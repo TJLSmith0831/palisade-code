@@ -308,11 +308,32 @@ fn tool_event(
 /// relying on it on the work laptop.
 pub fn parse_codex_line(value: &Value) -> Vec<ExecutorEvent> {
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+    let message_at = |pointer: &str| {
+        value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+
     if !matches!(kind, "item.started" | "item.completed") {
-        if kind == "turn.completed" {
-            return vec![ExecutorEvent::Done];
-        }
-        return vec![];
+        return match kind {
+            "turn.completed" => vec![ExecutorEvent::Done],
+            // Observed against Codex CLI 0.146.0: a turn that gives up emits
+            // `turn.failed`, never `turn.completed`. Without a terminal event
+            // here the harness stays busy forever and the composer locks up.
+            "turn.failed" => vec![
+                ExecutorEvent::Text { text: message_at("/error/message") },
+                ExecutorEvent::Crashed {
+                    exit_code: None,
+                    message: "Codex turn failed.".into(),
+                },
+            ],
+            // Retryable stream errors arrive as their own events; surfacing
+            // them is the only way the user learns what went wrong.
+            "error" => vec![ExecutorEvent::Text { text: message_at("/message") }],
+            _ => vec![],
+        };
     }
     let item = value.get("item").cloned().unwrap_or(json!({}));
     let id = item.get("id").and_then(Value::as_str).unwrap_or("").to_string();
@@ -330,6 +351,10 @@ pub fn parse_codex_line(value: &Value) -> Vec<ExecutorEvent> {
             path: string("path"),
             before: string("old_content"),
             after: string("new_content"),
+        }],
+        // An error item carries its explanation under `message`, not `text`.
+        Some("error") => vec![ExecutorEvent::Text {
+            text: item.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
         }],
         Some("command_execution") => {
             if kind == "item.started" {
@@ -541,11 +566,20 @@ pub fn send(session: &mut Session, sink: Arc<dyn Sink>, message: &str) -> Res<()
                 .arg("--json")
                 .arg("--sandbox")
                 .arg(Kind::Codex.permission_value(&session.mode))
+                // Observed: `codex exec` refuses to run outside a git repo
+                // ("Not inside a trusted directory"). The harness registers
+                // projects by path and never required them to be git repos,
+                // so without this every turn fails on a non-git project.
+                .arg("--skip-git-repo-check")
                 .arg("-C")
                 .arg(&session.project_root);
             let mut child = command
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
+                // Observed: `codex exec` reads stdin ("Reading additional
+                // input from stdin..."). Inheriting it risks the turn blocking
+                // on a terminal that will never send anything.
+                .stdin(Stdio::null())
                 .spawn()
                 .map_err(|err| format!("spawn codex: {err}"))?;
             let stdout = child.stdout.take().ok_or("codex stdout unavailable")?;
@@ -959,6 +993,41 @@ mod tests {
         })
         .unwrap();
         assert_eq!(edit["kind"], "fileEdit");
+    }
+
+    /// Real output captured from `codex exec --json` (Codex CLI 0.146.0), not
+    /// invented — a fixture I made up would only prove the parser matches my
+    /// guess. This is the failing-turn path: the run errored, so what matters
+    /// is that the user learns why and the turn actually ends.
+    const REAL_CODEX_FAILED_TURN: &str = r#"
+{"thread_id":"t-1","type":"thread.started"}
+{"type":"turn.started"}
+{"message":"stream error: 401 Unauthorized; retrying","type":"error"}
+{"item":{"id":"item_0","message":"We're currently experiencing high load","type":"error"},"type":"item.completed"}
+{"error":{"message":"exceeded retry limit"},"type":"turn.failed"}
+"#;
+
+    #[test]
+    fn a_failed_codex_turn_surfaces_the_error_and_ends() {
+        let events: Vec<ExecutorEvent> = REAL_CODEX_FAILED_TURN
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .flat_map(|line| parse_codex_line(&serde_json::from_str(line).unwrap()))
+            .collect();
+
+        assert!(
+            events.iter().any(|e| matches!(e, ExecutorEvent::Text { text } if text.contains("401"))),
+            "the user must be told why the turn failed; got {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, ExecutorEvent::Text { text } if text.contains("high load"))),
+            "an error item carries its message too; got {events:?}"
+        );
+        // Without a terminal event `busy` is never cleared and the UI locks up.
+        assert!(
+            matches!(events.last(), Some(ExecutorEvent::Crashed { .. })),
+            "a failed turn must terminate, or the harness hangs forever; got {events:?}"
+        );
     }
 
     #[test]

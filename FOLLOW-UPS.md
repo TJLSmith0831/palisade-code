@@ -30,31 +30,31 @@ is not. Low value: it's a one-line `is_busy()` check over state the layer below
 already tests, and covering it needs the same extraction treatment item 1 got —
 `go_mode`/`spec_mode` would have to split their guard out of the Tauri command.
 
-## 4. Codex adapter is unverified (E16) — and cheap to close
+## 4. Codex adapter — partially verified now (E16, E20)
 
-`parse_codex_line` and the per-turn `codex exec resume --last` spawn path are
-implemented and exercised by the fake-executor stub, but have never been run
-against a real `codex`. The event schema is written from Codex's documented
-`item.started` / `item.completed` shape, not from observed output.
+Running the real Codex CLI 0.146.0 found three defects the fake-executor stub
+could never have caught, because the stub only emitted the happy path I had
+imagined: `codex exec` refuses to run outside a git repo, it reads stdin, and a
+failing turn emits `turn.failed` (not `turn.completed`) so the harness hung
+forever with no explanation. All three are fixed and covered by a regression
+test built from real captured output. See E20.
 
-**Correction:** E16 originally claimed codex wasn't installed here. That was
-wrong — **Codex CLI 0.146.0 is installed** at
-`~/.nvm/versions/node/v24.16.0/bin/codex`. I asserted its absence without ever
-running `command -v codex`. So this is not blocked; it just wasn't done.
+**Still unverified:** the success-path item schemas. This machine's Codex is
+**not authenticated** — the probe reached `thread.started` / `turn.started` and
+then failed with `401 Unauthorized`. So these field names are still guesses from
+docs:
 
-**To close (now easy, on this machine):** run one cheap real turn, capture the
-JSONL, and check `parse_codex_line` against it — the same probe that caught
-Claude's missing `--verbose`:
+- `agent_message` → `text`
+- `command_execution` → `command`, `aggregated_output`, `exit_code`
+- `file_change` → `path`, `old_content`, `new_content`
+
+**To close:** authenticate Codex (`codex login`), run one cheap turn that both
+executes a command and edits a file, and check those against real output:
 
 ```
-codex exec "reply with the single word pong" --json --sandbox read-only -C <dir>
+codex exec "run: echo hi, then create a.txt containing hi" \
+  --json --sandbox workspace-write --skip-git-repo-check -C <dir>
 ```
-
-Check specifically: whether the item type key is `item_type` or `type`, whether
-`turn.completed` is really the terminal event, and the exact field names on
-`command_execution` (`aggregated_output`, `exit_code`) and `file_change`
-(`old_content`, `new_content`). The parser tolerates either `item_type` or
-`type` already, but the rest is unconfirmed guesswork.
 
 ## 5. Graphify shell-out is unverified (I6)
 
