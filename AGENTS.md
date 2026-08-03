@@ -11,6 +11,23 @@ Rust + Tauri · TypeScript (frontend) · pnpm · Browserbase (web search) · Gra
 - `pnpm build` — typecheck (`tsc`) and build the frontend bundle
 - `pnpm tauri build` — create the release binary
 
+## Packaging (per machine)
+`CODESIGN_ID="Floo Network Dev" ./package.sh` — builds the release bundle,
+re-signs it with a stable self-signed identity, and installs it to
+`/Applications`. `--no-install` builds without installing.
+
+Without `CODESIGN_ID` the bundle is ad-hoc signed, so its designated
+requirement is a cdhash that changes every rebuild and macOS re-prompts for
+every permission it was already granted. `package.sh`'s comments carry the
+exact one-time commands to create the identity on a new machine (note macOS
+ships LibreSSL, whose `openssl req` has no `-addext` — the extensions go in a
+config file). Each machine generates its own identity; they don't need to
+match, since only per-machine rebuild consistency matters.
+
+First signing on a machine raises a keychain dialog even with
+`-T /usr/bin/codesign`; click "Always Allow" once, or set the key partition
+list as documented in the script.
+
 ## Verifying UI flows
 Playwright cannot drive this app: it targets Chromium/Firefox/WebKit browsers,
 not the WKWebView that Tauri embeds on macOS. Use the Tauri MCP instead — the
