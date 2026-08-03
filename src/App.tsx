@@ -24,7 +24,13 @@ export default function App() {
   const [tab, setTab] = useState<"threads" | "notes">("threads");
   const [graphOpen, setGraphOpen] = useState(false);
   const [notePane, setNotePane] = useState<"edit" | "preview">("edit");
-  const [commandBar, setCommandBar] = useState(false);
+  // One reusable command bar: new note, rename project, rename thread.
+  // `window.prompt` is a no-op in Tauri's WKWebView — it returns null without
+  // ever showing a dialog — so anything that needs a line of text from the
+  // user has to go through this.
+  const [bar, setBar] = useState<
+    { label: string; value: string; submit: (value: string) => void } | null
+  >(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [flight, setFlight] = useState<Preflight | null>(null);
@@ -87,18 +93,22 @@ export default function App() {
     }
   };
 
-  const onRenameProject = async () => {
+  const onRenameProject = () => {
     if (!project) return;
-    const name = prompt("Project display name", project.displayName);
-    if (!name?.trim()) return;
-    try {
-      await api.renameProject(project.hash, name.trim());
-      const refreshed = await api.listProjects();
-      setProjects(refreshed);
-      setProject(refreshed.find((p) => p.hash === project.hash) ?? project);
-    } catch (err) {
-      fail(err);
-    }
+    setBar({
+      label: "Project display name",
+      value: project.displayName,
+      submit: async (name) => {
+        try {
+          await api.renameProject(project.hash, name);
+          const refreshed = await api.listProjects();
+          setProjects(refreshed);
+          setProject(refreshed.find((p) => p.hash === project.hash) ?? project);
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
   };
 
   // --------------------------------------------------------------- threads
@@ -115,17 +125,20 @@ export default function App() {
     }
   };
 
-  const onRenameThread = async () => {
+  const onRenameThread = () => {
     if (!project || !thread) return;
-    const title = prompt("Thread title", thread.title);
-    if (!title?.trim()) return;
-    try {
-      const renamed = await api.renameThread(project.hash, thread.id, title.trim());
-      setThread(renamed);
-      setThreads(await api.listThreads(project.hash));
-    } catch (err) {
-      fail(err);
-    }
+    setBar({
+      label: "Thread title",
+      value: thread.title,
+      submit: async (title) => {
+        try {
+          setThread(await api.renameThread(project.hash, thread.id, title));
+          setThreads(await api.listThreads(project.hash));
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
   };
 
   // Keeps the event listener (registered once) pointed at the current thread.
@@ -250,7 +263,7 @@ export default function App() {
     try {
       const path = await api.createNote(project.hash, rawName.trim());
       setNotes(await api.listNotes(project.hash));
-      setCommandBar(false);
+      setBar(null);
       setTab("notes");
       await openNote(project.hash, path.split("/").pop()!);
     } catch (err) {
@@ -276,13 +289,13 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        if (project) setCommandBar(true);
+        if (project) setBar({ label: "New note", value: "", submit: onCreateNote });
       }
-      if (event.key === "Escape") setCommandBar(false);
+      if (event.key === "Escape") setBar(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [project]);
+  }, [project, onCreateNote]);
 
   // ------------------------------------------------------------------ view
 
@@ -396,7 +409,7 @@ export default function App() {
             <>
               <button
                 className="wide"
-                onClick={() => setCommandBar(true)}
+                onClick={() => setBar({ label: "New note", value: "", submit: onCreateNote })}
                 disabled={!project}
                 data-testid="create-note"
               >
@@ -537,25 +550,30 @@ export default function App() {
         </main>
       </div>
 
-      {commandBar && (
-        <div className="overlay" onClick={() => setCommandBar(false)}>
+      {bar && (
+        <div className="overlay" onClick={() => setBar(null)}>
           <div className="commandbar" onClick={(event) => event.stopPropagation()}>
-            <label htmlFor="noteName">New note</label>
+            <label htmlFor="barInput">{bar.label}</label>
             <input
-              id="noteName"
-              name="noteName"
+              id="barInput"
+              name="barInput"
               autoFocus
               autoComplete="off"
-              placeholder="filename"
+              defaultValue={bar.value}
+              placeholder={bar.value ? undefined : "filename"}
               data-testid="note-name-input"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  onCreateNote(event.currentTarget.value);
+                  const value = event.currentTarget.value.trim();
+                  if (!value) return;
+                  const { submit } = bar;
+                  setBar(null);
+                  submit(value);
                 }
               }}
             />
-            <span className="hint">Enter to create · Esc to cancel</span>
+            <span className="hint">Enter to confirm · Esc to cancel</span>
           </div>
         </div>
       )}
