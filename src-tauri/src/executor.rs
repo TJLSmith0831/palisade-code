@@ -669,6 +669,16 @@ pub fn newly_added_change(before: &[String], after: &[String]) -> Option<String>
     }
 }
 
+/// How a thread recovers from its executor dying: back to spec mode, and the
+/// dead session forgotten so the next `/go` starts clean instead of resuming a
+/// conversation the executor no longer has. History is append-only, so nothing
+/// here can cost messages.
+pub fn on_crash(home: &Path, hash: &str, thread_id: &str) -> Res<()> {
+    store::set_thread_mode(home, hash, thread_id, "spec")?;
+    store::set_executor_session(home, hash, thread_id, None)?;
+    Ok(())
+}
+
 /// Set when `/propose` is in flight, so the change that `grill-propose`
 /// creates can be spotted the moment the turn finishes.
 pub struct ProposeWatch {
@@ -1155,6 +1165,28 @@ mod tests {
         }
         assert!(saw_done, "the turn itself completed");
         assert!(saw_crash, "the process ending afterwards must still crash");
+    }
+
+    /// Task 5.7: a crash must leave the thread recoverable — back in spec mode,
+    /// with the dead session forgotten, and every message still on disk.
+    #[test]
+    fn a_crash_reverts_the_thread_and_clears_its_session() {
+        let (home, _repo, hash, thread_id) = fixture();
+        store::append_message(home.path(), &hash, &thread_id, "user", "go", "before the crash").unwrap();
+        store::set_thread_mode(home.path(), &hash, &thread_id, "go").unwrap();
+        store::set_executor_session(home.path(), &hash, &thread_id, Some("sess-1")).unwrap();
+
+        on_crash(home.path(), &hash, &thread_id).unwrap();
+
+        let meta = store::list_threads(home.path(), &hash).unwrap().remove(0);
+        assert_eq!(meta.current_mode, "spec", "a crash drops back to spec mode");
+        assert_eq!(
+            meta.executor_session_id, None,
+            "the dead session id must be forgotten, or every retry resumes it and fails identically"
+        );
+        // Append-only storage means the crash can't cost history.
+        let messages = store::read_thread(home.path(), &hash, &thread_id).unwrap();
+        assert!(messages.iter().any(|m| m.content == "before the crash"));
     }
 
     #[test]

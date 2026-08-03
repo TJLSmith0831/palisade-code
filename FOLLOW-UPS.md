@@ -3,39 +3,12 @@
 Deferred work, deliberately not done in the day-23 build. Each entry says what
 is missing, why it was left, and what closing it involves.
 
-## 1. Crash reaction has no test (task 5.7, `-executor-handoff`)
+## 1. ~~Crash reaction has no test~~ — DONE
 
-`tasks.md` 5.7 asks for a cargo test that "crash reaction updates `.meta.json`
-correctly". There isn't one — and 5.7 was marked complete anyway, which was
-wrong. It has been unchecked.
-
-The behaviour itself works (verified by killing a live executor: banner shown,
-`currentMode` reverted to `spec`, history intact). It just isn't covered,
-because it lives inside `AppSink::emit` in `src-tauri/src/lib.rs`, which needs
-a Tauri `AppHandle` to construct.
-
-**To close:** extract the two-line reaction into a plain function and have
-`AppSink` call it. That is also the better shape — the Tauri command becomes a
-thin wrapper over testable logic.
-
-```rust
-// executor.rs
-pub fn on_crash(home: &Path, hash: &str, thread_id: &str) -> Res<()> {
-    store::set_thread_mode(home, hash, thread_id, "spec")?;
-    store::set_executor_session(home, hash, thread_id, None)?;
-    Ok(())
-}
-```
-
-Test first (red), against the same seam the other store tests use:
-
-```rust
-#[test]
-fn a_crash_reverts_the_thread_and_clears_its_session() {
-    // thread in go mode with a live session id
-    // → on_crash → currentMode == "spec", executorSessionId == None
-}
-```
+Closed. `executor::on_crash` was extracted from `AppSink::emit` and covered
+red-first by `a_crash_reverts_the_thread_and_clears_its_session`; the sink now
+calls it, so the test guards the production path. Task 5.7 is genuinely met and
+re-checked. See E19.
 
 ## 2. Graphify target guard has no test (`-integrations`)
 
@@ -53,8 +26,9 @@ project, `../..` is rejected, an absolute path outside the root is rejected.
 `executor::send` rejecting a mid-turn send is tested
 (`a_second_turn_is_rejected_while_the_first_is_in_flight`). The `is_busy()`
 guard in the `go_mode` / `spec_mode` commands — the one a user actually hits —
-is not. Low value: it's a one-line check over already-tested state, and it
-would come along free with the extraction in item 1.
+is not. Low value: it's a one-line `is_busy()` check over state the layer below
+already tests, and covering it needs the same extraction treatment item 1 got —
+`go_mode`/`spec_mode` would have to split their guard out of the Tauri command.
 
 ## 4. Codex adapter is unverified (E16) — and cheap to close
 

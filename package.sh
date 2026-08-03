@@ -26,10 +26,20 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-# Finder and iCloud leave com.apple.provenance and friends on copied files, and
-# codesign refuses to sign a bundle carrying them ("resource fork, Finder
+# Finder and iCloud leave extended attributes on copied files, and codesign
+# refuses to sign a bundle carrying some of them ("resource fork, Finder
 # information, or similar detritus not allowed").
+#
+# `xattr -cr` alone is not enough: it leaves com.apple.FinderInfo on the bundle
+# root, and that is the one codesign actually rejects. This repo lives under
+# ~/Desktop, which iCloud manages, so the file-provider daemon keeps applying
+# attributes — hence clearing the source icons too, or every build re-inherits
+# them. com.apple.provenance survives all of this and is harmless; codesign
+# signs fine with it.
+xattr -cr assets/icon.png src-tauri/icons/* 2>/dev/null || true
 xattr -cr "$APP"
+xattr -d com.apple.FinderInfo "$APP" 2>/dev/null || true
+find "$APP" -name '.DS_Store' -delete 2>/dev/null || true
 
 # Signing identity, and why this matters more than it looks.
 #
@@ -111,5 +121,14 @@ fi
 
 echo "==> installing to /Applications"
 rm -rf "/Applications/$APP_NAME.app"
-cp -R "$APP" "/Applications/$APP_NAME.app"
+# ditto over cp -R: cp preserves the extended attributes this tree picks up from
+# iCloud, and they follow the bundle into /Applications where they make
+# `codesign --verify --strict` fail on an app that is otherwise correctly
+# signed. Strip again afterwards for anything the copy itself re-applies.
+ditto --noextattr --norsrc "$APP" "/Applications/$APP_NAME.app"
+xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
+xattr -d com.apple.FinderInfo "/Applications/$APP_NAME.app" 2>/dev/null || true
+
+echo "==> verifying the installed bundle"
+codesign --verify --deep --strict "/Applications/$APP_NAME.app"
 echo "==> done: /Applications/$APP_NAME.app"

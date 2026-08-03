@@ -114,12 +114,7 @@ impl Sink for AppSink {
 
         match event {
             ExecutorEvent::Crashed { .. } => {
-                // History is append-only, so nothing is at risk here. Drop the
-                // session id too: a resume against a session the executor no
-                // longer has looks exactly like this, and keeping it would
-                // make every retry fail the same way.
-                let _ = store::set_thread_mode(&floo_home(), &self.project_hash, &self.thread_id, "spec");
-                let _ = store::set_executor_session(&floo_home(), &self.project_hash, &self.thread_id, None);
+                let _ = executor::on_crash(&floo_home(), &self.project_hash, &self.thread_id);
                 let _ = self.app.emit("thread-updated", &self.thread_id);
             }
             ExecutorEvent::Done => {
