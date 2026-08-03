@@ -49,10 +49,43 @@ impl Kind {
 /// PATH lookup without spawning a shell (E6). Stdlib rather than the `which`
 /// crate — same behavior in ~15 lines, one fewer dependency.
 pub fn find_on_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    lookup(&std::env::var_os("PATH")?, bin).or_else(|| lookup(login_shell_path()?, bin))
+}
+
+fn lookup(path: &std::ffi::OsStr, bin: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
         .map(|dir| dir.join(bin))
         .find(|candidate| is_executable(candidate))
+}
+
+/// The login shell's PATH, resolved at most once.
+///
+/// An app launched from Finder inherits launchd's minimal PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`), not the shell's — so a `claude` installed
+/// under `~/.nvm/...` or `~/.local/bin` is invisible and the harness would sit
+/// in chat-only mode with no way for the user to tell why. Asking the login
+/// shell is the only way to see what the user's own terminal would see.
+///
+/// This is the one place a shell is spawned; E6's "no shell invocation" applies
+/// to locating the binary, and this path only runs when the direct lookup has
+/// already failed, so a terminal-launched app never pays for it.
+fn login_shell_path() -> Option<&'static std::ffi::OsString> {
+    static SHELL_PATH: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    SHELL_PATH
+        .get_or_init(|| {
+            // launchd normally supplies SHELL, but default rather than give up:
+            // returning None here would put the app back in chat-only mode.
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+            let output = Command::new(shell)
+                .args(["-lic", "printf %s \"$PATH\""])
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            let path = String::from_utf8(output.stdout).ok()?;
+            let path = path.trim();
+            (!path.is_empty()).then(|| std::ffi::OsString::from(path))
+        })
+        .as_ref()
 }
 
 #[cfg(unix)]
@@ -683,6 +716,38 @@ mod tests {
     fn find_on_path_locates_a_real_binary_and_rejects_a_fake_one() {
         assert!(find_on_path("sh").is_some());
         assert!(find_on_path("definitely-not-a-real-binary-xyz").is_none());
+    }
+
+    /// A GUI launch gets launchd's minimal PATH, so anything installed under
+    /// the user's home (nvm, ~/.local/bin) is invisible until the login shell
+    /// is consulted. Simulated here by looking up a binary that is only
+    /// reachable via the login shell's PATH, not the minimal one.
+    #[test]
+    fn a_binary_outside_the_minimal_path_is_still_found() {
+        // Run this test under a launchd-style PATH to exercise the fallback:
+        //   env -i HOME=$HOME SHELL=$SHELL PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        //     <test-binary> a_binary_outside_the_minimal_path --nocapture
+        let on_env_path = std::env::var_os("PATH")
+            .and_then(|path| lookup(&path, "claude"))
+            .is_some();
+        let found = find_on_path("claude");
+        println!(
+            "claude on the inherited PATH: {on_env_path}; resolved: {:?}",
+            found.as_deref()
+        );
+
+        // Whatever the PATH looked like, the shell fallback must reach the same
+        // binary the user's own terminal would.
+        if let Some(claude) = found {
+            assert!(claude.exists(), "resolved claude must be a real file");
+            assert!(is_executable(&claude));
+        } else {
+            // Only legitimate when the user genuinely has no claude installed.
+            assert!(
+                login_shell_path().is_none_or(|path| lookup(path, "claude").is_none()),
+                "claude is on the login shell PATH but find_on_path missed it"
+            );
+        }
     }
 
     #[test]
