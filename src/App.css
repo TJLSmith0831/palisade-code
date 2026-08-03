@@ -244,6 +244,132 @@ button.mode.go {
   display: none;
 }
 
+/* --- executor handoff --------------------------------------------------- */
+
+.status.ok {
+  color: #57c98a;
+  border-color: currentColor;
+}
+
+.status.warn {
+  color: #e0b341;
+  border-color: currentColor;
+}
+
+.status.bad {
+  color: var(--dim);
+}
+
+.warnings {
+  padding: 8px 14px;
+  background: #2e2410;
+  border-bottom: 1px solid #4a3a17;
+  font-size: 12px;
+  color: #e0b341;
+}
+
+.change-chip {
+  font-size: 12px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.working {
+  align-self: flex-start;
+  color: var(--dim);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.crash-banner {
+  border: 1px solid #7a3b3b;
+  background: #2e1b1b;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #f0a6a6;
+  font-size: 13px;
+}
+
+.reasoning,
+.tool-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.tool-block.failed {
+  border-color: #7a3b3b;
+}
+
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: var(--panel);
+  text-align: left;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.tool-head code {
+  color: var(--text);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-name {
+  color: var(--spec);
+  font-weight: 600;
+}
+
+.running {
+  margin-left: auto;
+  font-style: italic;
+}
+
+.chev {
+  width: 10px;
+}
+
+.tool-body {
+  margin: 0;
+  padding: 10px;
+  background: #101216;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.file-edit {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.file-edit-head {
+  padding: 7px 10px;
+  background: var(--panel);
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+}
+
+.file-edit > div:last-child {
+  max-height: 420px;
+  overflow: auto;
+}
+
 .composer {
   display: flex;
   gap: 8px;

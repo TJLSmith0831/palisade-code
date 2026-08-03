@@ -18,6 +18,7 @@ export type ThreadMeta = {
   updatedAt: string;
   currentMode: Mode;
   openSpecChangeName: string | null;
+  executorSessionId: string | null;
 };
 
 export type Message = {
@@ -52,6 +53,41 @@ export const appendMessage = (
 ) => invoke<Message>("append_message", { projectHash, threadId, role, mode, content });
 export const readThread = (projectHash: string, threadId: string) =>
   invoke<Message[]>("read_thread", { projectHash, threadId });
+
+// ------------------------------------------------------- executor handoff
+
+export type Preflight = {
+  claude: string | null;
+  codex: string | null;
+  selected: "claude" | "codex" | null;
+  openspec: boolean;
+  grillApply: boolean;
+  ponytail: boolean;
+  ready: boolean;
+  warnings: string[];
+  checkedAt: string;
+};
+
+/** Mirrors the Rust `ExecutorEvent` enum, tagged by `kind`. */
+export type ExecutorEvent =
+  | { kind: "text"; text: string }
+  | { kind: "reasoning"; text: string }
+  | { kind: "fileEdit"; id: string; path: string; before: string; after: string }
+  | { kind: "toolCall"; id: string; name: string; command: string }
+  | { kind: "toolResult"; id: string; output: string; isError: boolean }
+  | { kind: "done" }
+  | { kind: "crashed"; exitCode: number | null; message: string };
+
+export const preflight = (refresh = false) => invoke<Preflight>("preflight", { refresh });
+export const sendMessage = (projectHash: string, threadId: string, content: string, mode: Mode) =>
+  invoke<Message>("send_message", { projectHash, threadId, content, mode });
+export const goMode = (projectHash: string, threadId: string) =>
+  invoke<ThreadMeta>("go_mode", { projectHash, threadId });
+export const specMode = (projectHash: string, threadId: string) =>
+  invoke<ThreadMeta>("spec_mode", { projectHash, threadId });
+export const propose = (projectHash: string, threadId: string) =>
+  invoke<void>("propose", { projectHash, threadId });
+export const stopExecutor = () => invoke<void>("stop_executor");
 
 export const createNote = (projectHash: string, name: string) =>
   invoke<string>("create_note", { projectHash, name });

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
 
 import * as api from "./api";
-import type { Message, Mode, Project, ThreadMeta } from "./api";
+import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
+import { EventList, itemsFromMessages } from "./EventView";
 import "./App.css";
 
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
@@ -23,6 +25,9 @@ export default function App() {
   const [commandBar, setCommandBar] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [flight, setFlight] = useState<Preflight | null>(null);
+  const [live, setLive] = useState<ExecutorEvent[]>([]);
+  const [busy, setBusy] = useState(false);
 
   const fail = (err: unknown) => setError(String(err));
 
@@ -33,6 +38,7 @@ export default function App() {
       return;
     }
     localStorage.setItem(lastThreadKey(projectHash), next.id);
+    setLive([]);
     setMessages(await api.readThread(projectHash, next.id));
   }, []);
 
@@ -120,26 +126,105 @@ export default function App() {
     }
   };
 
-  const onToggleMode = async () => {
+  // Keeps the event listener (registered once) pointed at the current thread.
+  const current = useRef({ project, thread });
+  current.current = { project, thread };
+
+  const refresh = useCallback(async () => {
+    const { project, thread } = current.current;
     if (!project || !thread) return;
-    const next: Mode = thread.currentMode === "spec" ? "go" : "spec";
+    const [found, history] = await Promise.all([
+      api.listThreads(project.hash),
+      api.readThread(project.hash, thread.id),
+    ]);
+    setThreads(found);
+    setThread(found.find((t) => t.id === thread.id) ?? thread);
+    setMessages(history);
+    setLive([]);
+  }, []);
+
+  useEffect(() => {
+    api.preflight().then(setFlight, fail);
+  }, []);
+
+  // Executor output streams in live; once the turn ends, the persisted log
+  // becomes the source of truth again so both paths can't drift.
+  useEffect(() => {
+    const streaming = listen<ExecutorEvent>("executor-event", async ({ payload }) => {
+      if (payload.kind === "done" || payload.kind === "crashed") {
+        setBusy(false);
+        await refresh().catch(fail);
+        return;
+      }
+      setLive((previous) => [...previous, payload]);
+    });
+    const updated = listen<string>("thread-updated", () => {
+      refresh().catch(fail);
+    });
+    return () => {
+      streaming.then((un) => un());
+      updated.then((un) => un());
+    };
+  }, [refresh]);
+
+  const onGo = async () => {
+    const { project, thread } = current.current;
+    if (!project || !thread) return;
     try {
-      const updated = await api.setThreadMode(project.hash, thread.id, next);
-      setThread(updated);
-      setThreads(await api.listThreads(project.hash));
-      setMessages(await api.readThread(project.hash, thread.id));
+      setBusy(true);
+      const meta = await api.goMode(project.hash, thread.id);
+      await refresh();
+      // A linked change means /grill-apply was just sent; otherwise we're idle.
+      if (!meta.openSpecChangeName) setBusy(false);
+    } catch (err) {
+      setBusy(false);
+      fail(err);
+    }
+  };
+
+  const onSpec = async () => {
+    const { project, thread } = current.current;
+    if (!project || !thread) return;
+    try {
+      await api.specMode(project.hash, thread.id);
+      setBusy(false);
+      await refresh();
     } catch (err) {
       fail(err);
     }
   };
 
+  const onPropose = async () => {
+    const { project, thread } = current.current;
+    if (!project || !thread) return;
+    try {
+      setBusy(true);
+      await api.propose(project.hash, thread.id);
+      await refresh();
+    } catch (err) {
+      setBusy(false);
+      fail(err);
+    }
+  };
+
+  const onToggleMode = () => (thread?.currentMode === "spec" ? onGo() : onSpec());
+
   const onSend = async () => {
     if (!project || !thread || !draft.trim()) return;
+    const text = draft.trim();
+    setDraft("");
+    // /go and /propose are the same functions the buttons call.
+    if (text === "/go") return onGo();
+    if (text === "/spec") return onSpec();
+    if (text === "/propose") return onPropose();
     try {
-      await api.appendMessage(project.hash, thread.id, "user", thread.currentMode, draft.trim());
-      setDraft("");
+      setBusy(true);
+      await api.sendMessage(project.hash, thread.id, text, thread.currentMode);
       setMessages(await api.readThread(project.hash, thread.id));
+      // Chat-only mode never answers, so never leave the composer locked.
+      if (!flight?.selected) setBusy(false);
     } catch (err) {
+      setBusy(false);
       fail(err);
     }
   };
@@ -229,7 +314,27 @@ export default function App() {
         <span className="root" title={project?.root}>
           {project?.root}
         </span>
+        <button
+          className={`status ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
+          onClick={() => api.preflight(true).then(setFlight, fail)}
+          title={
+            flight
+              ? [`executor: ${flight.selected ?? "none"}`, ...flight.warnings].join("\n")
+              : "checking…"
+          }
+          data-testid="preflight-status"
+        >
+          {flight?.selected ?? "no executor"}
+          {flight && !flight.ready && flight.selected ? " ⚠" : ""}
+        </button>
       </header>
+      {flight && flight.warnings.length > 0 && (
+        <div className="warnings" data-testid="preflight-warnings">
+          {flight.warnings.map((warning) => (
+            <div key={warning}>⚠ {warning}</div>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="error" onClick={() => setError(null)} data-testid="error">
@@ -343,25 +448,39 @@ export default function App() {
                 <button onClick={onRenameThread} data-testid="rename-thread">
                   Rename
                 </button>
+                {thread.openSpecChangeName && (
+                  <span className="change-chip" data-testid="change-chip">
+                    {thread.openSpecChangeName}
+                  </span>
+                )}
                 <div className="spacer" />
+                <button
+                  onClick={onPropose}
+                  disabled={busy || thread.currentMode !== "spec" || !flight?.selected}
+                  data-testid="propose"
+                >
+                  /propose
+                </button>
                 <button
                   className={`mode ${thread.currentMode}`}
                   onClick={onToggleMode}
+                  disabled={busy || !flight?.selected}
                   data-testid="mode-toggle"
+                  title={busy ? "Wait for the current turn to finish" : undefined}
                 >
                   {thread.currentMode} mode
                 </button>
               </div>
               <div className="messages" data-testid="messages">
-                {messages.length === 0 && <p className="empty">No messages yet.</p>}
-                {messages.map((m) => (
-                  <div key={m.seq} className={`message ${m.role}`}>
-                    <span className="meta">
-                      {m.role} · {m.mode}
-                    </span>
-                    <div className="content">{m.content}</div>
+                {messages.length === 0 && live.length === 0 && (
+                  <p className="empty">No messages yet.</p>
+                )}
+                <EventList items={[...itemsFromMessages(messages), ...live]} />
+                {busy && (
+                  <div className="working" data-testid="working">
+                    executor working…
                   </div>
-                ))}
+                )}
               </div>
               <form
                 className="composer"
@@ -373,10 +492,14 @@ export default function App() {
                 <input
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
-                  placeholder="Write a message…"
+                  placeholder={
+                    flight?.selected
+                      ? "Message, or /go · /spec · /propose"
+                      : "Chat-only — no executor on PATH"
+                  }
                   data-testid="composer-input"
                 />
-                <button type="submit" data-testid="composer-send">
+                <button type="submit" data-testid="composer-send" disabled={busy}>
                   Send
                 </button>
               </form>

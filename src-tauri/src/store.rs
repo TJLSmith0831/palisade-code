@@ -156,6 +156,10 @@ pub struct ThreadMeta {
     /// "spec" | "go"
     pub current_mode: String,
     pub open_spec_change_name: Option<String>,
+    /// The executor's own conversation id, so `/go` can carry history forward
+    /// after an app restart. Defaulted so pre-existing sidecars still parse.
+    #[serde(default)]
+    pub executor_session_id: Option<String>,
 }
 
 fn meta_path(home: &Path, hash: &str, id: &str) -> PathBuf {
@@ -177,6 +181,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         updated_at: stamp,
         current_mode: "spec".into(),
         open_spec_change_name: None,
+        executor_session_id: None,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -219,6 +224,20 @@ fn update_thread(home: &Path, hash: &str, id: &str, f: impl FnOnce(&mut ThreadMe
 
 pub fn rename_thread(home: &Path, hash: &str, id: &str, title: &str) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| m.title = title.trim().to_string())
+}
+
+/// Remember (or forget) the executor conversation backing this thread.
+pub fn set_executor_session(home: &Path, hash: &str, id: &str, session: Option<&str>) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.executor_session_id = session.map(str::to_string)
+    })
+}
+
+/// Link a thread to the OpenSpec change `/propose` created for it.
+pub fn set_open_spec_change(home: &Path, hash: &str, id: &str, change: Option<&str>) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.open_spec_change_name = change.map(str::to_string)
+    })
 }
 
 /// Flip a thread between "spec" and "go": persist the new mode and append one
@@ -521,6 +540,41 @@ mod tests {
         assert_eq!(messages[1].mode, "spec");
 
         assert!(set_thread_mode(home.path(), &project.hash, &thread.id, "turbo").is_err());
+    }
+
+    /// `/go` carries history forward by resuming the executor's own session,
+    /// so that id has to outlive the app process, not just the live child.
+    #[test]
+    fn the_executor_session_id_survives_on_the_sidecar() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert_eq!(thread.executor_session_id, None);
+
+        set_executor_session(home.path(), &project.hash, &thread.id, Some("sess-1")).unwrap();
+        // Re-reading from disk is what a restarted app actually does.
+        let reloaded = list_threads(home.path(), &project.hash).unwrap();
+        assert_eq!(reloaded[0].executor_session_id.as_deref(), Some("sess-1"));
+
+        // A crash clears it so the next attempt isn't stuck resuming a session
+        // the executor may no longer have.
+        set_executor_session(home.path(), &project.hash, &thread.id, None).unwrap();
+        let reloaded = list_threads(home.path(), &project.hash).unwrap();
+        assert_eq!(reloaded[0].executor_session_id, None);
+    }
+
+    /// Sidecars written before this field existed must still load.
+    #[test]
+    fn a_sidecar_without_the_session_field_still_parses() {
+        let legacy = r#"{
+            "id": "01ABC", "projectHash": "h", "title": "t",
+            "createdAt": "2026-08-03T00:00:00+00:00", "updatedAt": "2026-08-03T00:00:00+00:00",
+            "currentMode": "spec", "openSpecChangeName": null
+        }"#;
+        let meta: ThreadMeta = serde_json::from_str(legacy).unwrap();
+        assert_eq!(meta.executor_session_id, None);
+        assert_eq!(meta.current_mode, "spec");
     }
 
     #[test]
