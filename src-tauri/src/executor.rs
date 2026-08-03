@@ -371,6 +371,10 @@ struct Live {
 
 pub struct Session {
     pub kind: Kind,
+    /// The executable detection resolved. Codex re-spawns it every turn, so
+    /// this has to be the real path — looking `codex` up by name again would
+    /// ignore what detection found and can't be pointed at a test stub.
+    pub bin: PathBuf,
     pub project_hash: String,
     pub thread_id: String,
     pub project_root: PathBuf,
@@ -486,6 +490,7 @@ pub fn start(spawn: Spawn, sink: Arc<dyn Sink>) -> Res<Session> {
 
     Ok(Session {
         kind: spawn.kind,
+        bin: spawn.bin,
         project_hash: spawn.project_hash.to_string(),
         thread_id: spawn.thread_id.to_string(),
         project_root: spawn.project_root,
@@ -526,7 +531,7 @@ pub fn send(session: &mut Session, sink: Arc<dyn Sink>, message: &str) -> Res<()
             stdin.flush().map_err(|err| format!("flush claude stdin: {err}"))?;
         }
         Kind::Codex => {
-            let mut command = Command::new("codex");
+            let mut command = Command::new(&session.bin);
             command.arg("exec");
             if session.codex_started {
                 command.arg("resume").arg("--last");
@@ -1189,14 +1194,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let sink: Arc<dyn Sink> = Arc::new(Collector(tx));
 
-        // The Codex adapter shells out to `codex` by name; skip where absent.
-        if find_on_path("codex").is_none() {
-            return;
-        }
         let mut session = start(
             Spawn {
                 kind: Kind::Codex,
-                bin: PathBuf::from("codex"),
+                // The stub, never the real `codex` — a test must not spend an
+                // API call, and the fake-executor exists precisely for this.
+                bin: stub_path(),
                 project_root: repo.path().to_path_buf(),
                 project_hash: &hash,
                 thread_id: &thread_id,
@@ -1208,6 +1211,17 @@ mod tests {
         )
         .unwrap();
         send(&mut session, sink, "hello").unwrap();
-        assert!(rx.recv_timeout(std::time::Duration::from_secs(20)).is_ok());
+        let mut seen = vec![];
+        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
+            let done = event == ExecutorEvent::Done;
+            seen.push(event);
+            if done {
+                break;
+            }
+        }
+        assert!(seen.iter().any(|e| matches!(e, ExecutorEvent::ToolCall { .. })));
+        assert!(seen.iter().any(|e| matches!(e, ExecutorEvent::Text { .. })));
+        assert_eq!(seen.last(), Some(&ExecutorEvent::Done), "the turn must end cleanly");
+        assert!(!session.is_busy());
     }
 }
