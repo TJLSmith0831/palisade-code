@@ -89,6 +89,28 @@ export const propose = (projectHash: string, threadId: string) =>
   invoke<void>("propose", { projectHash, threadId });
 export const stopExecutor = () => invoke<void>("stop_executor");
 
+// ----------------------------------------------------------------- graphify
+
+export type GraphifyOptions = { incremental: boolean; codeOnly: boolean; deep: boolean };
+
+export type GraphifyRun = {
+  outDir: string;
+  report: string;
+  graph: { nodes?: unknown[]; links?: unknown[] } | null;
+  summary: string;
+};
+
+export const runGraphify = (
+  projectHash: string,
+  threadId: string,
+  subpath: string,
+  options: GraphifyOptions,
+) => invoke<GraphifyRun>("run_graphify", { projectHash, threadId, subpath, options });
+export const loadGraphify = (projectHash: string) =>
+  invoke<GraphifyRun>("load_graphify", { projectHash });
+export const queryGraphify = (projectHash: string, subcommand: string, question: string) =>
+  invoke<string>("query_graphify", { projectHash, subcommand, question });
+
 export const createNote = (projectHash: string, name: string) =>
   invoke<string>("create_note", { projectHash, name });
 export const listNotes = (projectHash: string) => invoke<string[]>("list_notes", { projectHash });

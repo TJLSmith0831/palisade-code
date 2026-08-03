@@ -1,4 +1,5 @@
 mod executor;
+mod integrations;
 mod store;
 
 use std::path::{Path, PathBuf};
@@ -351,6 +352,64 @@ fn executor_status(harness: tauri::State<'_, Harness>) -> Option<(String, bool)>
         .map(|s| (s.thread_id.clone(), s.is_busy()))
 }
 
+// ------------------------------------------------------------- graphify
+
+/// Where the `graphify` binary lives, or a readable error if it isn't there.
+fn graphify_bin() -> Res<PathBuf> {
+    executor::find_on_path("graphify")
+        .ok_or_else(|| "`graphify` is not on PATH — install it to build code maps.".into())
+}
+
+/// Run Graphify over the active project (or a subdirectory of it) and inject a
+/// bounded summary into the thread. A failed run injects nothing.
+#[tauri::command]
+fn run_graphify(
+    project_hash: String,
+    thread_id: String,
+    subpath: String,
+    options: integrations::GraphifyOptions,
+) -> Res<integrations::GraphifyRun> {
+    let root = project_root(&project_hash)?;
+    // Graphify maps the active project, never the harness — and never
+    // anywhere outside the project the user selected.
+    let target = if subpath.trim().is_empty() {
+        root.clone()
+    } else {
+        let joined = root.join(subpath.trim());
+        let resolved = std::fs::canonicalize(&joined)
+            .map_err(|err| format!("no such directory in this project: {} ({err})", joined.display()))?;
+        if !resolved.starts_with(std::fs::canonicalize(&root).unwrap_or(root.clone())) {
+            return Err("Graphify target must stay inside the active project.".into());
+        }
+        resolved
+    };
+
+    let out_dir = integrations::default_out_dir(&root);
+    let run = integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)?;
+    let mode = store::list_threads(&floo_home(), &project_hash)?
+        .into_iter()
+        .find(|t| t.id == thread_id)
+        .map_or_else(|| "spec".to_string(), |t| t.current_mode);
+    store::append_message(&floo_home(), &project_hash, &thread_id, "tool", &mode, &run.summary)?;
+    Ok(run)
+}
+
+/// Load a previous run's output without re-running the extract.
+#[tauri::command]
+fn load_graphify(project_hash: String) -> Res<integrations::GraphifyRun> {
+    integrations::read_run(&integrations::default_out_dir(&project_root(&project_hash)?))
+}
+
+#[tauri::command]
+fn query_graphify(project_hash: String, subcommand: String, question: String) -> Res<String> {
+    integrations::graphify_query(
+        &graphify_bin()?,
+        &subcommand,
+        &question,
+        &integrations::default_out_dir(&project_root(&project_hash)?),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
@@ -390,6 +449,9 @@ pub fn run() {
             propose,
             stop_executor,
             executor_status,
+            run_graphify,
+            load_graphify,
+            query_graphify,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

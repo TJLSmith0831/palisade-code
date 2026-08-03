@@ -8,6 +8,7 @@ import "@uiw/react-markdown-preview/markdown.css";
 import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
 import { EventList, itemsFromMessages } from "./EventView";
+import GraphPane from "./GraphPane";
 import "./App.css";
 
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
@@ -21,6 +22,7 @@ export default function App() {
   const [notes, setNotes] = useState<string[]>([]);
   const [note, setNote] = useState<{ name: string; content: string } | null>(null);
   const [tab, setTab] = useState<"threads" | "notes">("threads");
+  const [graphOpen, setGraphOpen] = useState(false);
   const [notePane, setNotePane] = useState<"edit" | "preview">("edit");
   const [commandBar, setCommandBar] = useState(false);
   const [draft, setDraft] = useState("");
@@ -359,6 +361,14 @@ export default function App() {
             >
               Notes
             </button>
+            <button
+              className={graphOpen ? "on" : ""}
+              onClick={() => setGraphOpen(!graphOpen)}
+              disabled={!project}
+              data-testid="tab-graph"
+            >
+              Graph
+            </button>
           </div>
 
           {tab === "threads" ? (
@@ -408,7 +418,22 @@ export default function App() {
         </aside>
 
         <main className="main">
-          {note ? (
+          {graphOpen && project ? (
+            <>
+              <div className="pane-head">
+                <strong>Graphify</strong>
+                <div className="spacer" />
+                <button onClick={() => setGraphOpen(false)} data-testid="graph-close">
+                  Close
+                </button>
+              </div>
+              <GraphPane
+                projectHash={project.hash}
+                threadId={thread?.id ?? null}
+                onInjected={() => refresh().catch(fail)}
+              />
+            </>
+          ) : note ? (
             <>
               <div className="pane-head">
                 <strong data-testid="note-name">{note.name}</strong>
