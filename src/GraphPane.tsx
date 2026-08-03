@@ -3,6 +3,7 @@ import MDEditor from "@uiw/react-md-editor";
 
 import * as api from "./api";
 import type { GraphifyOptions, GraphifyRun } from "./api";
+import GraphView from "./GraphView";
 
 type Props = {
   projectHash: string;
@@ -110,6 +111,8 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
             {run.graph === null && <span className="dim">no graph.json</span>}
           </div>
 
+          {run.graph && <GraphView graph={run.graph} />}
+
           <div className="graph-query">
             <select
               value={subcommand}
@@ -137,9 +140,12 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
             </pre>
           )}
 
-          <div className="graph-report" data-testid="graph-report">
-            <MDEditor.Markdown source={run.report} />
-          </div>
+          <details className="graph-report-wrap">
+            <summary>Report (GRAPH_REPORT.md)</summary>
+            <div className="graph-report" data-testid="graph-report">
+              <MDEditor.Markdown source={run.report} />
+            </div>
+          </details>
         </div>
       ) : (
         !error && <p className="empty">No code map yet. Run Graphify to build one.</p>

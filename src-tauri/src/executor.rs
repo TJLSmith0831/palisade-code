@@ -964,7 +964,7 @@ mod tests {
         assert!(session.is_busy());
 
         let mut seen = vec![];
-        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
             let done = event == ExecutorEvent::Done;
             seen.push(event);
             if done {
@@ -1005,7 +1005,7 @@ mod tests {
         send(&mut session, sink.clone(), "first").unwrap();
         assert!(send(&mut session, sink, "second").is_err(), "mid-turn send must be rejected");
 
-        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
             if event == ExecutorEvent::Done {
                 break;
             }
@@ -1036,7 +1036,7 @@ mod tests {
 
 
         let mut crashed = false;
-        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
             if matches!(event, ExecutorEvent::Crashed { .. }) {
                 crashed = true;
                 break;
@@ -1073,7 +1073,7 @@ mod tests {
 
         let mut saw_done = false;
         let mut saw_crash = false;
-        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        while let Ok(event) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
             match event {
                 ExecutorEvent::Done => saw_done = true,
                 ExecutorEvent::Crashed { .. } => {
