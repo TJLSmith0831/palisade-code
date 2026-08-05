@@ -26,5 +26,6 @@ graphify-out/
 *.sln
 *.sw?
 
+.agents/
 .claude/
 openspec/

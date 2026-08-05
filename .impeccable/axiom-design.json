@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-05T00:00:00Z",
+  "title": "Design System: Axiom Code Workbench",
+  "source": {
+    "type": "reference-image",
+    "description": "Dark desktop code workspace with a narrow navigation rail, repository explorer, tabbed editor, and warm ambient backdrop.",
+    "viewport": "1024x768",
+    "confidence": "visual-estimate"
+  },
+  "tokens": {
+    "colors": {
+      "backdrop": "#2b160c",
+      "appBg": "#0d0d0d",
+      "railBg": "#100c09",
+      "chromeBg": "#0c0a09",
+      "editorBg": "#111213",
+      "activeRow": "#292b1d",
+      "text": "#dedbd6",
+      "muted": "#77736e",
+      "border": "#252322",
+      "accent": "#c5a51b",
+      "syntaxGreen": "#78c98b",
+      "syntaxBlue": "#79a9d4",
+      "syntaxPink": "#d990b4",
+      "syntaxOrange": "#d99a66"
+    },
+    "typography": {
+      "ui": "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif",
+      "code": "'SF Mono', 'JetBrains Mono', Menlo, Monaco, Consolas, monospace",
+      "uiSize": "11px",
+      "codeSize": "11px",
+      "lineHeight": "1.55",
+      "microTracking": "0.04em"
+    },
+    "radii": {
+      "window": "12px",
+      "control": "6px",
+      "tab": "5px",
+      "pill": "9999px"
+    },
+    "spacing": {
+      "unit": "4px",
+      "scale": ["4px", "8px", "12px", "16px", "20px", "24px"]
+    },
+    "layout": {
+      "windowRadius": "12px",
+      "sidebarWidth": "193px",
+      "topChromeHeight": "36px",
+      "tabBarHeight": "28px",
+      "fileTreeWidth": "143px",
+      "editorPadding": "24px"
+    },
+    "shadows": {
+      "window": "0 18px 48px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 221, 185, 0.08)",
+      "focus": "0 0 0 2px rgba(197, 165, 27, 0.42)"
+    },
+    "motion": {
+      "micro": "120ms ease-out",
+      "standard": "180ms cubic-bezier(0.2, 0, 0, 1)"
+    }
+  },
+  "extensions": {
+    "colorMeta": {
+      "backdrop": {"role": "ambient", "displayName": "Cocoa Window Backdrop", "canonical": "#2b160c"},
+      "appBg": {"role": "neutral", "displayName": "Workbench Field", "canonical": "#0d0d0d"},
+      "railBg": {"role": "neutral", "displayName": "Navigation Rail", "canonical": "#100c09"},
+      "chromeBg": {"role": "neutral", "displayName": "Window Chrome", "canonical": "#0c0a09"},
+      "editorBg": {"role": "neutral", "displayName": "Editor Surface", "canonical": "#111213"},
+      "activeRow": {"role": "highlight", "displayName": "Active File Highlight", "canonical": "#292b1d"},
+      "accent": {"role": "accent", "displayName": "Axiom Gold", "canonical": "#c5a51b"},
+      "syntaxGreen": {"role": "syntax", "displayName": "Code Green", "canonical": "#78c98b"},
+      "syntaxBlue": {"role": "syntax", "displayName": "Code Blue", "canonical": "#79a9d4"},
+      "syntaxPink": {"role": "syntax", "displayName": "Code Pink", "canonical": "#d990b4"},
+      "syntaxOrange": {"role": "syntax", "displayName": "Code Orange", "canonical": "#d99a66"}
+    },
+    "typographyMeta": {
+      "ui": {"displayName": "Quiet UI Sans", "purpose": "Navigation, labels, project names, account metadata, and window controls."},
+      "code": {"displayName": "Editor Mono", "purpose": "Source code, file paths, line numbers, breadcrumbs, tabs, and status metadata."}
+    }
+  },
+  "components": {
+    "window-shell": {"description": "Floating desktop window with warm dark chrome, clipped 12px corners, and a soft black shadow."},
+    "traffic-lights": {"description": "Three compact macOS window controls in red, yellow, and green."},
+    "top-chrome": {"description": "Minimal header with centered Chats / Collab / Code segmented switch and a utility control."},
+    "navigation-rail": {"description": "Left rail containing primary actions, recent prompts, and a compact user footer."},
+    "nav-item": {"description": "Quiet icon-and-label row with muted iconography and low-contrast hover fill."},
+    "recent-prompt": {"description": "Two-line recent conversation item with bright title and truncated muted summary."},
+    "repository-tree": {"description": "Dark file explorer with repository breadcrumb, folder rows, file rows, and selected-file highlight."},
+    "editor-tabs": {"description": "Compact tab strip with active file tab and quieter neighboring tabs."},
+    "breadcrumbs": {"description": "Monospace repository / src / file path line with the final segment emphasized in gold."},
+    "code-editor": {"description": "Full-height source editor with aligned line numbers and syntax-colored TypeScript."},
+    "branch-badge": {"description": "Small gold branch/status capsule in the upper-right editor chrome."},
+    "status-bar": {"description": "Low-contrast bottom strip showing language, line count, encoding, and project status."}
+  },
+  "narrative": {
+    "northStar": "The Quiet Axiom Workbench: a dark, compact coding cockpit where syntax color and one restrained gold status accent carry hierarchy against almost-black surfaces.",
+    "overview": "A precision desktop editor presented as a floating window. Navigation and repository structure sit in low-contrast rails while the source file owns the visual center.",
+    "keyCharacteristics": [
+      "Warm black-brown desktop chrome creates a premium shell.",
+      "UI contrast is restrained; hierarchy comes from placement, type, and syntax color.",
+      "The editor is the dominant surface and owns the brightest colors.",
+      "Gold signals active project context rather than decoration.",
+      "Compact 6px controls and a single 12px outer window radius keep the interface precise."
+    ],
+    "disciplineRules": [
+      "Use gold only for active project context, branch/status badges, and selected code-adjacent affordances.",
+      "Keep navigation and chrome quieter than source code.",
+      "Use UI sans for human-facing navigation and monospace for files, paths, code, and metadata.",
+      "Use thin hairline borders and one floating-window shadow; keep internal panels flat.",
+      "Do not apply syntax colors to ordinary interface copy."
+    ]
+  }
+}

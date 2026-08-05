@@ -31,9 +31,9 @@ const SERIES = [
   "#9085e9",
   "#e66767",
 ];
-const OTHER = "#8b93a1";
+const OTHER = "#8e939e";
 const OTHER_LABEL = "Other";
-const SURFACE = "#14161a";
+const SURFACE = "#121316";
 
 type RawNode = { id?: string | number; [key: string]: unknown };
 type RawLink = { source?: unknown; target?: unknown; [key: string]: unknown };

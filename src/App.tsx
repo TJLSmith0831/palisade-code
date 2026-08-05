@@ -564,6 +564,14 @@ export default function App() {
                   {thread.currentMode} mode
                 </button>
               </div>
+              {thread.currentMode === "spec" && (
+                <div className="spec-banner" data-testid="spec-banner">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spec-icon">
+                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                  </svg>
+                  Spec Mode — read-only planning
+                </div>
+              )}
               <div className="messages" data-testid="messages">
                 {messages.length === 0 && live.length === 0 && (
                   <p className="empty">No messages yet.</p>
@@ -595,8 +603,17 @@ export default function App() {
                   }
                   data-testid="composer-input"
                 />
-                <button type="submit" data-testid="composer-send" disabled={busy}>
-                  Send
+                <button
+                  type="submit"
+                  className="send"
+                  data-testid="composer-send"
+                  disabled={busy}
+                  aria-label="Send message"
+                  title="Send message"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4z" />
+                  </svg>
                 </button>
               </form>
             </>

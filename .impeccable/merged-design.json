@@ -1,0 +1,543 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-05T00:00:00Z",
+  "title": "Design System: FlooNetwork v2 — Dragon Fire Workbench",
+  "source": {
+    "type": "merge",
+    "parents": [
+      ".impeccable/design.json (Floo Network — Dragon Fire Console: color palette, two-voice type, Spec/Go mode, chat/diff/spec components)",
+      ".impeccable/axiom-design.json (Axiom Code Workbench: narrow rail, file explorer, editor-dominant layout, ambient backdrop, tight chrome, breadcrumbs, status bar)"
+    ],
+    "mergeStrategy": "Floo palette + Axiom flow. Keep Dragon Fire Green as the sole accent but apply Axiom's scarcity discipline. Adopt Axiom's narrow navigation rail, repository explorer column, editor-dominant center, warm ambient backdrop, floating window shell, traffic lights, breadcrumbs, and status bar. Tighten radii from Floo's 8/16px to Axiom's 6/8/12px. Reframe Floo's chat/diff/spec components as panels inside the editor-dominant layout rather than equal-weight columns."
+  },
+  "extensions": {
+    "colorMeta": {
+      "backdrop": {
+        "role": "ambient",
+        "displayName": "Twilight Ember Backdrop",
+        "canonical": "oklch(11% 0.015 145)",
+        "tonalRamp": [
+          "oklch(7% 0.010 145)",
+          "oklch(11% 0.015 145)",
+          "oklch(16% 0.020 145)",
+          "oklch(24% 0.025 145)",
+          "oklch(34% 0.030 145)",
+          "oklch(48% 0.035 145)",
+          "oklch(66% 0.030 145)",
+          "oklch(88% 0.020 145)"
+        ]
+      },
+      "chrome-bg": {
+        "role": "neutral",
+        "displayName": "Window Chrome",
+        "canonical": "oklch(15% 0.004 250)",
+        "tonalRamp": [
+          "oklch(10% 0.004 250)",
+          "oklch(15% 0.004 250)",
+          "oklch(22% 0.004 250)",
+          "oklch(32% 0.004 250)",
+          "oklch(44% 0.004 250)",
+          "oklch(58% 0.004 250)",
+          "oklch(74% 0.004 250)",
+          "oklch(92% 0.004 250)"
+        ]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Console Field",
+        "canonical": "oklch(18% 0.005 250)",
+        "tonalRamp": [
+          "oklch(15% 0.005 250)",
+          "oklch(22% 0.005 250)",
+          "oklch(32% 0.005 250)",
+          "oklch(44% 0.005 250)",
+          "oklch(56% 0.005 250)",
+          "oklch(70% 0.005 250)",
+          "oklch(82% 0.005 250)",
+          "oklch(95% 0.005 250)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Panel Surface",
+        "canonical": "oklch(22% 0.006 250)",
+        "tonalRamp": [
+          "oklch(15% 0.006 250)",
+          "oklch(22% 0.006 250)",
+          "oklch(32% 0.006 250)",
+          "oklch(44% 0.006 250)",
+          "oklch(56% 0.006 250)",
+          "oklch(70% 0.006 250)",
+          "oklch(82% 0.006 250)",
+          "oklch(95% 0.006 250)"
+        ]
+      },
+      "surface-warm": {
+        "role": "neutral",
+        "displayName": "Warm Charcoal",
+        "canonical": "oklch(26% 0.008 250)",
+        "tonalRamp": [
+          "oklch(15% 0.008 250)",
+          "oklch(26% 0.008 250)",
+          "oklch(36% 0.008 250)",
+          "oklch(48% 0.008 250)",
+          "oklch(60% 0.008 250)",
+          "oklch(72% 0.008 250)",
+          "oklch(84% 0.008 250)",
+          "oklch(95% 0.008 250)"
+        ]
+      },
+      "editor-bg": {
+        "role": "neutral",
+        "displayName": "Editor Surface",
+        "canonical": "oklch(20% 0.005 250)",
+        "tonalRamp": [
+          "oklch(14% 0.005 250)",
+          "oklch(20% 0.005 250)",
+          "oklch(28% 0.005 250)",
+          "oklch(38% 0.005 250)",
+          "oklch(50% 0.005 250)",
+          "oklch(64% 0.005 250)",
+          "oklch(78% 0.005 250)",
+          "oklch(94% 0.005 250)"
+        ]
+      },
+      "active-row": {
+        "role": "highlight",
+        "displayName": "Active File Highlight",
+        "canonical": "oklch(24% 0.020 145)",
+        "tonalRamp": [
+          "oklch(14% 0.012 145)",
+          "oklch(24% 0.020 145)",
+          "oklch(34% 0.030 145)",
+          "oklch(46% 0.040 145)",
+          "oklch(58% 0.050 145)",
+          "oklch(70% 0.060 145)",
+          "oklch(82% 0.050 145)",
+          "oklch(94% 0.030 145)"
+        ]
+      },
+      "fg": {
+        "role": "neutral",
+        "displayName": "Crisp Off-White Ink",
+        "canonical": "oklch(96% 0.003 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 250)",
+          "oklch(28% 0.003 250)",
+          "oklch(42% 0.003 250)",
+          "oklch(56% 0.003 250)",
+          "oklch(70% 0.003 250)",
+          "oklch(82% 0.003 250)",
+          "oklch(90% 0.003 250)",
+          "oklch(96% 0.003 250)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Grey-Blue Meta",
+        "canonical": "oklch(66% 0.012 250)",
+        "tonalRamp": [
+          "oklch(20% 0.012 250)",
+          "oklch(32% 0.012 250)",
+          "oklch(44% 0.012 250)",
+          "oklch(55% 0.012 250)",
+          "oklch(66% 0.012 250)",
+          "oklch(76% 0.012 250)",
+          "oklch(86% 0.012 250)",
+          "oklch(94% 0.012 250)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Crisp Divider",
+        "canonical": "oklch(30% 0.010 250)",
+        "tonalRamp": [
+          "oklch(18% 0.010 250)",
+          "oklch(30% 0.010 250)",
+          "oklch(42% 0.010 250)",
+          "oklch(54% 0.010 250)",
+          "oklch(66% 0.010 250)",
+          "oklch(76% 0.010 250)",
+          "oklch(86% 0.010 250)",
+          "oklch(94% 0.010 250)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Dragon Fire Green",
+        "canonical": "oklch(88% 0.21 145)",
+        "tonalRamp": [
+          "oklch(20% 0.10 145)",
+          "oklch(32% 0.13 145)",
+          "oklch(46% 0.16 145)",
+          "oklch(60% 0.18 145)",
+          "oklch(74% 0.20 145)",
+          "oklch(84% 0.21 145)",
+          "oklch(90% 0.18 145)",
+          "oklch(95% 0.12 145)"
+        ]
+      },
+      "accent-on": {
+        "role": "primary",
+        "displayName": "On-Green Ink",
+        "canonical": "oklch(20% 0.03 145)",
+        "tonalRamp": [
+          "oklch(15% 0.03 145)",
+          "oklch(20% 0.03 145)",
+          "oklch(30% 0.03 145)",
+          "oklch(42% 0.03 145)",
+          "oklch(55% 0.03 145)",
+          "oklch(70% 0.03 145)",
+          "oklch(84% 0.03 145)",
+          "oklch(95% 0.03 145)"
+        ]
+      },
+      "twilight-glow": {
+        "role": "secondary",
+        "displayName": "Twilight Glow",
+        "canonical": "oklch(18% 0.03 145)",
+        "tonalRamp": [
+          "oklch(12% 0.03 145)",
+          "oklch(18% 0.03 145)",
+          "oklch(28% 0.05 145)",
+          "oklch(40% 0.08 145)",
+          "oklch(54% 0.12 145)",
+          "oklch(68% 0.16 145)",
+          "oklch(82% 0.20 145)",
+          "oklch(94% 0.18 145)"
+        ]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Refined Green Status",
+        "canonical": "oklch(72% 0.15 160)",
+        "tonalRamp": [
+          "oklch(20% 0.08 160)",
+          "oklch(32% 0.11 160)",
+          "oklch(46% 0.13 160)",
+          "oklch(58% 0.14 160)",
+          "oklch(72% 0.15 160)",
+          "oklch(82% 0.14 160)",
+          "oklch(90% 0.11 160)",
+          "oklch(95% 0.07 160)"
+        ]
+      },
+      "warn": {
+        "role": "tertiary",
+        "displayName": "Amber Status",
+        "canonical": "oklch(76% 0.15 65)",
+        "tonalRamp": [
+          "oklch(22% 0.08 65)",
+          "oklch(34% 0.11 65)",
+          "oklch(48% 0.13 65)",
+          "oklch(62% 0.14 65)",
+          "oklch(76% 0.15 65)",
+          "oklch(84% 0.13 65)",
+          "oklch(91% 0.10 65)",
+          "oklch(95% 0.06 65)"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Red Status",
+        "canonical": "oklch(64% 0.22 25)",
+        "tonalRamp": [
+          "oklch(20% 0.12 25)",
+          "oklch(32% 0.16 25)",
+          "oklch(46% 0.19 25)",
+          "oklch(58% 0.21 25)",
+          "oklch(64% 0.22 25)",
+          "oklch(74% 0.18 25)",
+          "oklch(86% 0.13 25)",
+          "oklch(95% 0.07 25)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Headings and the brand wordmark. Tight leading (0.96), display tracking (-0.0275em). Same family as body; hierarchy comes from size and weight."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "All human-readable prose, UI labels, button text, chat content, input. 1.5 leading, normal tracking, antialiased."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "File paths, timestamps, line numbers, kbd hints, uppercase micro-labels, note editor body, diff content, breadcrumbs, status bar, editor tabs. The machine voice — never used for prose."
+      },
+      "chrome": {
+        "displayName": "Chrome UI",
+        "purpose": "Tight navigation rail labels, mode-switch segments, status-bar metadata, and window controls. Same family as body but set at 11px with 0.04em tracking for compact density. Adopted from Axiom to resolve the AI-sloppy read — Floo's 14px UI labels felt web-app-y; 11px chrome reads as a native tool."
+      }
+    },
+    "shadows": [
+      {
+        "name": "flat",
+        "value": "none",
+        "purpose": "Default for all resting panels, sidebars, chat bubbles, thread items, tabs. The console is flat-first."
+      },
+      {
+        "name": "ring",
+        "value": "0 0 0 1px var(--border)",
+        "purpose": "The crisp 1px dividing edge, expressed as a ring so it reads as a border rather than a shadow."
+      },
+      {
+        "name": "window",
+        "value": "0 18px 48px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(44, 245, 117, 0.06)",
+        "purpose": "The floating application window. A soft black drop shadow plus a 1px green-tinted ring that ties the window edge to the Dragon Fire accent. Adopted from Axiom, tinted green."
+      },
+      {
+        "name": "raised",
+        "value": "0 4px 20px rgba(0, 0, 0, 0.35)",
+        "purpose": "Floating layers only: active mode button, command-bar box, toast, handoff console."
+      },
+      {
+        "name": "handoff-ambient",
+        "value": "0 0 30px rgba(44, 245, 117, 0.08)",
+        "purpose": "Green-tinted ambient glow on the handoff console during the mode-transition ritual."
+      },
+      {
+        "name": "focus-ring",
+        "value": "0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%)",
+        "purpose": "2px Dragon Fire Green halo at 45% opacity around focused interactive elements. Tightened from Floo's 3px/40% to match Axiom's leaner focus."
+      }
+    ],
+    "motion": [
+      {
+        "name": "micro",
+        "value": "120ms ease-out",
+        "purpose": "Hover and active-state changes on navigation, tabs, and file-tree rows. Adopted from Axiom for snappier chrome."
+      },
+      {
+        "name": "fast",
+        "value": "150ms cubic-bezier(0.2, 0, 0, 1)",
+        "purpose": "Quick state transitions: tab cross-fade, checklist toggle, pane opacity swap."
+      },
+      {
+        "name": "base",
+        "value": "200ms cubic-bezier(0.2, 0, 0, 1)",
+        "purpose": "Default transition for sidebar collapse/expand, banner show/hide, toast slide."
+      },
+      {
+        "name": "handoff-spin",
+        "value": "1s linear infinite",
+        "purpose": "The handoff glow ring rotation. The sole long animation, reserved for the mode-transition ritual."
+      },
+      {
+        "name": "diff-flash",
+        "value": "1.5s cubic-bezier(0.2, 0, 0, 1)",
+        "purpose": "Freshly-applied addition lines flash from 40% green to the 6% green resting background."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "cocktail-rail",
+        "value": "920px",
+        "purpose": "Below 920px the sidebars detach from flex flow and become position:fixed overlays anchored under the top chrome at z-index 50. Above 920px they live in the flex row and collapse by negative margin."
+      },
+      {
+        "name": "compact",
+        "value": "760px",
+        "purpose": "Below 760px the file explorer column hides entirely and the navigation rail collapses to icon-only. The editor takes the full center."
+      }
+    ],
+    "layout": {
+      "windowRadius": "12px",
+      "topChromeHeight": "36px",
+      "navRailWidth": "193px",
+      "fileTreeWidth": "143px",
+      "rightSidebarWidth": "300px",
+      "tabBarHeight": "28px",
+      "statusBarHeight": "18px",
+      "editorPadding": "24px",
+      "gridUnit": "4px"
+    }
+  },
+  "components": [
+    {
+      "name": "Window Shell",
+      "kind": "shell",
+      "description": "Floating desktop window with warm dark chrome, clipped 12px outer corners, and a soft black shadow with a 1px green-tinted ring. Adopted from Axiom to give the app a native-tool presence instead of a web-app full-bleed. The window sits over the Twilight Ember backdrop.",
+      "html": "<div class=\"ds-window\"><div class=\"ds-traffic-lights\"><span class=\"ds-light red\"></span><span class=\"ds-light yellow\"></span><span class=\"ds-light green\"></span></div><div class=\"ds-window-body\"><!-- chrome, rails, editor --></div></div>",
+      "css": ".ds-window { background: var(--bg); border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(44, 245, 117, 0.06); overflow: hidden; height: 100vh; display: flex; flex-direction: column; } .ds-traffic-lights { display: flex; gap: 6px; padding: 10px 14px; position: absolute; top: 0; left: 0; z-index: 10; } .ds-light { width: 10px; height: 10px; border-radius: 9999px; } .ds-light.red { background: #ff5f57; } .ds-light.yellow { background: #febc2e; } .ds-light.green { background: #28c840; } .ds-window-body { flex: 1; display: flex; flex-direction: column; }"
+    },
+    {
+      "name": "Top Chrome",
+      "kind": "chrome",
+      "description": "Minimal 36px header with the Spec/Go mode switch centered, brand wordmark left, and a compact utility cluster right (sound toggle, sidebar toggles). Tighter than Floo's 56px top nav — adopted from Axiom to read as a native tool, not a web app.",
+      "html": "<div class=\"ds-top-chrome\"><div class=\"ds-brand\">FlooNetwork</div><div class=\"ds-mode-selector\"><button class=\"ds-mode-btn active\" type=\"button\">Spec <kbd>S</kbd></button><button class=\"ds-mode-btn\" type=\"button\">Go <kbd>G</kbd></button></div><div class=\"ds-chrome-utils\"><button class=\"ds-icon-btn\" type=\"button\" title=\"Toggle left rail\">Cmd+\\</button></div></div>",
+      "css": ".ds-top-chrome { height: 36px; background: var(--chrome-bg); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 12px; position: relative; flex-shrink: 0; } .ds-brand { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--fg); padding-left: 60px; } .ds-mode-selector { position: absolute; left: 50%; transform: translateX(-50%); display: inline-flex; background: var(--surface-warm); padding: 2px; border-radius: 9999px; border: 1px solid var(--border); } .ds-mode-btn { padding: 3px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); background: transparent; border: none; transition: all 120ms ease-out; } .ds-mode-btn kbd { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 9px; padding: 0 3px; background: var(--bg); border-radius: 3px; } .ds-mode-btn.active { background: var(--bg); color: var(--fg); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); } .ds-mode-btn:not(.active):hover { color: var(--fg); } .ds-chrome-utils { margin-left: auto; display: flex; gap: 4px; } .ds-icon-btn { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 9px; transition: all 120ms ease-out; } .ds-icon-btn:hover { color: var(--fg); border-color: var(--fg); }"
+    },
+    {
+      "name": "Navigation Rail",
+      "kind": "nav",
+      "description": "Narrow 193px left rail — adopted from Axiom. Contains the workspace selector, New Thread action, recent threads list (scrollable), and a compact user footer. Tighter than Floo's 260px sidebar; the rail is a quiet navigator, not an equal-weight column. Collapses via Cmd+\\ with a 200ms negative-margin slide.",
+      "html": "<div class=\"ds-nav-rail\"><div class=\"ds-rail-section\"><div class=\"ds-rail-label\">Workspace</div><div class=\"ds-workspace-select\">floo-network</div></div><div class=\"ds-rail-section\"><button class=\"ds-new-thread\" type=\"button\">+ New Thread</button></div><div class=\"ds-rail-section flex-1\"><div class=\"ds-rail-label\">Active Threads</div><div class=\"ds-thread-item active\"><span class=\"ds-thread-title\">Design aggregate MCP cache</span><span class=\"ds-thread-meta\">Spec · now</span></div><div class=\"ds-thread-item\"><span class=\"ds-thread-title\">Graphify code map sync</span><span class=\"ds-thread-meta\">Go · 2m</span></div></div><div class=\"ds-rail-footer\"><div class=\"ds-user-chip\">U</div><div class=\"ds-user-meta\">tjlsmith</div></div></div>",
+      "css": ".ds-nav-rail { width: 193px; background: var(--chrome-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 10px 10px 8px; flex-shrink: 0; transition: margin 200ms cubic-bezier(0.2, 0, 0, 1); } .ds-nav-rail.collapsed { margin-left: -193px; } .ds-rail-section { margin-bottom: 12px; } .ds-rail-section.flex-1 { flex: 1; overflow-y: auto; } .ds-rail-label { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 0 4px 6px; } .ds-workspace-select { font-size: 11px; font-weight: 600; color: var(--fg); padding: 4px 6px; border-radius: 6px; cursor: pointer; } .ds-workspace-select:hover { background: var(--surface-warm); } .ds-new-thread { width: 100%; background: var(--surface-warm); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 600; cursor: pointer; transition: border-color 120ms ease-out; } .ds-new-thread:hover { border-color: var(--fg); } .ds-thread-item { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; transition: background 120ms ease-out; } .ds-thread-item:hover { background: var(--surface-warm); } .ds-thread-item.active { background: var(--surface-warm); border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; padding-left: 6px; } .ds-thread-title { font-size: 11px; font-weight: 500; color: var(--muted); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; } .ds-thread-item.active .ds-thread-title { color: var(--fg); font-weight: 600; } .ds-thread-meta { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 9px; color: var(--muted); } .ds-rail-footer { display: flex; align-items: center; gap: 8px; padding: 8px 4px 0; border-top: 1px solid var(--border); } .ds-user-chip { width: 20px; height: 20px; border-radius: 6px; background: var(--surface-warm); color: var(--fg); display: grid; place-items: center; font-size: 10px; font-weight: 700; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; } .ds-user-meta { font-size: 11px; color: var(--muted); }"
+    },
+    {
+      "name": "Repository Explorer",
+      "kind": "nav",
+      "description": "143px file tree column — new from Axiom. Sits between the navigation rail and the editor. Shows the active repository's folder/file tree with a mono breadcrumb heading, folder rows with chevrons, and file rows with document icons. The selected file gets an olive-green-tinted active-row highlight. This column is what makes the app read as a code tool rather than a chat app.",
+      "html": "<div class=\"ds-file-tree\"><div class=\"ds-tree-header\">floo-network</div><div class=\"ds-tree-row folder open\"><span class=\"ds-chevron\">▾</span><span class=\"ds-tree-label\">src</span></div><div class=\"ds-tree-row file active\"><span class=\"ds-tree-icon\">▸</span><span class=\"ds-tree-label\">client.ts</span></div><div class=\"ds-tree-row file\"><span class=\"ds-tree-icon\">▸</span><span class=\"ds-tree-label\">server.ts</span></div><div class=\"ds-tree-row folder\"><span class=\"ds-chevron\">▸</span><span class=\"ds-tree-label\">src-tauri</span></div></div>",
+      "css": ".ds-file-tree { width: 143px; background: var(--editor-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; } .ds-tree-header { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border); } .ds-tree-row { font-size: 11px; padding: 3px 10px; cursor: pointer; display: flex; align-items: center; gap: 4px; color: var(--muted); transition: background 120ms ease-out; } .ds-tree-row:hover { background: var(--surface-warm); color: var(--fg); } .ds-tree-row.file { padding-left: 22px; } .ds-tree-row.active { background: var(--active-row); color: var(--fg); } .ds-tree-row.active .ds-tree-icon { color: var(--accent); } .ds-chevron, .ds-tree-icon { font-size: 9px; width: 12px; text-align: center; } .ds-tree-label { text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }"
+    },
+    {
+      "name": "Editor Tabs",
+      "kind": "chrome",
+      "description": "Compact 28px tab strip above the editor. Active file tab lifts slightly from chrome with a thin border and readable label; inactive tabs are muted. Adopted from Axiom. When in Go Mode, the diff tab becomes active instead of the code tab.",
+      "html": "<div class=\"ds-editor-tabs\"><div class=\"ds-tab active\">client.ts</div><div class=\"ds-tab\">server.ts</div><div class=\"ds-tab diff\">Code Change Diff</div></div>",
+      "css": ".ds-editor-tabs { height: 28px; background: var(--chrome-bg); border-bottom: 1px solid var(--border); display: flex; align-items: flex-end; padding: 0 8px; gap: 2px; flex-shrink: 0; } .ds-tab { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 11px; padding: 5px 10px; border-radius: 5px 5px 0 0; color: var(--muted); cursor: pointer; transition: all 120ms ease-out; } .ds-tab:hover { color: var(--fg); } .ds-tab.active { background: var(--editor-bg); color: var(--fg); border: 1px solid var(--border); border-bottom-color: var(--editor-bg); } .ds-tab.diff.active { color: var(--accent); }"
+    },
+    {
+      "name": "Breadcrumbs",
+      "kind": "chrome",
+      "description": "Monospace breadcrumb line above the editor: repository / src / active file. The final segment is emphasized in Dragon Fire Green. Adopted from Axiom (where it was gold) — here it signals the active file context with the brand accent.",
+      "html": "<div class=\"ds-breadcrumbs\"><span>floo-network</span><span class=\"ds-crumb-sep\">/</span><span>src</span><span class=\"ds-crumb-sep\">/</span><span class=\"ds-crumb-active\">client.ts</span></div>",
+      "css": ".ds-breadcrumbs { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 10px; color: var(--muted); padding: 8px 12px 6px; display: flex; gap: 4px; align-items: center; border-bottom: 1px solid var(--border); background: var(--editor-bg); } .ds-crumb-sep { opacity: 0.5; } .ds-crumb-active { color: var(--accent); font-weight: 600; }"
+    },
+    {
+      "name": "Code Editor",
+      "kind": "editor",
+      "description": "Full-height dark source editor with aligned line numbers and syntax-colored TypeScript. The dominant surface of the workbench — it owns the brightest colors. Adopted from Axiom. In Spec Mode, the editor is read-only; in Go Mode, it shows the applied patch with diff-line highlighting.",
+      "html": "<div class=\"ds-code-editor\"><div class=\"ds-line-numbers\"><span>1</span><span>2</span><span>3</span><span>4</span></div><div class=\"ds-code-content\"><div class=\"ds-code-line\"><span class=\"ds-kw\">import</span> { createClient } <span class=\"ds-kw\">from</span> <span class=\"ds-str\">'@floo/sdk'</span>;</div><div class=\"ds-code-line\"><span class=\"ds-kw\">const</span> <span class=\"ds-const\">CACHE_LIMIT</span> = <span class=\"ds-num\">250</span>;</div></div></div>",
+      "css": ".ds-code-editor { flex: 1; background: var(--editor-bg); display: flex; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 12px; line-height: 1.55; overflow: hidden; } .ds-line-numbers { padding: 12px 8px 12px 12px; text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--border); min-width: 36px; } .ds-code-content { flex: 1; padding: 12px 24px; overflow-y: auto; } .ds-code-line { white-space: pre-wrap; } .ds-kw { color: var(--accent); } .ds-str { color: var(--success); } .ds-const { color: var(--warn); } .ds-num { color: var(--warn); }"
+    },
+    {
+      "name": "Branch Badge",
+      "kind": "badge",
+      "description": "Small Dragon Fire Green capsule in the upper-right editor chrome showing the active branch and sync status. Adopted from Axiom (where it was gold) — here the brand accent signals active project context. Scarce use: one per workspace, never decorative.",
+      "html": "<div class=\"ds-branch-badge\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"width:10px;height:10px\"><line x1=\"6\" y1=\"3\" x2=\"6\" y2=\"15\"/><circle cx=\"18\" cy=\"6\" r=\"3\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><path d=\"M18 9a9 9 0 0 1-9 9\"/></svg>main · synced</div>",
+      "css": ".ds-branch-badge { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in oklab, var(--accent), transparent 88%); color: var(--accent); border: 1px solid color-mix(in oklab, var(--accent), transparent 80%); border-radius: 9999px; padding: 3px 8px; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 9px; font-weight: 600; }"
+    },
+    {
+      "name": "Status Bar",
+      "kind": "chrome",
+      "description": "Low-contrast 18px bottom strip showing language, line count, encoding, and active mode. Adopted from Axiom. The mode segment (Spec/Go) is the only colored element — Dragon Fire Green for Go Mode (agent is applying), muted for Spec Mode.",
+      "html": "<div class=\"ds-status-bar\"><span>TypeScript</span><span>Ln 42, Col 18</span><span>UTF-8</span><span class=\"ds-status-mode\">Spec Mode</span></div>",
+      "css": ".ds-status-bar { height: 18px; background: var(--chrome-bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 12px; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 9px; color: var(--muted); flex-shrink: 0; } .ds-status-mode { margin-left: auto; color: var(--muted); } .ds-status-mode.go { color: var(--accent); font-weight: 600; }"
+    },
+    {
+      "name": "Agent Chat Bubble",
+      "kind": "card",
+      "description": "Agent reply in the console chat panel. 28px avatar (Gemma G in twilight-green with accent text, or Claude C in solid accent with on-green text) + content card in surface-warm with 8px radius. Tightened from Floo's 32px/16px to match the workbench's compact density. User bubbles mirror with row-reverse and a bg fill that recedes.",
+      "html": "<div class=\"ds-chat-bubble agent\"><div class=\"ds-chat-avatar claude\">C</div><div class=\"ds-chat-content\"><p>Applied fast fix for your query. Updated src/server.ts cache settings directly.</p></div></div>",
+      "css": ".ds-chat-bubble { display: flex; gap: 10px; max-width: 85%; } .ds-chat-bubble.agent { align-self: flex-start; } .ds-chat-avatar { width: 28px; height: 28px; border-radius: 6px; background: var(--twilight-glow); color: var(--accent); border: 1px solid var(--twilight-glow); display: flex; align-items: center; justify-content: center; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 11px; font-weight: 700; flex-shrink: 0; } .ds-chat-avatar.claude { background: var(--accent); color: var(--accent-on); border-color: var(--accent); } .ds-chat-content { background: var(--surface-warm); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 13px; color: var(--fg); } .ds-chat-content p { margin: 0; }"
+    },
+    {
+      "name": "Spec Checklist",
+      "kind": "custom",
+      "description": "Embedded inside an agent chat bubble during Spec Mode. Bordered bg card with mono uppercase header, checkbox rows (strike-through + muted when done), and a right-aligned Approve Handoff button. The visual signature of Spec Mode. Tightened to 6px radius and 11px chrome type.",
+      "html": "<div class=\"ds-spec-checklist\"><div class=\"ds-checklist-header\"><span>Gemma Spec Pipeline</span><span>2/4 Complete</span></div><label class=\"ds-checklist-item done\"><input type=\"checkbox\" checked /><span>Graph the code map using Graphify</span></label><label class=\"ds-checklist-item\"><input type=\"checkbox\" /><span>Verify cache threshold constraints</span></label><div class=\"ds-handoff-action\"><button class=\"ds-btn-warm\" type=\"button\">Approve Handoff</button></div></div>",
+      "css": ".ds-spec-checklist { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 10px; margin-top: 6px; display: flex; flex-direction: column; gap: 6px; } .ds-checklist-header { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 10px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; display: flex; justify-content: space-between; } .ds-checklist-item { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; cursor: pointer; } .ds-checklist-item input { margin-top: 3px; cursor: pointer; accent-color: var(--accent); } .ds-checklist-item.done span { text-decoration: line-through; color: var(--muted); } .ds-handoff-action { margin-top: 8px; display: flex; justify-content: flex-end; }"
+    },
+    {
+      "name": "Send Button",
+      "kind": "button",
+      "description": "The only accent-filled button in the system. 28px square, Dragon Fire Green fill, on-green glyph, 6px radius. Sits at the end of the chat input row. Tightened from Floo's 32px/8px to match the workbench density.",
+      "html": "<button class=\"ds-send-btn\" type=\"button\" title=\"Send Message\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M22 2L11 13M22 2l-7 20-4-9-9-4z\"/></svg></button>",
+      "css": ".ds-send-btn { background: var(--accent); color: var(--accent-on); width: 28px; height: 28px; border-radius: 6px; border: none; display: grid; place-items: center; cursor: pointer; transition: background 120ms ease-out; } .ds-send-btn svg { width: 12px; height: 12px; } .ds-send-btn:hover { background: color-mix(in oklab, var(--accent), white 8%); } .ds-send-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%); }"
+    },
+    {
+      "name": "Warm Button",
+      "kind": "button",
+      "description": "The default action button across the console: Apply Diff, Rebuild, Create note, Approve Handoff. Surface-warm fill, 1px border, 6px radius, 11px weight 600, icon+label. Tightened from Floo's 8px/14px to match the workbench density.",
+      "html": "<button class=\"ds-btn-warm\" type=\"button\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"width:12px;height:12px\"><path d=\"M12 5v14M5 12h14\"/></svg>Apply Diff</button>",
+      "css": ".ds-btn-warm { background: var(--surface-warm); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-weight: 600; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: border-color 120ms ease-out; } .ds-btn-warm:hover { border-color: var(--fg); } .ds-btn-warm:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%); }"
+    },
+    {
+      "name": "Diff Line (addition)",
+      "kind": "custom",
+      "description": "A line inside the Code Change Diff panel. 36px right-aligned mono line number in surface-warm divided by a right border, then content. Additions get a 6%-green background and green text with a leading +. Freshly-applied additions flash for 1.5s. Tightened from Floo's 44px line numbers.",
+      "html": "<div class=\"ds-diff-line addition flash\"><span class=\"ds-diff-num\">4</span><span class=\"ds-diff-content\">const defaultCacheLimit = 250;</span></div>",
+      "css": ".ds-diff-line { display: flex; min-height: 18px; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 12px; position: relative; } .ds-diff-num { width: 36px; text-align: right; padding-right: 10px; user-select: none; color: var(--muted); border-right: 1px solid var(--border); font-size: 10px; background: var(--surface-warm); } .ds-diff-content { flex: 1; padding-left: 14px; white-space: pre-wrap; } .ds-diff-line.addition { background: rgba(22, 163, 74, 0.06); } .ds-diff-line.addition .ds-diff-content { color: var(--success); } .ds-diff-line.addition::before { content: \"+\"; position: absolute; left: 46px; color: var(--success); font-weight: bold; } .ds-diff-line.addition.flash { animation: ds-diff-flash 1.5s cubic-bezier(0.2, 0, 0, 1); } @keyframes ds-diff-flash { 0% { background-color: rgba(44, 245, 117, 0.4); } 100% { background-color: rgba(22, 163, 74, 0.06); } }"
+    },
+    {
+      "name": "Note Item",
+      "kind": "card",
+      "description": "A markdown note row in the Notes panel list view. Title (weight 600) + 45-char ellipsized preview in muted. Hover lifts to surface-warm with a foreground border. Tightened to 6px radius and 11px type.",
+      "html": "<div class=\"ds-note-item\"><div class=\"ds-note-title\">grill-spec.md</div><div class=\"ds-note-preview\"># Routing spec for toolsieve — increase aggregate caching...</div></div>",
+      "css": ".ds-note-item { padding: 10px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: all 120ms ease-out; } .ds-note-item:hover { background: var(--surface-warm); border-color: var(--fg); } .ds-note-item.active { border-color: var(--fg); background: var(--surface-warm); } .ds-note-title { font-weight: 600; font-size: 12px; color: var(--fg); } .ds-note-preview { font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }"
+    },
+    {
+      "name": "Toast",
+      "kind": "custom",
+      "description": "Bottom-right system notification. Inverted fg-on-bg so it reads as a system utterance distinct from the dark chrome. 6px radius, 12px weight 600, green check icon. Slides up 80px and fades over 200ms; auto-dismisses at 3000ms. Tightened from Floo's 8px/14px.",
+      "html": "<div class=\"ds-toast show\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 6L9 17l-5-5\"/></svg><span>Switched to Spec Mode</span></div>",
+      "css": ".ds-toast { background: var(--fg); color: var(--bg); padding: 10px 14px; border-radius: 6px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transform: translateY(80px); opacity: 0; transition: all 200ms cubic-bezier(0.2, 0, 0, 1); } .ds-toast.show { transform: translateY(0); opacity: 1; } .ds-toast svg { width: 14px; height: 14px; color: var(--accent); }"
+    },
+    {
+      "name": "Command Bar",
+      "kind": "custom",
+      "description": "Centered 480px floating launcher (Cmd+N) for creating notes and triggering keyboard actions. Sits over a 4%-blurred scrim at 12vh from top. Tightened from Floo's 540px to match the workbench density. Input row with plus icon, then mono-uppercase sectioned results.",
+      "html": "<div class=\"ds-cmd-bar\"><div class=\"ds-cmd-input-row\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5v14M5 12h14\"/></svg><input type=\"text\" class=\"ds-cmd-input\" placeholder=\"Name new markdown file...\" /></div><div class=\"ds-cmd-results\"><div class=\"ds-cmd-section\">New Note Target</div><div class=\"ds-cmd-item active\"><span>create implementation-notes.md</span><span class=\"ds-cmd-hint\">Enter</span></div></div></div>",
+      "css": ".ds-cmd-bar { width: 480px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); overflow: hidden; display: flex; flex-direction: column; color: var(--fg); } .ds-cmd-input-row { display: flex; align-items: center; padding: 12px; border-bottom: 1px solid var(--border); } .ds-cmd-input-row svg { width: 16px; height: 16px; color: var(--muted); margin-right: 10px; } .ds-cmd-input { flex: 1; border: none; outline: none; font-size: 13px; background: transparent; color: var(--fg); } .ds-cmd-results { max-height: 220px; overflow-y: auto; padding: 6px; } .ds-cmd-section { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 10px; color: var(--muted); padding: 6px 10px; text-transform: uppercase; letter-spacing: 0.05em; } .ds-cmd-item { padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; cursor: pointer; color: var(--muted); } .ds-cmd-item.active, .ds-cmd-item:hover { background: var(--surface-warm); color: var(--fg); } .ds-cmd-hint { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 10px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Dragon Fire Workbench: a dark, compact coding cockpit where the editor owns the brightest colors and one restrained green accent signals what is alive. The agent console lives inside the editor, not the other way around.",
+    "overview": "FlooNetwork v2 is a desktop coding-agent workbench, not a chat app. The whole interface lives inside a floating window with 12px clipped corners, sitting over a warm Twilight Ember backdrop. The layout is a four-column cockpit: a narrow 193px navigation rail (threads and workspace), a 143px repository explorer (file tree), the editor-dominant center (tabs, breadcrumbs, code/diff surface, status bar), and a 300px right sidebar (Code Map / Files / Notes, collapsed by default). The agent chat is a panel within the editor column, not an equal-weight column — this is the key shift from v1.\n\nThe product's core gesture remains the Spec / Go mode toggle, now a compact pill switch in the 36px top chrome. Spec Mode is read-only planning: the agent replies with spec checklists, the editor is locked, the status bar reads 'Spec Mode' in muted. Go Mode is instant-apply: the editor flips to the diff tab, the status bar reads 'Go Mode' in Dragon Fire Green, applied additions flash green. The visual system signals mode through the status bar, the tab emphasis, and the chat content shape — no more full-width banner.\n\nThe color palette is unchanged from v1: a near-black field, two charcoal surfaces, one Dragon Fire Green accent, and three semantic status hues. What changes is discipline: the accent is scarcer (Axiom's lesson), the chrome is tighter (11px type, 6px radii), the editor owns the syntax colors, and the warm ambient backdrop replaces the flat black field. The result reads as a native code tool, not an AI chat app.",
+    "keyCharacteristics": [
+      "Editor-dominant layout. The code/diff surface is the largest and brightest area; navigation and chat are supporting panels, not equal-weight columns. This is the primary fix for the AI-sloppy read.",
+      "Narrow navigation rail (193px) + file explorer (143px). Adopted from Axiom. The app reads as a code tool because the file tree is visible, not hidden behind a chat feed.",
+      "Warm ambient backdrop. The Twilight Ember backdrop (deep warm green-black) sits behind the floating window, giving depth without cocoa warmth. Replaces v1's flat black full-bleed.",
+      "Tight chrome. 36px top chrome, 28px tab strip, 18px status bar, 11px UI type with 0.04em tracking. Adopted from Axiom. v1's 56px nav and 14px labels read as web-app; v2 reads as native tool.",
+      "Scarce glowing accent. Dragon Fire Green appears only on: the active thread rail, the send button, the branch badge, the breadcrumb active segment, the Go Mode status indicator, diff additions, the focus ring, and the spec badge. Never on chrome, dividers, or decoration.",
+      "Two-voice typography. Sans for prose and UI labels; mono for files, paths, code, breadcrumbs, status bar, tabs, and metadata. Unchanged from v1 — the two-voice split is load-bearing.",
+      "Quiet motion, 120–200ms. Micro (120ms) for chrome hover/active; fast (150ms) for tab cross-fade and pane swap; base (200ms) for sidebar collapse and toast slide. The handoff spinner (1s linear) is the only long animation."
+    ],
+    "rules": [
+      {
+        "name": "The One Accent Rule",
+        "body": "Dragon Fire Green is the only chromatic brand color; it is reserved for live, actionable, or agent-active surfaces: active thread rail, send button, branch badge, breadcrumb active segment, Go Mode status, diff additions, focus ring, spec badge. Never use it for decoration, dividers, or static chrome. Adopted from v1, enforced harder — Axiom's gold discipline applied to green.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Voice Rule",
+        "body": "If the user reads it as a sentence, it's the sans; if the user reads it as a path, a timestamp, a key, or a label, it's the mono. Never set prose in monospace, never set a file path in the sans. Unchanged from v1.",
+        "section": "typography"
+      },
+      {
+        "name": "The Editor-Dominant Rule",
+        "body": "The editor (code or diff surface) is the largest and brightest area of the workbench. Navigation, file tree, and chat are supporting panels with lower contrast. The editor owns the syntax colors; chrome stays muted. This is the primary fix for the AI-sloppy read — v1 gave chat equal weight to code.",
+        "section": "layout"
+      },
+      {
+        "name": "The Narrow-Rail Rule",
+        "body": "Left navigation rail is 193px; file explorer is 143px. Both are narrow enough that the editor dominates the viewport. They collapse by sliding out via negative margin over 200ms — they do not overlay. Below 760px the file explorer hides and the rail goes icon-only. Adopted from Axiom.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat-First Rule",
+        "body": "Borders divide; shadows elevate only what floats above the field (the window shell, command bar, toast, handoff console, active mode pill). Never shadow a resting panel. Unchanged from v1, now including the window shell as a floating layer.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Three-Radius Rule",
+        "body": "Use 6px for controls, buttons, list items, tabs, and inline elements; use 8px for cards, chat bubbles, the command-bar box, and the diff panel; use 12px only for the outer window shell; use 9999px (pill) exclusively for the mode switch, branch badge, spec badge, and status indicators. Tightened from v1's 8/16px — Axiom's 6px controls read as a native tool, not a web app.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do let the editor own the brightest colors — syntax highlighting is the visual center, not the chat.",
+      "Do keep the navigation rail at 193px and the file explorer at 143px so the editor dominates.",
+      "Do use 11px chrome type with 0.04em tracking for navigation, tabs, status bar, and window controls.",
+      "Do reserve Dragon Fire Green for live/actionable surfaces only — active thread rail, send button, branch badge, breadcrumb active, Go Mode status, diff additions, focus ring.",
+      "Do set file paths, breadcrumbs, status bar, tabs, and code in the monospace voice; set prose and UI labels in the sans voice.",
+      "Do use 6px radius for controls, 8px for cards, 12px for the window shell, and pill for status capsules only.",
+      "Do show the file tree by default — it is what makes the app read as a code tool.",
+      "Do invert the toast (fg-on-bg) so it reads as a system utterance distinct from the dark chrome."
+    ],
+    "donts": [
+      "Don't give the chat panel equal weight to the editor — chat is a supporting panel, not a co-star.",
+      "Don't introduce a second brand chromatic color. Twilight Glow is the only green-adjacent tone; everything else is neutral or semantic status.",
+      "Don't use 14px or 16px UI type in chrome — 11px is the chrome size. Larger sizes are for chat content and editor prose only.",
+      "Don't use 16px radius for anything — the largest radius is 12px (window shell only). Cards and chat bubbles use 8px; controls use 6px.",
+      "Don't shadow resting panels. Shadows are for the window shell, command bar, toast, handoff console, and active mode pill only.",
+      "Don't set prose in monospace or file paths in the sans — the two-voice split is load-bearing.",
+      "Don't use the accent for borders, dividers, or static chrome; the border color is the only divider.",
+      "Don't hide the file tree behind a tab or toggle — it is a permanent column at desktop width."
+    ]
+  }
+}
