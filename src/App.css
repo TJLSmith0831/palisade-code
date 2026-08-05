@@ -1,25 +1,66 @@
 :root {
-  /* Dragon Fire Console tokens — from DESIGN.md */
-  --bg: #0a0b0d;
-  --surface: #121316;
-  --surface-warm: #1a1c21;
-  --fg: #f3f4f6;
-  --muted: #8e939e;
-  --border: #22242b;
-  --accent: #2cf575;
-  --accent-on: #071a0d;
-  --twilight-glow: #081a10;
-  --success: #10b981;
-  --warn: #f59e0b;
-  --danger: #ef4444;
-
-  /* Legacy aliases kept for the transition */
-  --panel: var(--surface-warm);
-  --line: var(--border);
-  --text: var(--fg);
-  --dim: var(--muted);
+  /* Dragon Fire Workbench v2 tokens — from merged-design.json */
+  --backdrop: oklch(11% 0.015 145);
+  --chrome-bg: oklch(15% 0.004 250);
+  --bg: oklch(18% 0.005 250);
+  --surface: oklch(22% 0.006 250);
+  --surface-warm: oklch(26% 0.008 250);
+  --editor-bg: oklch(20% 0.005 250);
+  --active-row: oklch(24% 0.020 145);
+  --fg: oklch(96% 0.003 250);
+  --muted: oklch(66% 0.012 250);
+  --border: oklch(30% 0.010 250);
+  --accent: oklch(88% 0.21 145);
+  --accent-on: oklch(20% 0.03 145);
+  --twilight-glow: oklch(18% 0.03 145);
+  --success: oklch(72% 0.15 160);
+  --warn: oklch(76% 0.15 65);
+  --danger: oklch(64% 0.22 25);
 
   color-scheme: dark;
+}
+
+/* Auto: follow the OS unless the user picked an explicit theme (data-theme). */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --backdrop: oklch(92% 0.015 145);
+    --chrome-bg: oklch(97% 0.004 250);
+    --bg: oklch(99% 0.003 250);
+    --surface: oklch(96% 0.004 250);
+    --surface-warm: oklch(93% 0.006 250);
+    --editor-bg: oklch(98% 0.003 250);
+    --active-row: oklch(90% 0.04 145);
+    --fg: oklch(20% 0.006 250);
+    --muted: oklch(46% 0.012 250);
+    --border: oklch(85% 0.010 250);
+    --accent: oklch(46% 0.16 145);
+    --accent-on: oklch(98% 0.02 145);
+    --twilight-glow: oklch(90% 0.05 145);
+    --success: oklch(42% 0.13 160);
+    --warn: oklch(48% 0.13 65);
+    --danger: oklch(46% 0.19 25);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --backdrop: oklch(92% 0.015 145);
+  --chrome-bg: oklch(97% 0.004 250);
+  --bg: oklch(99% 0.003 250);
+  --surface: oklch(96% 0.004 250);
+  --surface-warm: oklch(93% 0.006 250);
+  --editor-bg: oklch(98% 0.003 250);
+  --active-row: oklch(90% 0.04 145);
+  --fg: oklch(20% 0.006 250);
+  --muted: oklch(46% 0.012 250);
+  --border: oklch(85% 0.010 250);
+  --accent: oklch(46% 0.16 145);
+  --accent-on: oklch(98% 0.02 145);
+  --twilight-glow: oklch(90% 0.05 145);
+  --success: oklch(42% 0.13 160);
+  --warn: oklch(48% 0.13 65);
+  --danger: oklch(46% 0.19 25);
+  color-scheme: light;
 }
 
 * {
@@ -31,9 +72,9 @@ html,
 #root {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--backdrop);
   color: var(--fg);
-  font: 16px/1.5 "Super Sans VF", system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -67,8 +108,9 @@ select {
   color: var(--fg);
   background: var(--surface-warm);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
 }
 
 button {
@@ -84,7 +126,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
 }
 
 button:disabled {
@@ -127,38 +169,155 @@ input[type="checkbox"] {
   background: color-mix(in oklab, var(--border), white 10%);
 }
 
+/* --- window shell & backdrop (v2) --------------------------------------- */
+
+#backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--backdrop);
+  z-index: 0;
+}
+
+.ds-window {
+  position: relative;
+  z-index: 1;
+  background: var(--bg);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(44, 245, 117, 0.06);
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-traffic-lights {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10;
+}
+
+.ds-light {
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 9999px;
+}
+
+.ds-light:hover {
+  filter: brightness(1.15);
+}
+
+.ds-light.red { background: #ff5f57; }
+.ds-light.yellow { background: #febc2e; }
+.ds-light.green { background: #28c840; }
+
 .app {
   display: flex;
   flex-direction: column;
   height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
-.topbar {
+/* --- top chrome (v2) ---------------------------------------------------- */
+
+.ds-top-chrome {
+  height: 36px;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  height: 56px;
-  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+  position: relative;
   flex-shrink: 0;
 }
 
-.brand {
-  font-weight: 600;
-  margin-right: 6px;
-  letter-spacing: -0.01em;
-  font-size: 16px;
+.ds-mode-selector {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  background: var(--surface-warm);
+  padding: 2px;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
 }
 
-.root {
-  margin-left: auto;
+.ds-mode-btn {
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 45%;
+  background: transparent;
+  border: none;
+  transition: all 120ms ease-out;
 }
+
+.ds-mode-btn kbd {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9px;
+  padding: 0 3px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+
+.ds-mode-btn.active {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.ds-mode-btn:not(.active):hover {
+  color: var(--fg);
+}
+
+.ds-mode-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ds-chrome-utils {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.ds-icon-btn {
+  min-width: 24px;
+  width: auto;
+  padding: 0 6px;
+  height: 24px;
+  border-radius: 6px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9px;
+  transition: all 120ms ease-out;
+}
+
+.ds-icon-btn:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
+.ds-icon-btn.ok { color: var(--accent); border-color: var(--accent); }
+.ds-icon-btn.warn { color: var(--warn); border-color: var(--warn); }
+.ds-icon-btn.bad { color: var(--muted); }
 
 .error {
   padding: 10px 16px;
@@ -180,42 +339,76 @@ input[type="checkbox"] {
   min-height: 0;
 }
 
-.sidebar {
-  width: 260px;
-  flex-shrink: 0;
+/* --- navigation rail (v2) ------------------------------------------------ */
+
+.ds-nav-rail {
+  width: 193px;
+  background: var(--chrome-bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 12px;
-  gap: 8px;
+  padding: 10px 10px 8px;
+  flex-shrink: 0;
   min-height: 0;
-  background: var(--surface);
 }
 
-.tabs {
+.ds-rail-section {
+  margin-bottom: 12px;
+}
+
+.ds-rail-section.ds-rail-threads {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  gap: 6px;
+  flex-direction: column;
 }
 
-.tabs button.on {
-  color: var(--fg);
-  border-color: var(--fg);
-  border-bottom-color: var(--fg);
-  background: transparent;
-  border-radius: 8px 8px 0 0;
+.ds-rail-label {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 0 4px 6px;
 }
 
-.wide {
+.ds-rail-section select {
   width: 100%;
-  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 6px;
+  border-radius: 6px;
+  margin-bottom: 4px;
 }
 
-.wide svg {
-  width: 14px;
-  height: 14px;
+.ds-rail-actions {
+  display: flex;
+  gap: 4px;
 }
 
-.sidebar ul {
+.ds-rail-actions button {
+  flex: 1;
+  font-size: 10px;
+  padding: 3px 6px;
+}
+
+.ds-new-thread {
+  width: 100%;
+  background: var(--surface-warm);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ds-new-thread:hover:not(:disabled) {
+  border-color: var(--fg);
+}
+
+.ds-nav-rail ul {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -223,45 +416,207 @@ input[type="checkbox"] {
   flex: 1;
 }
 
-.sidebar li {
+.ds-nav-rail li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: relative;
+  color: var(--muted);
+  transition: background 120ms ease-out;
+}
+
+.ds-nav-rail li:hover {
+  background: var(--surface-warm);
+}
+
+.ds-nav-rail li.active {
+  background: var(--surface-warm);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding-left: 6px;
+}
+
+.ds-thread-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
+}
+
+.ds-thread-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--muted);
-  transition: all 150ms cubic-bezier(0.2, 0, 0, 1);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
-.sidebar li:hover {
-  background: var(--surface-warm);
-  color: var(--fg);
-}
-
-.sidebar li:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%);
-}
-
-.sidebar li.on {
-  background: var(--surface-warm);
+.ds-nav-rail li.active .ds-thread-title {
   color: var(--fg);
   font-weight: 600;
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
-  padding-left: 9px;
 }
 
-.sidebar li.on:focus-visible {
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%), inset 0 0 0 0;
+.ds-thread-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.sidebar li .title {
+.ds-thread-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.ds-nav-rail li:hover .ds-thread-actions,
+.ds-nav-rail li:focus-within .ds-thread-actions {
+  opacity: 1;
+}
+
+.ds-thread-action {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.ds-thread-action:hover {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.ds-thread-action.delete:hover {
+  color: var(--danger);
+}
+
+.ds-rail-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--border);
+}
+
+.ds-user-chip {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--surface-warm);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.ds-user-name {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ds-think-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ds-think-toggle input {
+  accent-color: var(--accent);
+  width: 10px;
+  height: 10px;
+  margin: 0;
+}
+
+/* --- file tree (v2) ----------------------------------------------------- */
+
+.ds-file-tree {
+  width: 143px;
+  background: var(--editor-bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  min-height: 0;
+}
+
+.ds-tree-header {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ds-tree-body {
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
+}
+
+.ds-tree-row {
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  transition: background 120ms ease-out;
+}
+
+.ds-tree-row:hover {
+  background: var(--surface-warm);
+  color: var(--fg);
+}
+
+.ds-tree-row.active {
+  background: var(--active-row);
+  color: var(--fg);
+}
+
+.ds-tree-row.active .ds-chevron {
+  color: var(--accent);
+}
+
+.ds-chevron {
+  font-size: 9px;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.ds-tree-label {
   text-overflow: ellipsis;
+  overflow: hidden;
   white-space: nowrap;
+}
+
+.ds-tree-error {
+  padding: 6px 10px;
+  font-size: 10px;
+  color: var(--danger);
 }
 
 .badge {
@@ -286,27 +641,214 @@ input[type="checkbox"] {
   border-color: var(--border);
 }
 
-.thread-delete {
-  border: none;
-  background: none;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 1;
-  padding: 2px 5px;
-  border-radius: 8px;
-}
-
-.thread-delete:hover {
-  color: var(--danger);
-  background: color-mix(in oklab, var(--danger), transparent 90%);
-}
-
 .main {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--editor-bg);
+}
+
+/* --- editor tabs (v2) --------------------------------------------------- */
+
+.ds-editor-tabs {
+  height: 28px;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-end;
+  padding: 0 8px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ds-tab {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 5px 5px 0 0;
+  color: var(--muted);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: all 120ms ease-out;
+}
+
+.ds-tab:hover {
+  color: var(--fg);
+}
+
+.ds-tab.active {
+  background: var(--editor-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-bottom-color: var(--editor-bg);
+}
+
+.ds-tab.diff.active {
+  color: var(--accent);
+}
+
+/* --- file editor (v2) ---------------------------------------------------- */
+
+.ds-code-editor {
+  flex: 1;
+  min-height: 0;
+  background: var(--editor-bg);
+  display: flex;
+  flex-direction: column;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ds-code-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ds-code-row {
+  display: flex;
+}
+
+.ds-code-lineno {
+  flex-shrink: 0;
+  width: 44px;
+  padding: 0 10px;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+  border-right: 1px solid var(--border);
+  position: sticky;
+  left: 0;
+  background: var(--editor-bg);
+}
+
+.ds-code-text {
+  padding: 0 16px;
+  white-space: pre;
+  color: var(--fg);
+}
+
+/* --- breadcrumbs (v2) --------------------------------------------------- */
+
+.ds-breadcrumbs {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 8px 12px 6px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--editor-bg);
+  flex-shrink: 0;
+}
+
+.ds-crumb-sep {
+  opacity: 0.5;
+}
+
+.ds-crumb-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --- right sidebar (v2) ------------------------------------------------- */
+
+.ds-right-sidebar {
+  width: 300px;
+  max-width: calc(100vw - 40px);
+  background: var(--chrome-bg);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+  transition: margin 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ds-right-sidebar.collapsed {
+  margin-right: -300px;
+}
+
+/* The Code Map's force-directed canvas + communities legend need real
+   estate — 300px squeezes the canvas to nothing and clips the query row. */
+.ds-right-sidebar.wide {
+  width: 640px;
+}
+
+.ds-right-sidebar.wide.collapsed {
+  margin-right: -640px;
+}
+
+.ds-right-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ds-right-tabs button {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 8px 6px;
+  cursor: pointer;
+  transition: color 120ms ease-out;
+}
+
+.ds-right-tabs button.active {
+  color: var(--fg);
+  border-bottom: 2px solid var(--accent);
+}
+
+.ds-right-tabs button:hover {
+  color: var(--fg);
+}
+
+.ds-right-panes {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ds-notes-panel {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ds-notes-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ds-notes-panel li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  transition: background 120ms ease-out;
+}
+
+.ds-notes-panel li:hover {
+  background: var(--surface-warm);
+  color: var(--fg);
+}
+
+.ds-notes-panel li.active {
+  background: var(--surface-warm);
+  color: var(--fg);
+  font-weight: 600;
 }
 
 .pane-head {
@@ -322,32 +864,12 @@ input[type="checkbox"] {
   flex: 1;
 }
 
-button.mode {
-  border-color: var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-weight: 600;
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
-  text-transform: capitalize;
-}
-
-button.mode.spec {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-button.mode.go {
-  border-color: var(--fg);
-  color: var(--fg);
-}
-
 .spec-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: 6px 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--accent);
   background: linear-gradient(135deg, var(--twilight-glow), transparent 80%);
@@ -369,15 +891,53 @@ button.mode.go {
   gap: 16px;
 }
 
+/* --- agent chat bubble (v2) ---------------------------------------------- */
+
+.ds-chat-bubble {
+  display: flex;
+  gap: 10px;
+  max-width: 85%;
+}
+
+.ds-chat-bubble.agent {
+  align-self: flex-start;
+}
+
+.ds-chat-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--twilight-glow);
+  color: var(--accent);
+  border: 1px solid var(--twilight-glow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.ds-chat-avatar.claude {
+  background: var(--accent);
+  color: var(--accent-on);
+  border-color: var(--accent);
+}
+
+.ds-chat-bubble .message {
+  max-width: 100%;
+}
+
 .message {
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 12px 16px;
+  border-radius: 8px;
+  padding: 10px 14px;
   background: var(--surface-warm);
   color: var(--fg);
   max-width: 80%;
   align-self: flex-start;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -462,7 +1022,7 @@ button.mode.go {
 .crash-banner {
   border: 1px solid color-mix(in oklab, var(--danger), transparent 70%);
   background: color-mix(in oklab, var(--danger), transparent 90%);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 10px 14px;
   color: var(--danger);
   font-size: 13px;
@@ -470,20 +1030,20 @@ button.mode.go {
 
 .tool-block {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   max-width: 100%;
 }
 
 .reasoning-inline {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 10px 14px;
   max-width: 80%;
   color: var(--muted);
   font-style: italic;
   white-space: pre-wrap;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .tool-block.failed {
@@ -540,7 +1100,7 @@ button.mode.go {
 
 .file-edit {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   font-size: 12px;
 }
@@ -591,7 +1151,7 @@ button.mode.go {
   margin: 12px 16px 0;
   border: 1px solid color-mix(in oklab, var(--danger), transparent 70%);
   background: color-mix(in oklab, var(--danger), transparent 90%);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 10px 14px;
   color: var(--danger);
   font-size: 13px;
@@ -639,11 +1199,17 @@ details.graph-report-wrap > summary {
 
 .graph-query {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.graph-query select {
+  flex-shrink: 0;
 }
 
 .graph-query input {
   flex: 1;
+  min-width: 120px;
 }
 
 /* --- graph view --------------------------------------------------------- */
@@ -651,7 +1217,7 @@ details.graph-report-wrap > summary {
 .graph-view {
   display: flex;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 8px;
   overflow: hidden;
   background: var(--surface-warm);
   /* The graph is the hero of this pane: take the height available and never
@@ -681,9 +1247,10 @@ details.graph-report-wrap > summary {
 .graph-tooltip {
   position: absolute;
   pointer-events: none;
-  background: rgba(10, 11, 13, 0.96);
+  background: var(--surface-warm);
+  color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 6px 9px;
   display: flex;
   flex-direction: column;
@@ -767,7 +1334,7 @@ details.graph-report-wrap > summary {
 
 .graph-report {
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 14px;
   background: var(--surface);
 }
@@ -781,6 +1348,14 @@ details.graph-report-wrap > summary {
   gap: 12px;
   padding: 12px 16px;
   border-top: 1px solid var(--border);
+  transition: background 120ms ease-out, outline-color 120ms ease-out;
+  outline: 2px dashed transparent;
+  outline-offset: -2px;
+}
+
+.composer.drag-active {
+  background: color-mix(in oklab, var(--accent), transparent 92%);
+  outline-color: var(--accent);
 }
 
 .composer input {
@@ -789,22 +1364,22 @@ details.graph-report-wrap > summary {
 }
 
 .composer .send {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   background: var(--accent);
   color: var(--accent-on);
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  transition: background 150ms cubic-bezier(0.2, 0, 0, 1);
+  transition: background 120ms ease-out;
 }
 
 .composer .send svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .composer .send:hover:not(:disabled) {
@@ -843,34 +1418,42 @@ details.graph-report-wrap > summary {
   font-size: 13px;
 }
 
-.editor .wmde-markdown {
+.wmde-markdown {
   background: var(--surface-warm);
   color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
 }
 
-.editor .wmde-markdown h1,
-.editor .wmde-markdown h2,
-.editor .wmde-markdown h3 {
+.wmde-markdown h1,
+.wmde-markdown h2,
+.wmde-markdown h3 {
   color: var(--fg);
   border-bottom-color: var(--border);
 }
 
-.editor .wmde-markdown code {
+.wmde-markdown code {
   background: var(--bg);
   color: var(--accent);
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 }
 
-.editor .wmde-markdown pre {
+.wmde-markdown pre {
   background: var(--bg);
   border: 1px solid var(--border);
 }
 
-.editor .wmde-markdown ul li::marker {
+.wmde-markdown ul li::marker {
   color: var(--accent);
 }
 
-.editor .wmde-markdown a {
+.wmde-markdown a {
   color: var(--accent);
+}
+
+.message .content.wmde-markdown {
+  background: transparent;
+  padding: 0;
 }
 
 .overlay {
@@ -887,9 +1470,9 @@ details.graph-report-wrap > summary {
 .commandbar {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 16px 18px;
-  width: min(540px, 90vw);
+  border-radius: 8px;
+  padding: 12px 14px;
+  width: min(480px, 90vw);
   height: fit-content;
   display: flex;
   flex-direction: column;
@@ -927,4 +1510,78 @@ details.graph-report-wrap > summary {
 
 .confirm-actions .danger:hover {
   border-color: var(--danger);
+}
+
+/* --- responsive (v2) ---------------------------------------------------- */
+
+@media (max-width: 920px) {
+  .ds-nav-rail,
+  .ds-right-sidebar {
+    position: fixed;
+    top: 36px;
+    bottom: 0;
+    z-index: 50;
+  }
+
+  .ds-nav-rail {
+    left: 0;
+  }
+
+  .ds-nav-rail.collapsed {
+    margin-left: -193px;
+  }
+
+  .ds-right-sidebar {
+    right: 0;
+  }
+
+  .ds-right-sidebar.collapsed {
+    margin-right: -300px;
+  }
+
+  /* Below the cocktail-rail breakpoint the nav rail is also a fixed overlay —
+     640px plus the rail would swallow the whole window and hide the chat
+     underneath both. Cap the graph panel narrower here instead. */
+  .ds-right-sidebar.wide {
+    width: 420px;
+  }
+
+  .ds-right-sidebar.wide.collapsed {
+    margin-right: -420px;
+  }
+}
+
+@media (max-width: 760px) {
+  .ds-file-tree {
+    display: none;
+  }
+
+  .ds-nav-rail {
+    width: 48px;
+    padding: 8px 4px;
+  }
+
+  .ds-nav-rail .ds-rail-label,
+  .ds-nav-rail .ds-rail-actions,
+  .ds-nav-rail .ds-thread-title,
+  .ds-nav-rail .ds-thread-meta,
+  .ds-nav-rail .ds-user-name,
+  .ds-nav-rail .ds-think-toggle,
+  .ds-nav-rail select,
+  .ds-new-thread {
+    display: none;
+  }
+
+  .ds-nav-rail .ds-rail-section {
+    margin-bottom: 8px;
+  }
+
+  .ds-nav-rail li {
+    padding: 4px;
+    justify-content: center;
+  }
+
+  .ds-nav-rail .ds-thread-actions {
+    display: none;
+  }
 }

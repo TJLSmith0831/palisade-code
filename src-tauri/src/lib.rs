@@ -8,7 +8,15 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 use executor::{ExecutorEvent, Harness, Kind, Preflight, Sink, Spawn};
+use serde::Serialize;
 use store::{floo_home, Message, Project, Res, ThreadMeta};
+
+#[derive(Debug, Clone, Serialize)]
+struct DirEntry {
+    name: String,
+    is_dir: bool,
+    path: String,
+}
 
 /// Notes live inside the target project, so every note command resolves the
 /// project's root from the global index rather than trusting the frontend.
@@ -454,6 +462,54 @@ fn query_graphify(project_hash: String, subcommand: String, args: Vec<String>) -
     )
 }
 
+// ------------------------------------------------------------- file tree
+
+#[tauri::command]
+fn list_directory(project_hash: String, relative_path: String) -> Res<Vec<DirEntry>> {
+    let root = project_root(&project_hash)?;
+    let target = if relative_path.is_empty() {
+        root.clone()
+    } else {
+        let joined = root.join(&relative_path);
+        std::fs::canonicalize(&joined)
+            .map_err(|err| format!("no such directory: {} ({err})", joined.display()))?
+    };
+    if !target.starts_with(&root) {
+        return Err("path must stay inside the project".into());
+    }
+    let mut entries: Vec<DirEntry> = Vec::new();
+    for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
+        let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "node_modules" || name == "target" {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let full = entry.path();
+        let path = full
+            .strip_prefix(&root)
+            .unwrap_or(&full)
+            .to_string_lossy()
+            .to_string();
+        entries.push(DirEntry { name, is_dir, path });
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    Ok(entries)
+}
+
+#[tauri::command]
+fn read_file_content(project_hash: String, relative_path: String) -> Res<String> {
+    let root = project_root(&project_hash)?;
+    let target = root.join(&relative_path);
+    let resolved = std::fs::canonicalize(&target)
+        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
+    if !resolved.starts_with(&root) {
+        return Err("path must stay inside the project".into());
+    }
+    std::fs::read_to_string(&resolved)
+        .map_err(|err| format!("cannot read file: {err}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
@@ -497,6 +553,8 @@ pub fn run() {
             run_graphify,
             load_graphify,
             query_graphify,
+            list_directory,
+            read_file_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

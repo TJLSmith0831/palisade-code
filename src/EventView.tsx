@@ -1,7 +1,54 @@
 import { useState } from "react";
+import MDEditor from "@uiw/react-md-editor";
 import ReactDiffViewer from "react-diff-viewer-continued";
 
-import type { ExecutorEvent, Message } from "./api";
+import type { ExecutorEvent, Message, Preflight } from "./api";
+
+// Themes react-diff-viewer-continued to the Dragon Fire tokens instead of its
+// own built-in dark palette — see "Diff Line (addition)" in merged-design.json.
+const diffStyles = {
+  variables: {
+    dark: {
+      diffViewerBackground: "var(--bg)",
+      diffViewerColor: "var(--fg)",
+      addedBackground: "rgba(22, 163, 74, 0.06)",
+      addedColor: "var(--success)",
+      removedBackground: "color-mix(in oklab, var(--danger), transparent 94%)",
+      removedColor: "var(--danger)",
+      wordAddedBackground: "color-mix(in oklab, var(--success), transparent 65%)",
+      wordRemovedBackground: "color-mix(in oklab, var(--danger), transparent 65%)",
+      addedGutterBackground: "var(--surface-warm)",
+      removedGutterBackground: "var(--surface-warm)",
+      gutterBackground: "var(--surface-warm)",
+      gutterBackgroundDark: "var(--surface-warm)",
+      gutterColor: "var(--muted)",
+      addedGutterColor: "var(--muted)",
+      removedGutterColor: "var(--muted)",
+      codeFoldGutterBackground: "var(--surface)",
+      codeFoldBackground: "var(--surface)",
+      emptyLineBackground: "var(--bg)",
+      highlightBackground: "var(--active-row)",
+      highlightGutterBackground: "var(--active-row)",
+    },
+  },
+  diffContainer: {
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+    fontSize: "12px",
+  },
+};
+
+/** The "Code Change Diff" tab shows only applied patches; "Console Chat" shows everything. */
+export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
+  return tab === "diff" ? items.filter((item) => item.kind === "fileEdit") : items;
+}
+
+function ChatAvatar({ executor }: { executor: Preflight["selected"] }) {
+  return (
+    <div className={`ds-chat-avatar ${executor === "claude" ? "claude" : ""}`}>
+      {executor === "claude" ? "C" : executor === "codex" ? "X" : "A"}
+    </div>
+  );
+}
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
@@ -79,7 +126,15 @@ function ToolBlock({ event, output }: { event: Extract<ExecutorEvent, { kind: "t
   );
 }
 
-export function EventList({ items, showThinking }: { items: Item[]; showThinking: boolean }) {
+export function EventList({
+  items,
+  showThinking,
+  executor,
+}: {
+  items: Item[];
+  showThinking: boolean;
+  executor: Preflight["selected"];
+}) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = new Map<string, Extract<ExecutorEvent, { kind: "toolResult" }>>();
   for (const item of items) {
@@ -92,23 +147,42 @@ export function EventList({ items, showThinking }: { items: Item[]; showThinking
         switch (item.kind) {
           case "plain":
             // A crash is persisted as a system turn; it stays a banner on reload.
-            return item.role === "system" ? (
-              <div key={index} className="crash-banner" data-testid="crash-banner">
-                {item.text} Reverted to spec mode.
-              </div>
-            ) : (
+            if (item.role === "system") {
+              return (
+                <div key={index} className="crash-banner" data-testid="crash-banner">
+                  {item.text} Reverted to spec mode.
+                </div>
+              );
+            }
+            if (item.role === "assistant") {
+              return (
+                <div key={index} className="ds-chat-bubble agent">
+                  <ChatAvatar executor={executor} />
+                  <div className="message assistant">
+                    <span className="meta">
+                      {item.role} · {item.mode}
+                    </span>
+                    <MDEditor.Markdown source={item.text} className="content" />
+                  </div>
+                </div>
+              );
+            }
+            return (
               <div key={index} className={`message ${item.role}`}>
                 <span className="meta">
                   {item.role} · {item.mode}
                 </span>
-                <div className="content">{item.text}</div>
+                <MDEditor.Markdown source={item.text} className="content" />
               </div>
             );
           case "text":
             return (
-              <div key={index} className="message assistant">
-                <span className="meta">assistant</span>
-                <div className="content">{item.text}</div>
+              <div key={index} className="ds-chat-bubble agent">
+                <ChatAvatar executor={executor} />
+                <div className="message assistant">
+                  <span className="meta">assistant</span>
+                  <MDEditor.Markdown source={item.text} className="content" />
+                </div>
               </div>
             );
           case "reasoning":
@@ -136,6 +210,7 @@ export function EventList({ items, showThinking }: { items: Item[]; showThinking
                   useDarkTheme
                   hideLineNumbers
                   showDiffOnly
+                  styles={diffStyles}
                 />
               </div>
             );

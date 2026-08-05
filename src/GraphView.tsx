@@ -191,6 +191,12 @@ export default function GraphView({ graph }: { graph: object }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // Read live instead of hardcoding so the canvas follows the active
+    // light/dark theme. ponytail: read once per graph load, not per frame —
+    // upgrade to a prefers-color-scheme listener if live-toggle-while-viewing
+    // needs to repaint immediately.
+    const surfaceColor = getComputedStyle(canvas).getPropertyValue("--surface").trim() || SURFACE;
+
     // Seed each community on its own arc so they start apart and the layout
     // settles into separated clusters rather than one undifferentiated ball.
     const order = new Map(model.communities.map((c, index) => [c.name, index]));
@@ -247,7 +253,7 @@ export default function GraphView({ graph }: { graph: object }) {
       const { k, x: panX, y: panY } = viewRef.current;
       context.save();
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      context.fillStyle = SURFACE;
+      context.fillStyle = surfaceColor;
       context.fillRect(0, 0, width, height);
       context.translate(panX, panY);
       context.scale(k, k);
