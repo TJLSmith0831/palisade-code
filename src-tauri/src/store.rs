@@ -189,6 +189,21 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
     Ok(meta)
 }
 
+/// Removes both files that make up a thread. `list_threads` is scan-based
+/// (globs `*.meta.json`), so there's no separate index to keep in sync.
+/// Idempotent: an already-missing file is not an error.
+pub fn delete_thread(home: &Path, hash: &str, id: &str) -> Res<()> {
+    let remove = |path: PathBuf| -> Res<()> {
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(e(&format!("delete {}", path.display()), err)),
+        }
+    };
+    remove(meta_path(home, hash, id))?;
+    remove(log_path(home, hash, id))
+}
+
 pub fn list_threads(home: &Path, hash: &str) -> Res<Vec<ThreadMeta>> {
     let dir = threads_dir(home, hash);
     let entries = match fs::read_dir(&dir) {
@@ -474,6 +489,48 @@ mod tests {
 
         let listed = list_threads(home.path(), &project.hash).unwrap();
         assert_eq!(listed, vec![thread]);
+    }
+
+    #[test]
+    fn deleting_a_thread_removes_both_files_and_drops_it_from_the_list() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "scratch").unwrap();
+
+        delete_thread(home.path(), &project.hash, &thread.id).unwrap();
+
+        assert!(!meta_path(home.path(), &project.hash, &thread.id).exists());
+        assert!(!log_path(home.path(), &project.hash, &thread.id).exists());
+        assert!(list_threads(home.path(), &project.hash).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_an_already_deleted_thread_is_not_an_error() {
+        // Idempotent: the log file always exists once a thread is created,
+        // but a caller retrying after a partial failure shouldn't see this
+        // as a new error.
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "scratch").unwrap();
+
+        delete_thread(home.path(), &project.hash, &thread.id).unwrap();
+        assert!(delete_thread(home.path(), &project.hash, &thread.id).is_ok());
+    }
+
+    #[test]
+    fn deleting_one_thread_leaves_others_untouched() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let keep = create_thread(home.path(), &project.hash, "keep").unwrap();
+        let gone = create_thread(home.path(), &project.hash, "gone").unwrap();
+
+        delete_thread(home.path(), &project.hash, &gone.id).unwrap();
+
+        let listed = list_threads(home.path(), &project.hash).unwrap();
+        assert_eq!(listed, vec![keep]);
     }
 
     #[test]

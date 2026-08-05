@@ -9,6 +9,38 @@ export type Item =
   | ExecutorEvent;
 
 /**
+ * Folds live `textDelta`/`reasoningDelta` events onto the in-progress
+ * `text`/`reasoning` item they extend, and lets the matching complete event
+ * (once it arrives) replace the accumulation with the authoritative text —
+ * so streaming renders as one growing message, not a new bubble per chunk.
+ * A tool call (or anything else) between two delta runs ends the run, so a
+ * later delta of the same kind correctly starts a fresh item rather than
+ * appending to an already-finished one.
+ */
+export function mergeDeltas(events: ExecutorEvent[]): ExecutorEvent[] {
+  const merged: ExecutorEvent[] = [];
+  for (const event of events) {
+    if (event.kind === "textDelta" || event.kind === "reasoningDelta") {
+      const kind = event.kind === "textDelta" ? "text" : "reasoning";
+      const last = merged[merged.length - 1];
+      if (last && last.kind === kind) {
+        merged[merged.length - 1] = { kind, text: last.text + event.text };
+      } else {
+        merged.push({ kind, text: event.text });
+      }
+      continue;
+    }
+    const last = merged[merged.length - 1];
+    if ((event.kind === "text" || event.kind === "reasoning") && last?.kind === event.kind) {
+      merged[merged.length - 1] = event; // authoritative replace of the accumulation
+      continue;
+    }
+    merged.push(event);
+  }
+  return merged;
+}
+
+/**
  * Structured events are persisted as JSON under `role: "tool"`, so a reloaded
  * thread renders the same diffs and tool blocks a live one does. Anything that
  * doesn't parse (a mode-switch marker, say) falls back to plain text.
@@ -47,19 +79,7 @@ function ToolBlock({ event, output }: { event: Extract<ExecutorEvent, { kind: "t
   );
 }
 
-function Reasoning({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="reasoning">
-      <button className="tool-head" onClick={() => setOpen(!open)}>
-        <span className="chev">{open ? "▾" : "▸"}</span> thinking
-      </button>
-      {open && <pre className="tool-body">{text}</pre>}
-    </div>
-  );
-}
-
-export function EventList({ items }: { items: Item[] }) {
+export function EventList({ items, showThinking }: { items: Item[]; showThinking: boolean }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = new Map<string, Extract<ExecutorEvent, { kind: "toolResult" }>>();
   for (const item of items) {
@@ -92,7 +112,19 @@ export function EventList({ items }: { items: Item[] }) {
               </div>
             );
           case "reasoning":
-            return <Reasoning key={index} text={item.text} />;
+            // Global toggle (D19), not a per-message disclosure — off means
+            // not rendered at all.
+            return showThinking ? (
+              <div key={index} className="reasoning-inline" data-testid="reasoning">
+                {item.text}
+              </div>
+            ) : null;
+          // mergeDeltas always folds these into "text"/"reasoning" before
+          // EventList sees them; kept here only so the switch documents
+          // every Item kind instead of relying on the implicit fallthrough.
+          case "textDelta":
+          case "reasoningDelta":
+            return null;
           case "fileEdit":
             return (
               <div key={index} className="file-edit" data-testid="file-edit">

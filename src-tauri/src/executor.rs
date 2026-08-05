@@ -113,6 +113,7 @@ pub struct Preflight {
     pub openspec: bool,
     pub grill_apply: bool,
     pub ponytail: bool,
+    pub graphify: bool,
     /// True when a change-linked `/go` has everything it needs.
     pub ready: bool,
     pub warnings: Vec<String>,
@@ -129,6 +130,7 @@ pub fn preflight() -> Preflight {
     };
 
     let openspec = find_on_path("openspec").is_some();
+    let graphify = find_on_path("graphify").is_some();
     let (grill_apply, ponytail) = match selected {
         Some(Kind::Claude) => (
             home().join(".claude/skills/grill-apply").is_dir(),
@@ -154,6 +156,9 @@ pub fn preflight() -> Preflight {
     if selected.is_some() && !ponytail {
         warnings.push("Ponytail plugin not detected — install it in the executor itself (the harness cannot).".into());
     }
+    if !graphify {
+        warnings.push("`graphify` not on PATH — code maps won't build. Install: `uv tool install \"graphifyy[watch]\"`.".into());
+    }
 
     Preflight {
         claude: claude.map(|p| p.to_string_lossy().to_string()),
@@ -162,6 +167,7 @@ pub fn preflight() -> Preflight {
         openspec,
         grill_apply,
         ponytail,
+        graphify,
         ready: selected.is_some() && grill_apply && openspec,
         warnings,
         checked_at: chrono::Utc::now().to_rfc3339(),
@@ -177,6 +183,12 @@ pub fn preflight() -> Preflight {
 pub enum ExecutorEvent {
     Text { text: String },
     Reasoning { text: String },
+    /// A live fragment of an in-progress `Text`/`Reasoning` message
+    /// (Claude's `stream_event` content-block deltas, D6/D27) — a
+    /// rendering signal only, never persisted; the complete `Text`/
+    /// `Reasoning` event that follows is the thing written to the log.
+    TextDelta { text: String },
+    ReasoningDelta { text: String },
     FileEdit { id: String, path: String, before: String, after: String },
     /// Emitted when the tool starts; `ToolResult` fills in its output later.
     ToolCall { id: String, name: String, command: String },
@@ -259,6 +271,35 @@ pub fn parse_claude_line(value: &Value, read_before: &dyn Fn(&str) -> String) ->
                 });
             }
             events.push(ExecutorEvent::Done);
+        }
+        // Real shape, captured from a live `claude --include-partial-messages`
+        // run (D27): {"type":"stream_event","event":{"type":
+        // "content_block_delta","delta":{"type":"text_delta"|"thinking_delta",
+        // ...}}}. Only those two delta types carry renderable text;
+        // `signature_delta` (the thinking block's closing cryptographic
+        // signature) and every other `event.type` are silently ignored.
+        Some("stream_event") => {
+            let is_delta = value.pointer("/event/type").and_then(Value::as_str) == Some("content_block_delta");
+            if is_delta {
+                let delta = value.pointer("/event/delta");
+                match delta.and_then(|d| d.get("type")).and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let text = delta.and_then(|d| d.get("text")).and_then(Value::as_str).unwrap_or("");
+                        // Not `.trim()` — a delta can be pure whitespace
+                        // between two words and must survive concatenation.
+                        if !text.is_empty() {
+                            events.push(ExecutorEvent::TextDelta { text: text.to_string() });
+                        }
+                    }
+                    Some("thinking_delta") => {
+                        let text = delta.and_then(|d| d.get("thinking")).and_then(Value::as_str).unwrap_or("");
+                        if !text.is_empty() {
+                            events.push(ExecutorEvent::ReasoningDelta { text: text.to_string() });
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         _ => {}
     }
@@ -379,8 +420,13 @@ pub fn parse_codex_line(value: &Value) -> Vec<ExecutorEvent> {
 pub fn persist(home: &Path, project_hash: &str, thread_id: &str, mode: &str, event: &ExecutorEvent) {
     let (role, content) = match event {
         ExecutorEvent::Text { text } => ("assistant", text.clone()),
-        // Reasoning is transient and can be enormous; not persisted.
-        ExecutorEvent::Reasoning { .. } | ExecutorEvent::Done => return,
+        // Reasoning is transient and can be enormous; not persisted. Deltas
+        // are a live-rendering signal only — the complete Text/Reasoning
+        // event that follows each one is what actually gets persisted.
+        ExecutorEvent::Reasoning { .. }
+        | ExecutorEvent::TextDelta { .. }
+        | ExecutorEvent::ReasoningDelta { .. }
+        | ExecutorEvent::Done => return,
         ExecutorEvent::Crashed { message, .. } => ("system", message.clone()),
         structured => ("tool", serde_json::to_string(structured).unwrap_or_default()),
     };
@@ -727,6 +773,9 @@ pub struct Harness {
     pub session: Mutex<Option<Session>>,
     pub preflight: Mutex<Option<Preflight>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
+    /// The `graphify watch` process for whichever project is currently
+    /// active — never more than one at a time (D16).
+    pub watch: Mutex<Option<crate::integrations::Watcher>>,
 }
 
 // ------------------------------------------------------------------ tests
@@ -850,6 +899,90 @@ mod tests {
                 ExecutorEvent::Text { text: "hello".into() },
             ]
         );
+    }
+
+    // Fixtures below use the exact envelope shape captured from a real
+    // `claude --print --include-partial-messages --output-format
+    // stream-json` run (D6/D27): `{"type":"stream_event","event":{"type":
+    // "content_block_delta","delta":{"type":"text_delta","text":"..."}}}`.
+    // In that capture `thinking_delta.thinking` came through empty (just an
+    // `estimated_tokens` counter) for the prompts tried — the envelope
+    // shape is verified real; the thinking-delta fixtures below give it
+    // synthetic non-empty text to prove the parsing path, since an empty
+    // real capture can't exercise it.
+
+    #[test]
+    fn claude_stream_event_text_delta_appends_live() {
+        let line = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": { "type": "text_delta", "text": "hello there" }
+            }
+        });
+        assert_eq!(
+            parse_claude_line(&line, &no_before),
+            vec![ExecutorEvent::TextDelta { text: "hello there".into() }]
+        );
+    }
+
+    #[test]
+    fn claude_stream_event_thinking_delta_appends_live() {
+        let line = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "thinking_delta", "thinking": "let me check" }
+            }
+        });
+        assert_eq!(
+            parse_claude_line(&line, &no_before),
+            vec![ExecutorEvent::ReasoningDelta { text: "let me check".into() }]
+        );
+    }
+
+    #[test]
+    fn claude_stream_event_empty_deltas_are_dropped() {
+        // Real capture: thinking_delta with empty text and only a token
+        // count (D27) — must not emit an empty ReasoningDelta.
+        let thinking = json!({
+            "type": "stream_event",
+            "event": { "type": "content_block_delta", "delta":
+                { "type": "thinking_delta", "thinking": "", "estimated_tokens": 50 } }
+        });
+        assert_eq!(parse_claude_line(&thinking, &no_before), vec![]);
+
+        let text = json!({
+            "type": "stream_event",
+            "event": { "type": "content_block_delta", "delta":
+                { "type": "text_delta", "text": "" } }
+        });
+        assert_eq!(parse_claude_line(&text, &no_before), vec![]);
+    }
+
+    #[test]
+    fn claude_stream_event_signature_delta_is_not_text() {
+        // Real capture: the thinking block's closing delta is a
+        // cryptographic signature blob, not readable text — must not leak
+        // into ReasoningDelta.
+        let line = json!({
+            "type": "stream_event",
+            "event": { "type": "content_block_delta", "delta":
+                { "type": "signature_delta", "signature": "EoYKCg==" } }
+        });
+        assert_eq!(parse_claude_line(&line, &no_before), vec![]);
+    }
+
+    #[test]
+    fn claude_stream_event_non_delta_events_are_ignored() {
+        for event_type in
+            ["message_start", "content_block_start", "content_block_stop", "message_delta", "message_stop"]
+        {
+            let line = json!({ "type": "stream_event", "event": { "type": event_type } });
+            assert_eq!(parse_claude_line(&line, &no_before), vec![], "got events for {event_type}");
+        }
     }
 
     #[test]
@@ -993,6 +1126,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(edit["kind"], "fileEdit");
+
+        let text_delta = serde_json::to_value(ExecutorEvent::TextDelta { text: "hi".into() }).unwrap();
+        assert_eq!(text_delta, json!({ "kind": "textDelta", "text": "hi" }));
+
+        let reasoning_delta =
+            serde_json::to_value(ExecutorEvent::ReasoningDelta { text: "hm".into() }).unwrap();
+        assert_eq!(reasoning_delta, json!({ "kind": "reasoningDelta", "text": "hm" }));
     }
 
     /// Real output captured from `codex exec --json` (Codex CLI 0.146.0), not

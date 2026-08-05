@@ -32,8 +32,40 @@ fn add_project(path: String) -> Res<Project> {
 }
 
 #[tauri::command]
-fn switch_project(hash: String) -> Res<Project> {
-    store::touch_project(&floo_home(), &hash)
+fn switch_project(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, hash: String) -> Res<Project> {
+    let project = store::touch_project(&floo_home(), &hash)?;
+    start_watcher(&app, &harness, &project);
+    Ok(project)
+}
+
+/// Replaces whatever `graphify watch` was running (if any — `Watcher`'s
+/// `Drop` terminates it) with one scoped to the newly active project. A
+/// missing `graphify` binary is already covered by the persistent preflight
+/// warning, so it's silently skipped here rather than also flashing a
+/// one-off error every time the user switches projects; a watcher that
+/// fails to spawn for some other reason, or crashes later, surfaces once
+/// through the `graphify-warning` event instead.
+fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
+    let mut slot = harness.watch.lock().unwrap();
+    *slot = None;
+
+    let Some(bin) = executor::find_on_path("graphify") else {
+        return;
+    };
+
+    let app_update = app.clone();
+    let hash_update = project.hash.clone();
+    let app_crash = app.clone();
+    *slot = Some(integrations::Watcher::spawn(
+        bin,
+        PathBuf::from(&project.root),
+        move || {
+            let _ = app_update.emit("graphify-updated", &hash_update);
+        },
+        move |message| {
+            let _ = app_crash.emit("graphify-warning", message);
+        },
+    ));
 }
 
 #[tauri::command]
@@ -59,6 +91,22 @@ fn rename_thread(project_hash: String, thread_id: String, title: String) -> Res<
 #[tauri::command]
 fn set_thread_mode(project_hash: String, thread_id: String, mode: String) -> Res<ThreadMeta> {
     store::set_thread_mode(&floo_home(), &project_hash, &thread_id, &mode)
+}
+
+/// Refused while this thread has an executor turn in flight — deleting the
+/// files a live turn is about to append to would corrupt or orphan state.
+#[tauri::command]
+fn delete_thread(harness: tauri::State<'_, Harness>, project_hash: String, thread_id: String) -> Res<()> {
+    let busy = harness
+        .session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|s| s.thread_id == thread_id && s.is_busy());
+    if busy {
+        return Err("This thread has a turn in progress — wait for it to finish before deleting.".into());
+    }
+    store::delete_thread(&floo_home(), &project_hash, &thread_id)
 }
 
 #[tauri::command]
@@ -396,11 +444,12 @@ fn load_graphify(project_hash: String) -> Res<integrations::GraphifyRun> {
 }
 
 #[tauri::command]
-fn query_graphify(project_hash: String, subcommand: String, question: String) -> Res<String> {
+fn query_graphify(project_hash: String, subcommand: String, args: Vec<String>) -> Res<String> {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     integrations::graphify_query(
         &graphify_bin()?,
         &subcommand,
-        &question,
+        &refs,
         &integrations::default_out_dir(&project_root(&project_hash)?),
     )
 }
@@ -431,6 +480,7 @@ pub fn run() {
             list_threads,
             rename_thread,
             set_thread_mode,
+            delete_thread,
             append_message,
             read_thread,
             create_note,

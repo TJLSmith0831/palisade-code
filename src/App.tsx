@@ -7,11 +7,12 @@ import "@uiw/react-markdown-preview/markdown.css";
 
 import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
-import { EventList, itemsFromMessages } from "./EventView";
+import { EventList, itemsFromMessages, mergeDeltas } from "./EventView";
 import GraphPane from "./GraphPane";
 import "./App.css";
 
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
+const SHOW_THINKING_KEY = "floo:showThinking";
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -24,18 +25,22 @@ export default function App() {
   const [tab, setTab] = useState<"threads" | "notes">("threads");
   const [graphOpen, setGraphOpen] = useState(false);
   const [notePane, setNotePane] = useState<"edit" | "preview">("edit");
-  // One reusable command bar: new note, rename project, rename thread.
-  // `window.prompt` is a no-op in Tauri's WKWebView — it returns null without
-  // ever showing a dialog — so anything that needs a line of text from the
-  // user has to go through this.
+  // One reusable command bar: new note, rename project, rename thread, and
+  // now confirming a delete. `window.prompt`/`confirm` are no-ops in
+  // Tauri's WKWebView — they return null without ever showing a dialog —
+  // so anything that needs a line of text, or a yes/no from the user, has
+  // to go through this.
   const [bar, setBar] = useState<
-    { label: string; value: string; submit: (value: string) => void } | null
+    | { kind: "input"; label: string; value: string; submit: (value: string) => void }
+    | { kind: "confirm"; label: string; onConfirm: () => void }
+    | null
   >(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [flight, setFlight] = useState<Preflight | null>(null);
   const [live, setLive] = useState<ExecutorEvent[]>([]);
   const [busy, setBusy] = useState(false);
+  const [showThinking, setShowThinking] = useState(() => localStorage.getItem(SHOW_THINKING_KEY) === "1");
 
   const fail = (err: unknown) => setError(String(err));
 
@@ -96,6 +101,7 @@ export default function App() {
   const onRenameProject = () => {
     if (!project) return;
     setBar({
+      kind: "input",
       label: "Project display name",
       value: project.displayName,
       submit: async (name) => {
@@ -128,12 +134,34 @@ export default function App() {
   const onRenameThread = () => {
     if (!project || !thread) return;
     setBar({
+      kind: "input",
       label: "Thread title",
       value: thread.title,
       submit: async (title) => {
         try {
           setThread(await api.renameThread(project.hash, thread.id, title));
           setThreads(await api.listThreads(project.hash));
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
+  };
+
+  const onDeleteThread = (target: ThreadMeta) => {
+    if (!project) return;
+    setBar({
+      kind: "confirm",
+      label: `Delete "${target.title}"? This can't be undone.`,
+      onConfirm: async () => {
+        setBar(null);
+        try {
+          await api.deleteThread(project.hash, target.id);
+          const found = await api.listThreads(project.hash);
+          setThreads(found);
+          // Only reselect if the deleted thread was the one open (D22) —
+          // mirrors selectProject's found[0] ?? null fallback.
+          if (thread?.id === target.id) await selectThread(project.hash, found[0] ?? null);
         } catch (err) {
           fail(err);
         }
@@ -176,9 +204,13 @@ export default function App() {
     const updated = listen<string>("thread-updated", () => {
       refresh().catch(fail);
     });
+    // A graphify watch spawn failure or crash — the routine "not on PATH"
+    // case is already covered by the persistent preflight warning banner.
+    const warned = listen<string>("graphify-warning", ({ payload }) => fail(payload));
     return () => {
       streaming.then((un) => un());
       updated.then((un) => un());
+      warned.then((un) => un());
     };
   }, [refresh]);
 
@@ -289,7 +321,7 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        if (project) setBar({ label: "New note", value: "", submit: onCreateNote });
+        if (project) setBar({ kind: "input", label: "New note", value: "", submit: onCreateNote });
       }
       if (event.key === "Escape") setBar(null);
     };
@@ -329,6 +361,18 @@ export default function App() {
         <span className="root" title={project?.root}>
           {project?.root}
         </span>
+        <label className="toggle" data-testid="show-thinking">
+          <input
+            type="checkbox"
+            checked={showThinking}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setShowThinking(next);
+              localStorage.setItem(SHOW_THINKING_KEY, next ? "1" : "0");
+            }}
+          />
+          show thinking
+        </label>
         <button
           className={`status ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
           onClick={() => api.preflight(true).then(setFlight, fail)}
@@ -401,6 +445,17 @@ export default function App() {
                   >
                     <span className="title">{t.title}</span>
                     <span className={`badge ${t.currentMode}`}>{t.currentMode}</span>
+                    <button
+                      className="thread-delete"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteThread(t);
+                      }}
+                      title="Delete thread"
+                      data-testid="delete-thread"
+                    >
+                      ×
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -409,7 +464,7 @@ export default function App() {
             <>
               <button
                 className="wide"
-                onClick={() => setBar({ label: "New note", value: "", submit: onCreateNote })}
+                onClick={() => setBar({ kind: "input", label: "New note", value: "", submit: onCreateNote })}
                 disabled={!project}
                 data-testid="create-note"
               >
@@ -513,7 +568,10 @@ export default function App() {
                 {messages.length === 0 && live.length === 0 && (
                   <p className="empty">No messages yet.</p>
                 )}
-                <EventList items={[...itemsFromMessages(messages), ...live]} />
+                <EventList
+                  items={[...itemsFromMessages(messages), ...mergeDeltas(live)]}
+                  showThinking={showThinking}
+                />
                 {busy && (
                   <div className="working" data-testid="working">
                     executor working…
@@ -550,7 +608,7 @@ export default function App() {
         </main>
       </div>
 
-      {bar && (
+      {bar && bar.kind === "input" && (
         <div className="overlay" onClick={() => setBar(null)}>
           <div className="commandbar" onClick={(event) => event.stopPropagation()}>
             <label htmlFor="barInput">{bar.label}</label>
@@ -574,6 +632,20 @@ export default function App() {
               }}
             />
             <span className="hint">Enter to confirm · Esc to cancel</span>
+          </div>
+        </div>
+      )}
+
+      {bar && bar.kind === "confirm" && (
+        <div className="overlay" onClick={() => setBar(null)}>
+          <div className="commandbar" onClick={(event) => event.stopPropagation()}>
+            <label>{bar.label}</label>
+            <div className="confirm-actions">
+              <button onClick={bar.onConfirm} className="danger" data-testid="confirm-delete" autoFocus>
+                Delete
+              </button>
+              <button onClick={() => setBar(null)}>Cancel</button>
+            </div>
           </div>
         </div>
       )}

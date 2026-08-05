@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import MDEditor from "@uiw/react-md-editor";
 
 import * as api from "./api";
@@ -24,6 +25,8 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
   const [error, setError] = useState<string | null>(null);
   const [subcommand, setSubcommand] = useState("query");
   const [question, setQuestion] = useState("");
+  const [pathA, setPathA] = useState("");
+  const [pathB, setPathB] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
 
   // A previous run's output is still on disk; show it without re-extracting.
@@ -32,6 +35,17 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
     setError(null);
     setAnswer(null);
     api.loadGraphify(projectHash).then(setRun, () => setRun(null));
+  }, [projectHash]);
+
+  // The always-on `graphify watch` process refreshes graph.json in the
+  // background; pick up its changes without a manual re-run.
+  useEffect(() => {
+    const updated = listen<string>("graphify-updated", ({ payload }) => {
+      if (payload === projectHash) api.loadGraphify(projectHash).then(setRun, () => {});
+    });
+    return () => {
+      updated.then((un) => un());
+    };
   }, [projectHash]);
 
   const onRun = async () => {
@@ -53,11 +67,14 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
   };
 
   const onQuery = async () => {
-    if (!question.trim()) return;
+    // `path` takes two node names; `query`/`explain` take one question —
+    // the real CLI shape (`graphify path "A" "B"`).
+    const args = subcommand === "path" ? [pathA.trim(), pathB.trim()] : [question.trim()];
+    if (args.some((arg) => !arg)) return;
     setBusy(true);
     setError(null);
     try {
-      setAnswer(await api.queryGraphify(projectHash, subcommand, question.trim()));
+      setAnswer(await api.queryGraphify(projectHash, subcommand, args));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -75,7 +92,15 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
         <input
           className="scope"
           value={subpath}
-          onChange={(event) => setSubpath(event.target.value)}
+          onChange={(event) => {
+            const next = event.target.value;
+            setSubpath(next);
+            // `graphify update` has no --out override (D24) — it can't be
+            // scoped to a subdirectory without writing outside where the
+            // pane reads from, so incremental only applies to the whole
+            // project.
+            if (next.trim() && options.incremental) setOptions({ ...options, incremental: false });
+          }}
           placeholder="whole project (or a subdirectory)"
           data-testid="graph-scope"
         />
@@ -84,6 +109,7 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
             <input
               type="checkbox"
               checked={options[key]}
+              disabled={key === "incremental" && subpath.trim() !== ""}
               onChange={(event) => setOptions({ ...options, [key]: event.target.checked })}
               data-testid={`graph-${key}`}
             />
@@ -123,13 +149,32 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
               <option value="path">path</option>
               <option value="explain">explain</option>
             </select>
-            <input
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && onQuery()}
-              placeholder="Ask the graph…"
-              data-testid="graph-question"
-            />
+            {subcommand === "path" ? (
+              <>
+                <input
+                  value={pathA}
+                  onChange={(event) => setPathA(event.target.value)}
+                  onKeyDown={(event) => event.key === "Enter" && onQuery()}
+                  placeholder="Node A"
+                  data-testid="graph-question-a"
+                />
+                <input
+                  value={pathB}
+                  onChange={(event) => setPathB(event.target.value)}
+                  onKeyDown={(event) => event.key === "Enter" && onQuery()}
+                  placeholder="Node B"
+                  data-testid="graph-question-b"
+                />
+              </>
+            ) : (
+              <input
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && onQuery()}
+                placeholder="Ask the graph…"
+                data-testid="graph-question"
+              />
+            )}
             <button onClick={onQuery} disabled={busy} data-testid="graph-ask">
               Ask
             </button>

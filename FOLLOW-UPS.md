@@ -56,18 +56,19 @@ codex exec "run: echo hi, then create a.txt containing hi" \
   --json --sandbox workspace-write --skip-git-repo-check -C <dir>
 ```
 
-## 5. Graphify shell-out is unverified (I6)
+## 5. ~~Graphify shell-out is unverified~~ — DONE
 
-Same posture. `graphify` is not installed here and is not published under that
-name on pip or npm — the npm package of that name is unrelated. The argument
-construction follows D8's documented CLI shape; the disk-parsing and failure
-paths are covered using stand-in processes, and the pane was driven end to end
-against a stub that produced real data from this repo's import graph.
-
-**To close:** install the real Graphify and confirm `graphify_args` matches its
-actual flags, and that its `graph.json` node attributes carry a community key
-`communityOf()` recognises (it tries `community`, `group`, `cluster`, `module`,
-`type`, `kind`, `category` before falling back to `ungrouped`).
+Closed by `chat-and-graph-improvements` (decisions D25, D27). `graphify` is
+real (PyPI `graphifyy`, `uv tool install "graphifyy[watch]"`) and was
+installed and run against this repo's own source. The documented CLI shape
+(I6) was wrong in two ways `--help` text alone didn't reveal: `extract`
+never writes `GRAPH_REPORT.md` (a separate `cluster-only` call is
+required), and `--out <dir>` writes to `<dir>/graphify-out/`, not `<dir>`
+— the original code passed the wrong path for both. Fixed and driven end
+to end against the real binary, producing real data from this repo's own
+import graph (617 nodes), including the always-on `graphify watch` path
+(D4/D16), not just a manual run. `graph.json`'s node attributes did carry
+a `communityOf()`-recognised key — no gap there after all.
 
 ## 6. Work-laptop packaging is unrun (P9)
 
@@ -88,5 +89,24 @@ There is no Vitest/RTL setup. UI behaviour was verified by driving the running
 app through the Tauri MCP (per C9 — Playwright cannot drive a macOS WKWebView),
 which is agent-driven and doesn't re-run on its own. Pure functions worth
 covering if that changes: `itemsFromMessages` (structured-event round trip and
-the plain-text fallback) and `buildModel` (community ranking, the eight-hue cap
-folding into "Other", dangling-edge rejection).
+the plain-text fallback), `buildModel` (community ranking, the eight-hue cap
+folding into "Other", dangling-edge rejection), and `mergeDeltas` (delta
+accumulation onto the right in-progress item, the complete-event replacing
+the accumulation, a tool call correctly ending a delta run so a later delta
+of the same kind starts fresh — `chat-and-graph-improvements`).
+
+## 9. Two chat-and-graph-improvements pieces weren't live-verified
+
+The `path`-query two-field UI (D3) and the incremental-checkbox-disabled-
+when-a-subpath-is-set behavior (D24) are covered by `tsc` and code
+inspection only — everything else in that change was driven against the
+real running app, but these two weren't specifically clicked through.
+Low risk (straightforward conditional rendering), but worth a quick manual
+pass before relying on them.
+
+Separately, not a bug but worth knowing: live-verified against the real
+`claude` CLI (D27), Claude's `thinking_delta` content came through empty
+in both prompts tried — only an `estimated_tokens` counter, no readable
+text. The "show thinking" toggle (D19) is wired correctly, but may often
+have nothing to display in practice; this appears to be how the CLI
+streams reasoning today, not a floo-network defect.

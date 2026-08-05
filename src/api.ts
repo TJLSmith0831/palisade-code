@@ -43,6 +43,8 @@ export const renameThread = (projectHash: string, threadId: string, title: strin
   invoke<ThreadMeta>("rename_thread", { projectHash, threadId, title });
 export const setThreadMode = (projectHash: string, threadId: string, mode: Mode) =>
   invoke<ThreadMeta>("set_thread_mode", { projectHash, threadId, mode });
+export const deleteThread = (projectHash: string, threadId: string) =>
+  invoke<void>("delete_thread", { projectHash, threadId });
 
 export const appendMessage = (
   projectHash: string,
@@ -63,6 +65,7 @@ export type Preflight = {
   openspec: boolean;
   grillApply: boolean;
   ponytail: boolean;
+  graphify: boolean;
   ready: boolean;
   warnings: string[];
   checkedAt: string;
@@ -72,6 +75,8 @@ export type Preflight = {
 export type ExecutorEvent =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
+  | { kind: "textDelta"; text: string }
+  | { kind: "reasoningDelta"; text: string }
   | { kind: "fileEdit"; id: string; path: string; before: string; after: string }
   | { kind: "toolCall"; id: string; name: string; command: string }
   | { kind: "toolResult"; id: string; output: string; isError: boolean }
@@ -108,8 +113,8 @@ export const runGraphify = (
 ) => invoke<GraphifyRun>("run_graphify", { projectHash, threadId, subpath, options });
 export const loadGraphify = (projectHash: string) =>
   invoke<GraphifyRun>("load_graphify", { projectHash });
-export const queryGraphify = (projectHash: string, subcommand: string, question: string) =>
-  invoke<string>("query_graphify", { projectHash, subcommand, question });
+export const queryGraphify = (projectHash: string, subcommand: string, args: string[]) =>
+  invoke<string>("query_graphify", { projectHash, subcommand, args });
 
 export const createNote = (projectHash: string, name: string) =>
   invoke<string>("create_note", { projectHash, name });
