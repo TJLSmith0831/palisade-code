@@ -205,6 +205,77 @@ describe("Navigation rail (merged-design v2)", () => {
     expect(screen.getByTestId("thread-list")).toBeDefined();
   });
 
+  it("switches to the chat panel when a new thread is created", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/floo-network",
+            displayName: "floo-network",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/floo-network",
+          displayName: "floo-network",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "create_thread") {
+        return Promise.resolve({
+          id: "thread-new",
+          title: "New thread",
+          createdAt: "2026-08-06T00:00:00Z",
+          currentMode: "spec",
+        });
+      }
+      if (cmd === "list_threads") {
+        return Promise.resolve([
+          {
+            id: "thread-new",
+            title: "New thread",
+            createdAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+          },
+        ]);
+      }
+      if (cmd === "list_notes") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({
+          claude: null,
+          codex: null,
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "read_thread") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
+    fireEvent.click(screen.getByTestId("new-thread"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tab-chat").className).toMatch(/active/);
+    });
+  });
+
   it("has add project button", () => {
     render(<App />);
     expect(screen.getByTestId("add-project")).toBeDefined();

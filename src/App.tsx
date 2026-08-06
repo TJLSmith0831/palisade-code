@@ -259,6 +259,7 @@ export default function App() {
       const created = await api.createThread(project.hash, "New thread");
       setThreads(await api.listThreads(project.hash));
       setNote(null);
+      setChatTab("chat");
       await selectThread(project.hash, created);
     } catch (err) {
       fail(err);
