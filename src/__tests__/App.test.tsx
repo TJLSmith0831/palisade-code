@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "../App.css";
 
 // Mock Tauri APIs before importing App
@@ -21,8 +21,12 @@ vi.mock("@tauri-apps/api/window", () => ({
   })),
 }));
 
+const { invokeMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve([])),
+  invoke: invokeMock,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -35,7 +39,80 @@ vi.mock("@uiw/react-md-editor", () => ({
   MDEditor: { Markdown: ({ source }: { source: string }) => <div>{source}</div> },
 }));
 
+vi.mock("../GraphPane", () => ({
+  default: () => <div data-testid="graph-pane" />,
+}));
+
 import App from "../App";
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "list_projects") {
+      return Promise.resolve([
+        {
+          hash: "proj-1",
+          root: "/tmp/floo-network",
+          displayName: "floo-network",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        },
+      ]);
+    }
+    if (cmd === "switch_project") {
+      return Promise.resolve({
+        hash: "proj-1",
+        root: "/tmp/floo-network",
+        displayName: "floo-network",
+        createdAt: "2026-08-06T00:00:00Z",
+        lastAccessedAt: "2026-08-06T00:00:00Z",
+      });
+    }
+    if (cmd === "list_threads") return Promise.resolve([]);
+    if (cmd === "list_notes") return Promise.resolve([]);
+    if (cmd === "preflight") {
+      return Promise.resolve({
+        claude: null,
+        codex: null,
+        selected: null,
+        openspec: false,
+        grillApply: false,
+        ponytail: false,
+        graphify: false,
+        ready: false,
+        warnings: [],
+        checkedAt: "2026-08-06T00:00:00Z",
+      });
+    }
+    if (cmd === "load_graphify") {
+      return Promise.resolve({
+        outDir: "",
+        report: "",
+        graph: null,
+        summary: "",
+      });
+    }
+    if (cmd === "list_directory") {
+      const relativePath = String(args?.relativePath ?? "");
+      if (relativePath === "") {
+        return Promise.resolve([
+          { name: "src", is_dir: true, path: "src" },
+          { name: "AGENTS.md", is_dir: false, path: "AGENTS.md" },
+        ]);
+      }
+      return Promise.resolve([]);
+    }
+    if (cmd === "read_file_content") return Promise.resolve("agent rules\n");
+    if (cmd === "write_file_content") return Promise.resolve();
+    if (cmd === "read_thread") return Promise.resolve([]);
+    return Promise.resolve([]);
+  });
+});
+
+afterEach(() => {
+  localStorage.clear();
+  delete document.documentElement.dataset.theme;
+});
 
 describe("Window shell (merged-design v2)", () => {
   it("renders the backdrop div in index.html", () => {
@@ -137,6 +214,18 @@ describe("Editor chrome (merged-design v2)", () => {
   it("has no leftover status bar", () => {
     render(<App />);
     expect(screen.queryByTestId("status-bar")).toBeNull();
+  });
+
+  it("shows the file editor even when no thread exists", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    fireEvent.click(screen.getByTestId("tab-editor"));
+    fireEvent.click(screen.getByText("AGENTS.md"));
+
+    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
+    expect(screen.getByTestId("file-editor-textarea")).toBeDefined();
+    expect(screen.queryByText("Create a thread to get started.")).toBeNull();
   });
 });
 

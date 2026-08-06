@@ -177,3 +177,9 @@ export const listDirectory = (projectHash: string, relativePath: string) =>
 
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });
+
+export const writeFileContent = (
+  projectHash: string,
+  relativePath: string,
+  content: string,
+) => invoke<void>("write_file_content", { projectHash, relativePath, content });

@@ -1,5 +1,5 @@
 :root {
-  /* Dragon Fire Workbench v2 tokens — from merged-design.json */
+  /* Dragon Fire Workbench v2 tokens — from merged-design.json - TEMP TEST */
   --backdrop: oklch(11% 0.015 145);
   --chrome-bg: oklch(15% 0.004 250);
   --bg: oklch(18% 0.005 250);
@@ -703,16 +703,6 @@ input[type="checkbox"] {
   line-height: 1.55;
 }
 
-.ds-code-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-
-.ds-code-row {
-  display: flex;
-}
-
 .ds-code-lineno {
   flex-shrink: 0;
   width: 44px;
@@ -726,10 +716,93 @@ input[type="checkbox"] {
   background: var(--editor-bg);
 }
 
-.ds-code-text {
-  padding: 0 16px;
-  white-space: pre;
+.ds-editor-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-bg);
+  font-size: 11px;
+}
+
+.ds-editor-path {
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.ds-editor-spacer {
+  flex: 1;
+}
+
+.ds-editor-saved {
+  color: var(--accent);
+  margin-right: 8px;
+}
+
+.ds-editor-save-btn {
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg);
   color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ds-editor-save-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ds-editor-save-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ds-editor-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.ds-code-gutter {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 52px;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--editor-bg);
+  border-right: 1px solid var(--border);
+}
+
+.ds-code-gutter .ds-code-lineno {
+  width: auto;
+  border-right: none;
+  position: static;
+  line-height: 1.55;
+  height: calc(1.55 * 12px);
+}
+
+.ds-code-textarea {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--editor-bg);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 0 16px 0 60px;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow: auto;
+  tab-size: 2;
+  box-sizing: border-box;
 }
 
 /* --- breadcrumbs (v2) --------------------------------------------------- */

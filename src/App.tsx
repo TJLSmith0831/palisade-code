@@ -18,6 +18,7 @@ import "./App.css";
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
 const THEME_KEY = "floo:theme";
+// TEMP TEST CHANGE
 type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme => (t === "auto" ? "light" : t === "light" ? "dark" : "auto");
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
@@ -638,6 +639,12 @@ export default function App() {
                 />
               </div>
             </>
+          ) : chatTab === "editor" ? (
+            project ? (
+              <FileEditorPane projectHash={project.hash} path={selectedFile} />
+            ) : (
+              <p className="empty">Add a project to get started.</p>
+            )
           ) : thread ? (
             <>
               <div className="pane-head">
@@ -667,37 +674,33 @@ export default function App() {
                   Spec Mode — read-only planning
                 </div>
               )}
-              {chatTab === "editor" ? (
-                project && <FileEditorPane projectHash={project.hash} path={selectedFile} />
-              ) : (
-                <div className="messages" data-testid="messages">
-                  {(() => {
-                    const items = filterForTab(
-                      [...itemsFromMessages(messages), ...mergeDeltas(live)],
-                      chatTab,
-                    );
-                    return (
-                      <>
-                        {items.length === 0 && (
-                          <p className="empty">
-                            {chatTab === "diff" ? "No file changes yet." : "No messages yet."}
-                          </p>
-                        )}
-                        <EventList
-                          items={items}
-                          showThinking={showThinking}
-                          executor={flight?.selected ?? null}
-                        />
-                      </>
-                    );
-                  })()}
-                  {busy && (
-                    <div className="working" data-testid="working">
-                      executor working…
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="messages" data-testid="messages">
+                {(() => {
+                  const items = filterForTab(
+                    [...itemsFromMessages(messages), ...mergeDeltas(live)],
+                    chatTab,
+                  );
+                  return (
+                    <>
+                      {items.length === 0 && (
+                        <p className="empty">
+                          {chatTab === "diff" ? "No file changes yet." : "No messages yet."}
+                        </p>
+                      )}
+                      <EventList
+                        items={items}
+                        showThinking={showThinking}
+                        executor={flight?.selected ?? null}
+                      />
+                    </>
+                  );
+                })()}
+                {busy && (
+                  <div className="working" data-testid="working">
+                    executor working…
+                  </div>
+                )}
+              </div>
               <form
                 className={`composer ${dragActive ? "drag-active" : ""}`}
                 onSubmit={(event) => {

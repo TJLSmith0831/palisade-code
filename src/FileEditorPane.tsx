@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 
 type Props = {
@@ -6,18 +6,56 @@ type Props = {
   path: string | null;
 };
 
-// ponytail: renders every line as a DOM row — fine for source files, add
-// virtualization if someone opens a multi-thousand-line generated file.
 export default function FileEditorPane({ projectHash, path }: Props) {
   const [content, setContent] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setContent(null);
+    setDraft(null);
     setError(null);
+    setSaved(false);
     if (!path) return;
-    api.readFileContent(projectHash, path).then(setContent, (err) => setError(String(err)));
+    api
+      .readFileContent(projectHash, path)
+      .then((text) => {
+        setContent(text);
+        setDraft(text);
+      })
+      .catch((err) => setError(String(err)));
   }, [projectHash, path]);
+
+  const dirty = draft !== content;
+
+  const save = useCallback(() => {
+    if (!path || draft === null || saving) return;
+    setSaving(true);
+    setError(null);
+    api
+      .writeFileContent(projectHash, path, draft)
+      .then(() => {
+        setContent(draft);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      })
+      .catch((err) => setError(String(err)))
+      .finally(() => setSaving(false));
+  }, [projectHash, path, draft, saving]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        save();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [save]);
 
   if (!path) {
     return <p className="empty">Select a file from the explorer to view it.</p>;
@@ -29,20 +67,43 @@ export default function FileEditorPane({ projectHash, path }: Props) {
       </div>
     );
   }
-  if (content === null) {
+  if (draft === null) {
     return <p className="empty">Loading…</p>;
   }
 
-  const lines = content.split("\n");
+  const lines = draft.split("\n");
+  const lineCount = lines.length;
+
   return (
     <div className="ds-code-editor" data-testid="file-editor">
-      <div className="ds-code-scroll">
-        {lines.map((line, i) => (
-          <div className="ds-code-row" key={i}>
-            <span className="ds-code-lineno">{i + 1}</span>
-            <span className="ds-code-text">{line.length ? line : " "}</span>
-          </div>
-        ))}
+      <div className="ds-editor-toolbar">
+        <span className="ds-editor-path">{path}</span>
+        <span className="ds-editor-spacer" />
+        {saved && <span className="ds-editor-saved">Saved</span>}
+        <button
+          className="ds-editor-save-btn"
+          onClick={save}
+          disabled={!dirty || saving}
+        >
+          {saving ? "Saving…" : dirty ? "Save *" : "Save"}
+        </button>
+      </div>
+      <div className="ds-editor-body">
+        <div className="ds-code-gutter" aria-hidden>
+          {Array.from({ length: lineCount }, (_, i) => (
+            <div className="ds-code-lineno" key={i}>
+              {i + 1}
+            </div>
+          ))}
+        </div>
+        <textarea
+          ref={textareaRef}
+          className="ds-code-textarea"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          spellCheck={false}
+          data-testid="file-editor-textarea"
+        />
       </div>
     </div>
   );

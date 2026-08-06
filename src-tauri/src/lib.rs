@@ -510,6 +510,23 @@ fn read_file_content(project_hash: String, relative_path: String) -> Res<String>
         .map_err(|err| format!("cannot read file: {err}"))
 }
 
+#[tauri::command]
+fn write_file_content(
+    project_hash: String,
+    relative_path: String,
+    content: String,
+) -> Res<()> {
+    let root = project_root(&project_hash)?;
+    let target = root.join(&relative_path);
+    let resolved = std::fs::canonicalize(&target)
+        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
+    if !resolved.starts_with(&root) {
+        return Err("path must stay inside the project".into());
+    }
+    std::fs::write(&resolved, content)
+        .map_err(|err| format!("cannot write file: {err}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
@@ -555,6 +572,7 @@ pub fn run() {
             query_graphify,
             list_directory,
             read_file_content,
+            write_file_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
