@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -13,7 +13,45 @@ import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } fr
 import FileEditorPane from "./FileEditorPane";
 import FileTree from "./FileTree";
 import GraphPane from "./GraphPane";
+import { useResizable, type UseResizableResult } from "./useResizable";
 import "./App.css";
+
+// Cursor/VS Code-style panel-toggle glyph: outline + a filled column on the side being toggled.
+const SidebarIcon = ({ side }: { side: "left" | "right" }) => (
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+    <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
+    <rect x={side === "left" ? 2.5 : 9.5} y="3.5" width="4" height="9" rx="1" fill="currentColor" />
+    <line
+      x1={side === "left" ? 6.5 : 9.5}
+      y1="2.5"
+      x2={side === "left" ? 6.5 : 9.5}
+      y2="13.5"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
+  </svg>
+);
+
+// Keeps a resize drag alive after the pointer leaves the handle element.
+const bindDrag = (handle: UseResizableResult["handleProps"], cursor: "col-resize" | "row-resize") =>
+  (down: ReactPointerEvent) => {
+    down.preventDefault();
+    handle.onPointerDown(down);
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = cursor;
+    const onMove = (e: PointerEvent) => handle.onPointerMove(e);
+    const onUp = () => {
+      handle.onPointerUp();
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
@@ -52,9 +90,34 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [showThinking, setShowThinking] = useState(() => localStorage.getItem(SHOW_THINKING_KEY) === "1");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("chat");
-  const [rightOpen, setRightOpen] = useState(false);
+  const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("editor");
   const [rightTab, setRightTab] = useState<"codemap" | "notes">("codemap");
+  const layoutHash = project?.hash ?? "default";
+  const leftRail = useResizable({
+    storageKey: `floo:layout:${layoutHash}:left`,
+    defaultSize: 193,
+    min: 160,
+    max: 420,
+    axis: "horizontal",
+  });
+  const rightPanel = useResizable({
+    storageKey: `floo:layout:${layoutHash}:right`,
+    defaultSize: 300,
+    min: 260,
+    max: 820,
+    axis: "horizontal",
+    reverse: true,
+    defaultCollapsed: true,
+  });
+  const terminalPanel = useResizable({
+    storageKey: `floo:layout:${layoutHash}:terminal`,
+    defaultSize: 220,
+    min: 120,
+    max: 560,
+    axis: "vertical",
+    reverse: true,
+    defaultCollapsed: true,
+  });
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) || "auto");
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
@@ -342,7 +405,7 @@ export default function App() {
       const path = await api.createNote(project.hash, rawName.trim());
       setNotes(await api.listNotes(project.hash));
       setBar(null);
-      setRightOpen(true);
+      rightPanel.setCollapsed(false);
       setRightTab("notes");
       await openNote(project.hash, path.split("/").pop()!);
     } catch (err) {
@@ -373,12 +436,16 @@ export default function App() {
       if (event.key === "Escape") setBar(null);
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
         event.preventDefault();
-        setRightOpen((prev) => !prev);
+        rightPanel.toggleCollapsed();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
+        event.preventDefault();
+        leftRail.toggleCollapsed();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [project, onCreateNote]);
+  }, [project, onCreateNote, rightPanel.toggleCollapsed, leftRail.toggleCollapsed]);
 
   // ------------------------------------------------------------------ view
 
@@ -427,6 +494,14 @@ export default function App() {
           <div className="ds-chrome-utils">
             <button
               className="ds-icon-btn"
+              onClick={() => leftRail.toggleCollapsed()}
+              title="Toggle left sidebar (Cmd+\)"
+              data-testid="toggle-left-sidebar"
+            >
+              <SidebarIcon side="left" />
+            </button>
+            <button
+              className="ds-icon-btn"
               onClick={() => setTheme(nextTheme(theme))}
               title={`Theme: ${theme} (click to cycle auto → light → dark)`}
               data-testid="theme-toggle"
@@ -435,11 +510,11 @@ export default function App() {
             </button>
             <button
               className="ds-icon-btn"
-              onClick={() => setRightOpen(!rightOpen)}
+              onClick={() => rightPanel.toggleCollapsed()}
               title="Toggle right sidebar (Cmd+J)"
               data-testid="toggle-right-sidebar"
             >
-              ⇥
+              <SidebarIcon side="right" />
             </button>
             <button
               className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
@@ -479,7 +554,16 @@ export default function App() {
       )}
 
       <div className="body">
-        <nav className="ds-nav-rail" data-testid="nav-rail">
+        <nav
+          className="ds-nav-rail"
+          data-testid="nav-rail"
+          style={
+            {
+              "--rail-w": `${leftRail.size}px`,
+              marginLeft: leftRail.collapsed ? -leftRail.size : 0,
+            } as CSSProperties
+          }
+        >
           <div className="ds-rail-section">
             <div className="ds-rail-label">Workspace</div>
             <select
@@ -510,7 +594,7 @@ export default function App() {
             </button>
           </div>
           <div className="ds-rail-section ds-rail-threads">
-            <div className="ds-rail-label">Active Threads</div>
+            <div className="ds-rail-label">Threads</div>
             <ul data-testid="thread-list">
               {threads.map((t) => (
                 <li
@@ -573,6 +657,14 @@ export default function App() {
           </div>
         </nav>
 
+        {!leftRail.collapsed && (
+          <div
+            className="ds-resize-handle ds-resize-handle-x"
+            data-testid="resize-left-rail"
+            onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
+          />
+        )}
+
         {project && (
           <FileTree
             projectHash={project.hash}
@@ -585,18 +677,18 @@ export default function App() {
         <main className="main">
           <div className="ds-editor-tabs" data-testid="editor-tabs">
             <button
+              className={`ds-tab ${chatTab === "editor" ? "active" : ""}`}
+              onClick={() => setChatTab("editor")}
+              data-testid="tab-editor"
+            >
+              Editor
+            </button>
+            <button
               className={`ds-tab ${chatTab === "chat" ? "active" : ""}`}
               onClick={() => setChatTab("chat")}
               data-testid="tab-chat"
             >
               Console Chat
-            </button>
-            <button
-              className={`ds-tab ${chatTab === "editor" ? "active" : ""}`}
-              onClick={() => setChatTab("editor")}
-              data-testid="tab-editor"
-            >
-              File Editor
             </button>
             <button
               className={`ds-tab diff ${chatTab === "diff" ? "active" : ""}`}
@@ -766,11 +858,40 @@ export default function App() {
               {project ? "Create a thread to get started." : "Add a project to get started."}
             </p>
           )}
+
+          {!terminalPanel.collapsed && (
+            <>
+              <div
+                className="ds-resize-handle ds-resize-handle-y"
+                data-testid="resize-terminal-panel"
+                onPointerDown={bindDrag(terminalPanel.handleProps, "row-resize")}
+              />
+              <div
+                className="ds-terminal-panel"
+                data-testid="terminal-panel"
+                style={{ "--terminal-h": `${terminalPanel.size}px` } as CSSProperties}
+              />
+            </>
+          )}
         </main>
 
+        {!rightPanel.collapsed && (
+          <div
+            className="ds-resize-handle ds-resize-handle-x"
+            data-testid="resize-right-panel"
+            onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
+          />
+        )}
+
         <aside
-          className={`ds-right-sidebar ${rightTab === "codemap" ? "wide" : ""} ${rightOpen ? "" : "collapsed"}`}
+          className="ds-right-sidebar"
           data-testid="right-sidebar"
+          style={
+            {
+              "--panel-w": `${rightPanel.size}px`,
+              marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+            } as CSSProperties
+          }
         >
           <div className="ds-right-tabs">
             <button
@@ -778,7 +899,7 @@ export default function App() {
               onClick={() => setRightTab("codemap")}
               data-testid="tab-codemap"
             >
-              Code Map
+              Codebase Map
             </button>
             <button
               className={rightTab === "notes" ? "active" : ""}

@@ -391,8 +391,8 @@ export default function GraphView({ graph }: { graph: object }) {
         <div className="graph-hint">drag to pan · scroll to zoom · double-click to fit</div>
       </div>
 
-      <aside className="communities" data-testid="communities">
-        <h4>Communities</h4>
+      <details className="communities" data-testid="communities">
+        <summary>Communities</summary>
         <label className="community all">
           <input
             type="checkbox"
@@ -418,7 +418,7 @@ export default function GraphView({ graph }: { graph: object }) {
             </label>
           ))}
         </div>
-      </aside>
+      </details>
     </div>
   );
 }

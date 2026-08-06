@@ -88,7 +88,7 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
   return (
     <div className="graph-pane" data-testid="graph-pane">
       <div className="pane-head">
-        <strong>Code map</strong>
+        <strong>Codebase Map</strong>
         <input
           className="scope"
           value={subpath}

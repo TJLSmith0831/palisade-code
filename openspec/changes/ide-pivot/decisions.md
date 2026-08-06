@@ -173,3 +173,60 @@ New decisions appended here as Phase 1 grilling resolves them.
   7. Notes removal (D22) — last, smallest, isolated
 - **Why**: Layout first because every other feature mounts inside it; CodeMirror second because it's the highest-risk rewrite; notes last because it's isolated and low-risk.
 - **Source**: recommended-accepted
+
+---
+
+## Phase 1 implementation (layout refactor)
+
+## D29: Left-rail collapse shortcut didn't exist yet
+- **Decision**: D17's background text said the nav rail already collapsed via `⌘\`; the codebase only had `⌘J` for the right sidebar (nav rail was fixed-width, collapsing only via a viewport media query). Added a new `⌘\` handler (`leftRail.toggleCollapsed()`) rather than treating this as "wire the existing" — it's what D17's stated goal ("both sidebars become drag-to-resize and collapsible") requires.
+- **Why**: Trivial correction of a stale premise, not a scope change — the target behavior (both sidebars collapsible) was never in question.
+- **Source**: recommended-accepted
+
+## D30: Right sidebar's per-tab auto-width ("wide" class) dropped
+- **Decision**: The right sidebar previously auto-widened to 640px on the Code Map tab via a CSS `.wide` class swap. Now that width is user-controlled via `useResizable` (D24), that auto-behavior is dropped in favor of one persisted width regardless of active tab. Default width kept at the old base (300px).
+- **Why**: D17/D24 explicitly move sidebar width to user control; keeping a tab-driven auto-width alongside user-dragged width would fight the user's own resize. Verified via screenshot that 300px doesn't clip the Code Map's controls.
+- **Source**: recommended-accepted
+
+## D31: useResizable rehydrates on storageKey change, not just on mount
+- **Decision**: `useResizable`'s state now reloads from localStorage whenever `storageKey` changes (via a `useEffect` keyed on it), not only at initial mount.
+- **Why**: `storageKey` includes the project hash (`floo:layout:<hash>:...`); the initial `project` is `null` on first render (auto-select is async), so the hook briefly reads the `default` key before the real project hash resolves. Without re-reading on key change, a project switch would keep showing the previous project's (or default's) width instead of the new project's persisted layout — silently breaking the "per-project" requirement in task 1.1. Caught by a test-first case before implementing.
+- **Source**: recommended-accepted (implementation discovery, not user-facing surprise)
+- **Amendment (same day)**: the original fix used a `useEffect` keyed on `storageKey`, which re-reads localStorage asynchronously *after* commit. That opened a real race: a drag/toggle landing between the project-switch commit and the effect's re-run got silently reverted back to the freshly-loaded project's persisted (or default) value. Surfaced as intermittent test failures under `-t`/repeated runs, not as a one-off flake. Replaced with the standard React "adjust state during render" pattern — a ref tracks the previous `storageKey` and resets `state` synchronously in the render body when it changes, so there's no window between commit and rehydration. Verified with 5 repeated runs of the previously-flaky tests plus 3 full-suite runs, all green.
+
+## D32: Left/right sidebar toggle buttons use matching icons, not text glyphs
+- **Decision**: Both `toggle-left-sidebar` and `toggle-right-sidebar` render a small inline SVG (`SidebarIcon`, App.tsx) — a rounded-rect outline with a filled column on the side being toggled — instead of the `⇤`/`⇥` unicode glyphs used in the first pass.
+- **Why**: User pointed at Cursor's title bar as the reference; its panel toggles are minimal line-art icons, not text characters. Matches the codebase's existing pattern of small inline SVGs for icon buttons (e.g. the Claude glyph in the preflight-status button).
+- **Source**: user
+
+## D33: Right sidebar stays collapsed by default; opens at a width that doesn't clip the Code Map
+- **Decision**: `rightPanel` stays `defaultCollapsed: true` (Phase 1's original call, reaffirmed after a brief detour) — the right bar does not auto-open. What changes: `defaultSize` goes from 300px to 640px, so that *when the user opens it*, the Code Map's canvas and communities legend render at full size instead of the cramped 300px D30 had defaulted to. The initial complaint ("the graph hid by default") was about D30's clipped width, not about the panel's open/closed state — first correction (flip `defaultCollapsed`) overshot; this is the actual fix.
+- **Why**: User: collapsed-by-default is correct (least-surprise on first launch, matches the pre-pivot app); but once opened, nothing about the graph-native premise should feel cramped. Restores the old codebase's "wide" 640px rationale (`.ds-right-sidebar.wide` comment, pre-Phase-1) as the resizable panel's default, rather than as a tab-conditional class.
+- **Source**: user
+- **Superseded same day**: user reverted the 640px default (too wide) and asked for a different fix — see D34.
+
+## D34: Codebase Map's Communities legend collapses instead of the panel widening
+- **Decision**: `rightPanel.defaultSize` back to 300px. The `<aside className="communities">` list in `GraphView.tsx` becomes a native `<details>`/`<summary>` (closed by default) instead of an always-visible 260px column. CSS: `.communities:not([open]) { width: auto }`, `.communities[open] { width: 260px }`. When collapsed (default), the graph canvas gets the freed width instead of the whole right sidebar needing to be wider.
+- **Why**: User: 640px was too wide; the actual clipping problem (D30's original comment: "300px squeezes the canvas to nothing") is the Communities legend eating fixed width, not the panel itself. Matches the existing `<details>`/`<summary>` idiom already used for the Report section in the same file — no new JS state, native disclosure element (ladder rung 4).
+- **Source**: user
+- **Amendment (same day)**: first pass kept `.communities` as a flex sibling of `.graph-canvas-wrap` — open state still reserved a 220px column and squeezed the canvas, just a smaller squeeze than the original 260px. User wants it to float over the canvas instead. Changed `.graph-view` to `position: relative` and `.communities` to `position: absolute; top/right` with a border, rounded corners, and box-shadow (dropdown-card look) — canvas now always gets the full `graph-view` width; the open Communities list overlaps it instead of reflowing it. No JS/`<details>` behavior change, CSS-only.
+
+## D36: Codebase Map fills exactly the available viewport height, no overflow
+- **Decision**: Fixed two compounding bugs that let the graph pane grow taller than the window, pushing the query box and Report row below the fold with no working scroll:
+  1. `.ds-right-panes` (the graph pane's direct parent) was missing `display: flex; flex-direction: column`. `.graph-pane`'s `flex: 1` had no flex container to size against, so the whole pane sized to its content instead of the viewport — the same "every ancestor needs `display:flex` + `min-height:0`" idiom already used correctly for `.messages`/`main` elsewhere in this file (App.css:979-986).
+  2. `.graph-view` had `flex-shrink: 0` plus `min-height: 460px`, both explicitly there (per the removed comment) to "never let it shrink" — that blocked it from fitting into the now-properly-bounded parent even after fix #1. Changed to `flex: 1 1 0; min-height: 200px` so it fills exactly the remaining space in `.graph-body` (no more) rather than forcing a floor that overflows.
+- **Why**: User: graph view height should be static to the window, not grow with content/zoom — pan/zoom the canvas instead of growing the container; the bottom of the pane (query box, Report link) needs to stay reachable. Verified via `getBoundingClientRect()`: `graph-body.scrollHeight` now equals `clientHeight` (zero overflow) at the tested window size, with query box and Report both inside the viewport.
+- **Source**: user
+
+## D37: Dragging a resize handle no longer triggers native text selection
+- **Decision**: `bindDrag` (App.tsx) now: calls `preventDefault()` on the handle's `pointerdown` (suppresses the browser's compatibility mousedown that starts native text selection), and sets `document.body.style.userSelect = "none"` + a matching cursor (`col-resize`/`row-resize`, passed in by each call site) for the duration of the drag, restoring the previous values on `pointerup`.
+- **Why**: User: dragging the left sidebar's resize handle was highlighting file names in the tree underneath the pointer — the classic drag-handle-without-selection-guard bug. Test-first (new `App.test.tsx` case asserting `document.body.style.userSelect` toggles to `"none"` on pointerdown and reverts on pointerup); verified live via a real swipe on the handle with no residual selection in the file tree.
+- **Source**: user
+
+## D35: Editor is the default tab, ordered first; sidebar/tab renames
+- **Decision**:
+  1. `chatTab` default state → `"editor"` (was `"chat"`). Tab order in `ds-editor-tabs` → Editor, Console Chat, Code Change Diff (Editor moved from 2nd to 1st). Tab label "File Editor" → "Editor".
+  2. Left nav rail's thread-list section label "Active Threads" → "Threads".
+  3. Right sidebar's Code Map tab + GraphPane's internal heading: "Code Map" / "Code map" → "Codebase Map" (both, for consistency between the tab and its panel content).
+- **Why**: User: the editor is the primary surface now that CodeMirror is landing (D2/D3) — chat-first was a console-era default. Renames are direct product-naming requests.
+- **Source**: user

@@ -342,7 +342,7 @@ input[type="checkbox"] {
 /* --- navigation rail (v2) ------------------------------------------------ */
 
 .ds-nav-rail {
-  width: 193px;
+  width: var(--rail-w, 193px);
   background: var(--chrome-bg);
   border-right: 1px solid var(--border);
   display: flex;
@@ -350,6 +350,34 @@ input[type="checkbox"] {
   padding: 10px 10px 8px;
   flex-shrink: 0;
   min-height: 0;
+  transition: margin 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* --- resize handles (v2) ------------------------------------------------- */
+
+.ds-resize-handle {
+  flex-shrink: 0;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+}
+
+.ds-resize-handle-x {
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+}
+
+.ds-resize-handle-y {
+  height: 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+}
+
+.ds-resize-handle:hover,
+.ds-resize-handle:active {
+  background: var(--accent);
+  opacity: 0.5;
 }
 
 .ds-rail-section {
@@ -650,6 +678,13 @@ input[type="checkbox"] {
   background: var(--editor-bg);
 }
 
+.ds-terminal-panel {
+  height: var(--terminal-h, 220px);
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--editor-bg);
+}
+
 /* --- editor tabs (v2) --------------------------------------------------- */
 
 .ds-editor-tabs {
@@ -832,7 +867,7 @@ input[type="checkbox"] {
 /* --- right sidebar (v2) ------------------------------------------------- */
 
 .ds-right-sidebar {
-  width: 300px;
+  width: var(--panel-w, 300px);
   max-width: calc(100vw - 40px);
   background: var(--chrome-bg);
   border-left: 1px solid var(--border);
@@ -841,20 +876,6 @@ input[type="checkbox"] {
   flex-shrink: 0;
   min-height: 0;
   transition: margin 200ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.ds-right-sidebar.collapsed {
-  margin-right: -300px;
-}
-
-/* The Code Map's force-directed canvas + communities legend need real
-   estate — 300px squeezes the canvas to nothing and clips the query row. */
-.ds-right-sidebar.wide {
-  width: 640px;
-}
-
-.ds-right-sidebar.wide.collapsed {
-  margin-right: -640px;
 }
 
 .ds-right-tabs {
@@ -889,6 +910,8 @@ input[type="checkbox"] {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .ds-notes-panel {
@@ -1292,15 +1315,16 @@ details.graph-report-wrap > summary {
 
 .graph-view {
   display: flex;
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface-warm);
-  /* The graph is the hero of this pane: take the height available and never
-     let the surrounding column flex shrink it into a strip. */
-  flex: 1 1 auto;
-  flex-shrink: 0;
-  min-height: 460px;
+  /* The graph is the hero of this pane: fill exactly the height available
+     (no more) so it never pushes the query box/report below the fold — pan
+     and zoom the canvas instead of growing the container. */
+  flex: 1 1 0;
+  min-height: 200px;
 }
 
 .graph-canvas-wrap {
@@ -1350,22 +1374,41 @@ details.graph-report-wrap > summary {
 }
 
 .communities {
-  width: 260px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border);
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  max-height: calc(100% - 20px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: var(--surface);
-  padding: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.communities h4 {
+.communities[open] {
+  width: 220px;
+}
+
+.communities .community-list {
+  flex: 1;
+}
+
+.communities summary {
   margin: 0 0 10px;
   font-size: 11px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--muted);
+  cursor: pointer;
+}
+
+.communities:not([open]) summary {
+  margin-bottom: 0;
+  white-space: nowrap;
 }
 
 .community-list {
@@ -1603,27 +1646,9 @@ details.graph-report-wrap > summary {
     left: 0;
   }
 
-  .ds-nav-rail.collapsed {
-    margin-left: -193px;
-  }
-
   .ds-right-sidebar {
     right: 0;
-  }
-
-  .ds-right-sidebar.collapsed {
-    margin-right: -300px;
-  }
-
-  /* Below the cocktail-rail breakpoint the nav rail is also a fixed overlay —
-     640px plus the rail would swallow the whole window and hide the chat
-     underneath both. Cap the graph panel narrower here instead. */
-  .ds-right-sidebar.wide {
-    width: 420px;
-  }
-
-  .ds-right-sidebar.wide.collapsed {
-    margin-right: -420px;
+    max-width: 420px;
   }
 }
 

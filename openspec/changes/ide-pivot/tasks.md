@@ -1,11 +1,11 @@
 ## 1. Layout refactor (riskiest first — everything mounts inside it)
 
-- [ ] 1.1 Add a `useResizable` hook (pointer drag → width/height state → persist on pointer-up) with localStorage per-project (`floo:layout:<hash>`)
-- [ ] 1.2 Refactor `App.tsx` three-column flex: add drag handles to left and right sidebar borders; widths read from/hydrated by the hook
-- [ ] 1.3 Add a vertical split in the center column with a drag handle for the bottom terminal panel region (panel content mounts in task 3; for now it's an empty resizable slot)
-- [ ] 1.4 Wire the existing `⌘\` / `⌘J` collapse shortcuts to the new resizable layout (collapse = width 0 or flag; restore = persisted width)
-- [ ] 1.5 Verify chat / spec-go / GraphPane / file tree still render correctly inside the new layout (no behavior change, only structure)
-- [ ] 1.6 Add a frontend test that layout widths persist across remount and that collapse/restore works
+- [x] 1.1 Add a `useResizable` hook (pointer drag → width/height state → persist on pointer-up) with localStorage per-project (`floo:layout:<hash>`)
+- [x] 1.2 Refactor `App.tsx` three-column flex: add drag handles to left and right sidebar borders; widths read from/hydrated by the hook
+- [x] 1.3 Add a vertical split in the center column with a drag handle for the bottom terminal panel region (panel content mounts in task 3; for now it's an empty resizable slot)
+- [x] 1.4 Wire the existing `⌘\` / `⌘J` collapse shortcuts to the new resizable layout (collapse = width 0 or flag; restore = persisted width)
+- [x] 1.5 Verify chat / spec-go / GraphPane / file tree still render correctly inside the new layout (no behavior change, only structure)
+- [x] 1.6 Add a frontend test that layout widths persist across remount and that collapse/restore works
 
 ## 2. CodeMirror 6 editor migration
 

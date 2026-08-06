@@ -167,10 +167,27 @@ describe("Top chrome (merged-design v2)", () => {
 });
 
 describe("Navigation rail (merged-design v2)", () => {
-  it("renders at 193px width", () => {
+  it("renders at 193px width by default and is resizable", () => {
     render(<App />);
     const rail = screen.getByTestId("nav-rail");
-    expect(getComputedStyle(rail).width).toBe("193px");
+    expect(rail.style.getPropertyValue("--rail-w")).toBe("193px");
+    expect(screen.getByTestId("resize-left-rail")).toBeDefined();
+  });
+
+  it("has a visible toggle button that collapses/restores it", async () => {
+    const { unmount } = render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    const rail = screen.getByTestId("nav-rail");
+    const toggle = screen.getByTestId("toggle-left-sidebar");
+
+    fireEvent.click(toggle);
+    expect(rail.style.marginLeft).not.toBe("0px");
+    expect(screen.queryByTestId("resize-left-rail")).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(rail.style.marginLeft).toBe("0px");
+    expect(screen.getByTestId("resize-left-rail")).toBeDefined();
+    unmount();
   });
 
   it("has workspace selector with project picker", () => {
@@ -204,6 +221,17 @@ describe("Editor chrome (merged-design v2)", () => {
     render(<App />);
     expect(screen.getByTestId("tab-chat")).toBeDefined();
     expect(screen.getByTestId("tab-diff")).toBeDefined();
+  });
+
+  it("defaults to the Editor tab, listed first, ahead of Console Chat and Diff", () => {
+    render(<App />);
+    const tabs = screen.getByTestId("editor-tabs");
+    const order = Array.from(tabs.querySelectorAll("[data-testid]")).map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    expect(order).toEqual(["tab-editor", "tab-chat", "tab-diff"]);
+    expect(screen.getByTestId("tab-editor").className).toMatch(/active/);
+    expect(screen.getByText("Editor")).toBeDefined();
   });
 
   it("renders breadcrumbs", () => {
@@ -261,7 +289,67 @@ describe("Right sidebar (merged-design v2)", () => {
   it("is collapsed by default", () => {
     render(<App />);
     const sidebar = screen.getByTestId("right-sidebar");
-    expect(sidebar.className).toMatch(/collapsed/);
+    expect(sidebar.style.marginRight).not.toBe("0px");
+    expect(screen.queryByTestId("resize-right-panel")).toBeNull();
+  });
+
+  it("opens at 300px by default (the Communities list collapses instead of forcing extra width)", () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId("toggle-right-sidebar"));
+    const sidebar = screen.getByTestId("right-sidebar");
+    expect(sidebar.style.marginRight).toBe("0px");
+    expect(sidebar.style.getPropertyValue("--panel-w")).toBe("300px");
+  });
+});
+
+describe("Resizable layout persistence", () => {
+  it("persists left rail width via drag and rehydrates on remount", async () => {
+    const { unmount } = render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+
+    fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), { clientX: 200 });
+    fireEvent.pointerMove(window, { clientX: 260 });
+    fireEvent.pointerUp(window);
+    expect(screen.getByTestId("nav-rail").style.getPropertyValue("--rail-w")).toBe("253px");
+
+    unmount();
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    expect(screen.getByTestId("nav-rail").style.getPropertyValue("--rail-w")).toBe("253px");
+  });
+
+  it("disables text selection on the body while dragging a handle, restores it on release", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+
+    expect(document.body.style.userSelect).not.toBe("none");
+
+    fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), { clientX: 200 });
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent.pointerMove(window, { clientX: 260 });
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent.pointerUp(window);
+    expect(document.body.style.userSelect).not.toBe("none");
+  });
+
+  it("collapses and restores the left rail via Cmd+\\, persisted across remount", async () => {
+    const { unmount } = render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+
+    fireEvent.keyDown(window, { key: "\\", metaKey: true });
+    expect(screen.getByTestId("nav-rail").style.marginLeft).not.toBe("0px");
+    expect(screen.queryByTestId("resize-left-rail")).toBeNull();
+
+    unmount();
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    expect(screen.getByTestId("nav-rail").style.marginLeft).not.toBe("0px");
+
+    fireEvent.keyDown(window, { key: "\\", metaKey: true });
+    expect(screen.getByTestId("nav-rail").style.marginLeft).toBe("0px");
+    expect(screen.getByTestId("resize-left-rail")).toBeDefined();
   });
 });
 
