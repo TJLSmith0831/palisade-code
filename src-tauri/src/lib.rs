@@ -411,12 +411,16 @@ fn graphify_bin() -> Res<PathBuf> {
         .ok_or_else(|| "`graphify` is not on PATH — install it to build code maps.".into())
 }
 
-/// Run Graphify over the active project (or a subdirectory of it) and inject a
-/// bounded summary into the thread. A failed run injects nothing.
+/// Run Graphify over the active project (or a subdirectory of it). With a
+/// `thread_id` (a user-triggered run), also inject a bounded summary into
+/// that thread; a failed run injects nothing. Without one (an automatic
+/// compile — e.g. on first opening a project with no prior run — or a
+/// project that has no threads yet), Graphify still runs and its output is
+/// still written to disk, just with nothing to inject into.
 #[tauri::command]
 fn run_graphify(
     project_hash: String,
-    thread_id: String,
+    thread_id: Option<String>,
     subpath: String,
     options: integrations::GraphifyOptions,
 ) -> Res<integrations::GraphifyRun> {
@@ -437,11 +441,13 @@ fn run_graphify(
 
     let out_dir = integrations::default_out_dir(&root);
     let run = integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)?;
-    let mode = store::list_threads(&floo_home(), &project_hash)?
-        .into_iter()
-        .find(|t| t.id == thread_id)
-        .map_or_else(|| "spec".to_string(), |t| t.current_mode);
-    store::append_message(&floo_home(), &project_hash, &thread_id, "tool", &mode, &run.summary)?;
+    if let Some(thread_id) = thread_id {
+        let mode = store::list_threads(&floo_home(), &project_hash)?
+            .into_iter()
+            .find(|t| t.id == thread_id)
+            .map_or_else(|| "spec".to_string(), |t| t.current_mode);
+        store::append_message(&floo_home(), &project_hash, &thread_id, "tool", &mode, &run.summary)?;
+    }
     Ok(run)
 }
 

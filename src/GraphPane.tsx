@@ -30,11 +30,37 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
   const [answer, setAnswer] = useState<string | null>(null);
 
   // A previous run's output is still on disk; show it without re-extracting.
+  // If there isn't one, compile it automatically so a freshly opened project
+  // shows its codebase map without a manual "Run Graphify" click.
   useEffect(() => {
+    let cancelled = false;
     setRun(null);
     setError(null);
     setAnswer(null);
-    api.loadGraphify(projectHash).then(setRun, () => setRun(null));
+    api.loadGraphify(projectHash).then(
+      (loaded) => {
+        if (!cancelled) setRun(loaded);
+      },
+      () => {
+        setBusy(true);
+        api
+          .runGraphify(projectHash, null, "", { incremental: false, codeOnly: true, deep: false })
+          .then(
+            (fresh) => {
+              if (!cancelled) setRun(fresh);
+            },
+            (err) => {
+              if (!cancelled) setError(String(err));
+            },
+          )
+          .finally(() => {
+            if (!cancelled) setBusy(false);
+          });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [projectHash]);
 
   // The always-on `graphify watch` process refreshes graph.json in the
@@ -193,7 +219,7 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
           </details>
         </div>
       ) : (
-        !error && <p className="empty">No code map yet. Run Graphify to build one.</p>
+        !error && <p className="empty">{busy ? "Compiling codebase map…" : "No code map yet. Run Graphify to build one."}</p>
       )}
     </div>
   );

@@ -137,7 +137,7 @@ export type GraphifyRun = {
 
 export const runGraphify = (
   projectHash: string,
-  threadId: string,
+  threadId: string | null,
   subpath: string,
   options: GraphifyOptions,
 ) =>
