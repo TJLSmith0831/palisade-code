@@ -252,7 +252,7 @@ describe("Editor chrome (merged-design v2)", () => {
     fireEvent.click(screen.getByText("AGENTS.md"));
 
     await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
-    expect(screen.getByTestId("file-editor-textarea")).toBeDefined();
+    await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
     expect(screen.queryByText("Create a thread to get started.")).toBeNull();
   });
 
@@ -376,5 +376,78 @@ describe("Theme toggle", () => {
     fireEvent.click(toggle);
     expect(toggle.textContent).toBe("Auto");
     expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+});
+
+describe("Project switching", () => {
+  const projA = {
+    hash: "proj-a",
+    root: "/tmp/proj-a",
+    displayName: "proj-a",
+    createdAt: "2026-08-06T00:00:00Z",
+    lastAccessedAt: "2026-08-06T00:00:00Z",
+  };
+  const projB = {
+    hash: "proj-b",
+    root: "/tmp/proj-b",
+    displayName: "proj-b",
+    createdAt: "2026-08-06T00:00:00Z",
+    lastAccessedAt: "2026-08-06T00:00:00Z",
+  };
+
+  beforeEach(() => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") return Promise.resolve([projA, projB]);
+      if (cmd === "switch_project") {
+        const hash = args?.hash;
+        return Promise.resolve(hash === projB.hash ? projB : projA);
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "list_notes") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({
+          claude: null,
+          codex: null,
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") {
+        const relativePath = String(args?.relativePath ?? "");
+        if (relativePath !== "") return Promise.resolve([]);
+        const projectHash = args?.projectHash;
+        return Promise.resolve(
+          projectHash === projA.hash
+            ? [{ name: "a.ts", is_dir: false, path: "a.ts" }]
+            : [{ name: "b.ts", is_dir: false, path: "b.ts" }],
+        );
+      }
+      if (cmd === "read_file_content") return Promise.resolve("content\n");
+      if (cmd === "write_file_content") return Promise.resolve();
+      if (cmd === "read_thread") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+  });
+
+  it("unassociates the open file from the previous project when the project switches", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
+    fireEvent.click(screen.getByText("a.ts"));
+    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
+    expect(screen.getByText("a.ts", { selector: ".ds-editor-path" })).toBeDefined();
+
+    fireEvent.change(screen.getByTestId("project-picker"), { target: { value: projB.hash } });
+
+    await waitFor(() => expect(screen.getByText("b.ts")).toBeDefined());
+    expect(screen.queryByTestId("file-editor")).toBeNull();
+    expect(screen.getByText(/select a file/i)).toBeDefined();
   });
 });

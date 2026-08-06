@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import * as api from "./api";
+import { languageExtensionFor } from "./codeLanguage";
 
 type Props = {
   projectHash: string;
@@ -8,56 +14,98 @@ type Props = {
 };
 
 export default function FileEditorPane({ projectHash, path, onSave }: Props) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const languageCompartment = useRef(new Compartment());
+  // Refs so the update/save listeners (bound once per file load) always see
+  // the latest callback/path without re-mounting the EditorView per render.
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+
   const [content, setContent] = useState<string | null>(null);
-  const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    setContent(null);
-    setDraft(null);
-    setError(null);
-    setSaved(false);
-    if (!path) return;
-    api
-      .readFileContent(projectHash, path)
-      .then((text) => {
-        setContent(text);
-        setDraft(text);
-      })
-      .catch((err) => setError(String(err)));
-  }, [projectHash, path]);
-
-  const dirty = draft !== content;
 
   const save = useCallback(() => {
-    if (!path || draft === null || saving) return;
+    const view = viewRef.current;
+    if (!path || !view || saving) return;
+    const after = view.state.doc.toString();
     setSaving(true);
     setError(null);
     api
-      .writeFileContent(projectHash, path, draft)
+      .writeFileContent(projectHash, path, after)
       .then(() => {
-        onSave?.({ path, before: content!, after: draft });
-        setContent(draft);
+        onSaveRef.current?.({ path, before: content ?? "", after });
+        setContent(after);
+        setDirty(false);
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       })
       .catch((err) => setError(String(err)))
       .finally(() => setSaving(false));
-  }, [projectHash, path, draft, saving]);
+  }, [projectHash, path, content, saving]);
+  const saveRef = useRef(save);
+  saveRef.current = save;
 
+  // Load file content on path change.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        save();
-      }
+    setContent(null);
+    setError(null);
+    setDirty(false);
+    setSaved(false);
+    if (!path) return;
+    api
+      .readFileContent(projectHash, path)
+      .then(setContent)
+      .catch((err) => setError(String(err)));
+  }, [projectHash, path]);
+
+  // Mount the CM6 view once a file's content has loaded; remount only on a
+  // real file switch (path change), not on every save — `save()` also calls
+  // `setContent`, and keying this effect on `content` would tear down and
+  // recreate the view (losing cursor/selection/undo history) on every save.
+  const contentLoaded = content !== null;
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || content === null || !path) return;
+
+    const state = EditorState.create({
+      doc: content,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLine(),
+        history(),
+        closeBrackets(),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        autocompletion({ override: [completeAnyWord] }),
+        keymap.of([
+          { key: "Mod-s", run: () => (saveRef.current(), true) },
+          ...closeBracketsKeymap,
+          ...defaultKeymap,
+          ...historyKeymap,
+          indentWithTab,
+        ]),
+        languageCompartment.current.of(languageExtensionFor(path)),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) setDirty(true);
+        }),
+        EditorView.theme({
+          "&": { height: "100%", fontSize: "12px" },
+          ".cm-scroller": { fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace", lineHeight: "1.55" },
+        }),
+      ],
+    });
+
+    const view = new EditorView({ state, parent: host });
+    viewRef.current = view;
+    return () => {
+      view.destroy();
+      viewRef.current = null;
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [save]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, contentLoaded]);
 
   if (!path) {
     return <p className="empty">Select a file from the explorer to view it.</p>;
@@ -69,12 +117,9 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
       </div>
     );
   }
-  if (draft === null) {
+  if (content === null) {
     return <p className="empty">Loading…</p>;
   }
-
-  const lines = draft.split("\n");
-  const lineCount = lines.length;
 
   return (
     <div className="ds-code-editor" data-testid="file-editor">
@@ -82,31 +127,11 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
         <span className="ds-editor-path">{path}</span>
         <span className="ds-editor-spacer" />
         {saved && <span className="ds-editor-saved">Saved</span>}
-        <button
-          className="ds-editor-save-btn"
-          onClick={save}
-          disabled={!dirty || saving}
-        >
+        <button className="ds-editor-save-btn" onClick={save} disabled={!dirty || saving}>
           {saving ? "Saving…" : dirty ? "Save *" : "Save"}
         </button>
       </div>
-      <div className="ds-editor-body">
-        <div className="ds-code-gutter" aria-hidden>
-          {Array.from({ length: lineCount }, (_, i) => (
-            <div className="ds-code-lineno" key={i}>
-              {i + 1}
-            </div>
-          ))}
-        </div>
-        <textarea
-          ref={textareaRef}
-          className="ds-code-textarea"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          data-testid="file-editor-textarea"
-        />
-      </div>
+      <div className="ds-editor-body" ref={hostRef} data-testid="file-editor-cm" />
     </div>
   );
 }

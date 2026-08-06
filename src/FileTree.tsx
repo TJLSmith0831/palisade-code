@@ -17,6 +17,9 @@ export default function FileTree({ projectHash, projectName, onSelectFile, activ
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setError(null);
+    setExpanded(new Set());
+    setChildren(new Map());
     api.listDirectory(projectHash, "").then(setRoots, (err) => setError(String(err)));
   }, [projectHash]);
 

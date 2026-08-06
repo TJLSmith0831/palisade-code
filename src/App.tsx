@@ -151,6 +151,8 @@ export default function App() {
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
         setNote(null);
+        setSelectedFile(null);
+        setFileEdits([]);
         const [found, noteNames] = await Promise.all([
           api.listThreads(refreshed.hash),
           api.listNotes(refreshed.hash),

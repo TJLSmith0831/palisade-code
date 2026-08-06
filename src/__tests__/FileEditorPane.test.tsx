@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
@@ -17,15 +18,69 @@ describe("FileEditorPane", () => {
     expect(screen.getByText(/select a file/i)).toBeDefined();
   });
 
-  it("renders file content in a textarea with line numbers once loaded", async () => {
+  it("renders file content in a CodeMirror editor once loaded (open from tree)", async () => {
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
     await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    expect(screen.getByText("src/foo.ts")).toBeDefined();
+  });
 
-    const textarea = screen.getByTestId("file-editor-textarea") as HTMLTextAreaElement;
-    expect(textarea.value).toBe("line one\nline two\n");
+  it("shows a plain-text editor for an unrecognized file extension without erroring", async () => {
+    render(<FileEditorPane projectHash="abc" path="data/file.xyz" />);
+    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    expect(screen.queryByTestId("file-editor-error")).toBeNull();
+  });
 
-    // line numbers rendered in the gutter
-    expect(screen.getByText("1")).toBeDefined();
-    expect(screen.getByText("2")).toBeDefined();
+  it("marks dirty on edit and saves via the Save button, clearing the dirty indicator", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onSave={onSave} />);
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+
+    const saveBtn = screen.getByRole("button", { name: /^save$/i });
+    expect(saveBtn).toHaveProperty("disabled", true);
+
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "x");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined());
+
+    await user.click(screen.getByRole("button", { name: /save \*/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty("disabled", true));
+  });
+
+  it("does not remount the CodeMirror view on save (preserves cursor/undo/scroll state)", async () => {
+    const user = userEvent.setup();
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+
+    const contentBefore = document.querySelector(".ds-editor-body .cm-content") as HTMLElement;
+    contentBefore.focus();
+    await user.type(contentBefore, "x");
+    await user.click(screen.getByRole("button", { name: /save \*/i }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty("disabled", true));
+
+    const contentAfter = document.querySelector(".ds-editor-body .cm-content");
+    expect(contentAfter).toBe(contentBefore);
+  });
+
+  it("offers autocomplete suggestions from the document and dismisses on Escape", async () => {
+    const user = userEvent.setup();
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "lin");
+
+    await waitFor(() => expect(document.querySelector(".cm-tooltip-autocomplete")).not.toBeNull());
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.querySelector(".cm-tooltip-autocomplete")).toBeNull());
   });
 });

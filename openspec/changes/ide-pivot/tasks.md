@@ -9,13 +9,13 @@
 
 ## 2. CodeMirror 6 editor migration
 
-- [ ] 2.1 Add `@codemirror/*` dependencies: `codemirror`, `@codemirror/state`, `@codemirror/view`, `@codemirror/autocomplete`, `@codemirror/commands`, and language packages (`lang-rust`, `lang-javascript`, `lang-python`, `lang-go`, `lang-json`, `lang-markdown`, `lang-css`)
-- [ ] 2.2 Rewrite `FileEditorPane.tsx` as a thin React wrapper around a CM6 `EditorState` + `EditorView`; select language extension by file extension; plain-text fallback for unrecognized types
-- [ ] 2.3 Wire `@codemirror/autocomplete` with a document-word completion source (the seam for a future FIM provider — no FIM implementation)
-- [ ] 2.4 Wire save (`⌘S` + Save button) to the existing `write_file_content` IPC; derive dirty state from CM6 `docChanged` transactions; show "Save *" dirty indicator
-- [ ] 2.5 Verify viewport virtualization handles multi-thousand-line files without UI freeze
-- [ ] 2.6 Update `FileEditorPane.test.tsx` to cover: open from tree, open via palette (once palette exists in task 5), edit + save, dirty indicator, unrecognized file type as plain text, autocomplete trigger + dismiss
-- [ ] 2.7 Remove the textarea checkpoint's CSS classes that are no longer used (`.ds-code-textarea` etc.); keep any reused by the CM6 wrapper
+- [x] 2.1 Add `@codemirror/*` dependencies: `codemirror`, `@codemirror/state`, `@codemirror/view`, `@codemirror/autocomplete`, `@codemirror/commands`, and language packages (`lang-rust`, `lang-javascript`, `lang-python`, `lang-go`, `lang-json`, `lang-markdown`, `lang-css`)
+- [x] 2.2 Rewrite `FileEditorPane.tsx` as a thin React wrapper around a CM6 `EditorState` + `EditorView`; select language extension by file extension; plain-text fallback for unrecognized types
+- [x] 2.3 Wire `@codemirror/autocomplete` with a document-word completion source (the seam for a future FIM provider — no FIM implementation)
+- [x] 2.4 Wire save (`⌘S` + Save button) to the existing `write_file_content` IPC; derive dirty state from CM6 `docChanged` transactions; show "Save *" dirty indicator
+- [x] 2.5 Verify viewport virtualization handles multi-thousand-line files without UI freeze
+- [x] 2.6 Update `FileEditorPane.test.tsx` to cover: open from tree, open via palette (once palette exists in task 5), edit + save, dirty indicator, unrecognized file type as plain text, autocomplete trigger + dismiss
+- [x] 2.7 Remove the textarea checkpoint's CSS classes that are no longer used (`.ds-code-textarea` etc.); keep any reused by the CM6 wrapper
 
 ## 3. PTY terminal
 
