@@ -165,6 +165,45 @@ export const terminalResize = (cols: number, rows: number) =>
   invoke<void>("terminal_resize", { cols, rows });
 export const terminalKill = () => invoke<void>("terminal_kill");
 
+// --------------------------------------------------------------------- git
+
+export type FileStatus = { path: string; code: string };
+
+export const gitStatus = (projectHash: string) =>
+  invoke<FileStatus[]>("git_status", { projectHash });
+export const gitWorkingDiff = (projectHash: string) =>
+  invoke<string>("git_working_diff", { projectHash });
+export const gitStagedDiff = (projectHash: string) =>
+  invoke<string>("git_staged_diff", { projectHash });
+export const gitStageHunk = (projectHash: string, patch: string) =>
+  invoke<void>("git_stage_hunk", { projectHash, patch });
+export const gitUnstageHunk = (projectHash: string, patch: string) =>
+  invoke<void>("git_unstage_hunk", { projectHash, patch });
+export const gitStageFile = (projectHash: string, path: string) =>
+  invoke<void>("git_stage_file", { projectHash, path });
+export const gitCommit = (projectHash: string, message: string) =>
+  invoke<void>("git_commit", { projectHash, message });
+
+export type BranchInfo = { name: string; isCurrent: boolean; isRemote: boolean };
+
+export const gitBranches = (projectHash: string) =>
+  invoke<BranchInfo[]>("git_branches", { projectHash });
+export const gitCheckoutBranch = (projectHash: string, name: string) =>
+  invoke<void>("git_checkout_branch", { projectHash, name });
+export const gitCreateBranch = (projectHash: string, name: string) =>
+  invoke<void>("git_create_branch", { projectHash, name });
+export const gitDeleteBranch = (projectHash: string, name: string) =>
+  invoke<void>("git_delete_branch", { projectHash, name });
+export const gitFetch = (projectHash: string) => invoke<void>("git_fetch", { projectHash });
+export const gitPull = (projectHash: string) => invoke<string>("git_pull", { projectHash });
+export const gitPush = (projectHash: string) => invoke<string>("git_push", { projectHash });
+export const gitAheadBehind = (projectHash: string) =>
+  invoke<[number, number] | null>("git_ahead_behind", { projectHash });
+export const gitDiscardFile = (projectHash: string, path: string, untracked: boolean) =>
+  invoke<void>("git_discard_file", { projectHash, path, untracked });
+export const gitIsRepo = (projectHash: string) => invoke<boolean>("git_is_repo", { projectHash });
+export const gitInit = (projectHash: string) => invoke<void>("git_init", { projectHash });
+
 export const createNote = (projectHash: string, name: string) =>
   invoke<string>("create_note", { projectHash, name });
 export const listNotes = (projectHash: string) =>

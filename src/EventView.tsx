@@ -1,42 +1,9 @@
 import { useState } from "react";
 import MDEditor from "@uiw/react-md-editor";
-import ReactDiffViewer from "react-diff-viewer-continued";
 
 import type { ExecutorEvent, Message, Preflight } from "./api";
-
-// Themes react-diff-viewer-continued to the Dragon Fire tokens instead of its
-// own built-in dark palette — see "Diff Line (addition)" in merged-design.json.
-const diffStyles = {
-  variables: {
-    dark: {
-      diffViewerBackground: "var(--bg)",
-      diffViewerColor: "var(--fg)",
-      addedBackground: "rgba(22, 163, 74, 0.06)",
-      addedColor: "var(--success)",
-      removedBackground: "color-mix(in oklab, var(--danger), transparent 94%)",
-      removedColor: "var(--danger)",
-      wordAddedBackground: "color-mix(in oklab, var(--success), transparent 65%)",
-      wordRemovedBackground: "color-mix(in oklab, var(--danger), transparent 65%)",
-      addedGutterBackground: "var(--surface-warm)",
-      removedGutterBackground: "var(--surface-warm)",
-      gutterBackground: "var(--surface-warm)",
-      gutterBackgroundDark: "var(--surface-warm)",
-      gutterColor: "var(--muted)",
-      addedGutterColor: "var(--muted)",
-      removedGutterColor: "var(--muted)",
-      codeFoldGutterBackground: "var(--surface)",
-      codeFoldBackground: "var(--surface)",
-      emptyLineBackground: "var(--bg)",
-      highlightBackground: "var(--active-row)",
-      highlightGutterBackground: "var(--active-row)",
-    },
-  },
-  diffContainer: {
-    width: "100%",
-    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-    fontSize: "12px",
-  },
-};
+import { rowsFromChange } from "./diffLines";
+import DiffRows from "./DiffRows";
 
 /** The "Code Change Diff" tab shows only applied patches; "Console Chat" shows everything. */
 export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
@@ -204,15 +171,7 @@ export function EventList({
             return (
               <div key={index} className="file-edit" data-testid="file-edit">
                 <div className="file-edit-head">{item.path}</div>
-                <ReactDiffViewer
-                  oldValue={item.before}
-                  newValue={item.after}
-                  splitView={false}
-                  useDarkTheme
-                  hideLineNumbers
-                  showDiffOnly
-                  styles={diffStyles}
-                />
+                <DiffRows rows={rowsFromChange(item.before, item.after)} />
               </div>
             );
           case "toolCall":

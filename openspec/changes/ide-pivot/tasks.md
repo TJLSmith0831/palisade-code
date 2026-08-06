@@ -30,15 +30,25 @@
 
 ## 4. Git diff + hunk staging
 
-- [ ] 4.1 Add the `diff` npm dependency; remove `react-diff-viewer-continued`
-- [ ] 4.2 Create a `git.rs` Rust module: `working_tree_diff(root)`, `staged_diff(root)`, `status(root)`, `stage_hunk(root, patch)`, `unstage_hunk(root, patch)`, `commit(root, message)` — all shell out to `git` with `child_path_env()`
-- [ ] 4.3 Register the git Tauri commands in `lib.rs`; handle "git not on PATH" with a clear error
-- [ ] 4.4 Create a `DiffPane.tsx` component: fetch working-tree + staged diffs, use `diff` (npm) to compute hunks per file, render with the existing Dragon Fire `diffStyles` tokens (EventView.tsx:9-38)
-- [ ] 4.5 Add per-hunk stage/unstage controls; reconstruct hunk patches and call `stage_hunk`/`unstage_hunk`; add a "stage all" control per file
-- [ ] 4.6 Add a commit box (textarea + commit button) calling `commit`; refuse on empty message or nothing staged
-- [ ] 4.7 Mount `DiffPane` in the diff tab (replacing the current `react-diff-viewer-continued` usage for working-tree review; agent `fileEdit` events in chat/diff tabs stay via `EventView` per D7)
-- [ ] 4.8 Verify: view uncommitted changes, stage/unstage individual hunks, commit staged changes, empty-state when clean, git-missing error
-- [ ] 4.9 Add tests: hunk stage/unstage round-trip, commit refuses on empty message / nothing staged, empty state
+- [x] 4.1 Add the `diff` npm dependency; remove `react-diff-viewer-continued`
+- [x] 4.2 Create a `git.rs` Rust module: `working_tree_diff(root)`, `staged_diff(root)`, `status(root)`, `stage_hunk(root, patch)`, `unstage_hunk(root, patch)`, `commit(root, message)` — all shell out to `git` with `child_path_env()`
+- [x] 4.3 Register the git Tauri commands in `lib.rs`; handle "git not on PATH" with a clear error
+- [x] 4.4 Create a `DiffPane.tsx` component: fetch working-tree + staged diffs, use `diff` (npm) to compute hunks per file, render with the existing Dragon Fire `diffStyles` tokens (EventView.tsx:9-38)
+- [x] 4.5 Add per-hunk stage/unstage controls; reconstruct hunk patches and call `stage_hunk`/`unstage_hunk`; add a "stage all" control per file
+- [x] 4.6 Add a commit box (textarea + commit button) calling `commit`; refuse on empty message or nothing staged
+- [x] 4.7 Mount `DiffPane` in the diff tab (replacing the current `react-diff-viewer-continued` usage for working-tree review; agent `fileEdit` events in chat/diff tabs stay via `EventView` per D7)
+- [x] 4.8 Verify: view uncommitted changes, stage/unstage individual hunks, commit staged changes, empty-state when clean, git-missing error
+- [x] 4.9 Add tests: hunk stage/unstage round-trip, commit refuses on empty message / nothing staged, empty state
+
+### 4b. Branches, pull/push, discard, init (D55 — added mid-phase, scope expanded from D6)
+
+- [x] 4.10 Extend `git.rs`: `list_branches`, `checkout_branch`, `create_branch`, `delete_branch`, `fetch`, `pull`, `push` (auto `--set-upstream` on first push), `ahead_behind`, `discard_file`, `is_git_repo`, `init_repo` — all conflict/dirty-tree failures surface git's own error verbatim, no auto-stash
+- [x] 4.11 Register the new git Tauri commands in `lib.rs`
+- [x] 4.12 Add a branch indicator + switcher near the project picker in the left nav rail: shows current branch, click opens a list of local + remote branches (switch) plus a "new branch" option (create+checkout)
+- [x] 4.13 Add Fetch/Pull/Push controls to `DiffPane` with ahead/behind counts; "Initialize Repository" empty-state action when the project isn't a git repo yet
+- [x] 4.14 Add a "Discard changes" control per file in the Changes list (confirm dialog first — destructive)
+- [x] 4.15 Verify live (throwaway local repos only — never against a real remote): branch switch blocked by a dirty tree shows git's real error, create+checkout a new branch, discard reverts a file, fetch/pull/push round-trip against a local bare "origin", init on a fresh non-repo folder
+- [x] 4.16 Add tests: branch list parsing, checkout-blocked-by-dirty-tree surfaces the error, push auto-sets upstream on a new branch, discard removes an untracked file vs reverts a tracked one, ahead/behind with and without an upstream
 
 ## 5. Fuzzy file-open palette
 

@@ -12,6 +12,7 @@ import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./a
 import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } from "./EventView";
 import FileEditorPane from "./FileEditorPane";
 import FileTree from "./FileTree";
+import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
 import TerminalPane from "./TerminalPane";
 import { useResizable, type UseResizableResult } from "./useResizable";
@@ -85,6 +86,7 @@ export default function App() {
   const [thread, setThread] = useState<ThreadMeta | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
+  const [branches, setBranches] = useState<api.BranchInfo[]>([]);
   const [note, setNote] = useState<{ name: string; content: string } | null>(null);
   const [notePane, setNotePane] = useState<"edit" | "preview">("edit");
   // One reusable command bar: new note, rename project, rename thread, and
@@ -95,6 +97,7 @@ export default function App() {
   const [bar, setBar] = useState<
     | { kind: "input"; label: string; value: string; submit: (value: string) => void }
     | { kind: "confirm"; label: string; onConfirm: () => void }
+    | { kind: "select"; label: string; options: string[]; submit: (choice: string) => void }
     | null
   >(null);
   const [draft, setDraft] = useState("");
@@ -187,6 +190,17 @@ export default function App() {
     setMessages(await api.readThread(projectHash, next.id));
   }, []);
 
+  // Not every project is a git repo — that's a normal state, not an error,
+  // so a failed lookup here just means "no branches to show" rather than
+  // flashing the global error banner on every project switch.
+  const refreshBranches = useCallback(async (projectHash: string) => {
+    try {
+      setBranches(await api.gitBranches(projectHash));
+    } catch {
+      setBranches([]);
+    }
+  }, []);
+
   const selectProject = useCallback(
     async (next: Project) => {
       try {
@@ -201,13 +215,14 @@ export default function App() {
         ]);
         setThreads(found);
         setNotes(noteNames);
+        await refreshBranches(refreshed.hash);
         const remembered = localStorage.getItem(lastThreadKey(refreshed.hash));
         await selectThread(refreshed.hash, found.find((t) => t.id === remembered) ?? found[0] ?? null);
       } catch (err) {
         fail(err);
       }
     },
-    [selectThread],
+    [selectThread, refreshBranches],
   );
 
   // Restore the most recently used project on launch.
@@ -244,6 +259,39 @@ export default function App() {
           const refreshed = await api.listProjects();
           setProjects(refreshed);
           setProject(refreshed.find((p) => p.hash === project.hash) ?? project);
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
+  };
+
+  // ---------------------------------------------------------------- branch
+
+  const onOpenBranchPicker = () => {
+    if (!project) return;
+    const local = new Set(branches.filter((b) => !b.isRemote).map((b) => b.name));
+    // Remote branches with no local counterpart yet — offered so switching
+    // to one creates a local tracking branch (git's own DWIM checkout
+    // behavior), same as VS Code's remote-branch entries.
+    const remoteOnly = branches
+      .filter((b) => b.isRemote)
+      .map((b) => b.name.split("/").slice(1).join("/"))
+      .filter((name) => name && !local.has(name));
+    const options = [...branches.filter((b) => !b.isRemote).map((b) => b.name), ...new Set(remoteOnly)];
+    setBar({
+      kind: "select",
+      label: "Switch branch (or type a new name to create one)",
+      options,
+      submit: async (choice) => {
+        setBar(null);
+        try {
+          if (options.includes(choice)) {
+            await api.gitCheckoutBranch(project.hash, choice);
+          } else {
+            await api.gitCreateBranch(project.hash, choice);
+          }
+          await refreshBranches(project.hash);
         } catch (err) {
           fail(err);
         }
@@ -644,6 +692,11 @@ export default function App() {
                 <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
               )}
             </div>
+            {project && branches.length > 0 && (
+              <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
+                ⎇ {branches.find((b) => b.isCurrent)?.name ?? "…"}
+              </button>
+            )}
           </div>
           <div className="ds-rail-section">
             <button className="ds-new-thread" onClick={onNewThread} disabled={!project} data-testid="new-thread">
@@ -801,6 +854,7 @@ export default function App() {
             )
           ) : chatTab === "diff" ? (
             <div className="messages" data-testid="messages">
+              {project && <DiffPane projectHash={project.hash} />}
               {(() => {
                 const threadEdits = thread
                   ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
@@ -814,12 +868,11 @@ export default function App() {
                 }));
                 const allEdits = [...threadEdits, ...manualEdits];
                 return (
-                  <>
-                    {allEdits.length === 0 && (
-                      <p className="empty">No file changes yet.</p>
-                    )}
+                  <section className="diff-section" data-testid="turn-history-section">
+                    <h4>Turn History</h4>
+                    {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
                     <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
-                  </>
+                  </section>
                 );
               })()}
             </div>
@@ -1063,6 +1116,38 @@ export default function App() {
               </button>
               <button onClick={() => setBar(null)}>Cancel</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {bar && bar.kind === "select" && (
+        <div className="overlay" onClick={() => setBar(null)}>
+          <div className="commandbar" onClick={(event) => event.stopPropagation()}>
+            <label htmlFor="barSelect">{bar.label}</label>
+            <ul className="ds-branch-list" data-testid="branch-list">
+              {bar.options.map((name) => (
+                <li key={name} onClick={() => bar.submit(name)} data-testid="branch-option">
+                  {name}
+                </li>
+              ))}
+            </ul>
+            <input
+              id="barSelect"
+              name="barSelect"
+              autoFocus
+              autoComplete="off"
+              placeholder="new-branch-name"
+              data-testid="branch-new-input"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  const value = event.currentTarget.value.trim();
+                  if (!value) return;
+                  bar.submit(value);
+                }
+              }}
+            />
+            <span className="hint">Click a branch to switch · Enter a name to create · Esc to cancel</span>
           </div>
         </div>
       )}

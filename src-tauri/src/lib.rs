@@ -1,4 +1,5 @@
 mod executor;
+mod git;
 mod integrations;
 mod pidguard;
 mod store;
@@ -515,6 +516,103 @@ fn terminal_kill(harness: tauri::State<'_, Harness>) {
     *harness.terminal.lock().unwrap() = None;
 }
 
+// ------------------------------------------------------------------- git
+
+/// Where the `git` binary lives, or a readable error if it isn't there.
+fn git_bin() -> Res<PathBuf> {
+    executor::find_on_path("git").ok_or_else(|| "`git` is not on PATH.".into())
+}
+
+#[tauri::command]
+fn git_status(project_hash: String) -> Res<Vec<git::FileStatus>> {
+    git::status(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_working_diff(project_hash: String) -> Res<String> {
+    git::working_tree_diff(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_staged_diff(project_hash: String) -> Res<String> {
+    git::staged_diff(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_stage_hunk(project_hash: String, patch: String) -> Res<()> {
+    git::stage_hunk(&git_bin()?, &project_root(&project_hash)?, &patch)
+}
+
+#[tauri::command]
+fn git_unstage_hunk(project_hash: String, patch: String) -> Res<()> {
+    git::unstage_hunk(&git_bin()?, &project_root(&project_hash)?, &patch)
+}
+
+#[tauri::command]
+fn git_stage_file(project_hash: String, path: String) -> Res<()> {
+    git::stage_file(&git_bin()?, &project_root(&project_hash)?, &path)
+}
+
+#[tauri::command]
+fn git_commit(project_hash: String, message: String) -> Res<()> {
+    git::commit(&git_bin()?, &project_root(&project_hash)?, &message)
+}
+
+#[tauri::command]
+fn git_branches(project_hash: String) -> Res<Vec<git::BranchInfo>> {
+    git::list_branches(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_checkout_branch(project_hash: String, name: String) -> Res<()> {
+    git::checkout_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+}
+
+#[tauri::command]
+fn git_create_branch(project_hash: String, name: String) -> Res<()> {
+    git::create_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+}
+
+#[tauri::command]
+fn git_delete_branch(project_hash: String, name: String) -> Res<()> {
+    git::delete_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+}
+
+#[tauri::command]
+fn git_fetch(project_hash: String) -> Res<()> {
+    git::fetch(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_pull(project_hash: String) -> Res<String> {
+    git::pull(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_push(project_hash: String) -> Res<String> {
+    git::push(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_ahead_behind(project_hash: String) -> Res<Option<(u32, u32)>> {
+    git::ahead_behind(&git_bin()?, &project_root(&project_hash)?)
+}
+
+#[tauri::command]
+fn git_discard_file(project_hash: String, path: String, untracked: bool) -> Res<()> {
+    git::discard_file(&git_bin()?, &project_root(&project_hash)?, &path, untracked)
+}
+
+#[tauri::command]
+fn git_is_repo(project_hash: String) -> Res<bool> {
+    Ok(git::is_git_repo(&git_bin()?, &project_root(&project_hash)?))
+}
+
+#[tauri::command]
+fn git_init(project_hash: String) -> Res<()> {
+    git::init_repo(&git_bin()?, &project_root(&project_hash)?)
+}
+
 // ------------------------------------------------------------- file tree
 
 #[tauri::command]
@@ -627,6 +725,24 @@ pub fn run() {
             terminal_input,
             terminal_resize,
             terminal_kill,
+            git_status,
+            git_working_diff,
+            git_staged_diff,
+            git_stage_hunk,
+            git_unstage_hunk,
+            git_stage_file,
+            git_commit,
+            git_branches,
+            git_checkout_branch,
+            git_create_branch,
+            git_delete_branch,
+            git_fetch,
+            git_pull,
+            git_push,
+            git_ahead_behind,
+            git_discard_file,
+            git_is_repo,
+            git_init,
             list_directory,
             read_file_content,
             write_file_content,

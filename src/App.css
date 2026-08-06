@@ -420,6 +420,53 @@ input[type="checkbox"] {
   padding: 3px 6px;
 }
 
+.ds-branch-btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-branch-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.ds-branch-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ds-branch-list li {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-branch-list li:last-child {
+  border-bottom: none;
+}
+
+.ds-branch-list li:hover {
+  background: var(--active-row);
+}
+
 .ds-new-thread {
   width: 100%;
   background: var(--surface-warm);
@@ -1229,9 +1276,180 @@ input[type="checkbox"] {
   border-bottom: 1px solid var(--border);
 }
 
-.file-edit > div:last-child {
+.file-edit > div:last-child,
+.file-edit > .diff-rows {
   max-height: 420px;
   overflow: auto;
+}
+
+/* Dragon Fire diff tokens — shared by EventView's per-edit diffs and
+   DiffPane's working-tree hunks (both render DiffRows). */
+.diff-rows {
+  margin: 0;
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-row {
+  padding: 0 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.diff-row.add {
+  background: color-mix(in oklab, var(--success), transparent 94%);
+  color: var(--success);
+}
+
+.diff-row.remove {
+  background: color-mix(in oklab, var(--danger), transparent 94%);
+  color: var(--danger);
+}
+
+.diff-marker {
+  flex-shrink: 0;
+  width: 1ch;
+  color: var(--muted);
+  user-select: none;
+}
+
+/* --- git diff pane -------------------------------------------------------- */
+
+.diff-pane {
+  padding: 10px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.diff-sync-bar {
+  display: flex;
+  gap: 6px;
+}
+
+.diff-sync-bar button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-warm);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diff-sync-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.diff-commit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diff-commit-box textarea {
+  resize: vertical;
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.diff-commit-box button {
+  align-self: flex-end;
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.diff-commit-box button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: var(--surface-warm);
+  color: var(--muted);
+}
+
+.diff-section h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.diff-file {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.diff-file-path {
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.diff-spacer {
+  flex: 1;
+}
+
+.diff-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--success), transparent 80%);
+  color: var(--success);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.diff-file-head button,
+.diff-hunk-head button {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-warm);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diff-file-head button:disabled,
+.diff-hunk-head button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.diff-hunk-head {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 10px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
 }
 
 /* --- graphify ----------------------------------------------------------- */
