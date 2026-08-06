@@ -1,6 +1,8 @@
 mod executor;
 mod integrations;
+mod pidguard;
 mod store;
+mod terminal;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -468,6 +470,51 @@ fn query_graphify(project_hash: String, subcommand: String, args: Vec<String>) -
     )
 }
 
+// ------------------------------------------------------------- terminal
+
+/// Ensures a PTY terminal is running for `project_hash`, spawning one if
+/// none exists yet or the existing one belongs to a different (stale)
+/// project. Already running for this project → no-op, so re-opening the
+/// panel re-attaches to the same session (spec: "single terminal instance")
+/// instead of spawning a second one.
+#[tauri::command]
+fn terminal_spawn(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, project_hash: String) -> Res<()> {
+    {
+        let existing = harness.terminal.lock().unwrap();
+        if existing.as_ref().is_some_and(|(hash, _)| hash == &project_hash) {
+            return Ok(());
+        }
+    }
+    let root = project_root(&project_hash)?;
+    let app_output = app.clone();
+    let term = terminal::Terminal::spawn(&root, move |bytes| {
+        use base64::prelude::*;
+        let _ = app_output.emit("terminal-output", BASE64_STANDARD.encode(&bytes));
+    })
+    .map_err(|err| format!("start terminal: {err}"))?;
+    *harness.terminal.lock().unwrap() = Some((project_hash, term));
+    Ok(())
+}
+
+#[tauri::command]
+fn terminal_input(harness: tauri::State<'_, Harness>, data: String) -> Res<()> {
+    let guard = harness.terminal.lock().unwrap();
+    let (_, term) = guard.as_ref().ok_or("no terminal running")?;
+    term.write(data.as_bytes())
+}
+
+#[tauri::command]
+fn terminal_resize(harness: tauri::State<'_, Harness>, cols: u16, rows: u16) -> Res<()> {
+    let guard = harness.terminal.lock().unwrap();
+    let (_, term) = guard.as_ref().ok_or("no terminal running")?;
+    term.resize(cols, rows)
+}
+
+#[tauri::command]
+fn terminal_kill(harness: tauri::State<'_, Harness>) {
+    *harness.terminal.lock().unwrap() = None;
+}
+
 // ------------------------------------------------------------- file tree
 
 #[tauri::command]
@@ -576,6 +623,10 @@ pub fn run() {
             run_graphify,
             load_graphify,
             query_graphify,
+            terminal_spawn,
+            terminal_input,
+            terminal_resize,
+            terminal_kill,
             list_directory,
             read_file_content,
             write_file_content,

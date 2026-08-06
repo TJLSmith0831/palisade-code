@@ -19,14 +19,14 @@
 
 ## 3. PTY terminal
 
-- [ ] 3.1 Add `portable-pty` to `src-tauri/Cargo.toml`
-- [ ] 3.2 Create a `terminal.rs` module: `Terminal` struct owning a `PtyPair`; `spawn(project_root)` launches `$SHELL` (fallback `/bin/zsh`) with `child_path_env()` for PATH; holds the writer for input
-- [ ] 3.3 Add Tauri commands: `terminal_spawn`, `terminal_input(bytes)`, `terminal_resize(cols, rows)`, `terminal_kill`; emit `terminal-output` events for PTY stdout/stderr
-- [ ] 3.4 Wire terminal lifecycle to project switch (kill old, spawn new) and app shutdown
-- [ ] 3.5 Add `xterm.js` dependency; create a `TerminalPane.tsx` component that mounts an xterm `Terminal`, subscribes to `terminal-output`, sends input via `terminal_input`, forwards resize to `terminal_resize`
-- [ ] 3.6 Mount `TerminalPane` in the bottom panel (default) with a toggle control to move it to the right sidebar
-- [ ] 3.7 Verify: interactive TUI (`vim`, `top`), ANSI colors, Ctrl-C interrupt, Tab completion, resize redraws TUI apps
-- [ ] 3.8 Add a frontend test for the terminal placement toggle (bottom ↔ sidebar) and single-instance re-attach
+- [x] 3.1 Add `portable-pty` to `src-tauri/Cargo.toml`
+- [x] 3.2 Create a `terminal.rs` module: `Terminal` struct owning a `PtyPair`; `spawn(project_root)` launches `$SHELL` (fallback `/bin/zsh`) with `child_path_env()` for PATH; holds the writer for input
+- [x] 3.3 Add Tauri commands: `terminal_spawn`, `terminal_input(bytes)`, `terminal_resize(cols, rows)`, `terminal_kill`; emit `terminal-output` events for PTY stdout/stderr
+- [x] 3.4 Wire terminal lifecycle to project switch (kill old, spawn new) and app shutdown
+- [x] 3.5 Add `xterm.js` dependency; create a `TerminalPane.tsx` component that mounts an xterm `Terminal`, subscribes to `terminal-output`, sends input via `terminal_input`, forwards resize to `terminal_resize`
+- [x] 3.6 Mount `TerminalPane` in the bottom panel (default) with a toggle control to move it to the right sidebar
+- [x] 3.7 Verify: interactive TUI (`vim`, `top`), ANSI colors, Ctrl-C interrupt, Tab completion, resize redraws TUI apps
+- [x] 3.8 Add a frontend test for the terminal placement toggle (bottom ↔ sidebar) and single-instance re-attach
 
 ## 4. Git diff + hunk staging
 

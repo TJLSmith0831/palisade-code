@@ -67,7 +67,7 @@ fn lookup(path: &std::ffi::OsStr, bin: &str) -> Option<PathBuf> {
 /// so a child that resolves fine but starts with that minimal PATH can still
 /// exit immediately. Give it the same PATH the login shell fallback used to
 /// find it in the first place.
-fn child_path_env() -> std::ffi::OsString {
+pub(crate) fn child_path_env() -> std::ffi::OsString {
     login_shell_path()
         .cloned()
         .or_else(|| std::env::var_os("PATH"))
@@ -792,6 +792,11 @@ pub struct Harness {
     /// The `graphify watch` process for whichever project is currently
     /// active — never more than one at a time (D16).
     pub watch: Mutex<Option<crate::integrations::Watcher>>,
+    /// The PTY terminal, if the user has opened the panel — `None` until
+    /// then (spawned lazily, not on every project switch). Paired with the
+    /// project hash it belongs to so a re-open after a project switch knows
+    /// to kill the stale one instead of re-attaching to it.
+    pub terminal: Mutex<Option<(String, crate::terminal::Terminal)>>,
 }
 
 // ------------------------------------------------------------------ tests

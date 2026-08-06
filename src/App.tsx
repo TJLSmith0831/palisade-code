@@ -13,6 +13,7 @@ import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } fr
 import FileEditorPane from "./FileEditorPane";
 import FileTree from "./FileTree";
 import GraphPane from "./GraphPane";
+import TerminalPane from "./TerminalPane";
 import { useResizable, type UseResizableResult } from "./useResizable";
 import "./App.css";
 
@@ -29,6 +30,17 @@ const SidebarIcon = ({ side }: { side: "left" | "right" }) => (
       stroke="currentColor"
       strokeWidth="1.3"
     />
+  </svg>
+);
+
+// Same frame as SidebarIcon, with a prompt chevron + cursor bar instead of
+// a filled column — reads as "terminal" while matching the sidebar toggles'
+// weight and style.
+const TerminalIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+    <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
+    <path d="M4 6.2 6.8 8 4 9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <line x1="8" y1="9.8" x2="11.2" y2="9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
   </svg>
 );
 
@@ -56,6 +68,8 @@ const bindDrag = (handle: UseResizableResult["handleProps"], cursor: "col-resize
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
 const THEME_KEY = "floo:theme";
+const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
+type TerminalPlacement = "bottom" | "sidebar";
 // TEMP TEST CHANGE
 type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme => (t === "auto" ? "light" : t === "light" ? "dark" : "auto");
@@ -91,7 +105,10 @@ export default function App() {
   const [showThinking, setShowThinking] = useState(() => localStorage.getItem(SHOW_THINKING_KEY) === "1");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("editor");
-  const [rightTab, setRightTab] = useState<"codemap" | "notes">("codemap");
+  const [rightTab, setRightTab] = useState<"codemap" | "notes" | "terminal">("codemap");
+  const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
+    () => (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) || "bottom",
+  );
   const layoutHash = project?.hash ?? "default";
   const leftRail = useResizable({
     storageKey: `floo:layout:${layoutHash}:left`,
@@ -118,6 +135,31 @@ export default function App() {
     reverse: true,
     defaultCollapsed: true,
   });
+  const toggleTerminalPlacement = useCallback(() => {
+    setTerminalPlacement((prev) => {
+      const next = prev === "bottom" ? "sidebar" : "bottom";
+      localStorage.setItem(TERMINAL_PLACEMENT_KEY, next);
+      if (next === "sidebar") {
+        setRightTab("terminal");
+        rightPanel.setCollapsed(false);
+      } else {
+        setRightTab((tab) => (tab === "terminal" ? "codemap" : tab));
+        terminalPanel.setCollapsed(false);
+      }
+      return next;
+    });
+  }, [rightPanel.setCollapsed, terminalPanel.setCollapsed]);
+  // Placement-aware: toggles the bottom panel directly, or — when the
+  // terminal lives in the sidebar — switches to its tab and opens the
+  // sidebar, since terminalPanel.collapsed doesn't control visibility there.
+  const toggleTerminal = useCallback(() => {
+    if (terminalPlacement === "sidebar") {
+      setRightTab("terminal");
+      rightPanel.setCollapsed(false);
+    } else {
+      terminalPanel.toggleCollapsed();
+    }
+  }, [terminalPlacement, rightPanel.setCollapsed, terminalPanel.toggleCollapsed]);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) || "auto");
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
@@ -444,10 +486,14 @@ export default function App() {
         event.preventDefault();
         leftRail.toggleCollapsed();
       }
+      if ((event.metaKey || event.ctrlKey) && event.key === "`") {
+        event.preventDefault();
+        toggleTerminal();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [project, onCreateNote, rightPanel.toggleCollapsed, leftRail.toggleCollapsed]);
+  }, [project, onCreateNote, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
 
   // ------------------------------------------------------------------ view
 
@@ -517,6 +563,14 @@ export default function App() {
               data-testid="toggle-right-sidebar"
             >
               <SidebarIcon side="right" />
+            </button>
+            <button
+              className="ds-icon-btn"
+              onClick={toggleTerminal}
+              title="Toggle terminal (Cmd+`)"
+              data-testid="toggle-terminal"
+            >
+              <TerminalIcon />
             </button>
             <button
               className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
@@ -861,7 +915,7 @@ export default function App() {
             </p>
           )}
 
-          {!terminalPanel.collapsed && (
+          {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
             <>
               <div
                 className="ds-resize-handle ds-resize-handle-y"
@@ -872,7 +926,15 @@ export default function App() {
                 className="ds-terminal-panel"
                 data-testid="terminal-panel"
                 style={{ "--terminal-h": `${terminalPanel.size}px` } as CSSProperties}
-              />
+              >
+                {project && (
+                  <TerminalPane
+                    projectHash={project.hash}
+                    placement={terminalPlacement}
+                    onTogglePlacement={toggleTerminalPlacement}
+                  />
+                )}
+              </div>
             </>
           )}
         </main>
@@ -910,6 +972,15 @@ export default function App() {
             >
               Notes
             </button>
+            {terminalPlacement === "sidebar" && (
+              <button
+                className={rightTab === "terminal" ? "active" : ""}
+                onClick={() => setRightTab("terminal")}
+                data-testid="tab-terminal"
+              >
+                Terminal
+              </button>
+            )}
           </div>
           <div className="ds-right-panes">
             {rightTab === "codemap" && project && (
@@ -917,6 +988,13 @@ export default function App() {
                 projectHash={project.hash}
                 threadId={thread?.id ?? null}
                 onInjected={() => refresh().catch(fail)}
+              />
+            )}
+            {rightTab === "terminal" && terminalPlacement === "sidebar" && project && (
+              <TerminalPane
+                projectHash={project.hash}
+                placement={terminalPlacement}
+                onTogglePlacement={toggleTerminalPlacement}
               />
             )}
             {rightTab === "notes" && project && (

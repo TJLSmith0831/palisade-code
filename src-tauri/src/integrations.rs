@@ -212,6 +212,7 @@ const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 pub struct Watcher {
     stopping: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+    pid_path: PathBuf,
 }
 
 impl Watcher {
@@ -225,9 +226,15 @@ impl Watcher {
         on_update: impl Fn() + Send + 'static,
         on_crash: impl Fn(String) + Send + 'static,
     ) -> Self {
+        let pid_path = default_out_dir(&project_root).join(".watch.pid");
+        // A predecessor's Drop may never have run (tauri dev's hard-restart
+        // on a backend rebuild, D48) — clean up before adding a new one.
+        crate::pidguard::reap_stale(&pid_path, "graphify watch");
+
         let stopping = Arc::new(AtomicBool::new(false));
         let handle = {
             let stopping = Arc::clone(&stopping);
+            let pid_path = pid_path.clone();
             thread::spawn(move || {
                 let mut child = match Command::new(&bin)
                     .arg("watch")
@@ -242,6 +249,7 @@ impl Watcher {
                         return;
                     }
                 };
+                crate::pidguard::record(&pid_path, child.id());
                 let graph_path = default_out_dir(&project_root).join("graph.json");
                 let mut last_seen = std::fs::metadata(&graph_path).and_then(|m| m.modified()).ok();
                 loop {
@@ -268,7 +276,7 @@ impl Watcher {
                 }
             })
         };
-        Watcher { stopping, handle: Some(handle) }
+        Watcher { stopping, handle: Some(handle), pid_path }
     }
 
     pub fn terminate(&mut self) {
@@ -276,6 +284,10 @@ impl Watcher {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+        // A clean stop already killed the child (the poll loop's stopping
+        // check) — clear the record so the next spawn's reap_stale doesn't
+        // find a PID that's already gone (harmless, but needless work).
+        crate::pidguard::clear(&self.pid_path);
     }
 }
 

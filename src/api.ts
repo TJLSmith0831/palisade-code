@@ -155,6 +155,16 @@ export const queryGraphify = (
   args: string[],
 ) => invoke<string>("query_graphify", { projectHash, subcommand, args });
 
+// ---------------------------------------------------------------- terminal
+
+export const terminalSpawn = (projectHash: string) =>
+  invoke<void>("terminal_spawn", { projectHash });
+export const terminalInput = (data: string) =>
+  invoke<void>("terminal_input", { data });
+export const terminalResize = (cols: number, rows: number) =>
+  invoke<void>("terminal_resize", { cols, rows });
+export const terminalKill = () => invoke<void>("terminal_kill");
+
 export const createNote = (projectHash: string, name: string) =>
   invoke<string>("create_note", { projectHash, name });
 export const listNotes = (projectHash: string) =>
