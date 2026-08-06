@@ -58,6 +58,22 @@ fn lookup(path: &std::ffi::OsStr, bin: &str) -> Option<PathBuf> {
         .find(|candidate| is_executable(candidate))
 }
 
+/// The PATH to hand a spawned executor child.
+///
+/// `find_on_path` resolves the *binary itself* via the login shell fallback,
+/// but `Command::spawn` otherwise hands the child this process's own inherited
+/// environment — launchd's minimal PATH when launched from Finder/`/Applications`.
+/// Both `claude` and `codex` shell out to their own tooling (git, node, ...),
+/// so a child that resolves fine but starts with that minimal PATH can still
+/// exit immediately. Give it the same PATH the login shell fallback used to
+/// find it in the first place.
+fn child_path_env() -> std::ffi::OsString {
+    login_shell_path()
+        .cloned()
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into())
+}
+
 /// The login shell's PATH, resolved at most once.
 ///
 /// An app launched from Finder inherits launchd's minimal PATH

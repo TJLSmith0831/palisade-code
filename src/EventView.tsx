@@ -32,6 +32,7 @@ const diffStyles = {
     },
   },
   diffContainer: {
+    width: "100%",
     fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
     fontSize: "12px",
   },

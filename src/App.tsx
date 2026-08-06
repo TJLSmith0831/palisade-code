@@ -9,7 +9,7 @@ import "@uiw/react-markdown-preview/markdown.css";
 
 import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
-import { EventList, filterForTab, itemsFromMessages, mergeDeltas } from "./EventView";
+import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } from "./EventView";
 import FileEditorPane from "./FileEditorPane";
 import FileTree from "./FileTree";
 import GraphPane from "./GraphPane";
@@ -57,6 +57,11 @@ export default function App() {
   const [rightTab, setRightTab] = useState<"codemap" | "notes">("codemap");
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) || "auto");
   const [dragActive, setDragActive] = useState(false);
+  const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
+
+  const handleFileSave = useCallback((edit: { path: string; before: string; after: string }) => {
+    setFileEdits((prev) => [...prev, edit]);
+  }, []);
 
   useEffect(() => {
     if (theme === "auto") delete document.documentElement.dataset.theme;
@@ -641,10 +646,34 @@ export default function App() {
             </>
           ) : chatTab === "editor" ? (
             project ? (
-              <FileEditorPane projectHash={project.hash} path={selectedFile} />
+              <FileEditorPane projectHash={project.hash} path={selectedFile} onSave={handleFileSave} />
             ) : (
               <p className="empty">Add a project to get started.</p>
             )
+          ) : chatTab === "diff" ? (
+            <div className="messages" data-testid="messages">
+              {(() => {
+                const threadEdits = thread
+                  ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
+                  : [];
+                const manualEdits: Item[] = fileEdits.map((e, i) => ({
+                  kind: "fileEdit" as const,
+                  id: `manual-${i}`,
+                  path: e.path,
+                  before: e.before,
+                  after: e.after,
+                }));
+                const allEdits = [...threadEdits, ...manualEdits];
+                return (
+                  <>
+                    {allEdits.length === 0 && (
+                      <p className="empty">No file changes yet.</p>
+                    )}
+                    <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
+                  </>
+                );
+              })()}
+            </div>
           ) : thread ? (
             <>
               <div className="pane-head">
@@ -684,7 +713,7 @@ export default function App() {
                     <>
                       {items.length === 0 && (
                         <p className="empty">
-                          {chatTab === "diff" ? "No file changes yet." : "No messages yet."}
+                          No messages yet.
                         </p>
                       )}
                       <EventList

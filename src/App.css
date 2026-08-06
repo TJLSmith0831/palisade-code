@@ -1172,6 +1172,9 @@ input[type="checkbox"] {
 }
 
 .file-edit {
+  width: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;

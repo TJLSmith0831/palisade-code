@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
+import "../App.css";
 import { EventList, filterForTab, type Item } from "../EventView";
 
 const chatItem: Item = { kind: "plain", role: "assistant", mode: "spec", text: "hi" };
@@ -21,5 +22,10 @@ describe("EventList markdown rendering", () => {
     render(<EventList items={items} showThinking={false} executor={null} />);
     expect(screen.getByText("bold").tagName).toBe("STRONG");
     expect(screen.getByText("italic").tagName).toBe("EM");
+  });
+
+  it("renders file diffs at full width", () => {
+    render(<EventList items={[editItem]} showThinking={false} executor={null} />);
+    expect(getComputedStyle(screen.getByTestId("file-edit")).width).toBe("100%");
   });
 });

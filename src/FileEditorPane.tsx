@@ -4,9 +4,10 @@ import * as api from "./api";
 type Props = {
   projectHash: string;
   path: string | null;
+  onSave?: (edit: { path: string; before: string; after: string }) => void;
 };
 
-export default function FileEditorPane({ projectHash, path }: Props) {
+export default function FileEditorPane({ projectHash, path, onSave }: Props) {
   const [content, setContent] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +39,7 @@ export default function FileEditorPane({ projectHash, path }: Props) {
     api
       .writeFileContent(projectHash, path, draft)
       .then(() => {
+        onSave?.({ path, before: content!, after: draft });
         setContent(draft);
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);

@@ -227,6 +227,18 @@ describe("Editor chrome (merged-design v2)", () => {
     expect(screen.getByTestId("file-editor-textarea")).toBeDefined();
     expect(screen.queryByText("Create a thread to get started.")).toBeNull();
   });
+
+  it("shows the diff tab empty state even when no thread exists", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId("editor-tabs")).toBeDefined());
+    fireEvent.click(screen.getByTestId("tab-diff"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Create a thread to get started.")).toBeNull();
+      expect(screen.getByText(/no file changes/i)).toBeDefined();
+    });
+  });
 });
 
 describe("Right sidebar (merged-design v2)", () => {
