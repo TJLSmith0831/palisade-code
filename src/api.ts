@@ -215,6 +215,9 @@ export const listAllFiles = (projectHash: string) =>
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });
 
+export const readFileBase64 = (projectHash: string, relativePath: string) =>
+  invoke<string>("read_file_base64", { projectHash, relativePath });
+
 /** Resolves to a format-on-save summary (D14), or `null` if nothing matched. */
 export const writeFileContent = (
   projectHash: string,

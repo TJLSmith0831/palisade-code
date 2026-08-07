@@ -74,7 +74,7 @@ html,
 #root {
   margin: 0;
   height: 100%;
-  background: var(--backdrop);
+  background: transparent;
   color: var(--fg);
   font: 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -185,38 +185,11 @@ input[type="checkbox"] {
   z-index: 1;
   background: var(--bg);
   border-radius: 12px;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(44, 245, 117, 0.06);
   overflow: hidden;
   height: 100vh;
   display: flex;
   flex-direction: column;
 }
-
-.ds-traffic-lights {
-  display: flex;
-  gap: 6px;
-  padding: 10px 14px;
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 10;
-}
-
-.ds-light {
-  width: 10px;
-  height: 10px;
-  padding: 0;
-  border: none;
-  border-radius: 9999px;
-}
-
-.ds-light:hover {
-  filter: brightness(1.15);
-}
-
-.ds-light.red { background: #ff5f57; }
-.ds-light.yellow { background: #febc2e; }
-.ds-light.green { background: #28c840; }
 
 .app {
   display: flex;
@@ -837,6 +810,41 @@ input[type="checkbox"] {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.ds-media-preview {
+  flex: 1;
+  min-height: 0;
+  background: var(--editor-bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-media-preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.ds-media-preview-body img {
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center;
+}
+
+.ds-media-preview-body video {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.ds-zoom-level {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 40px;
+  text-align: center;
 }
 
 .ds-editor-toolbar {

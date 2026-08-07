@@ -13,12 +13,13 @@ vi.mock("@tauri-apps/api/webview", () => ({
   })),
 }));
 
+const { getCurrentWindowMock, mockWindow } = vi.hoisted(() => {
+  const mockWindow = { startDragging: vi.fn(), toggleMaximize: vi.fn() };
+  return { getCurrentWindowMock: vi.fn(() => mockWindow), mockWindow };
+});
+
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    close: vi.fn(),
-    minimize: vi.fn(),
-    toggleMaximize: vi.fn(),
-  })),
+  getCurrentWindow: getCurrentWindowMock,
 }));
 
 const { invokeMock } = vi.hoisted(() => ({
@@ -126,11 +127,6 @@ describe("Window shell (merged-design v2)", () => {
     expect(screen.getByTestId("window-shell")).toBeDefined();
   });
 
-  it("renders traffic lights inside the window shell", () => {
-    render(<App />);
-    expect(screen.getByTestId("traffic-lights")).toBeDefined();
-  });
-
   it("has 12px border-radius on the window shell", () => {
     render(<App />);
     const shell = screen.getByTestId("window-shell");
@@ -185,10 +181,25 @@ describe("Top chrome (merged-design v2)", () => {
     expect(screen.getByTestId("preflight-status")).toBeDefined();
   });
 
-  it("has data-tauri-drag-region on top chrome", () => {
+  it("starts dragging on a single mousedown, and toggles maximize on double-click, on the top chrome", () => {
+    mockWindow.startDragging.mockClear();
+    mockWindow.toggleMaximize.mockClear();
     render(<App />);
     const chrome = screen.getByTestId("top-chrome");
-    expect(chrome.getAttribute("data-tauri-drag-region")).toBe("");
+
+    fireEvent.mouseDown(chrome, { button: 0, detail: 1 });
+    expect(mockWindow.startDragging).toHaveBeenCalledTimes(1);
+    expect(mockWindow.toggleMaximize).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(chrome, { button: 0, detail: 2 });
+    expect(mockWindow.toggleMaximize).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not drag/maximize when mousedown originates on an excluded chrome button", () => {
+    mockWindow.startDragging.mockClear();
+    render(<App />);
+    fireEvent.mouseDown(screen.getByTestId("toggle-left-sidebar"), { button: 0, detail: 1 });
+    expect(mockWindow.startDragging).not.toHaveBeenCalled();
   });
 });
 

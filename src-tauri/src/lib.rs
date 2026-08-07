@@ -5,7 +5,9 @@ mod pidguard;
 mod settings;
 mod store;
 mod terminal;
+mod plugins;
 
+use plugins::mac_rounded_corners;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -761,6 +763,17 @@ fn read_file_content(project_hash: String, relative_path: String) -> Res<String>
         .map_err(|err| format!("cannot read file: {err}"))
 }
 
+/// Reads a file as base64 for binary previews (images/video/gif) the editor
+/// can't render as text.
+#[tauri::command]
+fn read_file_base64(project_hash: String, relative_path: String) -> Res<String> {
+    use base64::prelude::*;
+    let root = project_root(&project_hash)?;
+    let resolved = resolve_existing_path(&root, &relative_path)?;
+    let bytes = std::fs::read(&resolved).map_err(|err| format!("cannot read file: {err}"))?;
+    Ok(BASE64_STANDARD.encode(&bytes))
+}
+
 /// Resolves `relative_path` against `root` for creating a file or directory
 /// there — unlike `resolve_existing_path`, nothing (or only part of the
 /// path) needs to exist yet. Rejects any `..` component outright (a
@@ -911,10 +924,14 @@ pub fn run() {
             list_directory,
             list_all_files,
             read_file_content,
+            read_file_base64,
             write_file_content,
             rename_path,
             delete_path,
             create_directory,
+            mac_rounded_corners::enable_rounded_corners,
+            mac_rounded_corners::enable_modern_window_style,
+            mac_rounded_corners::reposition_traffic_lights,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

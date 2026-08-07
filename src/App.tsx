@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -14,6 +22,7 @@ import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
 import SettingsPanel, { applyAccentHue, loadAccentHue } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
+import { enableModernWindowStyle } from "./macRoundedCorners";
 import { useResizable, type UseResizableResult } from "./useResizable";
 import "./App.css";
 
@@ -206,6 +215,12 @@ export default function App() {
   // Restore a previously-chosen accent color on launch.
   useEffect(() => {
     applyAccentHue(loadAccentHue());
+  }, []);
+
+  // macOS rounded corners + native traffic light repositioning (macOS only
+  // — a no-op on other platforms). Must run once after the window is ready.
+  useEffect(() => {
+    enableModernWindowStyle({ offsetY: -3 });
   }, []);
 
   const fail = (err: unknown) => setError(String(err));
@@ -625,36 +640,34 @@ export default function App() {
 
   // ------------------------------------------------------------------ view
 
+  // Manual titlebar drag/double-click-to-maximize (data-tauri-drag-region
+  // alone only drags — it doesn't distinguish a double-click for maximize,
+  // per https://v2.tauri.app/learn/window-customization).
+  const onTitlebarMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("[data-tauri-drag-region-exclude]")) return;
+    if (event.detail === 2) {
+      getCurrentWindow().toggleMaximize();
+    } else {
+      getCurrentWindow().startDragging();
+    }
+  };
+
   return (
     <div className="ds-window" data-testid="window-shell">
-      <div className="ds-traffic-lights" data-testid="traffic-lights">
-        <button
-          className="ds-light red"
-          onClick={() => getCurrentWindow().close()}
-          aria-label="Close window"
-          title="Close"
-        />
-        <button
-          className="ds-light yellow"
-          onClick={() => getCurrentWindow().minimize()}
-          aria-label="Minimize window"
-          title="Minimize"
-        />
-        <button
-          className="ds-light green"
-          onClick={() => getCurrentWindow().toggleMaximize()}
-          aria-label="Maximize window"
-          title="Maximize"
-        />
-      </div>
       <div className="app" data-color-mode="dark">
-        <header className="ds-top-chrome" data-testid="top-chrome" data-tauri-drag-region="">
+        <header
+          className="ds-top-chrome"
+          data-testid="top-chrome"
+          onMouseDown={onTitlebarMouseDown}
+        >
           <div className="ds-chrome-utils">
             <button
               className="ds-icon-btn"
               onClick={() => leftRail.toggleCollapsed()}
               title="Toggle left sidebar (Cmd+\)"
               data-testid="toggle-left-sidebar"
+              data-tauri-drag-region-exclude
             >
               <SidebarIcon side="left" />
             </button>
@@ -663,6 +676,7 @@ export default function App() {
               onClick={() => setTheme(nextTheme(theme))}
               title={`Theme: ${theme} (click to cycle auto → light → dark)`}
               data-testid="theme-toggle"
+              data-tauri-drag-region-exclude
             >
               {theme === "auto" ? "Auto" : theme === "light" ? "Light" : "Dark"}
             </button>
@@ -671,6 +685,7 @@ export default function App() {
               onClick={() => rightPanel.toggleCollapsed()}
               title="Toggle right sidebar (Cmd+J)"
               data-testid="toggle-right-sidebar"
+              data-tauri-drag-region-exclude
             >
               <SidebarIcon side="right" />
             </button>
@@ -679,6 +694,7 @@ export default function App() {
               onClick={toggleTerminal}
               title="Toggle terminal (Cmd+`)"
               data-testid="toggle-terminal"
+              data-tauri-drag-region-exclude
             >
               <TerminalIcon />
             </button>
@@ -687,12 +703,14 @@ export default function App() {
               onClick={() => setSettingsOpen(true)}
               title="Settings"
               data-testid="open-settings"
+              data-tauri-drag-region-exclude
             >
               <SettingsIcon />
             </button>
             <button
               className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
               onClick={() => api.preflight(true).then(setFlight, fail)}
+              data-tauri-drag-region-exclude
               title={
                 flight
                   ? [`executor: ${flight.selected ?? "none"}`, ...flight.warnings].join("\n")

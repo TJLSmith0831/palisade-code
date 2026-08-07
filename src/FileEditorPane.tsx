@@ -5,7 +5,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import * as api from "./api";
-import { languageExtensionFor } from "./codeLanguage";
+import { languageExtensionFor, mediaKindFor, mimeTypeFor } from "./codeLanguage";
 import { EDITOR_FONT_CHANGED_EVENT, loadEditorFont, loadEditorFontSize } from "./SettingsPanel";
 
 type Props = {
@@ -13,6 +13,10 @@ type Props = {
   path: string | null;
   onSave?: (edit: { path: string; before: string; after: string }) => void;
 };
+
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 8;
+const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 
 const editorFontTheme = () =>
   EditorView.theme({
@@ -31,6 +35,8 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
   onSaveRef.current = onSave;
 
   const [content, setContent] = useState<string | null>(null);
+  const [mediaSrc, setMediaSrc] = useState<string | null>(null);
+  const [imageZoom, setImageZoom] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,10 +72,20 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
   // Load file content on path change.
   useEffect(() => {
     setContent(null);
+    setMediaSrc(null);
+    setImageZoom(1);
     setError(null);
     setDirty(false);
     setSaved(false);
     if (!path) return;
+    const mediaKind = mediaKindFor(path);
+    if (mediaKind) {
+      api
+        .readFileBase64(projectHash, path)
+        .then((base64) => setMediaSrc(`data:${mimeTypeFor(path)};base64,${base64}`))
+        .catch((err) => setError(String(err)));
+      return;
+    }
     api
       .readFileContent(projectHash, path)
       .then(setContent)
@@ -139,6 +155,64 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
       </div>
     );
   }
+  const mediaKind = mediaKindFor(path);
+  if (mediaKind) {
+    if (!mediaSrc) return <p className="empty">Loading…</p>;
+    return (
+      <div className="ds-media-preview" data-testid="file-editor-media">
+        <div className="ds-editor-toolbar">
+          <span className="ds-editor-path">{path}</span>
+          {mediaKind === "image" && (
+            <>
+              <span className="ds-editor-spacer" />
+              <button
+                className="ds-icon-btn"
+                onClick={() => setImageZoom((z) => clampZoom(z - 0.25))}
+                title="Zoom out"
+                data-testid="image-zoom-out"
+              >
+                −
+              </button>
+              <span className="ds-zoom-level" data-testid="image-zoom-level">
+                {Math.round(imageZoom * 100)}%
+              </span>
+              <button
+                className="ds-icon-btn"
+                onClick={() => setImageZoom((z) => clampZoom(z + 0.25))}
+                title="Zoom in"
+                data-testid="image-zoom-in"
+              >
+                +
+              </button>
+              <button
+                className="ds-icon-btn"
+                onClick={() => setImageZoom(1)}
+                title="Reset zoom"
+                data-testid="image-zoom-reset"
+              >
+                Reset
+              </button>
+            </>
+          )}
+        </div>
+        <div
+          className="ds-media-preview-body"
+          onWheel={(event) => {
+            if (mediaKind !== "image" || !(event.ctrlKey || event.metaKey)) return;
+            event.preventDefault();
+            setImageZoom((z) => clampZoom(z - event.deltaY * 0.01));
+          }}
+        >
+          {mediaKind === "image" ? (
+            <img src={mediaSrc} alt={path} style={{ transform: `scale(${imageZoom})` }} />
+          ) : (
+            <video src={mediaSrc} controls autoPlay loop muted />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (content === null) {
     return <p className="empty">Loading…</p>;
   }

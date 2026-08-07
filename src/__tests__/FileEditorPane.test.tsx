@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
     if (cmd === "read_file_content") return Promise.resolve("line one\nline two\n");
+    if (cmd === "read_file_base64") return Promise.resolve("Zm9v");
     if (cmd === "write_file_content") return Promise.resolve();
     return Promise.reject(new Error(`unexpected command ${cmd}`));
   }),
@@ -82,5 +83,25 @@ describe("FileEditorPane", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(document.querySelector(".cm-tooltip-autocomplete")).toBeNull());
+  });
+
+  it("renders an image preview (not the text editor) for a .gif path, with working zoom", async () => {
+    const user = userEvent.setup();
+    render(<FileEditorPane projectHash="abc" path="assets/demo.gif" />);
+    await waitFor(() => expect(screen.getByTestId("file-editor-media")).toBeDefined());
+    expect(screen.queryByTestId("file-editor-error")).toBeNull();
+    const img = document.querySelector("img") as HTMLImageElement;
+    expect(img.src).toBe("data:image/gif;base64,Zm9v");
+    expect(screen.getByTestId("image-zoom-level").textContent).toBe("100%");
+
+    await user.click(screen.getByTestId("image-zoom-in"));
+    expect(screen.getByTestId("image-zoom-level").textContent).toBe("125%");
+    expect(img.style.transform).toBe("scale(1.25)");
+  });
+
+  it("renders a video preview for an .mp4 path", async () => {
+    render(<FileEditorPane projectHash="abc" path="assets/clip.mp4" />);
+    await waitFor(() => expect(screen.getByTestId("file-editor-media")).toBeDefined());
+    expect(document.querySelector("video")).not.toBeNull();
   });
 });
