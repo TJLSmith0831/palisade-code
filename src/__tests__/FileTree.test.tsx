@@ -47,14 +47,14 @@ describe("FileTree", () => {
     expect(screen.queryByText(/no such file or directory/i)).toBeNull();
   });
 
-  it("background right-click offers New File / New Folder but no Rename or Delete", async () => {
+  it("background right-click offers New File / New Folder / hidden-files toggle but no Rename or Delete", async () => {
     render(<FileTree projectHash="good" projectName="p" onSelectFile={vi.fn()} activePath={null} />);
     await waitFor(() => expect(screen.getByText("README.md")).toBeDefined());
 
     fireEvent.contextMenu(screen.getByTestId("file-tree").querySelector(".ds-tree-body")!);
 
     const items = screen.getAllByTestId("tree-context-menu-item").map((el) => el.textContent);
-    expect(items).toEqual(["New File", "New Folder"]);
+    expect(items).toEqual(["New File", "New Folder", "Show Gitignored/Hidden Files"]);
   });
 
   it("row right-click offers the full set: New File, New Folder, Rename, Delete", async () => {

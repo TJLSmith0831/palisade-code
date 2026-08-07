@@ -892,8 +892,12 @@ export default function App() {
           </div>
           <div className="ds-breadcrumbs" data-testid="breadcrumbs">
             <span>{project?.displayName ?? "—"}</span>
-            <span className="ds-crumb-sep">/</span>
-            <span className="ds-crumb-active">{selectedFile ?? "Console"}</span>
+            {selectedFile && (
+              <>
+                <span className="ds-crumb-sep">/</span>
+                <span className="ds-crumb-active">{selectedFile}</span>
+              </>
+            )}
           </div>
           {chatTab === "editor" ? (
             project ? (

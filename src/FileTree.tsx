@@ -56,14 +56,15 @@ export default function FileTree({
   const [creating, setCreating] = useState<{ parentPath: string; kind: "file" | "folder" } | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null); // "" = root/background
+  const [includeHidden, setIncludeHidden] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setError(null);
     setExpanded(new Set());
     setChildren(new Map());
-    api.listDirectory(projectHash, "").then(setRoots, (err) => setError(describeError(err)));
-  }, [projectHash, refreshToken]);
+    api.listDirectory(projectHash, "", includeHidden).then(setRoots, (err) => setError(describeError(err)));
+  }, [projectHash, refreshToken, includeHidden]);
 
   useEffect(() => {
     editInputRef.current?.focus();
@@ -75,14 +76,14 @@ export default function FileTree({
   const refreshDir = useCallback(
     async (dirPath: string) => {
       try {
-        const entries = await api.listDirectory(projectHash, dirPath);
+        const entries = await api.listDirectory(projectHash, dirPath, includeHidden);
         if (dirPath === "") setRoots(entries);
         else setChildren((prev) => new Map(prev).set(dirPath, entries));
       } catch (err) {
         setError(describeError(err));
       }
     },
-    [projectHash],
+    [projectHash, includeHidden],
   );
 
   const toggle = useCallback(
@@ -103,14 +104,14 @@ export default function FileTree({
       });
       if (!children.has(path)) {
         try {
-          const entries = await api.listDirectory(projectHash, path);
+          const entries = await api.listDirectory(projectHash, path, includeHidden);
           setChildren((prev) => new Map(prev).set(path, entries));
         } catch (err) {
           setError(describeError(err));
         }
       }
     },
-    [projectHash, children, onSelectFile],
+    [projectHash, children, onSelectFile, includeHidden],
   );
 
   const runRename = async (path: string, newName: string) => {
@@ -190,7 +191,7 @@ export default function FileTree({
       setExpanded((prev) => new Set(prev).add(parentPath));
     }
     if (parentPath && !children.has(parentPath)) {
-      api.listDirectory(projectHash, parentPath).then(
+      api.listDirectory(projectHash, parentPath, includeHidden).then(
         (entries) => setChildren((prev) => new Map(prev).set(parentPath, entries)),
         (err) => setError(describeError(err)),
       );
@@ -324,6 +325,14 @@ export default function FileTree({
         onSelect: () => {
           setMenu(null);
           setConfirmingDelete(target.path);
+        },
+      });
+    } else {
+      items.push({
+        label: includeHidden ? "Hide Gitignored/Hidden Files" : "Show Gitignored/Hidden Files",
+        onSelect: () => {
+          setMenu(null);
+          setIncludeHidden((prev) => !prev);
         },
       });
     }

@@ -206,8 +206,8 @@ export type DirEntry = {
   path: string;
 };
 
-export const listDirectory = (projectHash: string, relativePath: string) =>
-  invoke<DirEntry[]>("list_directory", { projectHash, relativePath });
+export const listDirectory = (projectHash: string, relativePath: string, includeHidden = false) =>
+  invoke<DirEntry[]>("list_directory", { projectHash, relativePath, includeHidden });
 
 export const listAllFiles = (projectHash: string) =>
   invoke<string[]>("list_all_files", { projectHash });

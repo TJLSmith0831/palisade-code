@@ -671,13 +671,23 @@ fn git_init(project_hash: String) -> Res<()> {
 // ------------------------------------------------------------- file tree
 
 /// Shared by `list_directory` and `list_all_files` so the two entry points
-/// can't drift on which dirs/files they hide.
-fn should_skip_entry(name: &str) -> bool {
+/// can't drift on which dirs/files they hide. `.git` is always hidden (huge,
+/// never a browsable project file); with `include_hidden` the rest of the
+/// usual dotfile/build-output skip list is left in for the caller to see
+/// (the tree's "Show Hidden Files" toggle) — not real `.gitignore` parsing,
+/// just the same skip rule inverted.
+fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
+    if name == ".git" {
+        return true;
+    }
+    if include_hidden {
+        return false;
+    }
     name.starts_with('.') || name == "node_modules" || name == "target"
 }
 
 #[tauri::command]
-fn list_directory(project_hash: String, relative_path: String) -> Res<Vec<DirEntry>> {
+fn list_directory(project_hash: String, relative_path: String, include_hidden: bool) -> Res<Vec<DirEntry>> {
     let root = project_root(&project_hash)?;
     let target = if relative_path.is_empty() {
         root.clone()
@@ -693,7 +703,7 @@ fn list_directory(project_hash: String, relative_path: String) -> Res<Vec<DirEnt
     for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
         let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if should_skip_entry(&name) {
+        if should_skip_entry(&name, include_hidden) {
             continue;
         }
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -723,7 +733,7 @@ fn list_all_files(project_hash: String) -> Res<Vec<String>> {
         };
         for entry in read_dir.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if should_skip_entry(&name) {
+            if should_skip_entry(&name, false) {
                 continue;
             }
             let full = entry.path();
@@ -768,7 +778,7 @@ fn search_text_in(root: &Path, query: &str) -> Vec<TextMatch> {
         };
         for entry in read_dir.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if should_skip_entry(&name) {
+            if should_skip_entry(&name, false) {
                 continue;
             }
             let full = entry.path();
