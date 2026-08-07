@@ -909,7 +909,7 @@ input[type="checkbox"] {
 
 .ds-editor-save-btn:hover:not(:disabled) {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-on);
 }
 
 .ds-editor-save-btn:disabled {

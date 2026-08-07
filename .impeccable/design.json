@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-05T00:00:00Z",
-  "title": "Design System: FlooNetwork",
+  "generatedAt": "2026-08-07T13:05:00Z",
+  "title": "Design System: Floo Network",
   "extensions": {
     "colorMeta": {
       "bg": {
@@ -16,6 +16,36 @@
           "oklch(56% 0.005 250)",
           "oklch(70% 0.005 250)",
           "oklch(82% 0.005 250)",
+          "oklch(95% 0.005 250)"
+        ]
+      },
+      "chrome-bg": {
+        "role": "neutral",
+        "displayName": "Structural Chrome",
+        "canonical": "oklch(15% 0.004 250)",
+        "tonalRamp": [
+          "oklch(12% 0.004 250)",
+          "oklch(15% 0.004 250)",
+          "oklch(24% 0.004 250)",
+          "oklch(36% 0.004 250)",
+          "oklch(50% 0.004 250)",
+          "oklch(64% 0.004 250)",
+          "oklch(78% 0.004 250)",
+          "oklch(92% 0.004 250)"
+        ]
+      },
+      "editor-bg": {
+        "role": "neutral",
+        "displayName": "Working Document Surface",
+        "canonical": "oklch(20% 0.005 250)",
+        "tonalRamp": [
+          "oklch(14% 0.005 250)",
+          "oklch(20% 0.005 250)",
+          "oklch(30% 0.005 250)",
+          "oklch(42% 0.005 250)",
+          "oklch(56% 0.005 250)",
+          "oklch(70% 0.005 250)",
+          "oklch(84% 0.005 250)",
           "oklch(95% 0.005 250)"
         ]
       },
@@ -49,6 +79,21 @@
           "oklch(95% 0.008 250)"
         ]
       },
+      "active-row": {
+        "role": "neutral",
+        "displayName": "Accent-Tinted Active Row",
+        "canonical": "oklch(24% 0.020 145)",
+        "tonalRamp": [
+          "oklch(15% 0.020 145)",
+          "oklch(24% 0.020 145)",
+          "oklch(34% 0.020 145)",
+          "oklch(46% 0.020 145)",
+          "oklch(58% 0.020 145)",
+          "oklch(70% 0.020 145)",
+          "oklch(82% 0.020 145)",
+          "oklch(92% 0.020 145)"
+        ]
+      },
       "fg": {
         "role": "neutral",
         "displayName": "Crisp Off-White Ink",
@@ -66,32 +111,32 @@
       },
       "muted": {
         "role": "neutral",
-        "displayName": "Grey-Blue Meta",
+        "displayName": "Grey-Blue Metadata",
         "canonical": "oklch(66% 0.012 250)",
         "tonalRamp": [
           "oklch(20% 0.012 250)",
           "oklch(32% 0.012 250)",
-          "oklch(44% 0.012 250)",
-          "oklch(55% 0.012 250)",
+          "oklch(46% 0.012 250)",
+          "oklch(58% 0.012 250)",
           "oklch(66% 0.012 250)",
           "oklch(76% 0.012 250)",
           "oklch(86% 0.012 250)",
-          "oklch(94% 0.012 250)"
+          "oklch(95% 0.012 250)"
         ]
       },
       "border": {
         "role": "neutral",
-        "displayName": "Crisp Divider",
+        "displayName": "Divider",
         "canonical": "oklch(30% 0.010 250)",
         "tonalRamp": [
           "oklch(18% 0.010 250)",
           "oklch(30% 0.010 250)",
-          "oklch(42% 0.010 250)",
-          "oklch(54% 0.010 250)",
-          "oklch(66% 0.010 250)",
+          "oklch(40% 0.010 250)",
+          "oklch(52% 0.010 250)",
+          "oklch(64% 0.010 250)",
           "oklch(76% 0.010 250)",
           "oklch(86% 0.010 250)",
-          "oklch(94% 0.010 250)"
+          "oklch(95% 0.010 250)"
         ]
       },
       "accent": {
@@ -186,24 +231,24 @@
       }
     },
     "typographyMeta": {
-      "display": {
-        "displayName": "Display",
-        "purpose": "Headings and the brand wordmark. Tight leading (0.96), display tracking (-0.0275em). Same family as body; hierarchy comes from size and weight."
-      },
       "body": {
         "displayName": "Body",
-        "purpose": "All human-readable prose, UI labels, button text, chat content, input. 1.5 leading, normal tracking, antialiased."
+        "purpose": "All human-readable prose: chat messages, empty states, error banners, settings labels. 13px base, 1.5 leading, system-ui stack."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, badges, tab labels, uppercase section micro-labels. Sans stack at 11px, weight 600."
       },
       "mono": {
         "displayName": "Mono",
-        "purpose": "File paths, timestamps, line numbers, kbd hints, uppercase micro-labels, note editor body, diff content. The machine voice — never used for prose."
+        "purpose": "File paths, tab labels, line numbers, diff content, the terminal, uppercase section headings (Staged Changes, Turn History), kbd hints. The machine voice — never used for prose."
       }
     },
     "shadows": [
       {
         "name": "flat",
         "value": "none",
-        "purpose": "Default for all resting panels, sidebars, chat bubbles, thread items, tabs. The console is flat-first."
+        "purpose": "Default for all resting panels, tree/thread/branch rows, tabs, the editor. The workbench is flat-first."
       },
       {
         "name": "ring",
@@ -211,192 +256,150 @@
         "purpose": "The crisp 1px dividing edge, expressed as a ring so it reads as a border rather than a shadow."
       },
       {
-        "name": "raised",
+        "name": "raised-light",
         "value": "0 4px 20px rgba(0, 0, 0, 0.35)",
-        "purpose": "Floating layers only: active mode button, command-bar box, toast, handoff console."
+        "purpose": "Floating layers: the Modal command-bar (file palette, find-in-files, settings, confirm/rename/branch prompts)."
       },
       {
-        "name": "handoff-ambient",
-        "value": "0 0 30px rgba(44, 245, 117, 0.08)",
-        "purpose": "Green-tinted ambient glow on the handoff console during the mode-transition ritual."
+        "name": "raised-heavy",
+        "value": "0 8px 24px rgba(0, 0, 0, 0.35)",
+        "purpose": "Heavier floating layers: the file-tree context menu."
+      },
+      {
+        "name": "active-tab",
+        "value": "0 2px 8px rgba(0, 0, 0, 0.3)",
+        "purpose": "The only shadow on a non-overlay element — the active mode-selector button."
       },
       {
         "name": "focus-ring",
-        "value": "0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%)",
-        "purpose": "3px Dragon Fire Green halo at 40% opacity around focused interactive elements."
+        "value": "0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%)",
+        "purpose": "The single global focus-visible treatment, applied to every button/input/select and every keyboard-activatable tree/thread/branch row."
       }
     ],
     "motion": [
       {
+        "name": "rail-collapse",
+        "value": "200ms cubic-bezier(0.2, 0, 0, 1)",
+        "purpose": "Left/right rail collapse and expand via negative margin — the only layout-affecting transition, deliberately kept to manual toggles rather than continuous drags."
+      },
+      {
         "name": "fast",
-        "value": "150ms",
-        "purpose": "Quick state transitions: hover, tab cross-fade, checklist toggle, pane opacity swap."
-      },
-      {
-        "name": "base",
-        "value": "200ms",
-        "purpose": "Default transition for sidebar collapse/expand, banner show/hide, toast slide."
-      },
-      {
-        "name": "ease-standard",
-        "value": "cubic-bezier(0.2, 0, 0, 1)",
-        "purpose": "The only easing curve in the system. Used for every transition except the handoff spinner."
-      },
-      {
-        "name": "handoff-spin",
-        "value": "1s linear infinite",
-        "purpose": "The handoff glow ring rotation. The sole long animation, reserved for the mode-transition ritual."
-      },
-      {
-        "name": "diff-flash",
-        "value": "1.5s cubic-bezier(0.2, 0, 0, 1)",
-        "purpose": "Freshly-applied addition lines flash from 40% green to the 6% green resting background."
+        "value": "120ms ease-out",
+        "purpose": "Hover/background/color state transitions across buttons, rows, and tabs — the vast majority of transitions in the system."
       }
     ],
     "breakpoints": [
       {
-        "name": "cocktail-rail",
+        "name": "sidebar-overlay",
         "value": "920px",
-        "purpose": "Below 920px the sidebars detach from flex flow and become position:fixed overlays anchored under the 56px top nav at z-index 50. Above 920px they live in the flex row and collapse by negative margin."
+        "purpose": "Below 920px both rails become position:fixed overlays anchored under the 36px top chrome at z-index 50, so the workspace takes the full width and the rails float over it when opened."
+      },
+      {
+        "name": "no-further-tier",
+        "value": "760px",
+        "purpose": "A second breakpoint exists in CSS but currently carries no rules (a prior display:none override at this width, which killed the file explorer's toggle button, was removed as an accessibility fix) — the 920px overlay behavior is the layout's actual floor."
       }
     ]
   },
   "components": [
     {
-      "name": "Mode Selector (Spec / Go)",
-      "kind": "custom",
-      "refersTo": "mode-btn-active",
-      "description": "The product's signature segmented control. Toggles Spec Mode (read-only planning, banner visible, Gemma avatar) vs Go Mode (instant-apply, banner hidden, Claude avatar). Active button lifts to bg with raised shadow.",
-      "html": "<div class=\"ds-mode-selector\"><button class=\"ds-mode-btn active\" type=\"button\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6\"/></svg>Spec Mode <kbd>S</kbd></button><button class=\"ds-mode-btn\" type=\"button\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M13 2L3 14h9l-1 8 10-12h-9l1-8z\"/></svg>Go Mode <kbd>G</kbd></button></div>",
-      "css": ".ds-mode-selector { display: inline-flex; background: var(--surface-warm); padding: 3px; border-radius: 8px; border: 1px solid var(--border); } .ds-mode-btn { padding: 6px 16px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); background: transparent; border: none; transition: all 150ms cubic-bezier(0.2, 0, 0, 1); } .ds-mode-btn svg { width: 14px; height: 14px; } .ds-mode-btn kbd { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 10px; padding: 1px 4px; background: var(--bg); border-radius: 3px; } .ds-mode-btn.active { background: var(--bg); color: var(--fg); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); } .ds-mode-btn:not(.active):hover { opacity: 0.8; color: var(--fg); } .ds-mode-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%); }"
+      "name": "Icon Button",
+      "kind": "button",
+      "refersTo": "icon-btn",
+      "description": "32px square utility button — every top-chrome toggle (sidebars, theme, terminal, settings, preflight status) and the editor's image zoom controls. Transparent fill, 1px border, 6px radius, muted icon that lifts to foreground on hover.",
+      "html": "<button class=\"ds-icon-btn\" type=\"button\" aria-label=\"Toggle left sidebar\"><svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\"><rect x=\"1.5\" y=\"2.5\" width=\"13\" height=\"11\" rx=\"2\" stroke=\"currentColor\" stroke-width=\"1.3\"/><rect x=\"2.5\" y=\"3.5\" width=\"4\" height=\"9\" rx=\"1\" fill=\"currentColor\"/></svg></button>",
+      "css": ".ds-icon-btn { min-width: 32px; width: auto; height: 32px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; transition: all 120ms ease-out; } .ds-icon-btn:hover { color: var(--fg); border-color: var(--fg); } .ds-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%); } .ds-icon-btn.ok { color: var(--accent); border-color: var(--accent); } .ds-icon-btn.warn { color: var(--warn); border-color: var(--warn); }"
     },
     {
-      "name": "Thread Item",
+      "name": "Editor Tab (active)",
       "kind": "nav",
-      "refersTo": "thread-item-active",
-      "description": "Session row in the left rail. Two lines: title (ellipsis) + mono meta (mode · time). Active state adds a 3px Dragon Fire Green left rail and weight 600 — the accent's primary navigational use.",
-      "html": "<div class=\"ds-thread-item active\"><span class=\"ds-thread-title\">Design aggregate MCP cache limits</span><span class=\"ds-thread-meta\"><span>Spec-mode</span><span>Active now</span></span></div>",
-      "css": ".ds-thread-item { padding: 10px 12px; border-radius: 8px; font-size: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; color: var(--muted); transition: all 150ms cubic-bezier(0.2, 0, 0, 1); } .ds-thread-item:hover { background: var(--surface-warm); color: var(--fg); } .ds-thread-item.active { background: var(--surface-warm); color: var(--fg); font-weight: 600; border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding-left: 9px; } .ds-thread-title { text-overflow: ellipsis; overflow: hidden; white-space: nowrap; } .ds-thread-meta { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 11px; opacity: 0.8; display: flex; justify-content: space-between; }"
+      "refersTo": "tab-active",
+      "description": "The Editor / Console Chat / Code Change Diff tab bar, 28px tall. Active tab lifts to editor-bg with a top-rounded 6px card and a border matching the editor below it; the diff tab additionally tints accent-green when active.",
+      "html": "<div class=\"ds-editor-tabs\"><button class=\"ds-tab active\" type=\"button\">Editor</button><button class=\"ds-tab\" type=\"button\">Console Chat</button><button class=\"ds-tab diff\" type=\"button\">Code Change Diff</button></div>",
+      "css": ".ds-editor-tabs { height: 28px; background: var(--chrome-bg); border-bottom: 1px solid var(--border); display: flex; align-items: flex-end; padding: 0 8px; gap: 2px; } .ds-tab { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 11px; padding: 5px 10px; border-radius: 5px 5px 0 0; color: var(--muted); cursor: pointer; border: none; background: transparent; } .ds-tab:hover { color: var(--fg); } .ds-tab.active { background: var(--editor-bg); color: var(--fg); border: 1px solid var(--border); border-bottom-color: var(--editor-bg); } .ds-tab.diff.active { color: var(--accent); }"
     },
     {
-      "name": "Agent Chat Bubble",
-      "kind": "card",
-      "refersTo": "chat-content",
-      "description": "Agent reply in the console chat. 32px avatar (Gemma G in twilight-green with accent text, or Claude C in solid accent with on-green text) + content card in surface-warm with 16px radius. User bubbles mirror this with row-reverse and a bg fill that recedes.",
-      "html": "<div class=\"ds-chat-bubble agent\"><div class=\"ds-chat-avatar claude\">C</div><div class=\"ds-chat-content\"><p>Applied fast fix for your query. I've updated src/server.ts cache settings directly.</p></div></div>",
-      "css": ".ds-chat-bubble { display: flex; gap: 12px; max-width: 85%; } .ds-chat-bubble.agent { align-self: flex-start; } .ds-chat-avatar { width: 32px; height: 32px; border-radius: 8px; background: var(--twilight-glow); color: var(--accent); border: 1px solid var(--twilight-glow); display: flex; align-items: center; justify-content: center; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 12px; font-weight: 700; flex-shrink: 0; } .ds-chat-avatar.claude { background: var(--accent); color: var(--accent-on); border-color: var(--accent); } .ds-chat-content { background: var(--surface-warm); border: 1px solid var(--border); border-radius: 16px; padding: 12px 16px; font-size: 14px; color: var(--fg); } .ds-chat-content p { margin: 0; }"
+      "name": "Tree / List Row",
+      "kind": "nav",
+      "refersTo": "tree-row-active",
+      "description": "The shared interaction contract for file-tree rows, thread-list items, and branch-picker rows: role=button, tabIndex=0, click or Enter/Space to activate, hover/focus lift to surface-warm. The active file-tree row gets an accent-tinted fill; the active thread gets a 2px accent left rail.",
+      "html": "<div class=\"ds-tree-row active\" role=\"button\" tabindex=\"0\"><span class=\"ds-chevron\">▸</span><span class=\"ds-tree-label\">App.tsx</span></div>",
+      "css": ".ds-tree-row { display: flex; align-items: center; gap: 4px; padding: 4px 10px; cursor: pointer; border-radius: 4px; } .ds-tree-row:hover, .ds-tree-row:focus-visible { background: var(--surface-warm); } .ds-tree-row.active { background: var(--active-row); color: var(--fg); font-weight: 600; } .ds-tree-row:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%); }"
     },
     {
-      "name": "Spec Checklist",
+      "name": "Modal (role=dialog)",
       "kind": "custom",
-      "refersTo": "spec-badge",
-      "description": "Embedded inside an agent chat bubble during Spec Mode. Bordered bg card with mono uppercase header, checkbox rows (strike-through + muted when done), and a right-aligned Approve Handoff button. The visual signature of Spec Mode.",
-      "html": "<div class=\"ds-spec-checklist\"><div class=\"ds-checklist-header\"><span>Gemma Spec Pipeline</span><span>2/4 Complete</span></div><label class=\"ds-checklist-item done\"><input type=\"checkbox\" checked /><span>Automatically graph the code map using Graphify Labs</span></label><label class=\"ds-checklist-item done\"><input type=\"checkbox\" checked /><span>Analyze imports in server.ts for Toolsieve integrations</span></label><label class=\"ds-checklist-item\"><input type=\"checkbox\" /><span>Verify cache threshold constant constraints</span></label><label class=\"ds-checklist-item\"><input type=\"checkbox\" /><span>Synthesize grill-spec planning for frontier handoff</span></label><div class=\"ds-handoff-action\"><button class=\"ds-btn-warm\" type=\"button\">Approve Handoff to Claude 3.5</button></div></div>",
-      "css": ".ds-spec-checklist { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); padding: 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px; } .ds-checklist-header { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 11px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; display: flex; justify-content: space-between; } .ds-checklist-item { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; } .ds-checklist-item input { margin-top: 4px; cursor: pointer; accent-color: var(--accent); } .ds-checklist-item.done span { text-decoration: line-through; color: var(--muted); } .ds-handoff-action { margin-top: 12px; display: flex; justify-content: flex-end; } .ds-btn-warm { background: var(--surface-warm); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 14px; cursor: pointer; transition: border-color 150ms cubic-bezier(0.2, 0, 0, 1); } .ds-btn-warm:hover { border-color: var(--fg); } .ds-btn-warm:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%); }"
-    },
-    {
-      "name": "Send Button",
-      "kind": "button",
-      "refersTo": "chat-send-btn",
-      "description": "The only accent-filled button in the system. 32px square, Dragon Fire Green fill, on-green glyph, 8px radius. Sits at the end of the chat input row. Hover lightens 8% in OKLAB.",
-      "html": "<button class=\"ds-send-btn\" type=\"button\" title=\"Send Message\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M22 2L11 13M22 2l-7 20-4-9-9-4z\"/></svg></button>",
-      "css": ".ds-send-btn { background: var(--accent); color: var(--accent-on); width: 32px; height: 32px; border-radius: 8px; border: none; display: grid; place-items: center; cursor: pointer; transition: background 150ms cubic-bezier(0.2, 0, 0, 1); } .ds-send-btn svg { width: 14px; height: 14px; } .ds-send-btn:hover { background: color-mix(in oklab, var(--accent), white 8%); } .ds-send-btn:active { background: color-mix(in oklab, var(--accent), white 15%); } .ds-send-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%); }"
-    },
-    {
-      "name": "Warm Button",
-      "kind": "button",
-      "refersTo": "btn-warm",
-      "description": "The default action button across the console: Apply Diff, Rebuild, Create note, Synthesize & Handoff. Surface-warm fill, 1px border, 8px radius, 14px weight 600, icon+label. Border lifts to foreground on hover.",
-      "html": "<button class=\"ds-btn-warm\" type=\"button\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"width:14px;height:14px\"><path d=\"M12 5v14M5 12h14\"/></svg>Apply Diff</button>",
-      "css": ".ds-btn-warm { background: var(--surface-warm); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: border-color 150ms cubic-bezier(0.2, 0, 0, 1); } .ds-btn-warm:hover { border-color: var(--fg); } .ds-btn-warm:active { border-color: var(--fg); background: color-mix(in oklab, var(--surface-warm), black 3%); } .ds-btn-warm:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%); }"
+      "refersTo": "modal",
+      "description": "The shared wrapper behind the file palette, find-in-files, settings, and every confirm/rename/branch prompt. Blurred-backdrop overlay centered at 18vh; bg-filled command-bar card, 8px radius. Focuses its first control on mount and traps Tab within itself.",
+      "html": "<div class=\"ds-overlay\"><div class=\"ds-commandbar\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Example prompt\"><label>Thread title</label><input type=\"text\" value=\"Design aggregate MCP cache limits\" /><span class=\"ds-hint\">Enter to confirm · Esc to cancel</span></div></div>",
+      "css": ".ds-overlay { position: fixed; inset: 0; background: rgba(10, 11, 13, 0.55); backdrop-filter: blur(4px); display: flex; justify-content: center; padding-top: 18vh; } .ds-commandbar { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; width: min(480px, 90vw); display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.35); } .ds-commandbar label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; } .ds-commandbar input { font-size: 16px; background: transparent; border: none; color: var(--fg); outline: none; } .ds-hint { font-size: 11px; color: var(--muted); }"
     },
     {
       "name": "Diff Line (addition)",
       "kind": "custom",
-      "refersTo": "chat-content",
-      "description": "A line inside the Code Change Diff panel. 44px right-aligned mono line number in surface-warm divided by a right border, then content. Additions get a 6%-green background and green text with a leading +. Freshly-applied additions flash for 1.5s.",
-      "html": "<div class=\"ds-diff-line addition flash\"><span class=\"ds-diff-num\">4</span><span class=\"ds-diff-content\">const defaultCacheLimit = 250; // Increased based on toolsieve scaling requirements</span></div>",
-      "css": ".ds-diff-line { display: flex; min-height: 20px; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 13px; position: relative; } .ds-diff-num { width: 44px; text-align: right; padding-right: 12px; user-select: none; color: var(--muted); border-right: 1px solid var(--border); font-size: 11px; background: var(--surface-warm); } .ds-diff-content { flex: 1; padding-left: 16px; white-space: pre-wrap; } .ds-diff-line.addition { background: rgba(22, 163, 74, 0.06); } .ds-diff-line.addition .ds-diff-content { color: var(--success); } .ds-diff-line.addition::before { content: \"+\"; position: absolute; left: 54px; color: var(--success); font-weight: bold; } .ds-diff-line.addition.flash { animation: ds-diff-flash 1.5s cubic-bezier(0.2, 0, 0, 1); } @keyframes ds-diff-flash { 0% { background-color: rgba(44, 245, 117, 0.4); } 100% { background-color: rgba(22, 163, 74, 0.06); } }"
+      "refersTo": "diff-add",
+      "description": "A line inside the Code Change Diff panel or Turn History. 44px right-aligned mono line number in surface-warm, then content. Additions get a 6%-green background and green text with a leading + — color is never the only signal, the leading glyph always carries the same meaning.",
+      "html": "<div class=\"ds-diff-row add\"><span class=\"ds-diff-marker\">+</span><span>const defaultCacheLimit = 250;</span></div>",
+      "css": ".ds-diff-row { display: flex; gap: 6px; padding: 0 8px; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 12px; } .ds-diff-row.add { background: color-mix(in oklab, var(--success), transparent 94%); color: var(--success); } .ds-diff-marker { flex-shrink: 0; width: 1ch; color: var(--muted); }"
     },
     {
-      "name": "Note Item",
+      "name": "Section Heading",
+      "kind": "custom",
+      "refersTo": "badge-spec",
+      "description": "The h2-level micro-label used for Staged Changes / Changes / Turn History — 11px uppercase mono, muted color, no fill or border. Deliberately not an h4: the app has exactly one h1 (visually hidden, the product name) and every section heading routes through h2, so no level ever gets skipped.",
+      "html": "<h2 class=\"ds-section-heading\">Staged Changes</h2>",
+      "css": ".ds-section-heading { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }"
+    },
+    {
+      "name": "Chat Bubble / Spec Mode Banner",
       "kind": "card",
-      "refersTo": "note-item",
-      "description": "A markdown note row in the Notes panel list view. Title (weight 600) + 45-char ellipsized preview in muted. Hover lifts to surface-warm with a foreground border; active locks that state.",
-      "html": "<div class=\"ds-note-item\"><div class=\"ds-note-title\">grill-spec.md</div><div class=\"ds-note-preview\"># Routing spec for toolsieve\\n\\nWe need to increase aggregate caching...</div></div>",
-      "css": ".ds-note-item { padding: 12px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; transition: all 150ms cubic-bezier(0.2, 0, 0, 1); } .ds-note-item:hover { background: var(--surface-warm); border-color: var(--fg); } .ds-note-item.active { border-color: var(--fg); background: var(--surface-warm); } .ds-note-title { font-weight: 600; font-size: 14px; color: var(--fg); } .ds-note-preview { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }"
-    },
-    {
-      "name": "Toast",
-      "kind": "custom",
-      "refersTo": "toast",
-      "description": "Bottom-right system notification. Inverted fg-on-bg so it reads as a system utterance distinct from the dark chrome. 8px radius, 14px weight 600, green check icon. Slides up 100px and fades over 200ms; auto-dismisses at 3000ms.",
-      "html": "<div class=\"ds-toast show\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 6L9 17l-5-5\"/></svg><span>Switched to Spec Mode: Gemma4 spec pipeline loaded.</span></div>",
-      "css": ".ds-toast { background: var(--fg); color: var(--bg); padding: 12px 16px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; transform: translateY(100px); opacity: 0; transition: all 200ms cubic-bezier(0.2, 0, 0, 1); } .ds-toast.show { transform: translateY(0); opacity: 1; } .ds-toast svg { width: 16px; height: 16px; color: var(--accent); }"
-    },
-    {
-      "name": "Command Bar",
-      "kind": "custom",
-      "refersTo": "command-bar-box",
-      "description": "Centered 540px floating launcher (Cmd+N) for creating notes and triggering keyboard actions. Sits over a 4%-blurred scrim at 12vh from top. Input row with plus icon, then mono-uppercase sectioned results. The preview item live-updates the filename as you type, appending .md if missing.",
-      "html": "<div class=\"ds-cmd-bar\"><div class=\"ds-cmd-input-row\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5v14M5 12h14\"/></svg><input type=\"text\" class=\"ds-cmd-input\" placeholder=\"Name new markdown file... (e.g. implementation-notes.md)\" /></div><div class=\"ds-cmd-results\"><div class=\"ds-cmd-section\">New Note Target</div><div class=\"ds-cmd-item active\"><span class=\"ds-cmd-item-title\">create implementation-notes.md</span><span class=\"ds-cmd-hint\">Press Enter</span></div><div class=\"ds-cmd-divider\"></div><div class=\"ds-cmd-section\">Keyboard Actions</div><div class=\"ds-cmd-item\"><span class=\"ds-cmd-item-title\">Force Graphify code map indexing</span><span class=\"ds-cmd-hint\">Cmd+R</span></div></div></div>",
-      "css": ".ds-cmd-bar { width: 540px; background: var(--bg); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); overflow: hidden; display: flex; flex-direction: column; color: var(--fg); } .ds-cmd-input-row { display: flex; align-items: center; padding: 16px; border-bottom: 1px solid var(--border); } .ds-cmd-input-row svg { width: 20px; height: 20px; color: var(--muted); margin-right: 12px; } .ds-cmd-input { flex: 1; border: none; outline: none; font-size: 16px; background: transparent; color: var(--fg); } .ds-cmd-results { max-height: 240px; overflow-y: auto; padding: 8px; } .ds-cmd-section { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 12px; color: var(--muted); padding: 8px 12px; text-transform: uppercase; letter-spacing: 0.05em; } .ds-cmd-item { padding: 12px 16px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; cursor: pointer; color: var(--muted); } .ds-cmd-item.active, .ds-cmd-item:hover { background: var(--surface-warm); color: var(--fg); } .ds-cmd-item-title { font-weight: 500; } .ds-cmd-hint { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 12px; } .ds-cmd-divider { border-top: 1px solid var(--border); margin-block: 4px; }"
+      "refersTo": "modal",
+      "description": "The one surface where the product's original chat-console identity is still visually explicit inside the IDE shell. A twilight-glow gradient banner reading \"Spec Mode — read-only planning\" appears under the header whenever the active thread is in spec mode. Assistant turns get a 28px twilight-glow avatar; user turns have no avatar or bubble card.",
+      "html": "<div class=\"ds-spec-banner\">Spec Mode — read-only planning</div><div class=\"ds-chat-bubble agent\"><div class=\"ds-chat-avatar\">C</div><div class=\"ds-message\">Applied the fix directly.</div></div>",
+      "css": ".ds-spec-banner { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11px; font-weight: 600; color: var(--accent); background: linear-gradient(135deg, var(--twilight-glow), transparent 80%); border-bottom: 1px solid var(--twilight-glow); } .ds-chat-bubble { display: flex; gap: 10px; max-width: 85%; } .ds-chat-avatar { width: 28px; height: 28px; border-radius: 6px; background: var(--twilight-glow); color: var(--accent); border: 1px solid var(--twilight-glow); display: flex; align-items: center; justify-content: center; font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 11px; font-weight: 700; }"
     }
   ],
   "narrative": {
-    "northStar": "The Dragon Fire Console",
-    "overview": "FlooNetwork is a desktop coding-agent console, not a web page. The whole interface lives inside a single full-viewport window with overflow: hidden — there is no document scroll, only panes scroll. The visual world is a premium dark operator's console: a luxurious near-black field (#0a0b0d) cut by a single vibrant \"Dragon Fire Green\" accent (#2cf575) that glows against the dark like a terminal cursor. Everything else is restrained charcoal, off-white ink, and a muted grey-blue for metadata.\n\nThe product's core gesture is the Spec / Go mode toggle. Spec Mode is the read-only planning state — a smoky twilight-green banner sits under the top nav, the agent replies with interactive spec checklists, and a \"Synthesize & Handoff\" action culminates in a cinematic handoff overlay (a spinning glow ring over a streaming console). Go Mode is the instant-apply state — the banner hides, the agent replies terse, and the workspace flips to the Code Change Diff tab to show the applied patch. The same executor drives both; the visual system signals which mode is live through the banner, the avatar treatment (Gemma's G sits in twilight-green; Claude's C sits in solid accent-on-green), and the chat content shape (checklist vs. plain prose).",
+    "northStar": "The Dragon Fire Workbench",
+    "overview": "Floo Network is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project — file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color — Dragon Fire Green — cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.\n\nThis is the same visual language the product has carried since its chat-console days (--accent, --bg, --surface-warm are unchanged), retargeted at an IDE shell: a three-column workspace (resizable file explorer, tabbed editor/chat/diff center, resizable threads/codebase-map/terminal sidebar) replaced the earlier fixed-width chat cockpit as the product moved from \"watch the agent talk\" to \"work alongside the agent in the same files.\"",
     "keyCharacteristics": [
-      "One-ink dark field. A single near-black background with two charcoal surfaces (surface, surface-warm); no light mode, no gradients except the spec banner's twilight glow.",
-      "Scarce glowing accent. Dragon Fire Green appears only on actionable, \"live\" elements — active thread rail, send button, spec badge, graph pulse, diff additions, focus ring, markdown list bullets.",
-      "Three-column cockpit. Sessions (left, 260px), workspace (center, chat + diff tabs), and Code Map / Files / Notes (right, 340px, collapsed by default). Both sidebars collapse via Cmd+\\ / Cmd+J and slide out with a 200ms transform.",
-      "Mono for metadata, sans for prose. Monospace carries timestamps, file paths, line numbers, kbd hints, and uppercase micro-labels; the variable sans carries everything the user reads as language.",
-      "Quiet motion, 150–200ms. State transitions are fast and eased (cubic-bezier(0.2, 0, 0, 1)); the only long animation is the handoff spinner (1s linear), reserved for the mode-transition ritual."
+      "One-ink dark field, native chrome. A near-black background with three charcoal surface steps (surface, surface-warm, editor-bg); window traffic lights are native macOS controls, not drawn in CSS. Light mode exists as a full token-for-token mirror.",
+      "Scarce glowing accent. Dragon Fire Green marks the active tree row, active tab underline, active thread rail, diff additions, focus rings, and the codebase-map's live node — never decoration.",
+      "Three-column, both rails resizable. Left file-explorer rail (193px default, 160-420px) and right threads/codebase-map/terminal panel (300px default, 260-820px) both drag-resize and collapse via Cmd+\\ / Cmd+J, sliding fully out of the layout so the center workspace reclaims their width.",
+      "Mono for anything machine-shaped. File paths, line numbers, tab labels, uppercase micro-labels, diff content, and the terminal all use the monospace stack; the sans stack carries everything read as a sentence.",
+      "Command-bar family for every transient surface. The file palette (Cmd+P), find-in-files (Cmd+Shift+F), settings, and every confirm/rename/branch-picker prompt share one Modal component: blurred-backdrop overlay, role=dialog, Tab-trapped focus."
     ],
     "rules": [
       {
         "name": "The One Accent Rule",
-        "body": "Dragon Fire Green is the only chromatic brand color; it is reserved for live, actionable, or \"agent-is-doing-something\" surfaces. Never use it for decoration, dividers, or static chrome.",
+        "body": "Dragon Fire Green never appears on borders, dividers, or static chrome — only on something live: an active state, an addition, a focus ring, a link between two files the agent just touched.",
         "section": "colors"
       },
       {
         "name": "The Two-Voice Rule",
-        "body": "If the user reads it as a sentence, it's the sans; if the user reads it as a path, a timestamp, a key, or a label, it's the mono. Never set prose in monospace, never set a file path in the sans.",
+        "body": "If it's read as a path, a key, or a label, it's mono; if it's read as a sentence, it's sans. This split predates the IDE pivot and hasn't moved.",
         "section": "typography"
       },
       {
-        "name": "The Three-Column Cockpit Rule",
-        "body": "Left and right rails are fixed pixel widths; the center workspace flexes. Both rails collapse by sliding out of the viewport via negative margin (-260px / -340px) over 200ms — they do not overlay, they yield their space to the workspace.",
-        "section": "layout"
-      },
-      {
-        "name": "The Flat-First Rule",
-        "body": "Borders divide; shadows elevate only what floats above the field (overlays, toast, the active mode button). Never shadow a resting panel.",
-        "section": "elevation"
-      },
-      {
-        "name": "The Two-Radius Rule",
-        "body": "Use 8px for controls, inputs, buttons, list items, code blocks, and inline elements; use 16px only for cards, chat bubbles, the command-bar box, the diff view panel, and the handoff console. Use 9999px (pill) exclusively for status indicators — the spec badge, the scrollbar thumb, the graph pulse dot, the sound-toggle dot. No other radius value exists in the system.",
-        "section": "shapes"
+        "name": "The No-Skipped-Heading Rule",
+        "body": "The app has exactly one h1 (visually hidden, the product name); every section heading routes through h2. No heading level is ever skipped, and no bare h4 exists with nothing above it.",
+        "section": "typography"
       }
     ],
     "dos": [
-      "Do reserve Dragon Fire Green (#2cf575) for live, actionable, or agent-active surfaces only — active thread rail, send button, spec badge, graph pulse, diff additions, focus ring.",
-      "Do set file paths, timestamps, line numbers, kbd hints, and uppercase micro-labels in the monospace voice; set prose and UI labels in the sans voice.",
-      "Do use the 8px radius for controls and the 16px radius for cards/chat bubbles/diff panels; use the pill (9999px) only for status dots, badges, and the scrollbar thumb.",
-      "Do collapse the sidebars by sliding them out with a negative margin over 200ms so the workspace reclaims their space — do not overlay them on the workspace at desktop width.",
-      "Do signal mode through the banner + avatar treatment + chat content shape as a single coordinated state change.",
-      "Do cross-fade positioned panes (opacity over 150ms) when switching workspace or right-sidebar tabs.",
-      "Do invert the toast (fg-on-bg) so it reads as a system utterance distinct from the dark chrome."
+      "Do reserve Dragon Fire Green for live/active/agent-touched surfaces only.",
+      "Do set anything path-, key-, or metadata-shaped in the mono stack; prose in the sans stack.",
+      "Do collapse the resizable rails by sliding them fully out of the flex layout, never by overlaying the workspace.",
+      "Do route every transient prompt (confirm, rename, palette, settings) through the shared Modal component rather than a bespoke overlay div.",
+      "Do give every tree/list row real keyboard operability (role=button tabIndex=0 + Enter/Space), not click-only.",
+      "Do pair color with a second signal (a glyph, text, an icon) for anything status-bearing — never color alone."
     ],
     "donts": [
-      "Don't introduce a second brand chromatic color. Twilight Glow is the only green-adjacent tone; everything else is neutral or semantic status.",
-      "Don't shadow resting panels. Shadows are for floating layers only (command bar, toast, handoff console, active mode button).",
-      "Don't set prose in monospace or file paths in the sans — the two-voice split is load-bearing.",
-      "Don't use a radius other than 8px, 16px, or pill. The 6px mode-pill inset is the sole exception and is reserved for the segmented control.",
-      "Don't add gradients except the Spec Mode banner's twilight-glow gradient — the rest of the field is flat color.",
-      "Don't use the accent for borders, dividers, or static chrome; the border color (#22242b) is the only divider.",
-      "Don't promote the right sidebar to open-by-default; it is collapsed by default so the workspace and chat dominate the first viewport."
+      "Don't introduce a second brand chromatic color — accent is Dragon Fire Green only; everything else is neutral or semantic status.",
+      "Don't shadow a resting panel, row, or tab — shadows are for floating layers and the active mode button only.",
+      "Don't use a radius outside the documented five steps (4px, 5-6px, 8px, pill, and the one-off 12px window shell).",
+      "Don't skip a heading level.",
+      "Don't rely on placeholder as an input's only accessible name — every primary input carries its own aria-label alongside the placeholder."
     ]
   }
 }

@@ -1,234 +1,208 @@
 ---
 name: FlooNetwork
-description: Cross-machine coding-agent orchestrator with a two-mode (Spec / Go) console, code-map graph, and embedded project notes.
+description: Cross-machine coding-agent IDE — file tree, CodeMirror editor, git diff, terminal, and a live codebase-map graph around an agent chat/diff console.
 colors:
-  bg: "#0a0b0d"
-  surface: "#121316"
-  surface-warm: "#1a1c21"
-  fg: "#f3f4f6"
-  muted: "#8e939e"
-  border: "#22242b"
-  accent: "#2cf575"
-  accent-on: "#071a0d"
-  twilight-glow: "#081a10"
-  success: "#10b981"
-  warn: "#f59e0b"
-  danger: "#ef4444"
+  bg: "oklch(18% 0.005 250)"
+  chrome-bg: "oklch(15% 0.004 250)"
+  editor-bg: "oklch(20% 0.005 250)"
+  surface: "oklch(22% 0.006 250)"
+  surface-warm: "oklch(26% 0.008 250)"
+  active-row: "oklch(24% 0.020 var(--accent-hue, 145))"
+  fg: "oklch(96% 0.003 250)"
+  muted: "oklch(66% 0.012 250)"
+  border: "oklch(30% 0.010 250)"
+  accent: "oklch(88% 0.21 var(--accent-hue, 145))"
+  accent-on: "oklch(20% 0.03 var(--accent-hue, 145))"
+  twilight-glow: "oklch(18% 0.03 var(--accent-hue, 145))"
+  success: "oklch(72% 0.15 160)"
+  warn: "oklch(76% 0.15 65)"
+  danger: "oklch(64% 0.22 25)"
 typography:
-  display:
-    fontFamily: '"Super Sans VF", system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif'
-    fontSize: "16px"
-    fontWeight: 600
-    lineHeight: "0.96"
-    letterSpacing: "-0.0275em"
   body:
-    fontFamily: '"Super Sans VF", system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif'
-    fontSize: "16px"
-    fontWeight: 400
-    lineHeight: "1.5"
-    letterSpacing: "normal"
-  mono:
-    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace'
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif'
     fontSize: "13px"
     fontWeight: 400
-    lineHeight: "1.5"
-    letterSpacing: "normal"
+    lineHeight: 1.5
+  label:
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    fontSize: "11px"
+    fontWeight: 600
+  mono:
+    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace'
+    fontSize: "12px"
+    fontWeight: 400
 rounded:
-  sm: "8px"
+  xs: "4px"
+  sm: "6px"
   md: "8px"
-  lg: "16px"
+  lg: "12px"
   pill: "9999px"
 spacing:
-  "1": "4px"
-  "2": "8px"
-  "3": "12px"
-  "4": "16px"
-  "5": "20px"
-  "6": "24px"
-  "8": "32px"
-  "12": "48px"
+  "1": "2px"
+  "2": "4px"
+  "3": "6px"
+  "4": "8px"
+  "5": "12px"
+  "6": "16px"
 components:
-  btn-warm:
-    backgroundColor: "{colors.surface-warm}"
-    textColor: "{colors.fg}"
+  icon-btn:
+    backgroundColor: "transparent"
+    textColor: "{colors.muted}"
     rounded: "{rounded.sm}"
-    padding: "8px 12px"
-  btn-warm-hover:
-    backgroundColor: "{colors.surface-warm}"
-    textColor: "{colors.fg}"
-    rounded: "{rounded.sm}"
-    padding: "8px 12px"
-  chat-send-btn:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.accent-on}"
-    rounded: "{rounded.sm}"
-    padding: "0"
     size: "32px"
-  mode-btn-active:
-    backgroundColor: "{colors.bg}"
+  icon-btn-hover:
     textColor: "{colors.fg}"
-    rounded: "6px"
-    padding: "6px 16px"
+    rounded: "{rounded.sm}"
+  tab-active:
+    backgroundColor: "{colors.editor-bg}"
+    textColor: "{colors.fg}"
+    rounded: "6px 6px 0 0"
+  tree-row-active:
+    backgroundColor: "{colors.active-row}"
+    textColor: "{colors.fg}"
+    rounded: "{rounded.xs}"
   thread-item-active:
     backgroundColor: "{colors.surface-warm}"
     textColor: "{colors.fg}"
-    rounded: "{rounded.sm}"
-    padding: "10px 12px"
-  chat-content:
-    backgroundColor: "{colors.surface-warm}"
-    textColor: "{colors.fg}"
-    rounded: "{rounded.lg}"
-    padding: "12px 16px"
-  chat-content-user:
-    backgroundColor: "{colors.bg}"
-    textColor: "{colors.fg}"
-    rounded: "{rounded.lg}"
-    padding: "12px 16px"
-  spec-badge:
+    rounded: "0 {rounded.sm} {rounded.sm} 0"
+  badge-spec:
     backgroundColor: "color-mix(in oklab, {colors.accent}, transparent 80%)"
     textColor: "{colors.accent}"
     rounded: "{rounded.pill}"
     padding: "2px 8px"
-  note-item:
-    backgroundColor: "transparent"
-    textColor: "{colors.fg}"
-    rounded: "{rounded.sm}"
-    padding: "12px"
-  command-bar-box:
+  modal:
     backgroundColor: "{colors.bg}"
     textColor: "{colors.fg}"
-    rounded: "{rounded.lg}"
-    padding: "0"
-  toast:
-    backgroundColor: "{colors.fg}"
-    textColor: "{colors.bg}"
-    rounded: "{rounded.sm}"
-    padding: "12px 16px"
+    rounded: "{rounded.md}"
+    padding: "12px 14px"
+  diff-add:
+    backgroundColor: "color-mix(in oklab, {colors.success}, transparent 94%)"
+    textColor: "{colors.success}"
+  diff-remove:
+    backgroundColor: "color-mix(in oklab, {colors.danger}, transparent 94%)"
+    textColor: "{colors.danger}"
 ---
+
+# Design System: Floo Network
 
 ## Overview
 
-FlooNetwork is a desktop coding-agent console, not a web page. The whole interface lives inside a single full-viewport window with `overflow: hidden` — there is no document scroll, only panes scroll. The visual world is a **premium dark operator's console**: a luxurious near-black field (`#0a0b0d`) cut by a single vibrant "Dragon Fire Green" accent (`#2cf575`) that glows against the dark like a terminal cursor. Everything else is restrained charcoal, off-white ink, and a muted grey-blue for metadata.
+**Creative North Star: "The Dragon Fire Workbench"**
 
-**Creative North Star: "The Dragon Fire Console."** A focused operator's cockpit where one glowing green thread — the agent's intent — cuts through quiet darkness. The accent is scarce and meaningful: it marks the active session, the send button, the spec badge, the live graph node, the diff additions. When you see green, something is alive and actionable.
+Floo Network is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project — file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color — Dragon Fire Green — cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.
 
-The product's core gesture is the **Spec / Go mode toggle**. Spec Mode is the read-only planning state — a smoky twilight-green banner sits under the top nav, the agent replies with interactive spec checklists, and a "Synthesize & Handoff" action culminates in a cinematic handoff overlay (a spinning glow ring over a streaming console). Go Mode is the instant-apply state — the banner hides, the agent replies terse, and the workspace flips to the Code Change Diff tab to show the applied patch. The same executor drives both; the visual system signals which mode is live through the banner, the avatar treatment (Gemma's `G` sits in twilight-green; Claude's `C` sits in solid accent-on-green), and the chat content shape (checklist vs. plain prose).
+This is the same visual language the product has carried since its chat-console days (`--accent`, `--bg`, `--surface-warm` are unchanged), retargeted at an IDE shell: a three-column workspace (resizable file explorer · tabbed editor/chat/diff center · resizable threads/codebase-map/terminal sidebar) replaced the earlier fixed-width chat cockpit as the product moved from "watch the agent talk" to "work alongside the agent in the same files."
 
 **Key Characteristics:**
-- **One-ink dark field.** A single near-black background with two charcoal surfaces (`surface`, `surface-warm`); no light mode, no gradients except the spec banner's twilight glow.
-- **Scarce glowing accent.** Dragon Fire Green appears only on actionable, "live" elements — active thread rail, send button, spec badge, graph pulse, diff additions, focus ring, markdown list bullets.
-- **Three-column cockpit.** Sessions (left, 260px), workspace (center, chat + diff tabs), and Code Map / Files / Notes (right, 340px, collapsed by default). Both sidebars collapse via `⌘\` / `⌘J` and slide out with a 200ms transform.
-- **Mono for metadata, sans for prose.** Monospace carries timestamps, file paths, line numbers, kbd hints, and uppercase micro-labels; the variable sans carries everything the user reads as language.
-- **Quiet motion, 150–200ms.** State transitions are fast and eased (`cubic-bezier(0.2, 0, 0, 1)`); the only long animation is the handoff spinner (1s linear), reserved for the mode-transition ritual.
+- **One-ink dark field, native chrome.** A near-black background (`oklch(18% 0.005 250)`) with three charcoal surface steps (`surface`, `surface-warm`, `editor-bg`); window traffic lights are native macOS controls (via an AppKit plugin), not drawn in CSS. Light mode exists (`data-theme="light"` or OS auto-detect) as a full token-for-token mirror.
+- **Scarce glowing accent.** Dragon Fire Green marks the active tree row, active tab underline, active thread rail, diff additions, focus rings, and the codebase-map's live node — never decoration.
+- **Three-column, both rails resizable.** Left file-explorer rail (193px default, 160–420px) and right threads/codebase-map/terminal panel (300px default, 260–820px) both drag-resize and collapse via `⌘\` / `⌘J`, sliding fully out of the layout (not overlaying it) so the center workspace reclaims their width.
+- **Mono for anything machine-shaped.** File paths, line numbers, tab labels, uppercase micro-labels, diff content, and the terminal all use the monospace stack; the sans stack carries everything read as a sentence.
+- **Command-bar family for every transient surface.** The file palette (`⌘P`), find-in-files (`⌘⇧F`), settings, and every confirm/rename/branch-picker prompt share one `Modal` component: a blurred-backdrop overlay centered at 18vh, `role="dialog"`, Tab-trapped focus.
 
 ## Colors
 
-The palette is a dark neutral field with one glowing green accent and three semantic status hues. **The One Accent Rule.** Dragon Fire Green is the only chromatic brand color; it is reserved for live, actionable, or "agent-is-doing-something" surfaces. Never use it for decoration, dividers, or static chrome.
+A dark neutral field with one glowing green accent and three semantic status hues, expressed in OKLCH so the accent hue is swappable live (the Settings panel's 6-preset color picker rewrites `--accent-hue` on `:root`).
 
-**Primary**
-- **Dragon Fire Green** (`#2cf575`) — the single brand accent. Active thread rail, send button, spec badge border/text, graph pulse dot, diff addition text, focus ring, markdown bullet. Hover lightens 8% in OKLAB; active lightens 15%.
-- **Dragon Fire On-Green** (`#071a0d`) — deep black-green ink for any text or icon sitting on a green fill (send button glyph, Claude avatar).
+### Primary
+- **Dragon Fire Green** (`oklch(88% 0.21 var(--accent-hue, 145))`): the single brand accent. Active file-tree/thread row, active tab underline, diff-addition text, focus ring, the codebase-map's pulsing node, the branch-switch icon.
+- **Dragon Fire On-Green** (`oklch(20% 0.03 var(--accent-hue, 145))`): ink for anything sitting on a solid accent fill.
 
-**Secondary**
-- **Twilight Glow** (`#081a10`) — rich green-black used only for the Spec Mode banner gradient start and the Gemma agent avatar fill. The smoky bridge between the dark field and the green accent.
+### Secondary
+- **Twilight Glow** (`oklch(18% 0.03 var(--accent-hue, 145))`): still live in the chat pane specifically — the Spec Mode banner's gradient/border and the assistant chat-avatar fill. The one place a second accent-adjacent tone is allowed, scoped to "the agent is in read-only planning mode."
 
-**Neutral**
-- **Background** (`#0a0b0d`) — luxurious deep near-black; the page field and chat user-bubble fill.
-- **Surface** (`#121316`) — panels and main workspaces; the handoff console fill.
-- **Surface Warm** (`#1a1c21`) — warm charcoal for buttons, inactive items, hover fills, file-tree hover, right-tab bar background, scrollbar thumb base.
-- **Foreground** (`#f3f4f6`) — crisp off-white primary ink; also the toast background (inverted).
-- **Muted** (`#8e939e`) — grey-blue for secondary text, captions, metadata, line numbers, placeholder hints.
-- **Border** (`#22242b`) — crisp subtle divider; the only border color in the system.
+### Neutral
+- **Background** (`oklch(18% 0.005 250)`): the window field.
+- **Chrome background** (`oklch(15% 0.004 250)`): top chrome, editor tab bar — slightly darker than the field so structural chrome recedes behind content.
+- **Editor background** (`oklch(20% 0.005 250)`): the CodeMirror surface and active editor tab — slightly lighter than the field so the working document reads as "up."
+- **Surface** (`oklch(22% 0.006 250)`) / **Surface Warm** (`oklch(26% 0.008 250)`): panel and hover-state fills; warm is the resting state for buttons, inactive tree/thread rows, and hover.
+- **Active row** (`oklch(24% 0.020 var(--accent-hue, 145))`, accent-tinted): reserved specifically for the currently-open codebase-map node's neighborhood highlight.
+- **Foreground** (`oklch(96% 0.003 250)`): primary ink.
+- **Muted** (`oklch(66% 0.012 250)`): secondary text, metadata, placeholder hints, inactive tab/icon color.
+- **Border** (`oklch(30% 0.010 250)`): the only divider color in the system.
 
-**Semantic status**
-- **Success** (`#10b981`) — refined green for diff addition text and addition flash endpoint.
-- **Warn** (`#f59e0b`) — amber (reserved for status indicators).
-- **Danger** (`#ef4444`) — red for diff deletion text and the muted-sound toggle state.
+### Semantic status
+- **Success** (`oklch(72% 0.15 160)`): diff-addition background/text.
+- **Warn** (`oklch(76% 0.15 65)`): the preflight-status warning state.
+- **Danger** (`oklch(64% 0.22 25)`): diff-deletion text, destructive-action buttons (discard, delete), the error banner.
 
-Selection highlight is the accent at 75% transparency over foreground ink. Scrollbar thumb is the border color, pill-rounded, lifting 10% toward white on hover.
+**The One Accent Rule.** Dragon Fire Green never appears on borders, dividers, or static chrome — only on something live: an active state, an addition, a focus ring, a link between two files the agent just touched.
+
+**Measured contrast** (computed from these OKLCH tokens against `bg`): `fg` 16.7:1, `muted` 6.1:1, `accent` 14.0:1, `success` 8.1:1, `danger` 5.0:1, `warn` 8.5:1 — every text pairing clears WCAG AA, most clear AAA.
 
 ## Typography
 
-A two-voice system: one variable sans for everything human-readable, one monospace for everything machine-shaped. **The Two-Voice Rule.** If the user reads it as a sentence, it's the sans; if the user reads it as a path, a timestamp, a key, or a label, it's the mono. Never set prose in monospace, never set a file path in the sans.
+**Body — system-ui stack** (13px base, `1.5` line-height): everything read as prose — chat messages, empty-state copy, error banners, settings labels.
 
-- **Display / Body — "Super Sans VF"** (system-ui stack fallback). One family serves both display and body; hierarchy comes from size and weight, not from a second family. Headings use tight leading (`0.96`) and display tracking (`-0.0275em`); body uses `1.5` leading and normal tracking. Antialiased with `optimizeLegibility`.
-- **Mono — `ui-monospace, SF Mono, JetBrains Mono, Menlo`** for file paths, line numbers, timestamps, kbd chips, uppercase micro-labels (`SPEC INTERVIEW`, `Gemma Spec Pipeline`, `New Note Target`), note editor body, and diff content. Set at 11–13px with `1.4–1.5` leading.
+**Mono — `ui-monospace, SF Mono, JetBrains Mono, Menlo`**: file paths and tree labels, tab labels, line numbers, diff content, the terminal, uppercase section labels (`Staged Changes`, `Turn History`), badges, `<kbd>` hints. Set small (9–12px) since this is a dense, information-forward tool, not an editorial surface.
 
-**Type scale (px):**
-- Micro Label — 12 (`text-xs`): kbd hints, meta, micro-labels.
-- Caption — 14 (`text-sm`): thread titles, chat content, button labels, tab labels, sidebar body.
-- Body / Button / Nav — 16 (`text-base`): chat input, command-bar input, brand name.
-- Body Heading — 20 (`text-lg`): handoff overlay heading.
-- Card Heading — 22 (`text-xl`).
-- Feature Title — 28 (`text-2xl`).
-- Section Heading — 48 (`text-3xl`).
-- Display Hero — 64 (`text-4xl`).
+**The Two-Voice Rule.** If it's read as a path, a key, or a label, it's mono; if it's read as a sentence, it's sans. This split predates the IDE pivot and hasn't moved.
 
-Uppercase mono labels carry `0.05–0.08em` letter-spacing. The brand name uses `-0.01em` tracking at weight 600. Weights are binary in practice: 400 for body, 500 for tabs, 600 for active/important (active thread, active tab, brand, buttons, file-tree active), 700 for avatar glyphs.
+**Measured scale (px):** 9 (kbd/tab micro-labels) · 10 · 11 (buttons, badges, tab labels, uppercase section headings) · 12 (mono metadata, body default in dense panels) · 13 (base body, commit box) · 16 (modal input, only place body text gets room to breathe).
 
 ## Layout
 
-A fixed full-viewport cockpit. `body` is `height: 100vh; overflow: hidden; display: flex; flex-direction: column`. The app container is a three-column flex row filling the remaining height under a 56px top nav.
+A fixed full-viewport shell (`height: 100vh; overflow: hidden`) — no document scroll, only individual panes scroll.
 
-**The Three-Column Cockpit Rule.** Left and right rails are fixed pixel widths; the center workspace flexes. Both rails collapse by sliding out of the viewport via negative margin (`-260px` / `-340px`) over 200ms — they do not overlay, they yield their space to the workspace.
-
-- **Top nav — 56px.** Brand left, Spec/Go segmented toggle center, action cluster right (Note `⌘N`, divider, sound toggle, left-sidebar toggle `⌘\`, right-sidebar toggle `⌘J`). Fixed height, border-bottom, never scrolls.
-- **Left sidebar — 260px fixed.** Detected Workspace selector, New Thread button, "Active Threads" list (flex-1, scrollable), "Yesterday" archived group, footer. Active thread gets a 3px green left rail and a right-side-only border radius.
-- **Main workspace — flexes.** 48px workspace header with Console Chat / Code Change Diff tabs (border-bottom active underline in foreground). Optional Spec Mode banner directly below the header (twilight-glow gradient, hidden in Go Mode). Workspace body is a positioned pane stack — `.pane-view` panes are absolutely stacked and cross-fade via opacity over 150ms; only one is active.
-- **Right sidebar — 340px fixed, collapsed by default.** Three-tab bar (Code Map / Files / Notes) over a positioned pane stack with the same cross-fade pattern.
-
-**Responsive behavior:** below 920px the sidebars detach from the flex flow and become `position: fixed` overlays anchored under the top nav at `z-index: 50`, so the workspace takes the full width and the rails float over it when opened.
-
-**Spacing scale:** 4 / 8 / 12 / 16 / 20 / 24 / 32 / 48. Inset padding is typically `space-4` (16px) for panels and inputs; `space-3` (12px) for compact controls; gaps between list items are 2px. The chat container uses `space-4` gaps between bubbles.
+- **Top chrome — 36px.** Native macOS traffic lights at the OS level (not CSS); a right-aligned utility cluster of 32px icon buttons (left-sidebar toggle, theme cycle, right-sidebar toggle, terminal toggle, settings, preflight/executor status). The whole bar is a manual drag region (`onMouseDown` distinguishes single-click-drag from double-click-maximize, since Tauri's `data-tauri-drag-region` alone can't).
+- **Left rail — file explorer only, 193px default (160–420px), resizable + collapsible (`⌘\`).** Indented tree rows with inline chevrons; right-click opens a context menu (New File/Folder, and Rename/Delete when a row is targeted); rows support drag-and-drop move onto a folder or the tree background.
+- **Center workspace — flexes.** A 28px tab bar (Editor / Console Chat / Code Change Diff, Editor first and default) over a breadcrumb row, then the active pane. Editor is CodeMirror 6 with per-language extensions and inline image/video preview (zoomable) for binary files. Diff pane shows staged/working sections with hunk-level stage/unstage and a sticky fetch/pull/push + commit box. Chat pane is the agent console (Spec/Go mode toggle, streaming events, turn history).
+- **Right panel — Workspace/Threads/Codebase-Map/Terminal, 300px default (260–820px), resizable + collapsible (`⌘J`), open by default.** A pinned workspace-picker + branch-switch row sits above a three-tab bar; Terminal only appears as a tab when its placement is set to "sidebar" (it defaults to a bottom panel, toggled independently via `⌘\``).
+- **Both rails collapse by sliding fully out** (negative margin, 200ms) rather than overlaying the workspace — the center reclaims their width. Below 760px this is unchanged: the rails don't relayout further; there is no smaller breakpoint tier.
+- **Two overlay families float above everything, both `z-index: 100`:** the `Modal` command-bar family (blurred backdrop, centered at 18vh) for the file palette, find-in-files, settings, and confirm/rename/branch prompts; a separate lightweight `context-menu` popover for file-tree right-clicks.
 
 ## Elevation & Depth
 
-Depth is restrained and mostly flat — this is a console, not a card deck. **The Flat-First Rule.** Borders divide; shadows elevate only what floats above the field (overlays, toast, the active mode button). Never shadow a resting panel.
+Mostly flat — this is a workbench, not a card deck. Borders (`--border`, the only divider color) do the dividing; shadow is reserved for things that float above the field.
 
-- **Flat** (`none`) — default for all panels, sidebars, chat bubbles, thread items, tabs.
-- **Ring** (`0 0 0 1px var(--border)`) — the dividing border, expressed as a ring so it reads as a crisp 1px edge rather than a 1px box-shadow.
-- **Raised** (`0 4px 20px rgba(0, 0, 0, 0.35)`) — only for floating layers: the active mode button, the command-bar box, the toast, the handoff console (the console adds a green-tinted ambient `0 0 30px rgba(44, 245, 117, 0.08)`).
-- **Focus ring** (`0 0 0 3px color-mix(in oklab, var(--accent), transparent 60%)`) — a 3px green halo at 40% opacity around focused interactive elements.
-
-The handoff overlay is the one moment of atmospheric depth: a 96%-opaque near-black scrim (`rgba(10, 11, 13, 0.96)`) covering the workspace with a spinning 64px glow ring (border-top in accent) above a green-tinted console — the ritual center of the mode transition.
+- **Flat** (`none`): the default for panels, tree/thread rows, tabs, the editor.
+- **Raised** (`0 4px 20px rgba(0,0,0,0.35)` / `0 8px 24px rgba(0,0,0,0.35)`): the two floating-layer weights — modal command-bars get the lighter one, the file-tree context menu and settings-panel-triggered overlays the heavier.
+- **Focus ring** (`0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%)`): every focusable control (`button`, `input`, `select`, plus keyboard-activatable tree/thread/branch rows) gets this on `:focus-visible`, globally, once.
+- **Active-tab lift** (`box-shadow: 0 2px 8px rgba(0,0,0,0.3)`): the only shadow on something that isn't an overlay — the active mode-selector button.
 
 ## Shapes
 
-A binary radius language: 8px for almost everything, 16px for larger containers, pill for status only. **The Two-Radius Rule.** Use `8px` for controls, inputs, buttons, list items, code blocks, and inline elements; use `16px` only for cards, chat bubbles, the command-bar box, the diff view panel, and the handoff console. Use `9999px` (pill) exclusively for status indicators — the spec badge, the scrollbar thumb, the graph pulse dot, the sound-toggle dot. No other radius value exists in the system.
-
-The mode-selector is a 3px-padded rounded container with inner buttons at `radius-sm - 2px` (6px) — the one place a non-token radius appears, deliberately tightening the segmented control so its pills read as inset rather than as siblings of the 8px buttons around them.
+A five-step radius scale, smallest to largest: `4px` (chips, inline inputs) · `5–6px` (buttons, tabs, most controls — used near-interchangeably; treat as one "sm" step) · `8px` (modal command-bar) · `9999px` pill (badges, the scrollbar thumb) · `12px` (the window shell itself, a one-off outer radius). No larger card/panel radius exists — panels, the editor, and the terminal are all square-cornered; roundedness is reserved for controls and the window edge.
 
 ## Components
 
-- **Mode selector (Spec / Go).** A 3px-padded segmented control in `surface-warm` with a 1px border. Each button carries an inline SVG icon, a label, and a `<kbd>` shortcut hint. The active button lifts to `bg` with the raised shadow; inactive buttons fade to 0.8 opacity on hover. This is the product's signature control — it changes banner state, avatar treatment, and chat behavior.
-- **Thread item.** Two-line list row: title (ellipsis) + mono meta row (mode · time). Hover lifts to `surface-warm` and foreground ink. Active adds a 3px Dragon Fire Green left rail, weight 600, and a right-side-only 8px radius — the rail is the accent's primary navigational use.
-- **Chat bubble.** Avatar (32px, 8px radius) + content card. User bubbles align right, row-reverse, with content fill `bg` (recedes); agent bubbles align left with content fill `surface-warm` and a 1px border. Avatars: user `U` in `surface-warm`; Gemma `G` in twilight-glow with accent text; Claude `C` in solid accent with accent-on text. Content is 14px sans in a 16px-radius card.
-- **Spec checklist.** Embedded inside an agent chat bubble: a bordered `bg` card with a mono uppercase header ("Gemma Spec Pipeline" · `n/total Complete`), checkbox rows (strike-through + muted when done), and a right-aligned "Approve Handoff to Claude 3.5" `btn-warm`. The checklist is the visual signature of Spec Mode.
-- **Code Change Diff.** File title (mono, 14px, 600) + `+/- lines` meta + "Apply Diff" `btn-warm`, over a 16px-radius bordered panel. Each line: 44px right-aligned mono line number in `surface-warm` divided by a right border, then content. Additions get a 6%-green background and green text with a leading `+`; deletions get a 6%-red background and red text with a leading `-`. Additions can flash (`diff-flash`, 1.5s) when freshly applied.
-- **Graphify code map.** SVG canvas in `surface-warm` with `grab`/`grabbing` cursor. Nodes are circles with mono labels; links are 1.5px border-colored lines with arrowhead markers. The active node pulses with an accent fill; hover grows the radius from 8 to 12. Drag pans the whole transform group. A footer hint bar sits below: "Drag to pan graph · Click node to inspect file."
-- **File explorer.** Indented tree of folder/file rows with inline SVG chevrons (folder) and document icons (file). Hover and active lift to `surface-warm`; active adds weight 600. Clicking a file loads it into the diff pane.
-- **Notes editor.** List view: header + "Create note" button + note items (title + 45-char preview, ellipsized). Editor view: 48px header with mono filename + Edit/Preview segmented tabs (active tab inverts to `fg`-on-`bg`), then a positioned edit/preview pane stack. Edit pane is a mono 13px textarea; preview pane renders lightweight markdown (h1/h2/h3, bullets as accent `•`, bold, italic, task-list checkboxes with accent-color). Footer: "Back to list" + "Auto-saved to disk" mono caption.
-- **Command bar (`⌘N`).** Centered 540px floating box at 12vh from top, over a 4%-blurred scrim. Input row with a plus icon and placeholder, then a results list with mono uppercase section headers ("New Note Target", "Keyboard Actions") and items showing title + mono kbd hint. The preview item live-updates the filename as you type, appending `.md` if missing.
-- **Toast.** Bottom-right, `fg`-on-`bg` inverted pill-less card (8px radius), 14px weight 600, with a green check icon. Slides up 100px and fades over 200ms; auto-dismisses at 3000ms.
-- **Buttons.** `btn-warm` is the default action button: `surface-warm` fill, 1px border, 8px radius, 8×12 padding, 14px weight 600, icon+label, border lifts to foreground on hover. The `chat-send-btn` is the only accent-filled button: 32px square, accent fill, accent-on glyph, 8px radius, hover to `accent-hover`.
-- **Panel toggle button.** 32px square icon button, 1px border, 8px radius, muted icon; hover lifts border and icon to foreground. The sound toggle has a `.muted` variant that recolors border and icon to danger red.
+### Icon buttons
+32px square, transparent fill, 1px border, 6px radius, muted icon that lifts to foreground on hover; a `.ok`/`.warn`/`.bad` state variant recolors border+icon (used by the preflight/executor-status button). Shared by every top-chrome utility button and the editor's image zoom controls.
+
+### Tabs
+Two families, same underline language: the 28px editor tab bar (active tab lifts to `editor-bg` with a top-rounded 6px card and a 1px border matching the editor below it; the diff tab additionally tints accent-green when active) and the right-panel tab bar (flatter — active state is just a 2px accent underline, no fill change).
+
+### Tree / list rows (file tree, thread list, branch picker)
+All three now share one interaction contract: `role="button" tabIndex={0}`, click or Enter/Space to activate, hover/focus lift to `surface-warm`. The active file-tree row additionally gets the accent-tinted `active-row` fill; the active thread gets a 2px accent left rail with a right-only 6px radius.
+
+### Modal (`role="dialog"`)
+The shared wrapper behind the file palette, find-in-files, settings, and every confirm/rename/branch prompt: `overlay` (fixed, blurred, centered at 18vh) → `commandbar` (`bg` fill, 1px border, 8px radius, 12×14 padding). Focuses its first control on mount (unless a child already claimed focus via its own `autoFocus`) and traps Tab within itself while open.
+
+### Diff view
+Each hunk: 44px right-aligned mono line numbers in `surface-warm`, then content. Additions get a 6%-green tint with green text and a leading `+`; deletions get 6%-red with red text and a leading `-` — color is never the only signal, the leading glyph always carries the same information. Section labels (`Staged Changes`, `Changes`, `Turn History`) are `h2`s styled as 11px uppercase mono micro-labels (`.ds-section-heading`), not literal `h4`s — no heading level above `h1` gets skipped anywhere in the shell.
+
+### Chat pane / Spec Mode banner
+The Console Chat tab still carries the product's original agent-console identity inside the IDE shell: a `twilight-glow`-gradient banner ("Spec Mode — read-only planning") appears directly under the header whenever the active thread is in spec (read-only/plan) mode, and disappears in go (write-enabled) mode. Assistant turns render as a chat bubble with a 28px avatar filled `twilight-glow`; the user's own turns have no avatar treatment and align without a bubble card. This is the one surface where the chat-console lineage is still visually explicit, not just structurally present.
+
+### Codebase-map (Graphify)
+Force-directed canvas, `surface` background, `grab`/`grabbing` cursor, drag to pan, wheel to zoom, double-click to refit. Nodes are colored by community from a fixed 8-slot CVD-safe categorical palette (`#3987e5`, `#d95926`, `#199e70`, `#c98500`, `#d55181`, `#008300`, `#9085e9`, `#e66767`); anything past slot 8 folds into a neutral "Other." The paint loop only runs while the force simulation is still settling or the view was just touched (pan/zoom/resize) — it doesn't spin forever once idle.
+
+### Badges
+Pill-radius, 1px `currentColor` border, uppercase 11px mono, text always present alongside color (`spec`/`go` mode badges, the `new` untracked-file badge) — never color as the only signal.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** reserve Dragon Fire Green (`#2cf575`) for live, actionable, or agent-active surfaces only — active thread rail, send button, spec badge, graph pulse, diff additions, focus ring.
-- **Do** set file paths, timestamps, line numbers, kbd hints, and uppercase micro-labels in the monospace voice; set prose and UI labels in the sans voice.
-- **Do** use the 8px radius for controls and the 16px radius for cards/chat bubbles/diff panels; use the pill (`9999px`) only for status dots, badges, and the scrollbar thumb.
-- **Do** collapse the sidebars by sliding them out with a negative margin over 200ms so the workspace reclaims their space — do not overlay them on the workspace at desktop width.
-- **Do** signal mode through the banner + avatar treatment + chat content shape as a single coordinated state change.
-- **Do** cross-fade positioned panes (`opacity` over 150ms) when switching workspace or right-sidebar tabs.
-- **Do** invert the toast (`fg`-on-`bg`) so it reads as a system utterance distinct from the dark chrome.
+- **Do** reserve Dragon Fire Green for live/active/agent-touched surfaces only.
+- **Do** set anything path-, key-, or metadata-shaped in the mono stack; prose in the sans stack.
+- **Do** collapse the resizable rails by sliding them fully out of the flex layout, never by overlaying the workspace.
+- **Do** route every transient prompt (confirm, rename, palette, settings) through the shared `Modal` component rather than a bespoke overlay div.
+- **Do** give every tree/list row real keyboard operability (`role="button" tabIndex={0}` + Enter/Space), not click-only.
+- **Do** pair color with a second signal (a glyph, text, an icon) for anything status-bearing — never color alone.
 
 ### Don't:
-- **Don't** introduce a second brand chromatic color. Twilight Glow is the only green-adjacent tone; everything else is neutral or semantic status.
-- **Don't** shadow resting panels. Shadows are for floating layers only (command bar, toast, handoff console, active mode button).
-- **Don't** set prose in monospace or file paths in the sans — the two-voice split is load-bearing.
-- **Don't** use a radius other than 8px, 16px, or pill. The 6px mode-pill inset is the sole exception and is reserved for the segmented control.
-- **Don't** add gradients except the Spec Mode banner's twilight-glow gradient — the rest of the field is flat color.
-- **Don't** use the accent for borders, dividers, or static chrome; the border color (`#22242b`) is the only divider.
-- **Don't** promote the right sidebar to open-by-default; it is collapsed by default so the workspace and chat dominate the first viewport.
+- **Don't** introduce a second brand chromatic color — accent is Dragon Fire Green only; everything else is neutral or semantic status.
+- **Don't** shadow a resting panel, row, or tab — shadows are for floating layers and the active mode button only.
+- **Don't** use a radius outside the documented five steps.
+- **Don't** skip a heading level (no bare `h4` with nothing above it — every section heading routes through the app's single `h1` down to `h2`).
+- **Don't** rely on `placeholder` as an input's only accessible name — every primary input carries its own `aria-label` alongside the placeholder.
