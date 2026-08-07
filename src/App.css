@@ -820,7 +820,7 @@ input[type="checkbox"] {
 /* --- editor tabs (v2) --------------------------------------------------- */
 
 .ds-editor-tabs {
-  height: 28px;
+  height: 35px;
   background: var(--chrome-bg);
   border-bottom: 1px solid var(--border);
   display: flex;

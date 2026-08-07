@@ -43,6 +43,12 @@
       "skillPath": "skills/better-writing/SKILL.md",
       "computedHash": "ea8e80fe5c72ff3b8c04956dc6c92fa86723f83c9d90674db9edba1cc621d344"
     },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf"
+    },
     "interface-review": {
       "source": "jakubkrehel/skills",
       "sourceType": "github",
