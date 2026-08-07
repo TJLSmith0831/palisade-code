@@ -1,5 +1,5 @@
 :root {
-  /* Dragon Fire Workbench v2 tokens — from merged-design.json - TEMP TEST */
+  /* Dragon Fire Workbench v2 tokens — from merged-design.json */
   /* Overridden inline (documentElement.style) by the accent-color picker. */
   --accent-hue: 145;
   --backdrop: oklch(11% 0.015 var(--accent-hue, 145));
@@ -297,6 +297,12 @@ input[type="checkbox"] {
 .ds-icon-btn.ok { color: var(--accent); border-color: var(--accent); }
 .ds-icon-btn.warn { color: var(--warn); border-color: var(--warn); }
 .ds-icon-btn.bad { color: var(--muted); }
+
+.ds-preflight-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .error {
   padding: 10px 16px;
@@ -1849,6 +1855,28 @@ details.graph-report-wrap > summary {
 .empty {
   margin: auto;
   color: var(--muted);
+}
+
+.ds-onboarding-empty {
+  margin: auto;
+  max-width: 360px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.ds-onboarding-empty h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--fg);
+}
+
+.ds-onboarding-empty p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .editor {

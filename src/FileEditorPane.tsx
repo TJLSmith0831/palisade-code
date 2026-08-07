@@ -13,6 +13,7 @@ type Props = {
   projectHash: string;
   path: string | null;
   onSave?: (edit: { path: string; before: string; after: string }) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
 const MIN_ZOOM = 0.1;
@@ -25,7 +26,7 @@ const editorFontTheme = () =>
     ".cm-scroller": { fontFamily: loadEditorFont(), lineHeight: "1.55" },
   });
 
-export default function FileEditorPane({ projectHash, path, onSave }: Props) {
+export default function FileEditorPane({ projectHash, path, onSave, onDirtyChange }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const languageCompartment = useRef(new Compartment());
@@ -43,6 +44,10 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [formatResult, setFormatResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const save = useCallback(() => {
     const view = viewRef.current;

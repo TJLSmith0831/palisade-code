@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { open } from "@tauri-apps/plugin-dialog";
 import "../App.css";
 
 // Mock Tauri APIs before importing App
@@ -179,6 +181,29 @@ describe("Top chrome (merged-design v2)", () => {
   it("shows preflight status in utility cluster", () => {
     render(<App />);
     expect(screen.getByTestId("preflight-status")).toBeDefined();
+  });
+
+  it("shows a persistent visible 'claude' label, not just an icon, when Claude is selected", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({
+          claude: "/usr/local/bin/claude",
+          codex: null,
+          selected: "claude",
+          openspec: true,
+          grillApply: false,
+          ponytail: true,
+          graphify: true,
+          ready: true,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("preflight-status")).toHaveTextContent(/claude/i));
   });
 
   it("starts dragging on a single mousedown, and toggles maximize on double-click, on the top chrome", () => {
@@ -642,6 +667,141 @@ describe("Keyboard navigation (accessibility)", () => {
       expect(invokeMock).toHaveBeenCalledWith("git_checkout_branch", expect.objectContaining({ name: "feature" })),
     );
   });
+
+  it("fuzzy-filters the branch list as you type, like the file palette does for files", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") {
+        return Promise.resolve([
+          { name: "main", isCurrent: true, isRemote: false },
+          { name: "feature-login", isCurrent: false, isRemote: false },
+          { name: "bugfix-crash", isCurrent: false, isRemote: false },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("branch-indicator")).toBeDefined());
+    fireEvent.click(screen.getByTestId("branch-indicator"));
+    await waitFor(() => expect(screen.getAllByTestId("branch-option")).toHaveLength(3));
+
+    fireEvent.change(screen.getByTestId("branch-new-input"), { target: { value: "login" } });
+
+    await waitFor(() => {
+      const options = screen.getAllByTestId("branch-option").map((el) => el.textContent);
+      expect(options).toEqual(["feature-login"]);
+    });
+  });
+});
+
+describe("Unsaved-edit guard (data-loss prevention)", () => {
+  it("confirms before discarding an unsaved edit when switching files via the tree, and doesn't switch on Cancel", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") {
+        const relativePath = String(args?.relativePath ?? "");
+        if (relativePath === "") {
+          return Promise.resolve([
+            { name: "a.ts", is_dir: false, path: "a.ts" },
+            { name: "b.ts", is_dir: false, path: "b.ts" },
+          ]);
+        }
+        return Promise.resolve([]);
+      }
+      if (cmd === "read_file_content") return Promise.resolve("content\n");
+      if (cmd === "write_file_content") return Promise.resolve(null);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
+    fireEvent.click(screen.getByText("a.ts"));
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("content"));
+
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    cmContent.focus();
+    await user.type(cmContent, "x");
+
+    fireEvent.click(screen.getByText("b.ts"));
+
+    const discardBtn = await screen.findByTestId("confirm-delete");
+    expect(discardBtn).toHaveTextContent("Discard");
+    expect(screen.getByTestId("breadcrumbs").textContent).toContain("a.ts");
+
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(screen.queryByTestId("confirm-delete")).toBeNull();
+    expect(screen.getByTestId("breadcrumbs").textContent).toContain("a.ts");
+
+    fireEvent.click(screen.getByText("b.ts"));
+    fireEvent.click(screen.getByTestId("confirm-delete"));
+    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain("b.ts"));
+  });
+
+  it("switches files immediately with no prompt when there's nothing unsaved", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") {
+        const relativePath = String(args?.relativePath ?? "");
+        if (relativePath === "") {
+          return Promise.resolve([
+            { name: "a.ts", is_dir: false, path: "a.ts" },
+            { name: "b.ts", is_dir: false, path: "b.ts" },
+          ]);
+        }
+        return Promise.resolve([]);
+      }
+      if (cmd === "read_file_content") return Promise.resolve("content\n");
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
+    fireEvent.click(screen.getByText("a.ts"));
+    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain("a.ts"));
+
+    fireEvent.click(screen.getByText("b.ts"));
+    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain("b.ts"));
+    expect(screen.queryByTestId("confirm-delete")).toBeNull();
+  });
 });
 
 describe("Heading hierarchy (accessibility)", () => {
@@ -711,6 +871,53 @@ describe("Labeled inputs (accessibility)", () => {
   });
 });
 
+describe("Error banner provenance", () => {
+  it("keeps an earlier failure visible instead of a later one silently clobbering it", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") {
+        return Promise.resolve([
+          { name: "main", isCurrent: true, isRemote: false },
+          { name: "feature", isCurrent: false, isRemote: false },
+          { name: "bugfix", isCurrent: false, isRemote: false },
+        ]);
+      }
+      if (cmd === "git_checkout_branch") return Promise.reject(new Error("checkout failed: dirty tree"));
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("branch-indicator")).toBeDefined());
+
+    fireEvent.click(screen.getByTestId("branch-indicator"));
+    fireEvent.click(await screen.findByText("feature"));
+    await waitFor(() => expect(screen.getAllByTestId("error")).toHaveLength(1));
+
+    fireEvent.click(screen.getByTestId("branch-indicator"));
+    fireEvent.click(await screen.findByText("bugfix"));
+    await waitFor(() => expect(screen.getAllByTestId("error")).toHaveLength(2));
+
+    // Both instances survive rather than the second overwriting the first.
+    expect(screen.getAllByTestId("error")).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByTestId("error")[0]);
+    await waitFor(() => expect(screen.getAllByTestId("error")).toHaveLength(1));
+  });
+});
+
 describe("Find in files (Cmd+Shift+F)", () => {
   it("opens the find-in-files palette on Cmd+Shift+F and closes on Escape", async () => {
     render(<App />);
@@ -747,6 +954,37 @@ describe("Theme toggle", () => {
     fireEvent.click(toggle);
     expect(toggle.textContent).toBe("Auto");
     expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+});
+
+describe("First-run onboarding", () => {
+  it("shows an explanation and a prominent Add Project action when there are no projects yet, instead of a bare sentence", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({
+          claude: null,
+          codex: null,
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("onboarding-empty")).toBeDefined());
+    expect(screen.getByRole("heading", { level: 2, name: /floo network/i })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /add a project/i }));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
   });
 });
 

@@ -54,6 +54,22 @@ describe("FileEditorPane", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty("disabled", true));
   });
 
+  it("reports dirty state changes via onDirtyChange, so a caller can guard navigation away from unsaved edits", async () => {
+    const user = userEvent.setup();
+    const onDirtyChange = vi.fn();
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={onDirtyChange} />);
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "x");
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+
+    await user.click(screen.getByRole("button", { name: /save \*/i }));
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
+  });
+
   it("does not remount the CodeMirror view on save (preserves cursor/undo/scroll state)", async () => {
     const user = userEvent.setup();
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);

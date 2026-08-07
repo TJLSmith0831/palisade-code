@@ -16,6 +16,7 @@ import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
+import { fuzzyMatch } from "./fuzzyMatch";
 import { RenameIcon, DeleteIcon } from "./icons";
 import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } from "./EventView";
 import FileEditorPane from "./FileEditorPane";
@@ -122,7 +123,6 @@ const SHOW_THINKING_KEY = "floo:showThinking";
 const THEME_KEY = "floo:theme";
 const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
 type TerminalPlacement = "bottom" | "sidebar";
-// TEMP TEST CHANGE
 type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme => (t === "auto" ? "light" : t === "light" ? "dark" : "auto");
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
@@ -144,17 +144,28 @@ export default function App() {
   // to go through this.
   const [bar, setBar] = useState<
     | { kind: "input"; label: string; value: string; submit: (value: string) => void }
-    | { kind: "confirm"; label: string; onConfirm: () => void }
+    | { kind: "confirm"; label: string; confirmLabel?: string; onConfirm: () => void }
     | { kind: "select"; label: string; options: string[]; submit: (choice: string) => void }
     | null
   >(null);
+  // Live-filters the "select" bar's option list (branch picker) as the user
+  // types, the same fuzzy-match convention FilePalette/TextSearchPalette use.
+  const [selectQuery, setSelectQuery] = useState("");
+  useEffect(() => {
+    if (!bar) setSelectQuery("");
+  }, [bar]);
   const [draft, setDraft] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // A list, not a single string: an action failing while an earlier failure
+  // is still showing must not silently erase it — each stays visible until
+  // its own dismiss, so a user who triggers two things in a row can tell
+  // which one broke.
+  const [errors, setErrors] = useState<{ id: string; message: string }[]>([]);
   const [flight, setFlight] = useState<Preflight | null>(null);
   const [live, setLive] = useState<ExecutorEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
   const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("editor");
   const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">("threads");
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
@@ -242,7 +253,9 @@ export default function App() {
     enableModernWindowStyle({ offsetY: -3 });
   }, []);
 
-  const fail = (err: unknown) => setError(describeError(err));
+  const fail = (err: unknown) =>
+    setErrors((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, message: describeError(err) }]);
+  const dismissError = (id: string) => setErrors((prev) => prev.filter((e) => e.id !== id));
 
   const selectThread = useCallback(async (projectHash: string, next: ThreadMeta | null) => {
     setThread(next);
@@ -326,6 +339,29 @@ export default function App() {
     });
   };
 
+  // Guards navigating away from a dirty editor: file-tree/palette/find-in-files
+  // selection and opening project-settings.json all route through this instead
+  // of calling setSelectedFile directly, so an in-progress edit can't be
+  // silently discarded the way it could before.
+  const selectFile = useCallback(
+    (path: string) => {
+      if (editorDirty && selectedFile && selectedFile !== path) {
+        setBar({
+          kind: "confirm",
+          label: `Discard unsaved changes to "${selectedFile}"?`,
+          confirmLabel: "Discard",
+          onConfirm: () => {
+            setBar(null);
+            setSelectedFile(path);
+          },
+        });
+        return;
+      }
+      setSelectedFile(path);
+    },
+    [editorDirty, selectedFile],
+  );
+
   // Opens project-settings.json (D14/D15) in the editor, creating it with a
   // self-documenting default first if the project doesn't have one yet.
   const onOpenSettings = async () => {
@@ -341,7 +377,7 @@ export default function App() {
       }
     }
     setChatTab("editor");
-    setSelectedFile(PROJECT_SETTINGS_FILE);
+    selectFile(PROJECT_SETTINGS_FILE);
   };
 
   // ---------------------------------------------------------------- branch
@@ -711,6 +747,7 @@ export default function App() {
               className="ds-icon-btn"
               onClick={() => leftRail.toggleCollapsed()}
               title="Toggle left sidebar (Cmd+\)"
+              aria-label="Toggle left sidebar"
               data-testid="toggle-left-sidebar"
               data-tauri-drag-region-exclude
             >
@@ -729,6 +766,7 @@ export default function App() {
               className="ds-icon-btn"
               onClick={() => rightPanel.toggleCollapsed()}
               title="Toggle right sidebar (Cmd+J)"
+              aria-label="Toggle right sidebar"
               data-testid="toggle-right-sidebar"
               data-tauri-drag-region-exclude
             >
@@ -738,6 +776,7 @@ export default function App() {
               className="ds-icon-btn"
               onClick={toggleTerminal}
               title="Toggle terminal (Cmd+`)"
+              aria-label="Toggle terminal"
               data-testid="toggle-terminal"
               data-tauri-drag-region-exclude
             >
@@ -747,6 +786,7 @@ export default function App() {
               className="ds-icon-btn"
               onClick={() => setSettingsOpen(true)}
               title="Settings"
+              aria-label="Settings"
               data-testid="open-settings"
               data-tauri-drag-region-exclude
             >
@@ -764,12 +804,15 @@ export default function App() {
               data-testid="preflight-status"
             >
               {flight?.selected === "claude" ? (
-                <svg viewBox="0 0 256 257" width="12" height="12" aria-label="Claude">
-                  <path
-                    fill="#D97757"
-                    d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
-                  />
-                </svg>
+                <span className="ds-preflight-label">
+                  <svg viewBox="0 0 256 257" width="12" height="12" aria-hidden="true">
+                    <path
+                      fill="#D97757"
+                      d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
+                    />
+                  </svg>
+                  claude
+                </span>
               ) : (
                 flight?.selected ?? "—"
               )}
@@ -784,11 +827,11 @@ export default function App() {
         </div>
       )}
 
-      {error && (
-        <div className="error" onClick={() => setError(null)} data-testid="error">
-          {error} <span className="dismiss">dismiss</span>
+      {errors.map((e) => (
+        <div key={e.id} className="error" onClick={() => dismissError(e.id)} data-testid="error">
+          {e.message} <span className="dismiss">dismiss</span>
         </div>
-      )}
+      ))}
 
       <div className="body">
         <nav
@@ -805,7 +848,7 @@ export default function App() {
             <FileTree
               projectHash={project.hash}
               projectName={project.displayName}
-              onSelectFile={setSelectedFile}
+              onSelectFile={selectFile}
               activePath={selectedFile}
               refreshToken={fileTreeRefreshToken}
               onPathRenamed={onTreePathRenamed}
@@ -850,13 +893,25 @@ export default function App() {
           <div className="ds-breadcrumbs" data-testid="breadcrumbs">
             <span>{project?.displayName ?? "—"}</span>
             <span className="ds-crumb-sep">/</span>
-            <span className="ds-crumb-active">{selectedFile ?? "console"}</span>
+            <span className="ds-crumb-active">{selectedFile ?? "Console"}</span>
           </div>
           {chatTab === "editor" ? (
             project ? (
-              <FileEditorPane projectHash={project.hash} path={selectedFile} onSave={handleFileSave} />
+              <FileEditorPane
+                projectHash={project.hash}
+                path={selectedFile}
+                onSave={handleFileSave}
+                onDirtyChange={setEditorDirty}
+              />
             ) : (
-              <p className="empty">Add a project to get started.</p>
+              <div className="ds-onboarding-empty" data-testid="onboarding-empty">
+                <h2>Floo Network</h2>
+                <p>
+                  Drive Claude Code or Codex against a real project — file tree, editor, git diff, and a
+                  live codebase map, with the agent working alongside you in the same files.
+                </p>
+                <button onClick={onAddProject}>+ Add a project to get started</button>
+              </div>
             )
           ) : chatTab === "diff" ? (
             <div className="messages" data-testid="messages">
@@ -1162,7 +1217,7 @@ export default function App() {
       {paletteOpen && (
         <FilePalette
           files={paletteFiles}
-          onSelect={setSelectedFile}
+          onSelect={selectFile}
           onClose={() => setPaletteOpen(false)}
           onCreate={onCreateFile}
           onRename={onRenameFile}
@@ -1174,7 +1229,7 @@ export default function App() {
         <TextSearchPalette
           files={paletteFiles}
           onSearchText={searchProjectText}
-          onSelect={setSelectedFile}
+          onSelect={selectFile}
           onClose={() => setTextSearchOpen(false)}
         />
       )}
@@ -1214,7 +1269,7 @@ export default function App() {
           <label>{bar.label}</label>
           <div className="confirm-actions">
             <button onClick={bar.onConfirm} className="danger" data-testid="confirm-delete" autoFocus>
-              Delete
+              {bar.confirmLabel ?? "Delete"}
             </button>
             <button onClick={() => setBar(null)}>Cancel</button>
           </div>
@@ -1225,7 +1280,10 @@ export default function App() {
         <Modal onClose={() => setBar(null)} label={bar.label}>
           <label htmlFor="barSelect">{bar.label}</label>
           <ul className="ds-branch-list" data-testid="branch-list">
-            {bar.options.map((name) => (
+            {(selectQuery.trim()
+              ? bar.options.filter((name) => fuzzyMatch(selectQuery, name) !== null)
+              : bar.options
+            ).map((name) => (
               <li
                 key={name}
                 role="button"
@@ -1243,6 +1301,8 @@ export default function App() {
             name="barSelect"
             autoFocus
             autoComplete="off"
+            value={selectQuery}
+            onChange={(event) => setSelectQuery(event.target.value)}
             placeholder="new-branch-name"
             aria-label="New branch name"
             data-testid="branch-new-input"
