@@ -1052,39 +1052,6 @@ input[type="checkbox"] {
   flex-direction: column;
 }
 
-.ds-notes-panel {
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ds-notes-panel ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.ds-notes-panel li {
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  transition: background 120ms ease-out;
-}
-
-.ds-notes-panel li:hover {
-  background: var(--surface-warm);
-  color: var(--fg);
-}
-
-.ds-notes-panel li.active {
-  background: var(--surface-warm);
-  color: var(--fg);
-  font-weight: 600;
-}
-
 .pane-head {
   display: flex;
   align-items: center;
