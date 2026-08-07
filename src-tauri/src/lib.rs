@@ -2,6 +2,7 @@ mod executor;
 mod git;
 mod integrations;
 mod pidguard;
+mod settings;
 mod store;
 mod terminal;
 
@@ -21,8 +22,9 @@ struct DirEntry {
     path: String,
 }
 
-/// Notes live inside the target project, so every note command resolves the
-/// project's root from the global index rather than trusting the frontend.
+/// Resolves a project's root from the global index rather than trusting the
+/// frontend — used by every command that reads/writes inside the project
+/// filesystem (file editing, git, Graphify, format-on-save).
 fn project_root(hash: &str) -> Res<PathBuf> {
     let home = floo_home();
     store::list_projects(&home)?
@@ -47,6 +49,19 @@ fn switch_project(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, has
     let project = store::touch_project(&floo_home(), &hash)?;
     start_watcher(&app, &harness, &project);
     ensure_graphify_mcp(&app, &harness, &project);
+
+    let root = Path::new(&project.root);
+    // Auto-create .project-settings.json (D14/D15) so there's always a real
+    // file to open from the settings button — a no-op once it exists.
+    if let Err(message) = settings::ensure_file(root) {
+        let _ = app.emit("harness-warning", message);
+    }
+    // Surface malformed settings immediately on load, rather than only when
+    // a save or an executor-override lookup happens to re-read them.
+    let (_, warning) = settings::load(root);
+    if let Some(message) = warning {
+        let _ = app.emit("harness-warning", message);
+    }
     Ok(project)
 }
 
@@ -55,13 +70,13 @@ fn switch_project(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, has
 /// a pre-injected summary. A missing `graphify-mcp` binary or no detected
 /// executor is skipped silently — the general `graphify` PATH warning
 /// already covers a missing install. A registration failure (e.g. an
-/// unwritable project dir) surfaces through the same `graphify-warning`
+/// unwritable project dir) surfaces through the same `harness-warning`
 /// event a failed watcher spawn already uses.
 fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
     let Some(bin) = executor::find_on_path("graphify-mcp") else {
         return;
     };
-    let Ok((kind, _)) = selected_executor(harness) else {
+    let Ok((kind, _)) = selected_executor(app, harness, &project.hash) else {
         return;
     };
 
@@ -74,7 +89,7 @@ fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harnes
         }
     };
     if let Err(message) = result {
-        let _ = app.emit("graphify-warning", format!("Graphify MCP registration failed: {message}"));
+        let _ = app.emit("harness-warning", format!("Graphify MCP registration failed: {message}"));
     }
 }
 
@@ -84,7 +99,7 @@ fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harnes
 /// warning, so it's silently skipped here rather than also flashing a
 /// one-off error every time the user switches projects; a watcher that
 /// fails to spawn for some other reason, or crashes later, surfaces once
-/// through the `graphify-warning` event instead.
+/// through the `harness-warning` event instead.
 fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
     let mut slot = harness.watch.lock().unwrap();
     *slot = None;
@@ -103,7 +118,7 @@ fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, pr
             let _ = app_update.emit("graphify-updated", &hash_update);
         },
         move |message| {
-            let _ = app_crash.emit("graphify-warning", message);
+            let _ = app_crash.emit("harness-warning", message);
         },
     ));
 }
@@ -163,26 +178,6 @@ fn append_message(
 #[tauri::command]
 fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
     store::read_thread(&floo_home(), &project_hash, &thread_id)
-}
-
-#[tauri::command]
-fn create_note(project_hash: String, name: String) -> Res<String> {
-    store::create_note(&project_root(&project_hash)?, &name)
-}
-
-#[tauri::command]
-fn list_notes(project_hash: String) -> Res<Vec<String>> {
-    store::list_notes(&project_root(&project_hash)?)
-}
-
-#[tauri::command]
-fn read_note(project_hash: String, name: String) -> Res<String> {
-    store::read_note(&project_root(&project_hash)?, &name)
-}
-
-#[tauri::command]
-fn write_note(project_hash: String, name: String, content: String) -> Res<()> {
-    store::write_note(&project_root(&project_hash)?, &name, &content)
 }
 
 // ------------------------------------------------------- executor handoff
@@ -245,7 +240,41 @@ fn preflight(harness: tauri::State<'_, Harness>, refresh: bool) -> Preflight {
     cached.clone().expect("preflight just populated")
 }
 
-fn selected_executor(harness: &tauri::State<'_, Harness>) -> Res<(Kind, PathBuf)> {
+/// Pure decision: which executor a project should use, given a preflight
+/// snapshot and an optional `project-settings.json` override (D15). Only
+/// errors when nothing is usable at all — no override, and auto-detection
+/// found neither executor. An override naming an executor that isn't
+/// installed doesn't error; it falls back to auto-detection and returns a
+/// warning for the caller to surface, rather than leaving the project in
+/// chat-only mode.
+fn resolve_executor(flight: &Preflight, override_kind: Option<Kind>) -> Res<(Kind, Option<String>)> {
+    let auto = || flight.selected.ok_or("No executor found on PATH — chat-only mode.".to_string());
+    match override_kind {
+        Some(wanted) => {
+            let installed = match wanted {
+                Kind::Claude => flight.claude.is_some(),
+                Kind::Codex => flight.codex.is_some(),
+            };
+            if installed {
+                Ok((wanted, None))
+            } else {
+                let warning = format!(
+                    "project-settings.json requests {wanted:?}, but it's not on PATH — falling back to auto-detection."
+                );
+                Ok((auto()?, Some(warning)))
+            }
+        }
+        None => Ok((auto()?, None)),
+    }
+}
+
+/// Resolves which executor a project uses and its binary path, applying
+/// `resolve_executor`'s decision against the live preflight cache.
+fn selected_executor(
+    app: &tauri::AppHandle,
+    harness: &tauri::State<'_, Harness>,
+    project_hash: &str,
+) -> Res<(Kind, PathBuf)> {
     let flight = {
         let mut cached = harness.preflight.lock().unwrap();
         if cached.is_none() {
@@ -253,7 +282,13 @@ fn selected_executor(harness: &tauri::State<'_, Harness>) -> Res<(Kind, PathBuf)
         }
         cached.clone().expect("preflight just populated")
     };
-    let kind = flight.selected.ok_or("No executor found on PATH — chat-only mode.")?;
+    let override_kind = project_root(project_hash)
+        .ok()
+        .and_then(|root| settings::load(&root).0.executor_override);
+    let (kind, warning) = resolve_executor(&flight, override_kind)?;
+    if let Some(message) = warning {
+        let _ = app.emit("harness-warning", message);
+    }
     let path = match kind {
         Kind::Claude => flight.claude,
         Kind::Codex => flight.codex,
@@ -271,7 +306,7 @@ fn ensure_session(
     mode: &str,
     carry_forward: bool,
 ) -> Res<()> {
-    let (kind, bin) = selected_executor(harness)?;
+    let (kind, bin) = selected_executor(app, harness, project_hash)?;
     let mut slot = harness.session.lock().unwrap();
 
     let matches_thread = slot
@@ -328,7 +363,7 @@ fn send_message(
     mode: String,
 ) -> Res<Message> {
     let message = store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content)?;
-    if selected_executor(&harness).is_err() {
+    if selected_executor(&app, &harness, &project_hash).is_err() {
         // Chat-only mode: the turn is still recorded, nothing answers it.
         return Ok(message);
     }
@@ -719,21 +754,37 @@ fn read_file_content(project_hash: String, relative_path: String) -> Res<String>
         .map_err(|err| format!("cannot read file: {err}"))
 }
 
+/// Resolves `relative_path` against `root` for writing. Unlike reading, the
+/// file itself may not exist yet (creating a new file is valid), so only
+/// its *parent* directory — which must already exist — is canonicalized and
+/// boundary-checked, not the file.
+fn resolve_writable_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
+    let target = root.join(relative_path);
+    let parent = target.parent().ok_or("invalid file path")?;
+    let resolved_parent = std::fs::canonicalize(parent)
+        .map_err(|err| format!("no such directory: {} ({err})", parent.display()))?;
+    if !resolved_parent.starts_with(root) {
+        return Err("path must stay inside the project".into());
+    }
+    let file_name = target.file_name().ok_or("invalid file path")?;
+    Ok(resolved_parent.join(file_name))
+}
+
+/// Saves the file (creating it if it doesn't exist yet), then runs any
+/// matching `formatOnSave` command (D14) and returns a summary of what it
+/// did — `None` when no pattern matched.
 #[tauri::command]
 fn write_file_content(
     project_hash: String,
     relative_path: String,
     content: String,
-) -> Res<()> {
+) -> Res<Option<String>> {
     let root = project_root(&project_hash)?;
-    let target = root.join(&relative_path);
-    let resolved = std::fs::canonicalize(&target)
-        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
-    if !resolved.starts_with(&root) {
-        return Err("path must stay inside the project".into());
-    }
-    std::fs::write(&resolved, content)
-        .map_err(|err| format!("cannot write file: {err}"))
+    let resolved = resolve_writable_path(&root, &relative_path)?;
+    std::fs::write(&resolved, content).map_err(|err| format!("cannot write file: {err}"))?;
+
+    let (settings, _) = settings::load(&root);
+    Ok(settings::run_format_on_save(&settings, &root, &relative_path))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -765,10 +816,6 @@ pub fn run() {
             delete_thread,
             append_message,
             read_thread,
-            create_note,
-            list_notes,
-            read_note,
-            write_note,
             preflight,
             send_message,
             go_mode,
@@ -808,4 +855,87 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flight(claude: Option<&str>, codex: Option<&str>, selected: Option<Kind>) -> Preflight {
+        Preflight {
+            claude: claude.map(str::to_string),
+            codex: codex.map(str::to_string),
+            selected,
+            openspec: true,
+            grill_apply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: vec![],
+            checked_at: "2026-08-07T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn no_override_uses_auto_detection() {
+        let flight = flight(Some("/usr/bin/claude"), Some("/usr/bin/codex"), Some(Kind::Claude));
+        let (kind, warning) = resolve_executor(&flight, None).unwrap();
+        assert_eq!(kind, Kind::Claude);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn an_installed_override_wins_over_auto_detection() {
+        // Claude wins auto-detection when both are present, but the override
+        // must still be able to force Codex.
+        let flight = flight(Some("/usr/bin/claude"), Some("/usr/bin/codex"), Some(Kind::Claude));
+        let (kind, warning) = resolve_executor(&flight, Some(Kind::Codex)).unwrap();
+        assert_eq!(kind, Kind::Codex);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn an_override_naming_an_uninstalled_executor_falls_back_and_warns() {
+        let flight = flight(Some("/usr/bin/claude"), None, Some(Kind::Claude));
+        let (kind, warning) = resolve_executor(&flight, Some(Kind::Codex)).unwrap();
+        assert_eq!(kind, Kind::Claude, "must fall back to auto-detection, not error");
+        assert!(warning.unwrap().contains("Codex"));
+    }
+
+    #[test]
+    fn an_override_with_no_executors_installed_at_all_still_errors() {
+        let flight = flight(None, None, None);
+        assert!(resolve_executor(&flight, Some(Kind::Claude)).is_err());
+    }
+
+    #[test]
+    fn no_override_and_nothing_installed_errors() {
+        let flight = flight(None, None, None);
+        let error = resolve_executor(&flight, None).unwrap_err();
+        assert!(error.contains("chat-only"));
+    }
+
+    #[test]
+    fn resolve_writable_path_allows_creating_a_brand_new_file() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let resolved = resolve_writable_path(&canonical_root, "new-file.json").unwrap();
+        assert_eq!(resolved, canonical_root.join("new-file.json"));
+        assert!(!resolved.exists(), "must not require the file to already exist");
+    }
+
+    #[test]
+    fn resolve_writable_path_rejects_a_parent_directory_that_does_not_exist() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        assert!(resolve_writable_path(&canonical_root, "missing-dir/file.json").is_err());
+    }
+
+    #[test]
+    fn resolve_writable_path_rejects_a_parent_outside_the_project() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let error = resolve_writable_path(&canonical_root, "../escape.json").unwrap_err();
+        assert!(error.contains("stay inside"), "got {error}");
+    }
 }

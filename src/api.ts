@@ -198,15 +198,6 @@ export const gitDiscardFile = (projectHash: string, path: string, untracked: boo
 export const gitIsRepo = (projectHash: string) => invoke<boolean>("git_is_repo", { projectHash });
 export const gitInit = (projectHash: string) => invoke<void>("git_init", { projectHash });
 
-export const createNote = (projectHash: string, name: string) =>
-  invoke<string>("create_note", { projectHash, name });
-export const listNotes = (projectHash: string) =>
-  invoke<string[]>("list_notes", { projectHash });
-export const readNote = (projectHash: string, name: string) =>
-  invoke<string>("read_note", { projectHash, name });
-export const writeNote = (projectHash: string, name: string, content: string) =>
-  invoke<void>("write_note", { projectHash, name, content });
-
 // --------------------------------------------------------------- file tree
 
 export type DirEntry = {
@@ -224,8 +215,9 @@ export const listAllFiles = (projectHash: string) =>
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });
 
+/** Resolves to a format-on-save summary (D14), or `null` if nothing matched. */
 export const writeFileContent = (
   projectHash: string,
   relativePath: string,
   content: string,
-) => invoke<void>("write_file_content", { projectHash, relativePath, content });
+) => invoke<string | null>("write_file_content", { projectHash, relativePath, content });

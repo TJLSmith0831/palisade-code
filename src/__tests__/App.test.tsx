@@ -69,7 +69,6 @@ beforeEach(() => {
       });
     }
     if (cmd === "list_threads") return Promise.resolve([]);
-    if (cmd === "list_notes") return Promise.resolve([]);
     if (cmd === "preflight") {
       return Promise.resolve({
         claude: null,
@@ -159,7 +158,6 @@ describe("Top chrome (merged-design v2)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([{ id: "t1", projectHash: "proj-1", title: "Test Thread", createdAt: "2026-08-06T00:00:00Z", updatedAt: "2026-08-06T00:00:00Z", currentMode: "spec", openSpecChangeName: null, executorSessionId: null }]);
       if (cmd === "read_thread") return Promise.resolve([]);
-      if (cmd === "list_notes") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
@@ -300,7 +298,6 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
           },
         ]);
       }
-      if (cmd === "list_notes") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
           claude: null,
@@ -395,17 +392,78 @@ describe("Editor chrome (merged-design v2)", () => {
   });
 });
 
+describe("Settings button (D14/D15)", () => {
+  it("opens an existing .project-settings.json in the editor without recreating it", async () => {
+    const writeCalls: unknown[] = [];
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "read_file_content") return Promise.resolve('{"formatOnSave":{}}');
+      if (cmd === "write_file_content") writeCalls.push(args);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    fireEvent.click(screen.getByTestId("open-settings"));
+
+    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain(".project-settings.json"));
+    expect(writeCalls).toHaveLength(0);
+  });
+
+  it("creates .project-settings.json with defaults when none exists yet", async () => {
+    const writeCalls: Record<string, unknown>[] = [];
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "read_file_content") return Promise.reject(new Error("no such file"));
+      if (cmd === "write_file_content") {
+        writeCalls.push(args ?? {});
+        return Promise.resolve(null);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    fireEvent.click(screen.getByTestId("open-settings"));
+
+    await waitFor(() => expect(writeCalls).toHaveLength(1));
+    expect(writeCalls[0].relativePath).toBe(".project-settings.json");
+    expect(String(writeCalls[0].content)).toContain("formatOnSave");
+    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain(".project-settings.json"));
+  });
+});
+
 describe("Right sidebar (merged-design v2)", () => {
   it("renders right sidebar", () => {
     render(<App />);
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("has Threads, Code Map, and Notes tabs", () => {
+  it("has Threads and Code Map tabs, and no leftover Notes tab", () => {
     render(<App />);
     expect(screen.getByTestId("tab-threads")).toBeDefined();
     expect(screen.getByTestId("tab-codemap")).toBeDefined();
-    expect(screen.getByTestId("tab-notes")).toBeDefined();
+    expect(screen.queryByTestId("tab-notes")).toBeNull();
   });
 
   it("has no leftover Files tab (superseded by the file explorer column)", () => {
@@ -537,7 +595,6 @@ describe("Project switching", () => {
         return Promise.resolve(hash === projB.hash ? projB : projA);
       }
       if (cmd === "list_threads") return Promise.resolve([]);
-      if (cmd === "list_notes") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
           claude: null,

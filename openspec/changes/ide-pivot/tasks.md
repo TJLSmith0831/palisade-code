@@ -78,18 +78,18 @@
 
 ## 7. project-settings.json
 
-- [ ] 7.1 Create a `settings.rs` module: `load(project_root) -> ProjectSettings` with `#[serde(default)]` on all fields; `formatOnSave: HashMap<String, String>`, `executorOverride: Option<Kind>`; handle malformed JSON with a non-fatal warning + defaults
-- [ ] 7.2 Wire `executorOverride` into `selected_executor` (lib.rs:216) — checked before auto-detection; warn + fall back if override names an executor not on PATH
-- [ ] 7.3 Wire `formatOnSave` into the editor save path — match saved file path against globs, run the matched command, surface output in the terminal pane or a toast
-- [ ] 7.4 Read `project-settings.json` from project root on `switch_project` (lib.rs:43)
-- [ ] 7.5 Verify: settings present → applied; absent → defaults; malformed → warning + defaults; override to missing executor → warning + auto-detect; format-on-save runs + output surfaces; gitignoreable
-- [ ] 7.6 Add tests: load with all fields, load with empty file, load with malformed JSON, override resolution (set/missing/fallback), format-on-save glob match + no-match
+- [x] 7.1 Create a `settings.rs` module: `load(project_root) -> ProjectSettings` with `#[serde(default)]` on all fields; `formatOnSave: HashMap<String, String>`, `executorOverride: Option<Kind>`; handle malformed JSON with a non-fatal warning + defaults — implemented with a container-level `#[serde(default)]` (equivalent to per-field); also added `ensure_file` to auto-create the file with defaults on project open (mid-build addition, see D15)
+- [x] 7.2 Wire `executorOverride` into `selected_executor` (lib.rs:216) — checked before auto-detection; warn + fall back if override names an executor not on PATH — decision logic extracted into a pure `resolve_executor(flight, override_kind)` for unit testing without a live Tauri harness
+- [x] 7.3 Wire `formatOnSave` into the editor save path — **corrected to regex, not globs**: D14's own shape example uses regex (`"\\.rs$"`), so `format_on_save` keys are regex patterns (added the `regex` crate). Runs the matched shell command via `sh -c` (cwd = project root, saved path appended as a shell-quoted final argument) and returns a summary string; `FileEditorPane` surfaces it inline next to the "Saved" indicator (toast-style, auto-dismisses)
+- [x] 7.4 Read `project-settings.json` from project root on `switch_project` (lib.rs:43) — **renamed to `.project-settings.json`** (dotfile, D15 revision) partway through the build; `switch_project` also now calls `settings::ensure_file` so the file always exists after a project is opened, surfacing a malformed-JSON warning via a renamed generic `harness-warning` event (was `graphify-warning`, now shared by MCP/watcher/settings warnings)
+- [x] 7.5 Verify: settings present → applied; absent → defaults; malformed → warning + defaults; override to missing executor → warning + auto-detect; format-on-save runs + output surfaces; gitignoreable — verified via `cargo test`/`pnpm test` (real `sh` process execution in tests, not mocked) plus live reproduction of the original `write_file_content`-can't-create-a-new-file bug this surfaced (fixed, see D15 implementation note)
+- [x] 7.6 Add tests: load with all fields, load with empty file, load with malformed JSON, override resolution (set/missing/fallback), format-on-save glob match + no-match — `settings.rs` + `lib.rs` test modules; also added a settings-button UI test and `resolve_writable_path` tests for the create-new-file fix
 
 ## 8. Notes removal (last, isolated)
 
-- [ ] 8.1 Remove the Notes UI from the right sidebar (tab + related state/handlers in `App.tsx`)
-- [ ] 8.2 Remove `create_note`/`list_notes`/`read_note`/`write_note` Tauri commands from `lib.rs` and their registrations in the invoke handler
-- [ ] 8.3 Remove `store::create_note`/`list_notes`/`read_note`/`write_note` and the `project_root` helper if it becomes unused (check other callers first — it's used by `write_file_content`)
-- [ ] 8.4 Remove the `api.ts` note functions and any note-related tests
-- [ ] 8.5 Verify existing `.md` note files in projects remain openable as regular files in the editor
-- [ ] 8.6 Run `pnpm build` and `cd src-tauri && cargo test` to confirm no dangling references
+- [x] 8.1 Remove the Notes UI from the right sidebar (tab + related state/handlers in `App.tsx`)
+- [x] 8.2 Remove `create_note`/`list_notes`/`read_note`/`write_note` Tauri commands from `lib.rs` and their registrations in the invoke handler
+- [x] 8.3 Remove `store::create_note`/`list_notes`/`read_note`/`write_note` and the `project_root` helper if it becomes unused (check other callers first — it's used by `write_file_content`) — `project_root` confirmed still in heavy use (file tree, git, Graphify, settings), kept
+- [x] 8.4 Remove the `api.ts` note functions and any note-related tests
+- [x] 8.5 Verify existing `.md` note files in projects remain openable as regular files in the editor — unaffected; the generic file editor already opens any file type by path
+- [x] 8.6 Run `pnpm build` and `cd src-tauri && cargo test` to confirm no dangling references — ran `tsc --noEmit`/`vitest run`/`cargo build`/`cargo test`, all clean

@@ -85,10 +85,11 @@ New decisions appended here as Phase 1 grilling resolves them.
 - **Source**: user (revised from earlier recommendation)
 
 ## D15: Settings file
-- **Decision**: Project-level settings live in `project-settings.json` (name TBD, user suggested this direction). It's a protected, first-class config the IDE reads on project load — not a loose hook file. Format-on-save mappings (D14) live here. IDE works without it (fallbacks) but treats it as the authoritative project config when present.
-- **Why**: User wants the settings surface to feel like a real project config (protected, must-be-set-able, IDE-shaping) rather than a peripheral hook file. Fallbacks ensure the IDE still works on projects without one.
+- **Decision**: Project-level settings live in `.project-settings.json` (dotfile — finalized name, revised from the earlier TBD `project-settings.json`). It's a protected, first-class config the IDE reads on project load — not a loose hook file. Format-on-save mappings (D14) live here. `switch_project` auto-creates it with self-documenting defaults (`{"formatOnSave": {}, "executorOverride": null}`) the moment a project is opened if it doesn't exist yet, so there's always a real file to edit rather than a "create it yourself" gap. A gear-icon button in the top chrome opens it directly in the editor (also creating it on click, as a fallback for the rare case it was deleted after the fact). Every reader (`load`, format-on-save, executor-override resolution) still tolerates it being missing or malformed regardless — the auto-create is a convenience, not a new requirement.
+- **Why**: User wants the settings surface to feel like a real project config (protected, must-be-set-able, IDE-shaping) rather than a peripheral hook file, and discoverable without having to know the filename or hand-create it. Fallbacks ensure the IDE still works on projects without one (or with a hand-broken one).
 - **Source**: user
 - **v1 residents**: format-on-save mappings (D14) + executor override (force `claude`/`codex` per-project instead of machine-specific auto-detect). Other settings (graphify MCP toggle, default mode, terminal shell, ignored paths) move in as features land.
+- **Implementation note**: fixed a latent bug surfaced by this feature — `write_file_content` previously canonicalized the *target file* itself before writing, which requires the file to already exist, so it could never create a new file (any "create" attempt failed with "no such file"). Fixed by canonicalizing the parent directory instead and joining the (possibly new) filename, preserving the same project-boundary check.
 
 ## D16: Definition of done
 - **Decision**: The change is complete when all of the following are true:

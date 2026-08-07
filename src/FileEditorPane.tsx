@@ -27,6 +27,7 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [formatResult, setFormatResult] = useState<string | null>(null);
 
   const save = useCallback(() => {
     const view = viewRef.current;
@@ -34,14 +35,19 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
     const after = view.state.doc.toString();
     setSaving(true);
     setError(null);
+    setFormatResult(null);
     api
       .writeFileContent(projectHash, path, after)
-      .then(() => {
+      .then((format) => {
         onSaveRef.current?.({ path, before: content ?? "", after });
         setContent(after);
         setDirty(false);
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
+        if (format) {
+          setFormatResult(format);
+          setTimeout(() => setFormatResult(null), 4000);
+        }
       })
       .catch((err) => setError(String(err)))
       .finally(() => setSaving(false));
@@ -126,6 +132,11 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
       <div className="ds-editor-toolbar">
         <span className="ds-editor-path">{path}</span>
         <span className="ds-editor-spacer" />
+        {formatResult && (
+          <span className="ds-editor-format-result" data-testid="format-on-save-result">
+            {formatResult}
+          </span>
+        )}
         {saved && <span className="ds-editor-saved">Saved</span>}
         <button className="ds-editor-save-btn" onClick={save} disabled={!dirty || saving}>
           {saving ? "Saving…" : dirty ? "Save *" : "Save"}

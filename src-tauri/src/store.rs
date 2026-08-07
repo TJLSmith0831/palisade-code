@@ -1,5 +1,5 @@
 //! On-disk state for Floo Network: the global project index, per-project
-//! thread sidecars, append-only JSONL session logs, and project-root notes.
+//! thread sidecars, and append-only JSONL session logs.
 //!
 //! Every function takes the floo home directory explicitly rather than
 //! reading it from the environment, so tests can point at a tempdir without
@@ -7,7 +7,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -373,68 +373,6 @@ fn log_corrupt_line(home: &Path, thread_id: &str, offset: usize) {
     }
 }
 
-// ------------------------------------------------------------------- notes
-
-/// Notes live in `<project-root>/notes/`. Reject any name that could escape it.
-fn note_path(project_root: &Path, name: &str) -> Res<PathBuf> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("note name is empty".into());
-    }
-    let rel = Path::new(name);
-    if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
-        return Err(format!("invalid note name: {name}"));
-    }
-    let mut rel = rel.to_path_buf();
-    if rel.extension().is_none() {
-        rel.set_extension("md");
-    }
-    Ok(project_root.join("notes").join(rel))
-}
-
-/// Write a new note immediately (no approval gate) and return its path.
-pub fn create_note(project_root: &Path, name: &str) -> Res<String> {
-    let path = note_path(project_root, name)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| e("create notes dir", err))?;
-    }
-    if !path.exists() {
-        let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        fs::write(&path, format!("# {title}\n\n")).map_err(|err| e("write note", err))?;
-    }
-    Ok(path.to_string_lossy().to_string())
-}
-
-pub fn list_notes(project_root: &Path) -> Res<Vec<String>> {
-    let dir = project_root.join("notes");
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(err) => return Err(e("read notes dir", err)),
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|entry| entry.path().is_file())
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect();
-    names.sort();
-    Ok(names)
-}
-
-pub fn read_note(project_root: &Path, name: &str) -> Res<String> {
-    let path = note_path(project_root, name)?;
-    fs::read_to_string(&path).map_err(|err| e(&format!("read {}", path.display()), err))
-}
-
-/// Auto-save path for hand-edits — same guard, no re-prompt.
-pub fn write_note(project_root: &Path, name: &str, content: &str) -> Res<()> {
-    let path = note_path(project_root, name)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| e("create notes dir", err))?;
-    }
-    fs::write(&path, content).map_err(|err| e("write note", err))
-}
-
 // ------------------------------------------------------------------- tests
 
 #[cfg(test)]
@@ -645,27 +583,4 @@ mod tests {
         assert_eq!(renamed.title, "new");
     }
 
-    #[test]
-    fn notes_land_under_the_project_root_and_cannot_escape() {
-        let repo = tempfile::tempdir().unwrap();
-        let path = create_note(repo.path(), "design ideas").unwrap();
-        assert!(path.ends_with("notes/design ideas.md"), "got {path}");
-        assert_eq!(list_notes(repo.path()).unwrap(), vec!["design ideas.md"]);
-
-        write_note(repo.path(), "design ideas", "# edited\n").unwrap();
-        assert_eq!(read_note(repo.path(), "design ideas").unwrap(), "# edited\n");
-
-        assert!(create_note(repo.path(), "../escape.md").is_err());
-        assert!(create_note(repo.path(), "/etc/passwd").is_err());
-        assert!(create_note(repo.path(), "  ").is_err());
-    }
-
-    #[test]
-    fn creating_an_existing_note_does_not_clobber_it() {
-        let repo = tempfile::tempdir().unwrap();
-        create_note(repo.path(), "keep.md").unwrap();
-        write_note(repo.path(), "keep.md", "important").unwrap();
-        create_note(repo.path(), "keep.md").unwrap();
-        assert_eq!(read_note(repo.path(), "keep.md").unwrap(), "important");
-    }
 }

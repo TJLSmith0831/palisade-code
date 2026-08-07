@@ -3,9 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import MDEditor from "@uiw/react-md-editor";
-import "@uiw/react-md-editor/markdown-editor.css";
-import "@uiw/react-markdown-preview/markdown.css";
 
 import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
@@ -32,6 +29,19 @@ const SidebarIcon = ({ side }: { side: "left" | "right" }) => (
       stroke="currentColor"
       strokeWidth="1.3"
     />
+  </svg>
+);
+
+// Standard gear/cog glyph (Heroicons Cog6Tooth outline), stroke-only to
+// match the weight of the sidebar/terminal icons alongside it.
+const SettingsIcon = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"
+    />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
   </svg>
 );
 
@@ -67,6 +77,18 @@ const bindDrag = (handle: UseResizableResult["handleProps"], cursor: "col-resize
     window.addEventListener("pointerup", onUp);
   };
 
+// D15: .project-settings.json's known v1 shape. The backend auto-creates
+// this on every project open (settings::ensure_file); this is only a
+// fallback for the rare case a project's file was deleted after the fact
+// and the user re-opens it via the settings button before switching
+// projects again.
+const DEFAULT_PROJECT_SETTINGS = `{
+  "formatOnSave": {},
+  "executorOverride": null
+}
+`;
+const PROJECT_SETTINGS_FILE = ".project-settings.json";
+
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
 const THEME_KEY = "floo:theme";
@@ -86,12 +108,9 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [thread, setThread] = useState<ThreadMeta | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [notes, setNotes] = useState<string[]>([]);
   const [branches, setBranches] = useState<api.BranchInfo[]>([]);
-  const [note, setNote] = useState<{ name: string; content: string } | null>(null);
-  const [notePane, setNotePane] = useState<"edit" | "preview">("edit");
-  // One reusable command bar: new note, rename project, rename thread, and
-  // now confirming a delete. `window.prompt`/`confirm` are no-ops in
+  // One reusable command bar: rename project, rename thread, and confirming
+  // a delete. `window.prompt`/`confirm` are no-ops in
   // Tauri's WKWebView — they return null without ever showing a dialog —
   // so anything that needs a line of text, or a yes/no from the user, has
   // to go through this.
@@ -109,7 +128,7 @@ export default function App() {
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("editor");
-  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "notes" | "terminal">("threads");
+  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">("threads");
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
     () => (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) || "bottom",
   );
@@ -210,15 +229,10 @@ export default function App() {
       try {
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
-        setNote(null);
         setSelectedFile(null);
         setFileEdits([]);
-        const [found, noteNames] = await Promise.all([
-          api.listThreads(refreshed.hash),
-          api.listNotes(refreshed.hash),
-        ]);
+        const found = await api.listThreads(refreshed.hash);
         setThreads(found);
-        setNotes(noteNames);
         await refreshBranches(refreshed.hash);
         const remembered = localStorage.getItem(lastThreadKey(refreshed.hash));
         await selectThread(refreshed.hash, found.find((t) => t.id === remembered) ?? found[0] ?? null);
@@ -270,6 +284,24 @@ export default function App() {
     });
   };
 
+  // Opens project-settings.json (D14/D15) in the editor, creating it with a
+  // self-documenting default first if the project doesn't have one yet.
+  const onOpenSettings = async () => {
+    if (!project) return;
+    try {
+      await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE);
+    } catch {
+      try {
+        await api.writeFileContent(project.hash, PROJECT_SETTINGS_FILE, DEFAULT_PROJECT_SETTINGS);
+      } catch (err) {
+        fail(err);
+        return;
+      }
+    }
+    setChatTab("editor");
+    setSelectedFile(PROJECT_SETTINGS_FILE);
+  };
+
   // ---------------------------------------------------------------- branch
 
   const onOpenBranchPicker = () => {
@@ -310,7 +342,6 @@ export default function App() {
     try {
       const created = await api.createThread(project.hash, "New thread");
       setThreads(await api.listThreads(project.hash));
-      setNote(null);
       setChatTab("chat");
       await selectThread(project.hash, created);
     } catch (err) {
@@ -414,7 +445,7 @@ export default function App() {
     });
     // A graphify watch spawn failure or crash — the routine "not on PATH"
     // case is already covered by the persistent preflight warning banner.
-    const warned = listen<string>("graphify-warning", ({ payload }) => fail(payload));
+    const warned = listen<string>("harness-warning", ({ payload }) => fail(payload));
     return () => {
       streaming.then((un) => un());
       updated.then((un) => un());
@@ -482,47 +513,6 @@ export default function App() {
     }
   };
 
-  // ----------------------------------------------------------------- notes
-
-  const openNote = useCallback(
-    async (projectHash: string, name: string) => {
-      try {
-        setNote({ name, content: await api.readNote(projectHash, name) });
-        setNotePane("edit");
-      } catch (err) {
-        fail(err);
-      }
-    },
-    [],
-  );
-
-  const onCreateNote = async (rawName: string) => {
-    if (!project || !rawName.trim()) return;
-    try {
-      const path = await api.createNote(project.hash, rawName.trim());
-      setNotes(await api.listNotes(project.hash));
-      setBar(null);
-      rightPanel.setCollapsed(false);
-      setRightTab("notes");
-      await openNote(project.hash, path.split("/").pop()!);
-    } catch (err) {
-      fail(err);
-    }
-  };
-
-  // Auto-save hand-edits — no confirmation, no re-prompt.
-  const saveTimer = useRef<number | undefined>(undefined);
-  const onEditNote = (content: string) => {
-    if (!project || !note) return;
-    setNote({ ...note, content });
-    window.clearTimeout(saveTimer.current);
-    const { hash } = project;
-    const { name } = note;
-    saveTimer.current = window.setTimeout(() => {
-      api.writeNote(hash, name, content).catch(fail);
-    }, 300);
-  };
-
   // Cached per project hash so reopening the palette doesn't re-walk the tree.
   const openFilePalette = useCallback(async () => {
     if (!project) return;
@@ -541,13 +531,8 @@ export default function App() {
     }
   }, [project]);
 
-  // ⌘N opens the note command bar from anywhere.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        if (project) setBar({ kind: "input", label: "New note", value: "", submit: onCreateNote });
-      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
         event.preventDefault();
         openFilePalette();
@@ -568,7 +553,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [project, onCreateNote, openFilePalette, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
+  }, [openFilePalette, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
 
   // ------------------------------------------------------------------ view
 
@@ -628,6 +613,15 @@ export default function App() {
               data-testid="toggle-terminal"
             >
               <TerminalIcon />
+            </button>
+            <button
+              className="ds-icon-btn"
+              onClick={onOpenSettings}
+              disabled={!project}
+              title="Open project-settings.json"
+              data-testid="open-settings"
+            >
+              <SettingsIcon />
             </button>
             <button
               className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
@@ -724,40 +718,7 @@ export default function App() {
             <span className="ds-crumb-sep">/</span>
             <span className="ds-crumb-active">{selectedFile ?? "console"}</span>
           </div>
-          {note ? (
-            <>
-              <div className="pane-head">
-                <strong data-testid="note-name">{note.name}</strong>
-                <div className="tabs">
-                  <button
-                    className={notePane === "edit" ? "on" : ""}
-                    onClick={() => setNotePane("edit")}
-                    data-testid="note-edit-tab"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className={notePane === "preview" ? "on" : ""}
-                    onClick={() => setNotePane("preview")}
-                    data-testid="note-preview-tab"
-                  >
-                    Preview
-                  </button>
-                </div>
-                <div className="spacer" />
-                <button onClick={() => setNote(null)}>Close</button>
-              </div>
-              <div className="editor" data-testid="note-editor">
-                <MDEditor
-                  value={note.content}
-                  onChange={(value) => onEditNote(value ?? "")}
-                  preview={notePane}
-                  hideToolbar
-                  height="100%"
-                />
-              </div>
-            </>
-          ) : chatTab === "editor" ? (
+          {chatTab === "editor" ? (
             project ? (
               <FileEditorPane projectHash={project.hash} path={selectedFile} onSave={handleFileSave} />
             ) : (
@@ -986,13 +947,6 @@ export default function App() {
             >
               Codebase Map
             </button>
-            <button
-              className={rightTab === "notes" ? "active" : ""}
-              onClick={() => setRightTab("notes")}
-              data-testid="tab-notes"
-            >
-              Notes
-            </button>
             {terminalPlacement === "sidebar" && (
               <button
                 className={rightTab === "terminal" ? "active" : ""}
@@ -1015,7 +969,6 @@ export default function App() {
                       key={t.id}
                       className={t.id === thread?.id ? "active" : ""}
                       onClick={() => {
-                        setNote(null);
                         if (project) selectThread(project.hash, t);
                       }}
                     >
@@ -1061,29 +1014,6 @@ export default function App() {
                 placement={terminalPlacement}
                 onTogglePlacement={toggleTerminalPlacement}
               />
-            )}
-            {rightTab === "notes" && project && (
-              <div className="ds-notes-panel">
-                <button
-                  className="ds-new-thread"
-                  onClick={() => setBar({ kind: "input", label: "New note", value: "", submit: onCreateNote })}
-                  disabled={!project}
-                  data-testid="create-note"
-                >
-                  + Create note
-                </button>
-                <ul data-testid="note-list">
-                  {notes.map((name) => (
-                    <li
-                      key={name}
-                      className={name === note?.name ? "active" : ""}
-                      onClick={() => project && openNote(project.hash, name)}
-                    >
-                      <span className="ds-thread-title">{name}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
             )}
           </div>
         </aside>

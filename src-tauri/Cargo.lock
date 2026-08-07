@@ -1029,6 +1029,7 @@ dependencies = [
  "chrono",
  "dirs",
  "portable-pty",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

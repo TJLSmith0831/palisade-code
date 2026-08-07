@@ -780,6 +780,16 @@ input[type="checkbox"] {
   margin-right: 8px;
 }
 
+.ds-editor-format-result {
+  color: var(--muted);
+  margin-right: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
 .ds-editor-save-btn {
   padding: 2px 12px;
   border: 1px solid var(--border);
