@@ -265,10 +265,159 @@ input[type="checkbox"] {
   cursor: default;
 }
 
+/* Vibe/Editor workspace-shell toggle — layout switch only, independent of a
+   thread's own Spec/Go mode. Sits directly after the (native, non-DOM)
+   traffic lights, before the chrome utility cluster. */
+.ds-shell-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 2px;
+  margin-left: 5%;
+}
+
+.ds-shell-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all 120ms ease-out;
+}
+
+.ds-shell-toggle button.active {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.ds-shell-toggle button:not(.active):hover {
+  color: var(--fg);
+}
+
 .ds-chrome-utils {
   margin-left: auto;
   display: flex;
   gap: 4px;
+}
+
+/* Executor/model/bypass menu — executor is display-only (detection, not
+   config, per CLAUDE.md); model and bypass are the user-settable controls. */
+.ds-model-picker {
+  position: relative;
+}
+
+.ds-model-menu {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 50;
+}
+
+.ds-model-group-label {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 4px 6px 2px;
+}
+
+.ds-model-executor-row {
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.ds-model-opt {
+  display: block;
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.ds-model-opt:hover {
+  background: var(--surface-warm);
+}
+
+.ds-model-opt.selected {
+  color: var(--accent);
+}
+
+.ds-model-menu .hint {
+  padding: 6px 6px 2px;
+}
+
+.ds-bypass-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 6px 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.ds-bypass-label {
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.ds-bypass-sub {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.ds-switch {
+  width: 30px;
+  height: 17px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 9999px;
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  position: relative;
+}
+
+.ds-switch .knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 9999px;
+  background: var(--muted);
+  transition: all 120ms ease-out;
+}
+
+.ds-switch.on {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+.ds-switch.on .knob {
+  left: 15px;
+  background: var(--fg);
 }
 
 .ds-icon-btn {
@@ -379,6 +528,7 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .ds-rail-label {
@@ -481,6 +631,11 @@ input[type="checkbox"] {
   list-style: none;
   margin: 0;
   padding: 0;
+  /* Capped and independently scrollable so a long thread list can't push
+     the inline chat below it out of view. */
+  max-height: 220px;
+  overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .ds-threads-panel li {
@@ -1085,6 +1240,119 @@ input[type="checkbox"] {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+
+/* Lets the Vibe/Editor shell-toggle wrapper divs carry a data-testid without
+   participating in .body's flex layout — their children (nav/main/aside,
+   or the Vibe columns) stay direct flex items as if unwrapped. */
+.ds-shell-contents {
+  display: contents;
+}
+
+/* Collapsible disclosure shared by the Editor shell's "Threads & Codebase
+   Map" section and the Vibe shell's "File Explorer" section — collapsed by
+   default so chat/edited-files own the rail's height until expanded. */
+.ds-rail-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ds-rail-disclosure:hover {
+  color: var(--fg);
+}
+
+.ds-rail-disclosure .chev {
+  transition: transform 150ms ease-out;
+}
+
+.ds-rail-disclosure.open .chev {
+  transform: rotate(90deg);
+}
+
+.ds-rail-disclosure-body {
+  flex-shrink: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Vibe shell columns --------------------------------------------------- */
+
+.ds-vibe-chat {
+  flex: 1.6;
+  min-width: 380px;
+  display: flex;
+  flex-direction: column;
+  background: var(--editor-bg);
+}
+
+.ds-vibe-files {
+  flex: 1;
+  min-width: 300px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--editor-bg);
+}
+
+.ds-file-tabs {
+  display: flex;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.ds-file-tabs button {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  white-space: nowrap;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.ds-file-tabs button.active {
+  background: var(--editor-bg);
+  color: var(--fg);
+}
+
+.ds-vibe-explorer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Inline new-thread picker — replaces the pane-head/messages/composer in
+   whichever chat surface it's mounted in (spec: new-thread-mode-picker
+   requires this inline, not a modal dialog). */
+.ds-new-thread-picker {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
 }
 
 .pane-head {
@@ -2021,6 +2289,40 @@ details.graph-report-wrap > summary {
 .hint {
   font-size: 12px;
   color: var(--muted);
+}
+
+.ds-mode-picker {
+  display: flex;
+  gap: 10px;
+}
+
+.ds-mode-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ds-mode-card:hover {
+  border-color: var(--accent);
+  background: var(--surface-warm);
+}
+
+.ds-mode-card strong {
+  font-size: 13px;
+}
+
+.ds-mode-card span {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
 }
 
 .file-palette {

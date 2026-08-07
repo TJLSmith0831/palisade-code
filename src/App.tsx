@@ -85,6 +85,171 @@ const BranchIcon = () => (
   </svg>
 );
 
+// Shared chat surface: mounted as the Vibe shell's main column and as the
+// Editor shell's right-rail chat area (see openspec/changes/
+// vibe-editor-shell-redesign design.md Decision 2 — one component, two
+// mount points, rather than shell-specific duplicates). Shows the inline
+// Vibe/Spec new-thread picker in place of the thread view when active.
+type ChatSurfaceProps = {
+  project: Project | null;
+  thread: ThreadMeta | null;
+  messages: Message[];
+  live: ExecutorEvent[];
+  busy: boolean;
+  showThinking: boolean;
+  executor: Preflight["selected"] | null;
+  flightSelected: boolean;
+  draft: string;
+  setDraft: (value: string) => void;
+  onSend: () => void;
+  onRenameThread: (target: ThreadMeta) => void;
+  onSpec: () => void;
+  onGo: () => void;
+  dragActive: boolean;
+  newThreadPicker: boolean;
+  onPickMode: (mode: api.Mode) => void;
+};
+
+function ChatSurface({
+  project,
+  thread,
+  messages,
+  live,
+  busy,
+  showThinking,
+  executor,
+  flightSelected,
+  draft,
+  setDraft,
+  onSend,
+  onRenameThread,
+  onSpec,
+  onGo,
+  dragActive,
+  newThreadPicker,
+  onPickMode,
+}: ChatSurfaceProps) {
+  if (newThreadPicker) {
+    return (
+      <>
+        <div className="pane-head">
+          <strong>New thread</strong>
+        </div>
+        <div className="ds-new-thread-picker" data-testid="mode-picker">
+          <div className="ds-mode-picker">
+            <button className="ds-mode-card" onClick={() => onPickMode("go")} data-testid="pick-vibe" autoFocus>
+              <strong>Vibe</strong>
+              <span>Chat first — start building right away.</span>
+            </button>
+            <button className="ds-mode-card" onClick={() => onPickMode("spec")} data-testid="pick-spec">
+              <strong>Spec</strong>
+              <span>Plan first — read-only planning before code, via the grill flow.</span>
+            </button>
+          </div>
+          <span className="hint">You can switch modes any time from the composer.</span>
+        </div>
+      </>
+    );
+  }
+
+  if (!thread) {
+    return (
+      <p className="empty">{project ? "Create a thread to get started." : "Add a project to get started."}</p>
+    );
+  }
+
+  return (
+    <>
+      <div className="pane-head">
+        <strong data-testid="thread-title">{thread.title}</strong>
+        <button onClick={() => onRenameThread(thread)} data-testid="rename-thread">
+          Rename
+        </button>
+        {thread.openSpecChangeName && (
+          <span className="change-chip" data-testid="change-chip">
+            {thread.openSpecChangeName}
+          </span>
+        )}
+        <div className="spacer" />
+      </div>
+      {thread.currentMode === "spec" && (
+        <div className="spec-banner" data-testid="spec-banner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spec-icon">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+          </svg>
+          Spec Mode — read-only planning
+        </div>
+      )}
+      <div className="messages" data-testid="messages">
+        {(() => {
+          const items = filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "chat");
+          return (
+            <>
+              {items.length === 0 && <p className="empty">No messages yet.</p>}
+              <EventList items={items} showThinking={showThinking} executor={executor} />
+            </>
+          );
+        })()}
+        {busy && (
+          <div className="working" data-testid="working">
+            executor working
+            <span className="working-dots">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        )}
+      </div>
+      <form
+        className={`composer ${dragActive ? "drag-active" : ""}`}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+      >
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder={flightSelected ? "Message, or /propose" : "Chat-only — no executor on PATH"}
+          aria-label="Message"
+          data-testid="composer-input"
+        />
+        <div className="composer-mode-selector" data-testid="mode-selector">
+          <button
+            className={`ds-mode-btn ${thread.currentMode === "spec" ? "active" : ""}`}
+            onClick={() => thread.currentMode !== "spec" && onSpec()}
+            disabled={busy || !flightSelected}
+            data-testid="mode-spec"
+          >
+            Spec <kbd>S</kbd>
+          </button>
+          <button
+            className={`ds-mode-btn ${thread.currentMode === "go" ? "active" : ""}`}
+            onClick={() => thread.currentMode !== "go" && onGo()}
+            disabled={busy || !flightSelected}
+            data-testid="mode-go"
+          >
+            Go <kbd>G</kbd>
+          </button>
+        </div>
+        <button
+          type="submit"
+          className="send"
+          data-testid="composer-send"
+          disabled={busy}
+          aria-label="Send message"
+          title="Send message"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4z" />
+          </svg>
+        </button>
+      </form>
+    </>
+  );
+}
+
 // Keeps a resize drag alive after the pointer leaves the handle element.
 const bindDrag = (handle: UseResizableResult["handleProps"], cursor: "col-resize" | "row-resize") =>
   (down: ReactPointerEvent) => {
@@ -122,6 +287,11 @@ const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
 const THEME_KEY = "floo:theme";
 const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
+const MODEL_KEY = "floo:model";
+const BYPASS_KEY = "floo:bypass";
+// A stored preference only — not yet threaded into the executor invocation
+// (see openspec/changes/vibe-editor-shell-redesign design.md Non-Goals).
+const MODELS = ["Sonnet 5", "Opus 5", "Haiku 4.5"];
 type TerminalPlacement = "bottom" | "sidebar";
 type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme => (t === "auto" ? "light" : t === "light" ? "dark" : "auto");
@@ -148,6 +318,20 @@ export default function App() {
     | { kind: "select"; label: string; options: string[]; submit: (choice: string) => void }
     | null
   >(null);
+  // Shows the inline Vibe/Spec picker in the chat surface in place of the
+  // thread view — not part of `bar` since it isn't an overlay (spec:
+  // new-thread-mode-picker requires it inline, not a modal dialog).
+  const [newThreadPicker, setNewThreadPicker] = useState(false);
+  // Editor shell: Threads & Codebase Map collapsible disclosure, collapsed
+  // by default so chat owns the rail's height when idle (spec:
+  // editor-collapsible-rail).
+  const [editorRailOpen, setEditorRailOpen] = useState(false);
+  // Vibe shell: File Explorer collapsible disclosure in the right rail,
+  // collapsed by default (mirrors editorRailOpen's pattern).
+  const [vibeExplorerOpen, setVibeExplorerOpen] = useState(false);
+  // Vibe shell's Edited Files column: "changes" (diff/turn-history, default)
+  // or "file" (the currently selectedFile, opened from the File Explorer).
+  const [vibeFileTab, setVibeFileTab] = useState<"changes" | "file">("changes");
   // Live-filters the "select" bar's option list (branch picker) as the user
   // types, the same fuzzy-match convention FilePalette/TextSearchPalette use.
   const [selectQuery, setSelectQuery] = useState("");
@@ -166,7 +350,12 @@ export default function App() {
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
-  const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("editor");
+  const [centerTab, setCenterTab] = useState<"editor" | "diff">("editor");
+  // Which workspace shell is rendered — layout only, independent of a thread's
+  // own Spec/Go mode (see openspec/changes/vibe-editor-shell-redesign).
+  // Defaults to "editor" (today's layout) so existing users see no change
+  // until they opt into "vibe" via the toggle.
+  const [centerShell, setCenterShell] = useState<"vibe" | "editor">("editor");
   const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">("threads");
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
     () => (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) || "bottom",
@@ -223,6 +412,21 @@ export default function App() {
     }
   }, [terminalPlacement, rightPanel.setCollapsed, terminalPanel.toggleCollapsed]);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) || "auto");
+  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem(MODEL_KEY) || MODELS[0]);
+  const [bypassEnabled, setBypassEnabled] = useState<boolean>(() => localStorage.getItem(BYPASS_KEY) === "1");
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const onSelectModel = (model: string) => {
+    setSelectedModel(model);
+    localStorage.setItem(MODEL_KEY, model);
+    setModelMenuOpen(false);
+  };
+  const onToggleBypass = () => {
+    setBypassEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem(BYPASS_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -259,6 +463,7 @@ export default function App() {
 
   const selectThread = useCallback(async (projectHash: string, next: ThreadMeta | null) => {
     setThread(next);
+    setNewThreadPicker(false);
     if (!next) {
       setMessages([]);
       return;
@@ -376,7 +581,7 @@ export default function App() {
         return;
       }
     }
-    setChatTab("editor");
+    setCenterTab("editor");
     selectFile(PROJECT_SETTINGS_FILE);
   };
 
@@ -415,13 +620,25 @@ export default function App() {
 
   // --------------------------------------------------------------- threads
 
-  const onNewThread = async () => {
+  const onNewThread = () => {
     if (!project) return;
+    setNewThreadPicker(true);
+    // Collapse the Editor shell's disclosure so the picker (mounted in the
+    // always-visible chat area below it) is immediately visible.
+    setEditorRailOpen(false);
+  };
+
+  // Vibe/Spec is a friendlier front door onto the two modes that already
+  // exist — Vibe seeds go (chat first, build immediately), Spec seeds spec
+  // (today's read-only grill/plan flow). No third mode.
+  const onPickMode = async (mode: api.Mode) => {
+    if (!project) return;
+    setNewThreadPicker(false);
     try {
       const created = await api.createThread(project.hash, "New thread");
+      const updated = await api.setThreadMode(project.hash, created.id, mode);
       setThreads(await api.listThreads(project.hash));
-      setChatTab("chat");
-      await selectThread(project.hash, created);
+      await selectThread(project.hash, updated);
     } catch (err) {
       fail(err);
     }
@@ -742,6 +959,22 @@ export default function App() {
           onMouseDown={onTitlebarMouseDown}
         >
           <h1 className="sr-only">Floo Network</h1>
+          <div className="ds-shell-toggle" data-testid="shell-toggle" data-tauri-drag-region-exclude>
+            <button
+              className={centerShell === "vibe" ? "active" : ""}
+              onClick={() => setCenterShell("vibe")}
+              data-testid="shell-vibe"
+            >
+              Vibe
+            </button>
+            <button
+              className={centerShell === "editor" ? "active" : ""}
+              onClick={() => setCenterShell("editor")}
+              data-testid="shell-editor"
+            >
+              Editor
+            </button>
+          </div>
           <div className="ds-chrome-utils">
             <button
               className="ds-icon-btn"
@@ -792,6 +1025,52 @@ export default function App() {
             >
               <SettingsIcon />
             </button>
+            <div className="ds-model-picker" data-tauri-drag-region-exclude>
+              <button
+                className="ds-icon-btn"
+                onClick={() => setModelMenuOpen((open) => !open)}
+                title={`Model: ${selectedModel}${bypassEnabled ? " · bypass on" : ""}`}
+                data-testid="model-btn"
+              >
+                {selectedModel}
+              </button>
+              {modelMenuOpen && (
+                <div className="ds-model-menu" data-testid="model-menu">
+                  <div className="ds-model-group-label">Executor</div>
+                  <div className="ds-model-executor-row" data-testid="executor-row">
+                    {flight?.selected ?? "none detected"}
+                  </div>
+                  <div className="ds-model-group-label">Model</div>
+                  {MODELS.map((m) => (
+                    <button
+                      key={m}
+                      className={`ds-model-opt ${selectedModel === m ? "selected" : ""}`}
+                      onClick={() => onSelectModel(m)}
+                      data-testid={`model-opt-${m.toLowerCase().replace(/\s+/g, "-")}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                  <span className="hint">Stored preference — not yet wired to the executor.</span>
+                  <div className="ds-bypass-row">
+                    <div>
+                      <div className="ds-bypass-label">Bypass permissions</div>
+                      <div className="ds-bypass-sub">Skip approval prompts</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={`ds-switch ${bypassEnabled ? "on" : ""}`}
+                      onClick={onToggleBypass}
+                      aria-pressed={bypassEnabled}
+                      title="Toggle bypass permissions"
+                      data-testid="bypass-toggle"
+                    >
+                      <span className="knob" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
               onClick={() => api.preflight(true).then(setFlight, fail)}
@@ -834,330 +1113,438 @@ export default function App() {
       ))}
 
       <div className="body">
-        <nav
-          className="ds-nav-rail"
-          data-testid="nav-rail"
-          style={
-            {
-              "--rail-w": `${leftRail.size}px`,
-              marginLeft: leftRail.collapsed ? -leftRail.size : 0,
-            } as CSSProperties
-          }
-        >
-          {project && (
-            <FileTree
-              projectHash={project.hash}
-              projectName={project.displayName}
-              onSelectFile={selectFile}
-              activePath={selectedFile}
-              refreshToken={fileTreeRefreshToken}
-              onPathRenamed={onTreePathRenamed}
-              onPathDeleted={onTreePathDeleted}
-              onFilesChanged={onTreeFilesChanged}
-            />
-          )}
-        </nav>
+        {centerShell === "editor" ? (
+          <div className="ds-shell-contents" data-testid="editor-shell">
+            <nav
+              className="ds-nav-rail"
+              data-testid="nav-rail"
+              style={
+                {
+                  "--rail-w": `${leftRail.size}px`,
+                  marginLeft: leftRail.collapsed ? -leftRail.size : 0,
+                } as CSSProperties
+              }
+            >
+              {project && (
+                <FileTree
+                  projectHash={project.hash}
+                  projectName={project.displayName}
+                  onSelectFile={selectFile}
+                  activePath={selectedFile}
+                  refreshToken={fileTreeRefreshToken}
+                  onPathRenamed={onTreePathRenamed}
+                  onPathDeleted={onTreePathDeleted}
+                  onFilesChanged={onTreeFilesChanged}
+                />
+              )}
+            </nav>
 
-        {!leftRail.collapsed && (
-          <div
-            className="ds-resize-handle ds-resize-handle-x"
-            data-testid="resize-left-rail"
-            onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
-          />
-        )}
-
-        <main className="main">
-          <div className="ds-editor-tabs" data-testid="editor-tabs">
-            <button
-              className={`ds-tab ${chatTab === "editor" ? "active" : ""}`}
-              onClick={() => setChatTab("editor")}
-              data-testid="tab-editor"
-            >
-              Editor
-            </button>
-            <button
-              className={`ds-tab ${chatTab === "chat" ? "active" : ""}`}
-              onClick={() => setChatTab("chat")}
-              data-testid="tab-chat"
-            >
-              Console Chat
-            </button>
-            <button
-              className={`ds-tab diff ${chatTab === "diff" ? "active" : ""}`}
-              onClick={() => setChatTab("diff")}
-              data-testid="tab-diff"
-            >
-              Code Change Diff
-            </button>
-          </div>
-          <div className="ds-breadcrumbs" data-testid="breadcrumbs">
-            <span>{project?.displayName ?? "—"}</span>
-            {selectedFile && (
-              <>
-                <span className="ds-crumb-sep">/</span>
-                <span className="ds-crumb-active">{selectedFile}</span>
-              </>
-            )}
-          </div>
-          {chatTab === "editor" ? (
-            project ? (
-              <FileEditorPane
-                projectHash={project.hash}
-                path={selectedFile}
-                onSave={handleFileSave}
-                onDirtyChange={setEditorDirty}
+            {!leftRail.collapsed && (
+              <div
+                className="ds-resize-handle ds-resize-handle-x"
+                data-testid="resize-left-rail"
+                onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
               />
-            ) : (
-              <div className="ds-onboarding-empty" data-testid="onboarding-empty">
-                <h2>Floo Network</h2>
-                <p>
-                  Drive Claude Code or Codex against a real project — file tree, editor, git diff, and a
-                  live codebase map, with the agent working alongside you in the same files.
-                </p>
-                <button onClick={onAddProject}>+ Add a project to get started</button>
-              </div>
-            )
-          ) : chatTab === "diff" ? (
-            <div className="messages" data-testid="messages">
-              {project && <DiffPane projectHash={project.hash} />}
-              {(() => {
-                const threadEdits = thread
-                  ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
-                  : [];
-                const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                  kind: "fileEdit" as const,
-                  id: `manual-${i}`,
-                  path: e.path,
-                  before: e.before,
-                  after: e.after,
-                }));
-                const allEdits = [...threadEdits, ...manualEdits];
-                return (
-                  <section className="diff-section" data-testid="turn-history-section">
-                    <h2 className="ds-section-heading">Turn History</h2>
-                    {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
-                    <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
-                  </section>
-                );
-              })()}
-            </div>
-          ) : thread ? (
-            <>
-              <div className="pane-head">
-                <strong data-testid="thread-title">{thread.title}</strong>
-                <button onClick={() => onRenameThread(thread)} data-testid="rename-thread">
-                  Rename
-                </button>
-                {thread.openSpecChangeName && (
-                  <span className="change-chip" data-testid="change-chip">
-                    {thread.openSpecChangeName}
-                  </span>
-                )}
-                <div className="spacer" />
+            )}
+
+            <main className="main" data-testid="main-pane">
+              <div className="ds-editor-tabs" data-testid="editor-tabs">
                 <button
-                  onClick={onPropose}
-                  disabled={busy || thread.currentMode !== "spec" || !flight?.selected}
-                  data-testid="propose"
+                  className={`ds-tab ${centerTab === "editor" ? "active" : ""}`}
+                  onClick={() => setCenterTab("editor")}
+                  data-testid="tab-editor"
                 >
-                  /propose
+                  Editor
+                </button>
+                <button
+                  className={`ds-tab diff ${centerTab === "diff" ? "active" : ""}`}
+                  onClick={() => setCenterTab("diff")}
+                  data-testid="tab-diff"
+                >
+                  Code Change Diff
                 </button>
               </div>
-              {thread.currentMode === "spec" && (
-                <div className="spec-banner" data-testid="spec-banner">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spec-icon">
-                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                  </svg>
-                  Spec Mode — read-only planning
+              <div className="ds-breadcrumbs" data-testid="breadcrumbs">
+                <span>{project?.displayName ?? "—"}</span>
+                {selectedFile && (
+                  <>
+                    <span className="ds-crumb-sep">/</span>
+                    <span className="ds-crumb-active">{selectedFile}</span>
+                  </>
+                )}
+              </div>
+              {centerTab === "editor" ? (
+                project ? (
+                  <FileEditorPane
+                    projectHash={project.hash}
+                    path={selectedFile}
+                    onSave={handleFileSave}
+                    onDirtyChange={setEditorDirty}
+                  />
+                ) : (
+                  <div className="ds-onboarding-empty" data-testid="onboarding-empty">
+                    <h2>Floo Network</h2>
+                    <p>
+                      Drive Claude Code or Codex against a real project — file tree, editor, git diff, and a
+                      live codebase map, with the agent working alongside you in the same files.
+                    </p>
+                    <button onClick={onAddProject}>+ Add a project to get started</button>
+                  </div>
+                )
+              ) : (
+                <div className="messages" data-testid="messages">
+                  {project && <DiffPane projectHash={project.hash} />}
+                  {(() => {
+                    const threadEdits = thread
+                      ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
+                      : [];
+                    const manualEdits: Item[] = fileEdits.map((e, i) => ({
+                      kind: "fileEdit" as const,
+                      id: `manual-${i}`,
+                      path: e.path,
+                      before: e.before,
+                      after: e.after,
+                    }));
+                    const allEdits = [...threadEdits, ...manualEdits];
+                    return (
+                      <section className="diff-section" data-testid="turn-history-section">
+                        <h2 className="ds-section-heading">Turn History</h2>
+                        {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
+                        <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
+                      </section>
+                    );
+                  })()}
                 </div>
               )}
-              <div className="messages" data-testid="messages">
-                {(() => {
-                  const items = filterForTab(
-                    [...itemsFromMessages(messages), ...mergeDeltas(live)],
-                    chatTab,
-                  );
-                  return (
-                    <>
-                      {items.length === 0 && (
-                        <p className="empty">
-                          No messages yet.
-                        </p>
-                      )}
-                      <EventList
-                        items={items}
-                        showThinking={showThinking}
-                        executor={flight?.selected ?? null}
-                      />
-                    </>
-                  );
-                })()}
-                {busy && (
-                  <div className="working" data-testid="working">
-                    executor working
-                    <span className="working-dots">
-                      <span />
-                      <span />
-                      <span />
-                    </span>
-                  </div>
-                )}
-              </div>
-              <form
-                className={`composer ${dragActive ? "drag-active" : ""}`}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  onSend();
-                }}
-              >
-                <input
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  placeholder={
-                    flight?.selected
-                      ? "Message, or /propose"
-                      : "Chat-only — no executor on PATH"
-                  }
-                  aria-label="Message"
-                  data-testid="composer-input"
-                />
-                <div className="composer-mode-selector" data-testid="mode-selector">
-                  <button
-                    className={`ds-mode-btn ${thread?.currentMode === "spec" ? "active" : ""}`}
-                    onClick={() => thread?.currentMode !== "spec" && onSpec()}
-                    disabled={busy || !flight?.selected}
-                    data-testid="mode-spec"
-                  >
-                    Spec <kbd>S</kbd>
-                  </button>
-                  <button
-                    className={`ds-mode-btn ${thread?.currentMode === "go" ? "active" : ""}`}
-                    onClick={() => thread?.currentMode !== "go" && onGo()}
-                    disabled={busy || !flight?.selected}
-                    data-testid="mode-go"
-                  >
-                    Go <kbd>G</kbd>
-                  </button>
-                </div>
-                <button
-                  type="submit"
-                  className="send"
-                  data-testid="composer-send"
-                  disabled={busy}
-                  aria-label="Send message"
-                  title="Send message"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4z" />
-                  </svg>
-                </button>
-              </form>
-            </>
-          ) : (
-            <p className="empty">
-              {project ? "Create a thread to get started." : "Add a project to get started."}
-            </p>
-          )}
 
-          {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
-            <>
+              {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
+                <>
+                  <div
+                    className="ds-resize-handle ds-resize-handle-y"
+                    data-testid="resize-terminal-panel"
+                    onPointerDown={bindDrag(terminalPanel.handleProps, "row-resize")}
+                  />
+                  <div
+                    className="ds-terminal-panel"
+                    data-testid="terminal-panel"
+                    style={{ "--terminal-h": `${terminalPanel.size}px` } as CSSProperties}
+                  >
+                    {project && (
+                      <TerminalPane
+                        projectHash={project.hash}
+                        placement={terminalPlacement}
+                        onTogglePlacement={toggleTerminalPlacement}
+                      />
+                    )}
+                  </div>
+                </>
+              )}
+            </main>
+
+            {!rightPanel.collapsed && (
               <div
-                className="ds-resize-handle ds-resize-handle-y"
-                data-testid="resize-terminal-panel"
-                onPointerDown={bindDrag(terminalPanel.handleProps, "row-resize")}
+                className="ds-resize-handle ds-resize-handle-x"
+                data-testid="resize-right-panel"
+                onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
               />
-              <div
-                className="ds-terminal-panel"
-                data-testid="terminal-panel"
-                style={{ "--terminal-h": `${terminalPanel.size}px` } as CSSProperties}
-              >
-                {project && (
-                  <TerminalPane
-                    projectHash={project.hash}
-                    placement={terminalPlacement}
-                    onTogglePlacement={toggleTerminalPlacement}
+            )}
+
+            <aside
+              className="ds-right-sidebar"
+              data-testid="right-sidebar"
+              style={
+                {
+                  "--panel-w": `${rightPanel.size}px`,
+                  marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+                } as CSSProperties
+              }
+            >
+              <div className="ds-workspace-panel">
+                <div className="ds-rail-section">
+                  <div className="ds-rail-label">Workspace</div>
+                  <select
+                    data-testid="project-picker"
+                    value={project?.hash ?? ""}
+                    onChange={(event) => {
+                      const next = projects.find((p) => p.hash === event.target.value);
+                      if (next) selectProject(next);
+                    }}
+                  >
+                    {projects.length === 0 && <option value="">No project</option>}
+                    {projects.map((p) => (
+                      <option key={p.hash} value={p.hash}>
+                        {p.displayName}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="ds-rail-actions">
+                    <button onClick={onAddProject} data-testid="add-project">Add</button>
+                    {project && (
+                      <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
+                    )}
+                  </div>
+                  {project && branches.length > 0 && (
+                    <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
+                      <BranchIcon /> {branches.find((b) => b.isCurrent)?.name ?? "…"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="ds-right-panes">
+                {rightTab === "terminal" && terminalPlacement === "sidebar" ? (
+                  project && (
+                    <TerminalPane
+                      projectHash={project.hash}
+                      placement={terminalPlacement}
+                      onTogglePlacement={toggleTerminalPlacement}
+                    />
+                  )
+                ) : (
+                  <>
+                    <button
+                      className={`ds-rail-disclosure ${editorRailOpen ? "open" : ""}`}
+                      onClick={() => setEditorRailOpen((open) => !open)}
+                      data-testid="rail-disclosure-toggle"
+                    >
+                      <span className="chev">▸</span> Threads &amp; Codebase Map
+                    </button>
+                    {editorRailOpen && (
+                      <div className="ds-rail-disclosure-body" data-testid="rail-disclosure-body">
+                        <div className="ds-right-tabs">
+                          <button
+                            className={rightTab === "threads" ? "active" : ""}
+                            onClick={() => setRightTab("threads")}
+                            data-testid="tab-threads"
+                          >
+                            Threads
+                          </button>
+                          <button
+                            className={rightTab === "codemap" ? "active" : ""}
+                            onClick={() => setRightTab("codemap")}
+                            data-testid="tab-codemap"
+                          >
+                            Codebase Map
+                          </button>
+                        </div>
+                        {rightTab === "threads" && (
+                          <div className="ds-threads-panel">
+                            <button
+                              className="ds-new-thread"
+                              onClick={onNewThread}
+                              disabled={!project}
+                              data-testid="new-thread"
+                            >
+                              + New Thread
+                            </button>
+                            <ul data-testid="thread-list">
+                              {threads.map((t) => (
+                                <li
+                                  key={t.id}
+                                  className={t.id === thread?.id ? "active" : ""}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => {
+                                    if (project) selectThread(project.hash, t);
+                                    setEditorRailOpen(false);
+                                  }}
+                                  onKeyDown={onActivateKey(() => {
+                                    if (project) selectThread(project.hash, t);
+                                    setEditorRailOpen(false);
+                                  })}
+                                >
+                                  <div className="ds-thread-row">
+                                    <span className="ds-thread-title">{t.title}</span>
+                                    <div className="ds-thread-actions">
+                                      <button
+                                        className="ds-thread-action"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          onRenameThread(t);
+                                        }}
+                                        title="Rename thread"
+                                        data-testid="rename-thread-item"
+                                      >
+                                        <RenameIcon />
+                                      </button>
+                                      <button
+                                        className="ds-thread-action delete"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          onDeleteThread(t);
+                                        }}
+                                        title="Delete thread"
+                                        data-testid="delete-thread"
+                                      >
+                                        <DeleteIcon />
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <span className="ds-thread-meta">
+                                    <span className={`badge ${t.currentMode}`}>{t.currentMode}</span>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {rightTab === "codemap" && project && <GraphPane projectHash={project.hash} />}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {!(rightTab === "terminal" && terminalPlacement === "sidebar") && (
+                  <ChatSurface
+                    project={project}
+                    thread={thread}
+                    messages={messages}
+                    live={live}
+                    busy={busy}
+                    showThinking={showThinking}
+                    executor={flight?.selected ?? null}
+                    flightSelected={!!flight?.selected}
+                    draft={draft}
+                    setDraft={setDraft}
+                    onSend={onSend}
+                    onRenameThread={onRenameThread}
+                    onSpec={onSpec}
+                    onGo={onGo}
+                    dragActive={dragActive}
+                    newThreadPicker={newThreadPicker}
+                    onPickMode={onPickMode}
                   />
                 )}
               </div>
-            </>
-          )}
-        </main>
+            </aside>
+          </div>
+        ) : (
+          <div className="ds-shell-contents" data-testid="vibe-shell">
+            <section className="ds-vibe-chat" data-testid="vibe-chat-column">
+              <ChatSurface
+                project={project}
+                thread={thread}
+                messages={messages}
+                live={live}
+                busy={busy}
+                showThinking={showThinking}
+                executor={flight?.selected ?? null}
+                flightSelected={!!flight?.selected}
+                draft={draft}
+                setDraft={setDraft}
+                onSend={onSend}
+                onRenameThread={onRenameThread}
+                onSpec={onSpec}
+                onGo={onGo}
+                dragActive={dragActive}
+                newThreadPicker={newThreadPicker}
+                onPickMode={onPickMode}
+              />
+            </section>
 
-        {!rightPanel.collapsed && (
-          <div
-            className="ds-resize-handle ds-resize-handle-x"
-            data-testid="resize-right-panel"
-            onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
-          />
-        )}
-
-        <aside
-          className="ds-right-sidebar"
-          data-testid="right-sidebar"
-          style={
-            {
-              "--panel-w": `${rightPanel.size}px`,
-              marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
-            } as CSSProperties
-          }
-        >
-          <div className="ds-workspace-panel">
-            <div className="ds-rail-section">
-              <div className="ds-rail-label">Workspace</div>
-              <select
-                data-testid="project-picker"
-                value={project?.hash ?? ""}
-                onChange={(event) => {
-                  const next = projects.find((p) => p.hash === event.target.value);
-                  if (next) selectProject(next);
-                }}
-              >
-                {projects.length === 0 && <option value="">No project</option>}
-                {projects.map((p) => (
-                  <option key={p.hash} value={p.hash}>
-                    {p.displayName}
-                  </option>
-                ))}
-              </select>
-              <div className="ds-rail-actions">
-                <button onClick={onAddProject} data-testid="add-project">Add</button>
-                {project && (
-                  <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
+            <section className="ds-vibe-files" data-testid="col-files">
+              <div className="ds-file-tabs">
+                <button
+                  className={vibeFileTab === "changes" ? "active" : ""}
+                  onClick={() => setVibeFileTab("changes")}
+                  data-testid="vibe-tab-changes"
+                >
+                  Changes
+                </button>
+                {selectedFile && (
+                  <button
+                    className={vibeFileTab === "file" ? "active" : ""}
+                    onClick={() => setVibeFileTab("file")}
+                    data-testid="vibe-tab-file"
+                  >
+                    {selectedFile}
+                  </button>
                 )}
               </div>
-              {project && branches.length > 0 && (
-                <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
-                  <BranchIcon /> {branches.find((b) => b.isCurrent)?.name ?? "…"}
-                </button>
+              {vibeFileTab === "file" && selectedFile ? (
+                project && (
+                  <FileEditorPane
+                    projectHash={project.hash}
+                    path={selectedFile}
+                    onSave={handleFileSave}
+                    onDirtyChange={setEditorDirty}
+                  />
+                )
+              ) : (
+                <div className="messages" data-testid="vibe-files-content">
+                  {project && <DiffPane projectHash={project.hash} />}
+                  {(() => {
+                    const threadEdits = thread
+                      ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
+                      : [];
+                    const manualEdits: Item[] = fileEdits.map((e, i) => ({
+                      kind: "fileEdit" as const,
+                      id: `manual-${i}`,
+                      path: e.path,
+                      before: e.before,
+                      after: e.after,
+                    }));
+                    const allEdits = [...threadEdits, ...manualEdits];
+                    return (
+                      <section className="diff-section" data-testid="turn-history-section">
+                        <h2 className="ds-section-heading">Turn History</h2>
+                        {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
+                        <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
+                      </section>
+                    );
+                  })()}
+                </div>
               )}
-            </div>
-          </div>
-          <div className="ds-right-tabs">
-            <button
-              className={rightTab === "threads" ? "active" : ""}
-              onClick={() => setRightTab("threads")}
-              data-testid="tab-threads"
-            >
-              Threads
-            </button>
-            <button
-              className={rightTab === "codemap" ? "active" : ""}
-              onClick={() => setRightTab("codemap")}
-              data-testid="tab-codemap"
-            >
-              Codebase Map
-            </button>
-            {terminalPlacement === "sidebar" && (
-              <button
-                className={rightTab === "terminal" ? "active" : ""}
-                onClick={() => setRightTab("terminal")}
-                data-testid="tab-terminal"
-              >
-                Terminal
-              </button>
+            </section>
+
+            {!rightPanel.collapsed && (
+              <div
+                className="ds-resize-handle ds-resize-handle-x"
+                data-testid="resize-right-panel"
+                onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
+              />
             )}
-          </div>
-          <div className="ds-right-panes">
-            {rightTab === "threads" && (
+
+            <aside
+              className="ds-right-sidebar"
+              data-testid="right-sidebar"
+              style={
+                {
+                  "--panel-w": `${rightPanel.size}px`,
+                  marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+                } as CSSProperties
+              }
+            >
+              <div className="ds-workspace-panel">
+                <div className="ds-rail-section">
+                  <div className="ds-rail-label">Workspace</div>
+                  <select
+                    data-testid="project-picker"
+                    value={project?.hash ?? ""}
+                    onChange={(event) => {
+                      const next = projects.find((p) => p.hash === event.target.value);
+                      if (next) selectProject(next);
+                    }}
+                  >
+                    {projects.length === 0 && <option value="">No project</option>}
+                    {projects.map((p) => (
+                      <option key={p.hash} value={p.hash}>
+                        {p.displayName}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="ds-rail-actions">
+                    <button onClick={onAddProject} data-testid="add-project">Add</button>
+                    {project && (
+                      <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
+                    )}
+                  </div>
+                  {project && branches.length > 0 && (
+                    <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
+                      <BranchIcon /> {branches.find((b) => b.isCurrent)?.name ?? "…"}
+                    </button>
+                  )}
+                </div>
+              </div>
               <div className="ds-threads-panel">
                 <button className="ds-new-thread" onClick={onNewThread} disabled={!project} data-testid="new-thread">
                   + New Thread
@@ -1210,17 +1597,35 @@ export default function App() {
                   ))}
                 </ul>
               </div>
-            )}
-            {rightTab === "codemap" && project && <GraphPane projectHash={project.hash} />}
-            {rightTab === "terminal" && terminalPlacement === "sidebar" && project && (
-              <TerminalPane
-                projectHash={project.hash}
-                placement={terminalPlacement}
-                onTogglePlacement={toggleTerminalPlacement}
-              />
-            )}
+              <div className="ds-vibe-explorer">
+                <button
+                  className={`ds-rail-disclosure ${vibeExplorerOpen ? "open" : ""}`}
+                  onClick={() => setVibeExplorerOpen((open) => !open)}
+                  data-testid="vibe-explorer-toggle"
+                >
+                  <span className="chev">▸</span> File Explorer
+                </button>
+                {vibeExplorerOpen && project && (
+                  <div className="ds-rail-disclosure-body" data-testid="vibe-explorer-body">
+                    <FileTree
+                      projectHash={project.hash}
+                      projectName={project.displayName}
+                      onSelectFile={(path) => {
+                        selectFile(path);
+                        setVibeFileTab("file");
+                      }}
+                      activePath={selectedFile}
+                      refreshToken={fileTreeRefreshToken}
+                      onPathRenamed={onTreePathRenamed}
+                      onPathDeleted={onTreePathDeleted}
+                      onFilesChanged={onTreeFilesChanged}
+                    />
+                  </div>
+                )}
+              </div>
+            </aside>
           </div>
-        </aside>
+        )}
       </div>
 
       {paletteOpen && (
