@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import * as api from "./api";
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
+import { NewFileIcon, NewFolderIcon } from "./icons";
 
 type Props = {
   projectHash: string;
@@ -331,7 +332,29 @@ export default function FileTree({
 
   return (
     <div className="ds-file-tree" data-testid="file-tree">
-      <div className="ds-tree-header">{projectName}</div>
+      <div className="ds-tree-header">
+        <span className="ds-tree-header-label">{projectName}</span>
+        <div className="ds-tree-header-actions">
+          <button
+            className="ds-tree-header-action"
+            title="New File"
+            aria-label="New File"
+            onClick={() => openCreate("", "file")}
+            data-testid="tree-new-file"
+          >
+            <NewFileIcon />
+          </button>
+          <button
+            className="ds-tree-header-action"
+            title="New Folder"
+            aria-label="New Folder"
+            onClick={() => openCreate("", "folder")}
+            data-testid="tree-new-folder"
+          >
+            <NewFolderIcon />
+          </button>
+        </div>
+      </div>
       <div
         className={`ds-tree-body ${dragOver === "" ? "drop-target" : ""}`}
         onContextMenu={(event) => {

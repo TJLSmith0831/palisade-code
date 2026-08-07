@@ -584,6 +584,10 @@ input[type="checkbox"] {
 }
 
 .ds-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -591,6 +595,36 @@ input[type="checkbox"] {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.ds-tree-header-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-tree-header-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ds-tree-header-action {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.ds-tree-header-action:hover {
+  color: var(--fg);
+  background: var(--bg);
 }
 
 .ds-tree-body {
