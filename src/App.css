@@ -1,18 +1,20 @@
 :root {
   /* Dragon Fire Workbench v2 tokens — from merged-design.json - TEMP TEST */
-  --backdrop: oklch(11% 0.015 145);
+  /* Overridden inline (documentElement.style) by the accent-color picker. */
+  --accent-hue: 145;
+  --backdrop: oklch(11% 0.015 var(--accent-hue, 145));
   --chrome-bg: oklch(15% 0.004 250);
   --bg: oklch(18% 0.005 250);
   --surface: oklch(22% 0.006 250);
   --surface-warm: oklch(26% 0.008 250);
   --editor-bg: oklch(20% 0.005 250);
-  --active-row: oklch(24% 0.020 145);
+  --active-row: oklch(24% 0.020 var(--accent-hue, 145));
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
   --border: oklch(30% 0.010 250);
-  --accent: oklch(88% 0.21 145);
-  --accent-on: oklch(20% 0.03 145);
-  --twilight-glow: oklch(18% 0.03 145);
+  --accent: oklch(88% 0.21 var(--accent-hue, 145));
+  --accent-on: oklch(20% 0.03 var(--accent-hue, 145));
+  --twilight-glow: oklch(18% 0.03 var(--accent-hue, 145));
   --success: oklch(72% 0.15 160);
   --warn: oklch(76% 0.15 65);
   --danger: oklch(64% 0.22 25);
@@ -23,19 +25,19 @@
 /* Auto: follow the OS unless the user picked an explicit theme (data-theme). */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --backdrop: oklch(92% 0.015 145);
+    --backdrop: oklch(92% 0.015 var(--accent-hue, 145));
     --chrome-bg: oklch(97% 0.004 250);
     --bg: oklch(99% 0.003 250);
     --surface: oklch(96% 0.004 250);
     --surface-warm: oklch(93% 0.006 250);
     --editor-bg: oklch(98% 0.003 250);
-    --active-row: oklch(90% 0.04 145);
+    --active-row: oklch(90% 0.04 var(--accent-hue, 145));
     --fg: oklch(20% 0.006 250);
     --muted: oklch(46% 0.012 250);
     --border: oklch(85% 0.010 250);
-    --accent: oklch(46% 0.16 145);
-    --accent-on: oklch(98% 0.02 145);
-    --twilight-glow: oklch(90% 0.05 145);
+    --accent: oklch(46% 0.16 var(--accent-hue, 145));
+    --accent-on: oklch(98% 0.02 var(--accent-hue, 145));
+    --twilight-glow: oklch(90% 0.05 var(--accent-hue, 145));
     --success: oklch(42% 0.13 160);
     --warn: oklch(48% 0.13 65);
     --danger: oklch(46% 0.19 25);
@@ -44,19 +46,19 @@
 }
 
 :root[data-theme="light"] {
-  --backdrop: oklch(92% 0.015 145);
+  --backdrop: oklch(92% 0.015 var(--accent-hue, 145));
   --chrome-bg: oklch(97% 0.004 250);
   --bg: oklch(99% 0.003 250);
   --surface: oklch(96% 0.004 250);
   --surface-warm: oklch(93% 0.006 250);
   --editor-bg: oklch(98% 0.003 250);
-  --active-row: oklch(90% 0.04 145);
+  --active-row: oklch(90% 0.04 var(--accent-hue, 145));
   --fg: oklch(20% 0.006 250);
   --muted: oklch(46% 0.012 250);
   --border: oklch(85% 0.010 250);
-  --accent: oklch(46% 0.16 145);
-  --accent-on: oklch(98% 0.02 145);
-  --twilight-glow: oklch(90% 0.05 145);
+  --accent: oklch(46% 0.16 var(--accent-hue, 145));
+  --accent-on: oklch(98% 0.02 var(--accent-hue, 145));
+  --twilight-glow: oklch(90% 0.05 var(--accent-hue, 145));
   --success: oklch(42% 0.13 160);
   --warn: oklch(48% 0.13 65);
   --danger: oklch(46% 0.19 25);
@@ -641,6 +643,86 @@ input[type="checkbox"] {
 .ds-tree-error {
   padding: 6px 10px;
   font-size: 10px;
+  color: var(--danger);
+}
+
+.ds-tree-body.drop-target {
+  background: color-mix(in oklab, var(--accent), transparent 92%);
+}
+
+.ds-tree-row.drop-target {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  background: color-mix(in oklab, var(--accent), transparent 85%);
+}
+
+.ds-tree-row.editing,
+.ds-tree-row.confirm-delete {
+  cursor: default;
+}
+
+.ds-tree-row.editing input {
+  width: 100%;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 5px;
+  background: var(--surface-warm);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--fg);
+}
+
+.ds-tree-row.confirm-delete {
+  color: var(--danger);
+  gap: 6px;
+}
+
+.ds-tree-row.confirm-delete button {
+  font-size: 10px;
+  padding: 2px 6px;
+  color: var(--fg);
+}
+
+.ds-tree-row.confirm-delete button.danger {
+  border-color: color-mix(in oklab, var(--danger), transparent 70%);
+  color: var(--danger);
+}
+
+.ds-tree-row.confirm-delete button.danger:hover {
+  border-color: var(--danger);
+}
+
+.context-menu-catcher {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.context-menu {
+  position: fixed;
+  min-width: 140px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  list-style: none;
+  margin: 0;
+}
+
+.context-menu li {
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.context-menu li:hover {
+  background: var(--surface-warm);
+}
+
+.context-menu li.danger {
   color: var(--danger);
 }
 
@@ -1870,6 +1952,9 @@ details.graph-report-wrap > summary {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .file-palette-results li:hover,
@@ -1884,6 +1969,168 @@ details.graph-report-wrap > summary {
 
 .file-palette-empty:hover {
   background: none !important;
+}
+
+.file-palette-create {
+  color: var(--accent);
+}
+
+.file-palette-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-palette-row-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.file-palette-results li:hover .file-palette-row-actions,
+.file-palette-results li:focus-within .file-palette-row-actions {
+  opacity: 1;
+}
+
+.file-palette-row-action {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.file-palette-row-action:hover {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.file-palette-row-action.delete:hover {
+  color: var(--danger);
+}
+
+.file-palette-renaming,
+.file-palette-confirm-delete {
+  cursor: default !important;
+}
+
+.file-palette-renaming input {
+  width: 100%;
+  font-size: 13px;
+  padding: 4px 6px;
+  background: var(--surface-warm);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--fg);
+}
+
+.file-palette-confirm-delete span {
+  color: var(--danger);
+}
+
+.file-palette-confirm-delete button {
+  font-size: 11px;
+  padding: 3px 8px;
+  color: var(--fg);
+}
+
+.file-palette-confirm-delete button.danger {
+  border-color: color-mix(in oklab, var(--danger), transparent 70%);
+  color: var(--danger);
+}
+
+.file-palette-confirm-delete button.danger:hover {
+  border-color: var(--danger);
+}
+
+.settings-panel {
+  width: min(360px, 90vw);
+  gap: 16px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accent-swatches {
+  display: flex;
+  gap: 8px;
+}
+
+.accent-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.accent-swatch.active {
+  border-color: var(--fg);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-row select {
+  flex: 1;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.settings-row input[type="number"] {
+  width: 52px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.settings-unit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  text-align: left;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
+}
+
+.file-palette-error {
+  color: var(--danger);
+  font-size: 12px;
+  padding: 4px 2px;
 }
 
 .confirm-actions {

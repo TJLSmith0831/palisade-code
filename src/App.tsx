@@ -12,6 +12,7 @@ import FilePalette from "./FilePalette";
 import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
+import SettingsPanel, { applyAccentHue, loadAccentHue } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
 import { useResizable, type UseResizableResult } from "./useResizable";
 import "./App.css";
@@ -187,8 +188,10 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
   const filesCache = useRef<Map<string, string[]>>(new Map());
+  const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0);
 
   const handleFileSave = useCallback((edit: { path: string; before: string; after: string }) => {
     setFileEdits((prev) => [...prev, edit]);
@@ -199,6 +202,11 @@ export default function App() {
     else document.documentElement.dataset.theme = theme;
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  // Restore a previously-chosen accent color on launch.
+  useEffect(() => {
+    applyAccentHue(loadAccentHue());
+  }, []);
 
   const fail = (err: unknown) => setError(String(err));
 
@@ -531,6 +539,66 @@ export default function App() {
     }
   }, [project]);
 
+  // Bypasses the cache — used after a palette create/rename/delete so the
+  // palette's own list (and the file tree, via the token bump) catch up.
+  const refreshPaletteFiles = useCallback(async () => {
+    if (!project) return;
+    const files = await api.listAllFiles(project.hash);
+    filesCache.current.set(project.hash, files);
+    setPaletteFiles(files);
+  }, [project]);
+
+  const onCreateFile = useCallback(
+    async (path: string) => {
+      if (!project) return;
+      await api.writeFileContent(project.hash, path, "");
+      await refreshPaletteFiles();
+      setFileTreeRefreshToken((t) => t + 1);
+    },
+    [project, refreshPaletteFiles],
+  );
+
+  const onRenameFile = useCallback(
+    async (from: string, to: string) => {
+      if (!project) return;
+      await api.renamePath(project.hash, from, to);
+      await refreshPaletteFiles();
+      setFileTreeRefreshToken((t) => t + 1);
+      setSelectedFile((current) => (current === from ? to : current));
+    },
+    [project, refreshPaletteFiles],
+  );
+
+  const onDeleteFile = useCallback(
+    async (path: string) => {
+      if (!project) return;
+      await api.deletePath(project.hash, path);
+      await refreshPaletteFiles();
+      setFileTreeRefreshToken((t) => t + 1);
+      setSelectedFile((current) => (current === path ? null : current));
+    },
+    [project, refreshPaletteFiles],
+  );
+
+  // The file tree performs its own create/rename/delete/move (surgical
+  // per-directory refresh, no full-tree collapse) — these just keep the
+  // open editor tab and the file-palette cache in sync afterward.
+  const onTreePathRenamed = useCallback((from: string, to: string) => {
+    setSelectedFile((current) => {
+      if (current === from) return to;
+      if (current?.startsWith(`${from}/`)) return to + current.slice(from.length);
+      return current;
+    });
+  }, []);
+
+  const onTreePathDeleted = useCallback((path: string) => {
+    setSelectedFile((current) => (current === path || current?.startsWith(`${path}/`) ? null : current));
+  }, []);
+
+  const onTreeFilesChanged = useCallback(() => {
+    if (project) filesCache.current.delete(project.hash);
+  }, [project]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
@@ -616,9 +684,8 @@ export default function App() {
             </button>
             <button
               className="ds-icon-btn"
-              onClick={onOpenSettings}
-              disabled={!project}
-              title="Open project-settings.json"
+              onClick={() => setSettingsOpen(true)}
+              title="Settings"
               data-testid="open-settings"
             >
               <SettingsIcon />
@@ -677,6 +744,10 @@ export default function App() {
               projectName={project.displayName}
               onSelectFile={setSelectedFile}
               activePath={selectedFile}
+              refreshToken={fileTreeRefreshToken}
+              onPathRenamed={onTreePathRenamed}
+              onPathDeleted={onTreePathDeleted}
+              onFilesChanged={onTreeFilesChanged}
             />
           )}
         </nav>
@@ -1024,7 +1095,14 @@ export default function App() {
           files={paletteFiles}
           onSelect={setSelectedFile}
           onClose={() => setPaletteOpen(false)}
+          onCreate={onCreateFile}
+          onRename={onRenameFile}
+          onDelete={onDeleteFile}
         />
+      )}
+
+      {settingsOpen && (
+        <SettingsPanel onOpenProjectSettings={onOpenSettings} onClose={() => setSettingsOpen(false)} />
       )}
 
       {bar && bar.kind === "input" && (

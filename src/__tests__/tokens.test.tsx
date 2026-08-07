@@ -24,10 +24,14 @@ function rootVar(name: string): string {
 
 describe("CSS token system (merged-design.json)", () => {
   // CSS parser normalizes whitespace in oklch(); use regex to match loosely.
+  // The hue component may be a literal (most tokens) or `var(--accent-hue,
+  // <literal>)` (the accent-derived tokens, swappable via the color-scheme
+  // picker) — either form with the same literal hue satisfies the check.
   const ok = (name: string, l: string, c: string, h: string) => {
     const val = rootVar(name);
     const cEsc = c.replace(/\./g, "\\.");
-    expect(val).toMatch(new RegExp(`oklch\\(${l}%\\s*${cEsc}\\s+${h}\\)`));
+    const hueEsc = `(?:${h}|var\\(--accent-hue,\\s*${h}\\))`;
+    expect(val).toMatch(new RegExp(`oklch\\(${l}%\\s*${cEsc}\\s+${hueEsc}\\)`));
   };
 
   it("has the accent token set to Dragon Fire Green", () => ok("--accent", "88", "0.21", "145"));

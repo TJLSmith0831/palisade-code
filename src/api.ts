@@ -221,3 +221,13 @@ export const writeFileContent = (
   relativePath: string,
   content: string,
 ) => invoke<string | null>("write_file_content", { projectHash, relativePath, content });
+
+/** Renames or moves a file/directory — a full path edit doubles as a move. */
+export const renamePath = (projectHash: string, from: string, to: string) =>
+  invoke<void>("rename_path", { projectHash, from, to });
+
+export const deletePath = (projectHash: string, relativePath: string) =>
+  invoke<void>("delete_path", { projectHash, relativePath });
+
+export const createDirectory = (projectHash: string, relativePath: string) =>
+  invoke<void>("create_directory", { projectHash, relativePath });

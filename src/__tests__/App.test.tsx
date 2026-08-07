@@ -392,7 +392,17 @@ describe("Editor chrome (merged-design v2)", () => {
   });
 });
 
-describe("Settings button (D14/D15)", () => {
+describe("Settings panel (D14/D15)", () => {
+  it("opens the settings panel with color scheme and font controls", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    fireEvent.click(screen.getByTestId("open-settings"));
+
+    expect(screen.getByTestId("settings-panel")).toBeDefined();
+    expect(screen.getAllByTestId("accent-swatch").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("editor-font-select")).toBeDefined();
+  });
+
   it("opens an existing .project-settings.json in the editor without recreating it", async () => {
     const writeCalls: unknown[] = [];
     invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
@@ -415,6 +425,7 @@ describe("Settings button (D14/D15)", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
     fireEvent.click(screen.getByTestId("open-settings"));
+    fireEvent.click(screen.getByTestId("open-project-settings"));
 
     await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain(".project-settings.json"));
     expect(writeCalls).toHaveLength(0);
@@ -445,6 +456,7 @@ describe("Settings button (D14/D15)", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
     fireEvent.click(screen.getByTestId("open-settings"));
+    fireEvent.click(screen.getByTestId("open-project-settings"));
 
     await waitFor(() => expect(writeCalls).toHaveLength(1));
     expect(writeCalls[0].relativePath).toBe(".project-settings.json");

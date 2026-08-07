@@ -741,38 +741,62 @@ fn list_all_files(project_hash: String) -> Res<Vec<String>> {
     Ok(files)
 }
 
+/// Resolves `relative_path` against `root`, requiring it to already exist
+/// and stay inside the project.
+fn resolve_existing_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
+    let target = root.join(relative_path);
+    let resolved = std::fs::canonicalize(&target)
+        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
+    if !resolved.starts_with(root) {
+        return Err("path must stay inside the project".into());
+    }
+    Ok(resolved)
+}
+
 #[tauri::command]
 fn read_file_content(project_hash: String, relative_path: String) -> Res<String> {
     let root = project_root(&project_hash)?;
-    let target = root.join(&relative_path);
-    let resolved = std::fs::canonicalize(&target)
-        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
-    if !resolved.starts_with(&root) {
-        return Err("path must stay inside the project".into());
-    }
+    let resolved = resolve_existing_path(&root, &relative_path)?;
     std::fs::read_to_string(&resolved)
         .map_err(|err| format!("cannot read file: {err}"))
 }
 
-/// Resolves `relative_path` against `root` for writing. Unlike reading, the
-/// file itself may not exist yet (creating a new file is valid), so only
-/// its *parent* directory — which must already exist — is canonicalized and
-/// boundary-checked, not the file.
-fn resolve_writable_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
-    let target = root.join(relative_path);
-    let parent = target.parent().ok_or("invalid file path")?;
-    let resolved_parent = std::fs::canonicalize(parent)
-        .map_err(|err| format!("no such directory: {} ({err})", parent.display()))?;
-    if !resolved_parent.starts_with(root) {
+/// Resolves `relative_path` against `root` for creating a file or directory
+/// there — unlike `resolve_existing_path`, nothing (or only part of the
+/// path) needs to exist yet. Rejects any `..` component outright (a
+/// relative path with none can only ever join to somewhere under `root`),
+/// then walks up to the nearest ancestor that *does* exist and canonicalizes
+/// just that — catching a symlink escape planted partway down an existing
+/// subtree — before creating whatever's missing beneath it.
+fn resolve_creatable_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
+    let rel = Path::new(relative_path);
+    if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err("path must stay inside the project".into());
     }
-    let file_name = target.file_name().ok_or("invalid file path")?;
-    Ok(resolved_parent.join(file_name))
+    let target = root.join(rel);
+
+    let mut existing = target.clone();
+    while !existing.exists() {
+        match existing.parent() {
+            Some(parent) => existing = parent.to_path_buf(),
+            None => break,
+        }
+    }
+    let resolved_existing = std::fs::canonicalize(&existing)
+        .map_err(|err| format!("cannot resolve {}: {err}", existing.display()))?;
+    if !resolved_existing.starts_with(root) {
+        return Err("path must stay inside the project".into());
+    }
+
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("create directory: {err}"))?;
+    }
+    Ok(target)
 }
 
-/// Saves the file (creating it if it doesn't exist yet), then runs any
-/// matching `formatOnSave` command (D14) and returns a summary of what it
-/// did — `None` when no pattern matched.
+/// Saves the file (creating it, and any missing parent directories, if it
+/// doesn't exist yet), then runs any matching `formatOnSave` command (D14)
+/// and returns a summary of what it did — `None` when no pattern matched.
 #[tauri::command]
 fn write_file_content(
     project_hash: String,
@@ -780,11 +804,47 @@ fn write_file_content(
     content: String,
 ) -> Res<Option<String>> {
     let root = project_root(&project_hash)?;
-    let resolved = resolve_writable_path(&root, &relative_path)?;
+    let resolved = resolve_creatable_path(&root, &relative_path)?;
     std::fs::write(&resolved, content).map_err(|err| format!("cannot write file: {err}"))?;
 
     let (settings, _) = settings::load(&root);
     Ok(settings::run_format_on_save(&settings, &root, &relative_path))
+}
+
+/// Renames or moves a file or directory within the project (the file
+/// palette's rename action — a full relative-path edit doubles as a move,
+/// so this is also how "reorganize" works). Refuses to clobber an existing
+/// file at the destination.
+#[tauri::command]
+fn rename_path(project_hash: String, from: String, to: String) -> Res<()> {
+    let root = project_root(&project_hash)?;
+    let source = resolve_existing_path(&root, &from)?;
+    let target = resolve_creatable_path(&root, &to)?;
+    if target.exists() {
+        return Err(format!("{to} already exists"));
+    }
+    std::fs::rename(&source, &target).map_err(|err| format!("rename: {err}"))
+}
+
+/// Deletes a file or directory (recursively) from the project.
+#[tauri::command]
+fn delete_path(project_hash: String, relative_path: String) -> Res<()> {
+    let root = project_root(&project_hash)?;
+    let target = resolve_existing_path(&root, &relative_path)?;
+    if target.is_dir() {
+        std::fs::remove_dir_all(&target).map_err(|err| format!("delete directory: {err}"))
+    } else {
+        std::fs::remove_file(&target).map_err(|err| format!("delete file: {err}"))
+    }
+}
+
+/// Creates a directory (and any missing parents) — the file tree's "New
+/// Folder" action.
+#[tauri::command]
+fn create_directory(project_hash: String, relative_path: String) -> Res<()> {
+    let root = project_root(&project_hash)?;
+    let target = resolve_creatable_path(&root, &relative_path)?;
+    std::fs::create_dir_all(&target).map_err(|err| format!("create directory: {err}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -852,6 +912,9 @@ pub fn run() {
             list_all_files,
             read_file_content,
             write_file_content,
+            rename_path,
+            delete_path,
+            create_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -916,26 +979,92 @@ mod tests {
     }
 
     #[test]
-    fn resolve_writable_path_allows_creating_a_brand_new_file() {
+    fn resolve_creatable_path_allows_creating_a_brand_new_file() {
         let root = tempfile::tempdir().unwrap();
         let canonical_root = std::fs::canonicalize(root.path()).unwrap();
-        let resolved = resolve_writable_path(&canonical_root, "new-file.json").unwrap();
+        let resolved = resolve_creatable_path(&canonical_root, "new-file.json").unwrap();
         assert_eq!(resolved, canonical_root.join("new-file.json"));
         assert!(!resolved.exists(), "must not require the file to already exist");
     }
 
     #[test]
-    fn resolve_writable_path_rejects_a_parent_directory_that_does_not_exist() {
+    fn resolve_creatable_path_creates_missing_intermediate_directories() {
         let root = tempfile::tempdir().unwrap();
         let canonical_root = std::fs::canonicalize(root.path()).unwrap();
-        assert!(resolve_writable_path(&canonical_root, "missing-dir/file.json").is_err());
+        let resolved = resolve_creatable_path(&canonical_root, "a/b/c/new-file.json").unwrap();
+        assert_eq!(resolved, canonical_root.join("a/b/c/new-file.json"));
+        assert!(canonical_root.join("a/b/c").is_dir(), "intermediate dirs must exist for the write");
     }
 
     #[test]
-    fn resolve_writable_path_rejects_a_parent_outside_the_project() {
+    fn resolve_creatable_path_rejects_a_parent_directory_traversal() {
         let root = tempfile::tempdir().unwrap();
         let canonical_root = std::fs::canonicalize(root.path()).unwrap();
-        let error = resolve_writable_path(&canonical_root, "../escape.json").unwrap_err();
+        let error = resolve_creatable_path(&canonical_root, "../escape.json").unwrap_err();
         assert!(error.contains("stay inside"), "got {error}");
+    }
+
+    #[test]
+    fn resolve_creatable_path_rejects_an_absolute_path() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        assert!(resolve_creatable_path(&canonical_root, "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn resolve_existing_path_requires_the_target_to_already_exist() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        assert!(resolve_existing_path(&canonical_root, "missing.json").is_err());
+
+        std::fs::write(canonical_root.join("present.json"), "{}").unwrap();
+        assert_eq!(
+            resolve_existing_path(&canonical_root, "present.json").unwrap(),
+            canonical_root.join("present.json"),
+        );
+    }
+
+    #[test]
+    fn rename_and_delete_round_trip_a_file() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(project_dir.path()).unwrap();
+        std::fs::write(canonical_root.join("old.txt"), "hi").unwrap();
+
+        // Exercises the same resolution rename_path/delete_path use, without
+        // going through project_root()'s real ~/.floo-network index lookup.
+        let source = resolve_existing_path(&canonical_root, "old.txt").unwrap();
+        let target = resolve_creatable_path(&canonical_root, "moved/new.txt").unwrap();
+        std::fs::rename(&source, &target).unwrap();
+        assert!(!canonical_root.join("old.txt").exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
+
+        let to_delete = resolve_existing_path(&canonical_root, "moved/new.txt").unwrap();
+        std::fs::remove_file(&to_delete).unwrap();
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn create_directory_creates_nested_empty_folders() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(project_dir.path()).unwrap();
+
+        let target = resolve_creatable_path(&canonical_root, "src/new/nested").unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+
+        assert!(canonical_root.join("src/new/nested").is_dir());
+    }
+
+    #[test]
+    fn deleting_a_directory_removes_it_recursively() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(project_dir.path()).unwrap();
+        std::fs::create_dir_all(canonical_root.join("a/b")).unwrap();
+        std::fs::write(canonical_root.join("a/b/file.txt"), "x").unwrap();
+
+        let target = resolve_existing_path(&canonical_root, "a").unwrap();
+        assert!(target.is_dir());
+        std::fs::remove_dir_all(&target).unwrap();
+
+        assert!(!canonical_root.join("a").exists());
     }
 }

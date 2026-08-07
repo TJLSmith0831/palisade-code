@@ -6,6 +6,7 @@ import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } f
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import * as api from "./api";
 import { languageExtensionFor } from "./codeLanguage";
+import { EDITOR_FONT_CHANGED_EVENT, loadEditorFont, loadEditorFontSize } from "./SettingsPanel";
 
 type Props = {
   projectHash: string;
@@ -13,10 +14,17 @@ type Props = {
   onSave?: (edit: { path: string; before: string; after: string }) => void;
 };
 
+const editorFontTheme = () =>
+  EditorView.theme({
+    "&": { height: "100%", fontSize: `${loadEditorFontSize()}px` },
+    ".cm-scroller": { fontFamily: loadEditorFont(), lineHeight: "1.55" },
+  });
+
 export default function FileEditorPane({ projectHash, path, onSave }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const languageCompartment = useRef(new Compartment());
+  const fontCompartment = useRef(new Compartment());
   // Refs so the update/save listeners (bound once per file load) always see
   // the latest callback/path without re-mounting the EditorView per render.
   const onSaveRef = useRef(onSave);
@@ -97,10 +105,7 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) setDirty(true);
         }),
-        EditorView.theme({
-          "&": { height: "100%", fontSize: "12px" },
-          ".cm-scroller": { fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace", lineHeight: "1.55" },
-        }),
+        fontCompartment.current.of(editorFontTheme()),
       ],
     });
 
@@ -112,6 +117,17 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, contentLoaded]);
+
+  // Live-reconfigure the font on a settings change, without waiting for the
+  // next file switch to remount the view (mirrors languageCompartment's use
+  // for per-file language selection).
+  useEffect(() => {
+    const onFontChanged = () => {
+      viewRef.current?.dispatch({ effects: fontCompartment.current.reconfigure(editorFontTheme()) });
+    };
+    window.addEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
+    return () => window.removeEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
+  }, []);
 
   if (!path) {
     return <p className="empty">Select a file from the explorer to view it.</p>;
