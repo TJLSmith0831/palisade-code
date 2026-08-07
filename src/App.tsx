@@ -993,7 +993,12 @@ export default function App() {
                 })()}
                 {busy && (
                   <div className="working" data-testid="working">
-                    executor working…
+                    executor working
+                    <span className="working-dots">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
                   </div>
                 )}
               </div>
