@@ -52,11 +52,20 @@
 
 ## 5. Fuzzy file-open palette
 
-- [ ] 5.1 Add a `FilePalette.tsx` component: `⌘P` trigger, text input, fuzzy-match against project file paths, keyboard + mouse selection, Escape to dismiss
-- [ ] 5.2 Build the file list source — reuse `list_directory` recursively on first open (cached) or add a `list_all_files` Tauri command that walks the project root (respecting `.gitignore` basics)
-- [ ] 5.3 Wire palette selection to open the file in the editor (same path as file-tree selection)
-- [ ] 5.4 Verify: `⌘P` opens palette, fuzzy match ranks results, selection opens file, Escape dismisses
-- [ ] 5.5 Add a test for palette open/select/dismiss
+- [x] 5.1 Add a `FilePalette.tsx` component: `⌘P` trigger, text input, fuzzy-match against project file paths, keyboard + mouse selection, Escape to dismiss
+- [x] 5.2 Build the file list source — reuse `list_directory` recursively on first open (cached) or add a `list_all_files` Tauri command that walks the project root (respecting `.gitignore` basics)
+- [x] 5.3 Wire palette selection to open the file in the editor (same path as file-tree selection)
+- [x] 5.4 Verify: `⌘P` opens palette, fuzzy match ranks results, selection opens file, Escape dismisses
+- [x] 5.5 Add a test for palette open/select/dismiss
+
+### 5b. Layout: File Explorer left, Threads right (D57 — added mid-phase, amends D17)
+
+- [x] 5.6 Split the left rail (`ds-nav-rail`) down to a File Explorer only: remove the Workspace section and Threads section from it; it keeps just `FileTree`, still resizable/collapsible via the existing `leftRail` hook and `⌘\`
+- [x] 5.7 Move Workspace (project picker, branch indicator, Add/Rename, `+ New Thread`) and the Threads list into the right sidebar: Workspace pinned above the tab bar (visible regardless of active tab), Threads becomes a new tab alongside Codebase Map / Notes / Terminal
+- [x] 5.8 Make "Threads" the right sidebar's new default tab (was Codebase Map)
+- [x] 5.9 Flip `rightPanel`'s `defaultCollapsed` to `false` — it now holds primary, always-relevant content (Workspace + Threads), not just the optional Codebase Map; staying collapsed-by-default would hide project switching and the thread list on every launch
+- [x] 5.10 Update existing layout tests (`App.test.tsx`) for the new default-open right sidebar, the relocated Workspace/Threads testids, and the left rail's Explorer-only content
+- [x] 5.11 Verify live: `⌘\` toggles the Explorer-only left sidebar, `⌘J` toggles the Workspace+Threads+tabs right sidebar (open by default), project switching and thread selection work identically from their new location, file tree unaffected by the move
 
 ## 6. Graphify MCP auto-registration
 

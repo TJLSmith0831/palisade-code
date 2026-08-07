@@ -158,40 +158,42 @@ export default function DiffPane({ projectHash }: Props) {
         </div>
       )}
 
-      <div className="diff-sync-bar">
-        <button onClick={() => run(() => api.gitFetch(projectHash))} disabled={busy} data-testid="fetch-btn">
-          Fetch
-        </button>
-        <button
-          onClick={() => run(async () => void (await api.gitPull(projectHash)))}
-          disabled={busy}
-          data-testid="pull-btn"
-        >
-          Pull{aheadBehind && behind > 0 ? ` (${behind})` : ""}
-        </button>
-        <button
-          onClick={() => run(async () => void (await api.gitPush(projectHash)))}
-          disabled={busy}
-          data-testid="push-btn"
-        >
-          Push{aheadBehind && ahead > 0 ? ` (${ahead})` : ""}
-        </button>
-      </div>
+      <div className="diff-sticky-controls">
+        <div className="diff-sync-bar">
+          <button onClick={() => run(() => api.gitFetch(projectHash))} disabled={busy} data-testid="fetch-btn">
+            Fetch
+          </button>
+          <button
+            onClick={() => run(async () => void (await api.gitPull(projectHash)))}
+            disabled={busy}
+            data-testid="pull-btn"
+          >
+            Pull{aheadBehind && behind > 0 ? ` (${behind})` : ""}
+          </button>
+          <button
+            onClick={() => run(async () => void (await api.gitPush(projectHash)))}
+            disabled={busy}
+            data-testid="push-btn"
+          >
+            Push{aheadBehind && ahead > 0 ? ` (${ahead})` : ""}
+          </button>
+        </div>
 
-      <div className="diff-commit-box">
-        <textarea
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          placeholder="Commit message"
-          data-testid="commit-message"
-        />
-        <button
-          onClick={commit}
-          disabled={busy || !message.trim() || !hasStaged}
-          data-testid="commit-btn"
-        >
-          Commit
-        </button>
+        <div className="diff-commit-box">
+          <textarea
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="Commit message"
+            data-testid="commit-message"
+          />
+          <button
+            onClick={commit}
+            disabled={busy || !message.trim() || !hasStaged}
+            data-testid="commit-btn"
+          >
+            Commit
+          </button>
+        </div>
       </div>
 
       {isClean && !error && <p className="empty">Nothing to commit — working tree clean.</p>}

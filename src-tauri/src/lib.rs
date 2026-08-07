@@ -615,6 +615,12 @@ fn git_init(project_hash: String) -> Res<()> {
 
 // ------------------------------------------------------------- file tree
 
+/// Shared by `list_directory` and `list_all_files` so the two entry points
+/// can't drift on which dirs/files they hide.
+fn should_skip_entry(name: &str) -> bool {
+    name.starts_with('.') || name == "node_modules" || name == "target"
+}
+
 #[tauri::command]
 fn list_directory(project_hash: String, relative_path: String) -> Res<Vec<DirEntry>> {
     let root = project_root(&project_hash)?;
@@ -632,7 +638,7 @@ fn list_directory(project_hash: String, relative_path: String) -> Res<Vec<DirEnt
     for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
         let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || name == "node_modules" || name == "target" {
+        if should_skip_entry(&name) {
             continue;
         }
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -646,6 +652,40 @@ fn list_directory(project_hash: String, relative_path: String) -> Res<Vec<DirEnt
     }
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
     Ok(entries)
+}
+
+/// Recursive file listing for the fuzzy file-open palette (task 5.2). Applies
+/// the same skip rules as `list_directory` (dotfiles, node_modules, target)
+/// rather than a full `.gitignore` parser — matches what the tree already hides.
+#[tauri::command]
+fn list_all_files(project_hash: String) -> Res<Vec<String>> {
+    let root = project_root(&project_hash)?;
+    let mut files = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if should_skip_entry(&name) {
+                continue;
+            }
+            let full = entry.path();
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                stack.push(full);
+            } else {
+                let rel = full
+                    .strip_prefix(&root)
+                    .unwrap_or(&full)
+                    .to_string_lossy()
+                    .to_string();
+                files.push(rel);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 #[tauri::command]
@@ -744,6 +784,7 @@ pub fn run() {
             git_is_repo,
             git_init,
             list_directory,
+            list_all_files,
             read_file_content,
             write_file_content,
         ])

@@ -224,6 +224,9 @@ export type DirEntry = {
 export const listDirectory = (projectHash: string, relativePath: string) =>
   invoke<DirEntry[]>("list_directory", { projectHash, relativePath });
 
+export const listAllFiles = (projectHash: string) =>
+  invoke<string[]>("list_all_files", { projectHash });
+
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });
 

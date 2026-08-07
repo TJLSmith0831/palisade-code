@@ -237,16 +237,7 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
-.ds-mode-selector {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: inline-flex;
-  background: var(--surface-warm);
-  padding: 2px;
-  border-radius: 9999px;
-  border: 1px solid var(--border);
-}
+/* .ds-mode-selector removed from top chrome — mode toggle now lives in .composer-mode-selector */
 
 .ds-mode-btn {
   padding: 3px 10px;
@@ -347,7 +338,6 @@ input[type="checkbox"] {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 10px 10px 8px;
   flex-shrink: 0;
   min-height: 0;
   transition: margin 200ms cubic-bezier(0.2, 0, 0, 1);
@@ -384,11 +374,17 @@ input[type="checkbox"] {
   margin-bottom: 12px;
 }
 
-.ds-rail-section.ds-rail-threads {
-  flex: 1;
-  min-height: 0;
+.ds-workspace-panel {
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ds-threads-panel {
+  padding: 6px;
   display: flex;
   flex-direction: column;
+  gap: 8px;
 }
 
 .ds-rail-label {
@@ -483,15 +479,13 @@ input[type="checkbox"] {
   border-color: var(--fg);
 }
 
-.ds-nav-rail ul {
+.ds-threads-panel ul {
   list-style: none;
   margin: 0;
   padding: 0;
-  overflow-y: auto;
-  flex: 1;
 }
 
-.ds-nav-rail li {
+.ds-threads-panel li {
   padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -503,11 +497,11 @@ input[type="checkbox"] {
   transition: background 120ms ease-out;
 }
 
-.ds-nav-rail li:hover {
+.ds-threads-panel li:hover {
   background: var(--surface-warm);
 }
 
-.ds-nav-rail li.active {
+.ds-threads-panel li.active {
   background: var(--surface-warm);
   border-left: 2px solid var(--accent);
   border-radius: 0 6px 6px 0;
@@ -531,7 +525,7 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
-.ds-nav-rail li.active .ds-thread-title {
+.ds-threads-panel li.active .ds-thread-title {
   color: var(--fg);
   font-weight: 600;
 }
@@ -550,8 +544,8 @@ input[type="checkbox"] {
   transition: opacity 120ms ease-out;
 }
 
-.ds-nav-rail li:hover .ds-thread-actions,
-.ds-nav-rail li:focus-within .ds-thread-actions {
+.ds-threads-panel li:hover .ds-thread-actions,
+.ds-threads-panel li:focus-within .ds-thread-actions {
   opacity: 1;
 }
 
@@ -579,55 +573,11 @@ input[type="checkbox"] {
   color: var(--danger);
 }
 
-.ds-rail-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 4px 0;
-  border-top: 1px solid var(--border);
-}
-
-.ds-user-chip {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: var(--surface-warm);
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-  font-size: 10px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.ds-user-name {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.ds-think-toggle {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 9px;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.ds-think-toggle input {
-  accent-color: var(--accent);
-  width: 10px;
-  height: 10px;
-  margin: 0;
-}
-
 /* --- file tree (v2) ----------------------------------------------------- */
 
 .ds-file-tree {
-  width: 143px;
+  width: 100%;
   background: var(--editor-bg);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -1050,6 +1000,10 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Paint its own solid background rather than relying on `.main` showing
+     through — WebKit can show a stale-frame seam under a sticky child
+     during momentum scroll when the scrolling box itself is transparent. */
+  background: var(--editor-bg);
 }
 
 /* --- agent chat bubble (v2) ---------------------------------------------- */
@@ -1322,10 +1276,36 @@ input[type="checkbox"] {
 
 .diff-pane {
   padding: 10px 14px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Pinned so Fetch/Pull/Push and the commit box stay reachable no matter how
+   long the Changes/Staged lists (or Turn History below them) grow — they
+   used to scroll away with everything else inside `.messages`. Bleeds into
+   `.diff-pane`'s own padding so it's a flush, solid toolbar (no inset card
+   look, no seam at the edges) rather than floating content with gaps a
+   scrolled diff row could show through. */
+.diff-sticky-controls {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--editor-bg);
+  margin: -10px -14px 0;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  /* Forces its own compositing layer — WKWebView can otherwise leave a
+     stale-paint sliver of scrolled-past content showing behind a sticky
+     element even though its computed position is already flush. */
+  transform: translateZ(0);
+  /* Belt-and-suspenders: paint a solid block above the element's own box,
+     since the compositing-layer fix alone still let a sub-pixel sliver of
+     the previous scrolled line show through the boundary in testing. */
+  box-shadow: 0 -40px 0 var(--editor-bg);
 }
 
 .diff-sync-bar {
@@ -1852,6 +1832,50 @@ details.graph-report-wrap > summary {
   color: var(--muted);
 }
 
+.file-palette {
+  align-items: stretch;
+}
+
+.file-palette input {
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.file-palette-results {
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+
+.file-palette-results li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-palette-results li:hover,
+.file-palette-results li.active {
+  background: var(--surface-warm);
+}
+
+.file-palette-empty {
+  color: var(--muted);
+  cursor: default !important;
+}
+
+.file-palette-empty:hover {
+  background: none !important;
+}
+
 .confirm-actions {
   display: flex;
   gap: 8px;
@@ -1889,36 +1913,7 @@ details.graph-report-wrap > summary {
 }
 
 @media (max-width: 760px) {
-  .ds-file-tree {
-    display: none;
-  }
-
   .ds-nav-rail {
-    width: 48px;
-    padding: 8px 4px;
-  }
-
-  .ds-nav-rail .ds-rail-label,
-  .ds-nav-rail .ds-rail-actions,
-  .ds-nav-rail .ds-thread-title,
-  .ds-nav-rail .ds-thread-meta,
-  .ds-nav-rail .ds-user-name,
-  .ds-nav-rail .ds-think-toggle,
-  .ds-nav-rail select,
-  .ds-new-thread {
-    display: none;
-  }
-
-  .ds-nav-rail .ds-rail-section {
-    margin-bottom: 8px;
-  }
-
-  .ds-nav-rail li {
-    padding: 4px;
-    justify-content: center;
-  }
-
-  .ds-nav-rail .ds-thread-actions {
     display: none;
   }
 }

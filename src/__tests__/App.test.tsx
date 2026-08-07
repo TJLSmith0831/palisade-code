@@ -147,11 +147,39 @@ describe("Top chrome (merged-design v2)", () => {
     expect(getComputedStyle(chrome).height).toBe("36px");
   });
 
-  it("has centered Spec/Go mode pill switch", () => {
-    render(<App />);
-    expect(screen.getByTestId("mode-selector")).toBeDefined();
+  it("has Spec/Go mode toggle in the chat composer", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([{ id: "t1", projectHash: "proj-1", title: "Test Thread", createdAt: "2026-08-06T00:00:00Z", updatedAt: "2026-08-06T00:00:00Z", currentMode: "spec", openSpecChangeName: null, executorSessionId: null }]);
+      if (cmd === "read_thread") return Promise.resolve([]);
+      if (cmd === "list_notes") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "read_file_content") return Promise.resolve("");
+      if (cmd === "get_file_info") return Promise.resolve(null);
+      if (cmd === "git_branches") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const { unmount } = render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    const threadItem = await screen.findByText("Test Thread");
+    fireEvent.click(threadItem);
+    // Switch to the chat tab where the composer (and mode toggle) lives
+    fireEvent.click(screen.getByTestId("tab-chat"));
+    await waitFor(() => expect(screen.getByTestId("mode-selector")).toBeDefined());
     expect(screen.getByTestId("mode-spec")).toBeDefined();
     expect(screen.getByTestId("mode-go")).toBeDefined();
+    unmount();
   });
 
   it("shows preflight status in utility cluster", () => {
@@ -166,7 +194,7 @@ describe("Top chrome (merged-design v2)", () => {
   });
 });
 
-describe("Navigation rail (merged-design v2)", () => {
+describe("Navigation rail — File Explorer only (D57)", () => {
   it("renders at 193px width by default and is resizable", () => {
     render(<App />);
     const rail = screen.getByTestId("nav-rail");
@@ -190,6 +218,18 @@ describe("Navigation rail (merged-design v2)", () => {
     unmount();
   });
 
+  it("contains only the file tree — no Workspace picker or Threads list", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    const rail = screen.getByTestId("nav-rail");
+    expect(rail.querySelector('[data-testid="file-tree"]')).not.toBeNull();
+    expect(rail.querySelector('[data-testid="project-picker"]')).toBeNull();
+    expect(rail.querySelector('[data-testid="thread-list"]')).toBeNull();
+    expect(rail.querySelector('[data-testid="new-thread"]')).toBeNull();
+  });
+});
+
+describe("Right sidebar — Workspace + Threads (D57)", () => {
   it("has workspace selector with project picker", () => {
     render(<App />);
     expect(screen.getByTestId("project-picker")).toBeDefined();
@@ -203,6 +243,21 @@ describe("Navigation rail (merged-design v2)", () => {
   it("has thread list", () => {
     render(<App />);
     expect(screen.getByTestId("thread-list")).toBeDefined();
+  });
+
+  it("defaults to the Threads tab, and keeps Workspace visible when switching tabs", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    expect(screen.getByTestId("tab-threads").className).toMatch(/active/);
+    expect(screen.getByTestId("thread-list")).toBeDefined();
+    expect(screen.getByTestId("new-thread")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("tab-codemap"));
+    expect(screen.getByTestId("tab-codemap").className).toMatch(/active/);
+    // Workspace stays pinned above the tabs regardless of which tab is active;
+    // New Thread lives inside the Threads pane itself, so it hides with it.
+    expect(screen.getByTestId("project-picker")).toBeDefined();
+    expect(screen.queryByTestId("new-thread")).toBeNull();
   });
 
   it("switches to the chat panel when a new thread is created", async () => {
@@ -346,8 +401,9 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("has Code Map and Notes tabs", () => {
+  it("has Threads, Code Map, and Notes tabs", () => {
     render(<App />);
+    expect(screen.getByTestId("tab-threads")).toBeDefined();
     expect(screen.getByTestId("tab-codemap")).toBeDefined();
     expect(screen.getByTestId("tab-notes")).toBeDefined();
   });
@@ -357,19 +413,26 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.queryByTestId("tab-files")).toBeNull();
   });
 
-  it("is collapsed by default", () => {
+  it("is open by default at 300px (D57 — Workspace + Threads are load-bearing, not optional)", () => {
     render(<App />);
-    const sidebar = screen.getByTestId("right-sidebar");
-    expect(sidebar.style.marginRight).not.toBe("0px");
-    expect(screen.queryByTestId("resize-right-panel")).toBeNull();
-  });
-
-  it("opens at 300px by default (the Communities list collapses instead of forcing extra width)", () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId("toggle-right-sidebar"));
     const sidebar = screen.getByTestId("right-sidebar");
     expect(sidebar.style.marginRight).toBe("0px");
     expect(sidebar.style.getPropertyValue("--panel-w")).toBe("300px");
+    expect(screen.getByTestId("resize-right-panel")).toBeDefined();
+  });
+
+  it("collapses via the toggle and restores on a second click", () => {
+    render(<App />);
+    const sidebar = screen.getByTestId("right-sidebar");
+    const toggle = screen.getByTestId("toggle-right-sidebar");
+
+    fireEvent.click(toggle);
+    expect(sidebar.style.marginRight).not.toBe("0px");
+    expect(screen.queryByTestId("resize-right-panel")).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(sidebar.style.marginRight).toBe("0px");
+    expect(screen.getByTestId("resize-right-panel")).toBeDefined();
   });
 });
 

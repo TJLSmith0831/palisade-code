@@ -11,6 +11,7 @@ import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
 import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } from "./EventView";
 import FileEditorPane from "./FileEditorPane";
+import FilePalette from "./FilePalette";
 import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
@@ -105,10 +106,10 @@ export default function App() {
   const [flight, setFlight] = useState<Preflight | null>(null);
   const [live, setLive] = useState<ExecutorEvent[]>([]);
   const [busy, setBusy] = useState(false);
-  const [showThinking, setShowThinking] = useState(() => localStorage.getItem(SHOW_THINKING_KEY) === "1");
+  const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [chatTab, setChatTab] = useState<"chat" | "editor" | "diff">("editor");
-  const [rightTab, setRightTab] = useState<"codemap" | "notes" | "terminal">("codemap");
+  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "notes" | "terminal">("threads");
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
     () => (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) || "bottom",
   );
@@ -127,7 +128,7 @@ export default function App() {
     max: 820,
     axis: "horizontal",
     reverse: true,
-    defaultCollapsed: true,
+    defaultCollapsed: false,
   });
   const terminalPanel = useResizable({
     storageKey: `floo:layout:${layoutHash}:terminal`,
@@ -146,7 +147,7 @@ export default function App() {
         setRightTab("terminal");
         rightPanel.setCollapsed(false);
       } else {
-        setRightTab((tab) => (tab === "terminal" ? "codemap" : tab));
+        setRightTab((tab) => (tab === "terminal" ? "threads" : tab));
         terminalPanel.setCollapsed(false);
       }
       return next;
@@ -166,6 +167,9 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) || "auto");
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
+  const filesCache = useRef<Map<string, string[]>>(new Map());
 
   const handleFileSave = useCallback((edit: { path: string; before: string; after: string }) => {
     setFileEdits((prev) => [...prev, edit]);
@@ -519,12 +523,34 @@ export default function App() {
     }, 300);
   };
 
+  // Cached per project hash so reopening the palette doesn't re-walk the tree.
+  const openFilePalette = useCallback(async () => {
+    if (!project) return;
+    setPaletteOpen(true);
+    const cached = filesCache.current.get(project.hash);
+    if (cached) {
+      setPaletteFiles(cached);
+      return;
+    }
+    try {
+      const files = await api.listAllFiles(project.hash);
+      filesCache.current.set(project.hash, files);
+      setPaletteFiles(files);
+    } catch (err) {
+      fail(err);
+    }
+  }, [project]);
+
   // ⌘N opens the note command bar from anywhere.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         if (project) setBar({ kind: "input", label: "New note", value: "", submit: onCreateNote });
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        openFilePalette();
       }
       if (event.key === "Escape") setBar(null);
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
@@ -542,7 +568,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [project, onCreateNote, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
+  }, [project, onCreateNote, openFilePalette, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
 
   // ------------------------------------------------------------------ view
 
@@ -570,24 +596,6 @@ export default function App() {
       </div>
       <div className="app" data-color-mode="dark">
         <header className="ds-top-chrome" data-testid="top-chrome" data-tauri-drag-region="">
-          <div className="ds-mode-selector" data-testid="mode-selector">
-            <button
-              className={`ds-mode-btn ${thread?.currentMode === "spec" ? "active" : ""}`}
-              onClick={() => thread?.currentMode !== "spec" && onSpec()}
-              disabled={busy || !flight?.selected}
-              data-testid="mode-spec"
-            >
-              Spec <kbd>S</kbd>
-            </button>
-            <button
-              className={`ds-mode-btn ${thread?.currentMode === "go" ? "active" : ""}`}
-              onClick={() => thread?.currentMode !== "go" && onGo()}
-              disabled={busy || !flight?.selected}
-              data-testid="mode-go"
-            >
-              Go <kbd>G</kbd>
-            </button>
-          </div>
           <div className="ds-chrome-utils">
             <button
               className="ds-icon-btn"
@@ -669,102 +677,14 @@ export default function App() {
             } as CSSProperties
           }
         >
-          <div className="ds-rail-section">
-            <div className="ds-rail-label">Workspace</div>
-            <select
-              data-testid="project-picker"
-              value={project?.hash ?? ""}
-              onChange={(event) => {
-                const next = projects.find((p) => p.hash === event.target.value);
-                if (next) selectProject(next);
-              }}
-            >
-              {projects.length === 0 && <option value="">No project</option>}
-              {projects.map((p) => (
-                <option key={p.hash} value={p.hash}>
-                  {p.displayName}
-                </option>
-              ))}
-            </select>
-            <div className="ds-rail-actions">
-              <button onClick={onAddProject} data-testid="add-project">Add</button>
-              {project && (
-                <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
-              )}
-            </div>
-            {project && branches.length > 0 && (
-              <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
-                ⎇ {branches.find((b) => b.isCurrent)?.name ?? "…"}
-              </button>
-            )}
-          </div>
-          <div className="ds-rail-section">
-            <button className="ds-new-thread" onClick={onNewThread} disabled={!project} data-testid="new-thread">
-              + New Thread
-            </button>
-          </div>
-          <div className="ds-rail-section ds-rail-threads">
-            <div className="ds-rail-label">Threads</div>
-            <ul data-testid="thread-list">
-              {threads.map((t) => (
-                <li
-                  key={t.id}
-                  className={t.id === thread?.id ? "active" : ""}
-                  onClick={() => {
-                    setNote(null);
-                    if (project) selectThread(project.hash, t);
-                  }}
-                >
-                  <div className="ds-thread-row">
-                    <span className="ds-thread-title">{t.title}</span>
-                    <div className="ds-thread-actions">
-                      <button
-                        className="ds-thread-action"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRenameThread(t);
-                        }}
-                        title="Rename thread"
-                        data-testid="rename-thread-item"
-                      >
-                        ✎
-                      </button>
-                      <button
-                        className="ds-thread-action delete"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDeleteThread(t);
-                        }}
-                        title="Delete thread"
-                        data-testid="delete-thread"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                  <span className="ds-thread-meta">
-                    <span className={`badge ${t.currentMode}`}>{t.currentMode}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="ds-rail-footer">
-            <div className="ds-user-chip">T</div>
-            <span className="ds-user-name">tjlsmith</span>
-            <label className="ds-think-toggle" data-testid="show-thinking">
-              <input
-                type="checkbox"
-                checked={showThinking}
-                onChange={(event) => {
-                  const next = event.target.checked;
-                  setShowThinking(next);
-                  localStorage.setItem(SHOW_THINKING_KEY, next ? "1" : "0");
-                }}
-              />
-              think
-            </label>
-          </div>
+          {project && (
+            <FileTree
+              projectHash={project.hash}
+              projectName={project.displayName}
+              onSelectFile={setSelectedFile}
+              activePath={selectedFile}
+            />
+          )}
         </nav>
 
         {!leftRail.collapsed && (
@@ -772,15 +692,6 @@ export default function App() {
             className="ds-resize-handle ds-resize-handle-x"
             data-testid="resize-left-rail"
             onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
-          />
-        )}
-
-        {project && (
-          <FileTree
-            projectHash={project.hash}
-            projectName={project.displayName}
-            onSelectFile={setSelectedFile}
-            activePath={selectedFile}
           />
         )}
 
@@ -944,11 +855,29 @@ export default function App() {
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     flight?.selected
-                      ? "Message, or /go · /spec · /propose"
+                      ? "Message, or /propose"
                       : "Chat-only — no executor on PATH"
                   }
                   data-testid="composer-input"
                 />
+                <div className="composer-mode-selector" data-testid="mode-selector">
+                  <button
+                    className={`ds-mode-btn ${thread?.currentMode === "spec" ? "active" : ""}`}
+                    onClick={() => thread?.currentMode !== "spec" && onSpec()}
+                    disabled={busy || !flight?.selected}
+                    data-testid="mode-spec"
+                  >
+                    Spec <kbd>S</kbd>
+                  </button>
+                  <button
+                    className={`ds-mode-btn ${thread?.currentMode === "go" ? "active" : ""}`}
+                    onClick={() => thread?.currentMode !== "go" && onGo()}
+                    disabled={busy || !flight?.selected}
+                    data-testid="mode-go"
+                  >
+                    Go <kbd>G</kbd>
+                  </button>
+                </div>
                 <button
                   type="submit"
                   className="send"
@@ -1011,7 +940,45 @@ export default function App() {
             } as CSSProperties
           }
         >
+          <div className="ds-workspace-panel">
+            <div className="ds-rail-section">
+              <div className="ds-rail-label">Workspace</div>
+              <select
+                data-testid="project-picker"
+                value={project?.hash ?? ""}
+                onChange={(event) => {
+                  const next = projects.find((p) => p.hash === event.target.value);
+                  if (next) selectProject(next);
+                }}
+              >
+                {projects.length === 0 && <option value="">No project</option>}
+                {projects.map((p) => (
+                  <option key={p.hash} value={p.hash}>
+                    {p.displayName}
+                  </option>
+                ))}
+              </select>
+              <div className="ds-rail-actions">
+                <button onClick={onAddProject} data-testid="add-project">Add</button>
+                {project && (
+                  <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
+                )}
+              </div>
+              {project && branches.length > 0 && (
+                <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
+                  ⎇ {branches.find((b) => b.isCurrent)?.name ?? "…"}
+                </button>
+              )}
+            </div>
+          </div>
           <div className="ds-right-tabs">
+            <button
+              className={rightTab === "threads" ? "active" : ""}
+              onClick={() => setRightTab("threads")}
+              data-testid="tab-threads"
+            >
+              Threads
+            </button>
             <button
               className={rightTab === "codemap" ? "active" : ""}
               onClick={() => setRightTab("codemap")}
@@ -1037,6 +1004,56 @@ export default function App() {
             )}
           </div>
           <div className="ds-right-panes">
+            {rightTab === "threads" && (
+              <div className="ds-threads-panel">
+                <button className="ds-new-thread" onClick={onNewThread} disabled={!project} data-testid="new-thread">
+                  + New Thread
+                </button>
+                <ul data-testid="thread-list">
+                  {threads.map((t) => (
+                    <li
+                      key={t.id}
+                      className={t.id === thread?.id ? "active" : ""}
+                      onClick={() => {
+                        setNote(null);
+                        if (project) selectThread(project.hash, t);
+                      }}
+                    >
+                      <div className="ds-thread-row">
+                        <span className="ds-thread-title">{t.title}</span>
+                        <div className="ds-thread-actions">
+                          <button
+                            className="ds-thread-action"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onRenameThread(t);
+                            }}
+                            title="Rename thread"
+                            data-testid="rename-thread-item"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            className="ds-thread-action delete"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onDeleteThread(t);
+                            }}
+                            title="Delete thread"
+                            data-testid="delete-thread"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                      <span className="ds-thread-meta">
+                        <span className={`badge ${t.currentMode}`}>{t.currentMode}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {rightTab === "codemap" && project && (
               <GraphPane
                 projectHash={project.hash}
@@ -1077,6 +1094,14 @@ export default function App() {
           </div>
         </aside>
       </div>
+
+      {paletteOpen && (
+        <FilePalette
+          files={paletteFiles}
+          onSelect={setSelectedFile}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
 
       {bar && bar.kind === "input" && (
         <div className="overlay" onClick={() => setBar(null)}>
