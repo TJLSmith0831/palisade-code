@@ -212,6 +212,11 @@ export const listDirectory = (projectHash: string, relativePath: string) =>
 export const listAllFiles = (projectHash: string) =>
   invoke<string[]>("list_all_files", { projectHash });
 
+export type TextMatch = { path: string; line: number; text: string };
+
+export const searchText = (projectHash: string, query: string) =>
+  invoke<TextMatch[]>("search_text", { projectHash, query });
+
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });
 

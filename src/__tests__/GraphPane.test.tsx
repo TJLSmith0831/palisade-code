@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -65,5 +65,29 @@ describe("GraphPane", () => {
 
     await waitFor(() => expect(screen.getByTestId("graph-view")).toBeDefined());
     expect(invokeMock.mock.calls.some(([cmd]) => cmd === "run_graphify")).toBe(false);
+  });
+
+  it("labels the scope and query inputs for screen readers, not just their placeholders", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "load_graphify") {
+        return Promise.resolve({
+          outDir: "/tmp/proj/graphify-out",
+          report: "# Report",
+          graph: { nodes: [{ id: "a" }], links: [] },
+          summary: "prior run",
+        });
+      }
+      return Promise.reject(new Error(`unexpected command ${cmd}`));
+    });
+
+    render(<GraphPane projectHash="proj-1" />);
+    await waitFor(() => expect(screen.getByTestId("graph-view")).toBeDefined());
+
+    expect(screen.getByLabelText(/subdirectory scope/i)).toBe(screen.getByTestId("graph-scope"));
+    expect(screen.getByLabelText(/ask the graph/i)).toBe(screen.getByTestId("graph-question"));
+
+    fireEvent.change(screen.getByTestId("graph-subcommand"), { target: { value: "path" } });
+    expect(screen.getByLabelText(/node a/i)).toBe(screen.getByTestId("graph-question-a"));
+    expect(screen.getByLabelText(/node b/i)).toBe(screen.getByTestId("graph-question-b"));
   });
 });

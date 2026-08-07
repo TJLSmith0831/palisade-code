@@ -88,3 +88,32 @@ describe("CSS token system (merged-design.json)", () => {
     expect(rootRule!.style.colorScheme).toBe("dark");
   });
 });
+
+describe("Icon button sizing", () => {
+  it("matches DESIGN.md's documented 32px panel-toggle icon button", () => {
+    const rules = [...document.styleSheets].flatMap((s) => {
+      try { return [...s.cssRules]; } catch { return []; }
+    });
+    const rule = rules.find(
+      (r) => r instanceof CSSStyleRule && r.selectorText === ".ds-icon-btn"
+    ) as CSSStyleRule | undefined;
+    expect(rule).toBeDefined();
+    expect(rule!.style.height).toBe("32px");
+  });
+});
+
+describe("Responsive breakpoints", () => {
+  it("never hides the file explorer with display:none (its toggle button would go dead — it only controls margin-left)", () => {
+    const allRules = [...document.styleSheets].flatMap((s) => {
+      try { return [...s.cssRules]; } catch { return []; }
+    });
+    const mediaRules = allRules.filter((r): r is CSSMediaRule => r instanceof CSSMediaRule);
+    const navRailDisplayNoneRules = mediaRules
+      .flatMap((r) => [...r.cssRules])
+      .filter(
+        (r): r is CSSStyleRule =>
+          r instanceof CSSStyleRule && r.selectorText === ".ds-nav-rail" && r.style.display === "none",
+      );
+    expect(navRailDisplayNoneRules).toHaveLength(0);
+  });
+});

@@ -177,4 +177,19 @@ describe("FileTree", () => {
     await waitFor(() => expect(screen.getByText(/can't move a folder into itself/i)).toBeDefined());
     expect(calls.some((c) => c.cmd === "rename_path")).toBe(false);
   });
+
+  it("is keyboard-focusable and opens a file on Enter or Space", async () => {
+    const onSelectFile = vi.fn();
+    render(<FileTree projectHash="good" projectName="p" onSelectFile={onSelectFile} activePath={null} />);
+    const row = (await screen.findByText("README.md")).closest(".ds-tree-row")!;
+
+    expect(row).toHaveAttribute("tabIndex", "0");
+
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onSelectFile).toHaveBeenCalledWith("README.md");
+
+    onSelectFile.mockClear();
+    fireEvent.keyDown(row, { key: " " });
+    expect(onSelectFile).toHaveBeenCalledWith("README.md");
+  });
 });

@@ -568,6 +568,162 @@ describe("Resizable layout persistence", () => {
   });
 });
 
+describe("Keyboard navigation (accessibility)", () => {
+  it("switches threads via Enter on a keyboard-focused thread row", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") {
+        return Promise.resolve([
+          { id: "t1", title: "Thread A", createdAt: "2026-08-06T00:00:00Z", currentMode: "spec" },
+          { id: "t2", title: "Thread B", createdAt: "2026-08-06T00:00:00Z", currentMode: "spec" },
+        ]);
+      }
+      if (cmd === "read_thread") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Thread A")).toBeDefined());
+    const rowB = screen.getByText("Thread B").closest("li")!;
+    expect(rowB).toHaveAttribute("tabIndex", "0");
+
+    fireEvent.keyDown(rowB, { key: "Enter" });
+    await waitFor(() => expect(rowB.className).toMatch(/active/));
+  });
+
+  it("switches branches via Enter on a keyboard-focused branch row", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") {
+        return Promise.resolve([
+          { name: "main", isCurrent: true, isRemote: false },
+          { name: "feature", isCurrent: false, isRemote: false },
+        ]);
+      }
+      if (cmd === "git_checkout_branch") return Promise.resolve();
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("branch-indicator")).toBeDefined());
+    fireEvent.click(screen.getByTestId("branch-indicator"));
+
+    const row = (await screen.findByText("feature")).closest("li")!;
+    expect(row).toHaveAttribute("tabIndex", "0");
+
+    fireEvent.keyDown(row, { key: "Enter" });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_checkout_branch", expect.objectContaining({ name: "feature" })),
+    );
+  });
+});
+
+describe("Heading hierarchy (accessibility)", () => {
+  it("has a document h1 and no h4 anywhere in the app shell", () => {
+    const { container } = render(<App />);
+    expect(container.querySelector("h1")).not.toBeNull();
+    expect(container.querySelectorAll("h4")).toHaveLength(0);
+  });
+});
+
+describe("Labeled inputs (accessibility)", () => {
+  it("labels the chat composer input, not just its placeholder", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") {
+        return Promise.resolve([{ id: "t1", title: "Thread A", createdAt: "2026-08-06T00:00:00Z", currentMode: "spec" }]);
+      }
+      if (cmd === "read_thread") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Thread A")).toBeDefined());
+    fireEvent.click(screen.getByTestId("tab-chat"));
+
+    expect(screen.getByLabelText("Message")).toBe(screen.getByTestId("composer-input"));
+  });
+
+  it("labels the new-branch-name input, not just its placeholder", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          { hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") return Promise.resolve([{ name: "main", isCurrent: true, isRemote: false }]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("branch-indicator")).toBeDefined());
+    fireEvent.click(screen.getByTestId("branch-indicator"));
+
+    expect(screen.getByLabelText(/new branch name/i)).toBe(screen.getByTestId("branch-new-input"));
+  });
+});
+
+describe("Find in files (Cmd+Shift+F)", () => {
+  it("opens the find-in-files palette on Cmd+Shift+F and closes on Escape", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+
+    fireEvent.keyDown(window, { key: "f", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId("text-search-input")).toHaveFocus());
+
+    fireEvent.keyDown(screen.getByTestId("text-search-input"), { key: "Escape" });
+    expect(screen.queryByTestId("text-search-input")).toBeNull();
+  });
+});
+
 describe("Theme toggle", () => {
   afterEach(() => {
     localStorage.removeItem("floo:theme");

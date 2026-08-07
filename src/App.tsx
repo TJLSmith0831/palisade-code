@@ -14,12 +14,17 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import * as api from "./api";
 import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
+import { onActivateKey } from "./a11y";
+import { describeError } from "./errors";
+import { RenameIcon, DeleteIcon } from "./icons";
 import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } from "./EventView";
 import FileEditorPane from "./FileEditorPane";
 import FilePalette from "./FilePalette";
+import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
+import Modal from "./Modal";
 import SettingsPanel, { applyAccentHue, loadAccentHue } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
 import { enableModernWindowStyle } from "./macRoundedCorners";
@@ -63,6 +68,19 @@ const TerminalIcon = () => (
     <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
     <path d="M4 6.2 6.8 8 4 9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
     <line x1="8" y1="9.8" x2="11.2" y2="9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+  </svg>
+);
+
+// Same stroke weight as SettingsIcon (24x24 viewBox, 1.5 stroke) — the family
+// used for small inline row actions (rename/delete/branch), as distinct from
+// the 16x16/1.3 panel-toggle family above. RenameIcon/DeleteIcon live in
+// ./icons since FilePalette needs the same two for its own row actions.
+const BranchIcon = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+    <line x1="6" y1="3" x2="6" y2="15" strokeLinecap="round" />
+    <circle cx="18" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <path strokeLinecap="round" d="M18 9a9 9 0 0 1-9 9" />
   </svg>
 );
 
@@ -197,6 +215,7 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
   const filesCache = useRef<Map<string, string[]>>(new Map());
@@ -223,7 +242,7 @@ export default function App() {
     enableModernWindowStyle({ offsetY: -3 });
   }, []);
 
-  const fail = (err: unknown) => setError(String(err));
+  const fail = (err: unknown) => setError(describeError(err));
 
   const selectThread = useCallback(async (projectHash: string, next: ThreadMeta | null) => {
     setThread(next);
@@ -536,10 +555,11 @@ export default function App() {
     }
   };
 
-  // Cached per project hash so reopening the palette doesn't re-walk the tree.
-  const openFilePalette = useCallback(async () => {
+  // Cached per project hash so reopening a palette doesn't re-walk the tree.
+  // Shared by the file palette (⌘P) and find-in-files (⌘⇧F) — both need the
+  // same flat file list, just for different search modes.
+  const ensurePaletteFiles = useCallback(async () => {
     if (!project) return;
-    setPaletteOpen(true);
     const cached = filesCache.current.get(project.hash);
     if (cached) {
       setPaletteFiles(cached);
@@ -553,6 +573,26 @@ export default function App() {
       fail(err);
     }
   }, [project]);
+
+  const openFilePalette = useCallback(async () => {
+    if (!project) return;
+    setPaletteOpen(true);
+    await ensurePaletteFiles();
+  }, [project, ensurePaletteFiles]);
+
+  const openTextSearch = useCallback(async () => {
+    if (!project) return;
+    setTextSearchOpen(true);
+    await ensurePaletteFiles();
+  }, [project, ensurePaletteFiles]);
+
+  const searchProjectText = useCallback(
+    (query: string) => {
+      if (!project) return Promise.resolve([]);
+      return api.searchText(project.hash, query);
+    },
+    [project],
+  );
 
   // Bypasses the cache — used after a palette create/rename/delete so the
   // palette's own list (and the file tree, via the token bump) catch up.
@@ -620,6 +660,10 @@ export default function App() {
         event.preventDefault();
         openFilePalette();
       }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        openTextSearch();
+      }
       if (event.key === "Escape") setBar(null);
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
         event.preventDefault();
@@ -636,7 +680,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openFilePalette, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
+  }, [openFilePalette, openTextSearch, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
 
   // ------------------------------------------------------------------ view
 
@@ -661,6 +705,7 @@ export default function App() {
           data-testid="top-chrome"
           onMouseDown={onTitlebarMouseDown}
         >
+          <h1 className="sr-only">Floo Network</h1>
           <div className="ds-chrome-utils">
             <button
               className="ds-icon-btn"
@@ -830,7 +875,7 @@ export default function App() {
                 const allEdits = [...threadEdits, ...manualEdits];
                 return (
                   <section className="diff-section" data-testid="turn-history-section">
-                    <h4>Turn History</h4>
+                    <h2 className="ds-section-heading">Turn History</h2>
                     {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
                     <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
                   </section>
@@ -908,6 +953,7 @@ export default function App() {
                       ? "Message, or /propose"
                       : "Chat-only — no executor on PATH"
                   }
+                  aria-label="Message"
                   data-testid="composer-input"
                 />
                 <div className="composer-mode-selector" data-testid="mode-selector">
@@ -1016,7 +1062,7 @@ export default function App() {
               </div>
               {project && branches.length > 0 && (
                 <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
-                  ⎇ {branches.find((b) => b.isCurrent)?.name ?? "…"}
+                  <BranchIcon /> {branches.find((b) => b.isCurrent)?.name ?? "…"}
                 </button>
               )}
             </div>
@@ -1057,9 +1103,14 @@ export default function App() {
                     <li
                       key={t.id}
                       className={t.id === thread?.id ? "active" : ""}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         if (project) selectThread(project.hash, t);
                       }}
+                      onKeyDown={onActivateKey(() => {
+                        if (project) selectThread(project.hash, t);
+                      })}
                     >
                       <div className="ds-thread-row">
                         <span className="ds-thread-title">{t.title}</span>
@@ -1073,7 +1124,7 @@ export default function App() {
                             title="Rename thread"
                             data-testid="rename-thread-item"
                           >
-                            ✎
+                            <RenameIcon />
                           </button>
                           <button
                             className="ds-thread-action delete"
@@ -1084,7 +1135,7 @@ export default function App() {
                             title="Delete thread"
                             data-testid="delete-thread"
                           >
-                            ×
+                            <DeleteIcon />
                           </button>
                         </div>
                       </div>
@@ -1119,82 +1170,93 @@ export default function App() {
         />
       )}
 
+      {textSearchOpen && (
+        <TextSearchPalette
+          files={paletteFiles}
+          onSearchText={searchProjectText}
+          onSelect={setSelectedFile}
+          onClose={() => setTextSearchOpen(false)}
+        />
+      )}
+
       {settingsOpen && (
         <SettingsPanel onOpenProjectSettings={onOpenSettings} onClose={() => setSettingsOpen(false)} />
       )}
 
       {bar && bar.kind === "input" && (
-        <div className="overlay" onClick={() => setBar(null)}>
-          <div className="commandbar" onClick={(event) => event.stopPropagation()}>
-            <label htmlFor="barInput">{bar.label}</label>
-            <input
-              id="barInput"
-              name="barInput"
-              autoFocus
-              autoComplete="off"
-              defaultValue={bar.value}
-              placeholder={bar.value ? undefined : "filename"}
-              data-testid="note-name-input"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  const value = event.currentTarget.value.trim();
-                  if (!value) return;
-                  const { submit } = bar;
-                  setBar(null);
-                  submit(value);
-                }
-              }}
-            />
-            <span className="hint">Enter to confirm · Esc to cancel</span>
-          </div>
-        </div>
+        <Modal onClose={() => setBar(null)} label={bar.label}>
+          <label htmlFor="barInput">{bar.label}</label>
+          <input
+            id="barInput"
+            name="barInput"
+            autoFocus
+            autoComplete="off"
+            defaultValue={bar.value}
+            placeholder={bar.value ? undefined : "filename"}
+            data-testid="note-name-input"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                const value = event.currentTarget.value.trim();
+                if (!value) return;
+                const { submit } = bar;
+                setBar(null);
+                submit(value);
+              }
+            }}
+          />
+          <span className="hint">Enter to confirm · Esc to cancel</span>
+        </Modal>
       )}
 
       {bar && bar.kind === "confirm" && (
-        <div className="overlay" onClick={() => setBar(null)}>
-          <div className="commandbar" onClick={(event) => event.stopPropagation()}>
-            <label>{bar.label}</label>
-            <div className="confirm-actions">
-              <button onClick={bar.onConfirm} className="danger" data-testid="confirm-delete" autoFocus>
-                Delete
-              </button>
-              <button onClick={() => setBar(null)}>Cancel</button>
-            </div>
+        <Modal onClose={() => setBar(null)} label={bar.label}>
+          <label>{bar.label}</label>
+          <div className="confirm-actions">
+            <button onClick={bar.onConfirm} className="danger" data-testid="confirm-delete" autoFocus>
+              Delete
+            </button>
+            <button onClick={() => setBar(null)}>Cancel</button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {bar && bar.kind === "select" && (
-        <div className="overlay" onClick={() => setBar(null)}>
-          <div className="commandbar" onClick={(event) => event.stopPropagation()}>
-            <label htmlFor="barSelect">{bar.label}</label>
-            <ul className="ds-branch-list" data-testid="branch-list">
-              {bar.options.map((name) => (
-                <li key={name} onClick={() => bar.submit(name)} data-testid="branch-option">
-                  {name}
-                </li>
-              ))}
-            </ul>
-            <input
-              id="barSelect"
-              name="barSelect"
-              autoFocus
-              autoComplete="off"
-              placeholder="new-branch-name"
-              data-testid="branch-new-input"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  const value = event.currentTarget.value.trim();
-                  if (!value) return;
-                  bar.submit(value);
-                }
-              }}
-            />
-            <span className="hint">Click a branch to switch · Enter a name to create · Esc to cancel</span>
-          </div>
-        </div>
+        <Modal onClose={() => setBar(null)} label={bar.label}>
+          <label htmlFor="barSelect">{bar.label}</label>
+          <ul className="ds-branch-list" data-testid="branch-list">
+            {bar.options.map((name) => (
+              <li
+                key={name}
+                role="button"
+                tabIndex={0}
+                onClick={() => bar.submit(name)}
+                onKeyDown={onActivateKey(() => bar.submit(name))}
+                data-testid="branch-option"
+              >
+                {name}
+              </li>
+            ))}
+          </ul>
+          <input
+            id="barSelect"
+            name="barSelect"
+            autoFocus
+            autoComplete="off"
+            placeholder="new-branch-name"
+            aria-label="New branch name"
+            data-testid="branch-new-input"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                const value = event.currentTarget.value.trim();
+                if (!value) return;
+                bar.submit(value);
+              }
+            }}
+          />
+          <span className="hint">Click a branch to switch · Enter a name to create · Esc to cancel</span>
+        </Modal>
       )}
       </div>
     </div>

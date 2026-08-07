@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import * as api from "./api";
+import { onActivateKey } from "./a11y";
+import { describeError } from "./errors";
 
 type Props = {
   projectHash: string;
@@ -59,7 +61,7 @@ export default function FileTree({
     setError(null);
     setExpanded(new Set());
     setChildren(new Map());
-    api.listDirectory(projectHash, "").then(setRoots, (err) => setError(String(err)));
+    api.listDirectory(projectHash, "").then(setRoots, (err) => setError(describeError(err)));
   }, [projectHash, refreshToken]);
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export default function FileTree({
         if (dirPath === "") setRoots(entries);
         else setChildren((prev) => new Map(prev).set(dirPath, entries));
       } catch (err) {
-        setError(String(err));
+        setError(describeError(err));
       }
     },
     [projectHash],
@@ -103,7 +105,7 @@ export default function FileTree({
           const entries = await api.listDirectory(projectHash, path);
           setChildren((prev) => new Map(prev).set(path, entries));
         } catch (err) {
-          setError(String(err));
+          setError(describeError(err));
         }
       }
     },
@@ -124,7 +126,7 @@ export default function FileTree({
       onPathRenamed?.(path, to);
       onFilesChanged?.();
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 
@@ -136,7 +138,7 @@ export default function FileTree({
       onPathDeleted?.(path);
       onFilesChanged?.();
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 
@@ -159,7 +161,7 @@ export default function FileTree({
       onFilesChanged?.();
       if (kind === "file") onSelectFile(path);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 
@@ -177,7 +179,7 @@ export default function FileTree({
       onPathRenamed?.(source, to);
       onFilesChanged?.();
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 
@@ -189,7 +191,7 @@ export default function FileTree({
     if (parentPath && !children.has(parentPath)) {
       api.listDirectory(projectHash, parentPath).then(
         (entries) => setChildren((prev) => new Map(prev).set(parentPath, entries)),
-        (err) => setError(String(err)),
+        (err) => setError(describeError(err)),
       );
     }
     setCreating({ parentPath, kind });
@@ -262,7 +264,10 @@ export default function FileTree({
         <div
           className={`ds-tree-row ${entry.is_dir ? "folder" : "file"} ${isActive ? "active" : ""} ${isDropTarget ? "drop-target" : ""}`}
           style={{ paddingLeft: 10 + depth * 12 }}
+          role="button"
+          tabIndex={0}
           onClick={() => toggle(entry)}
+          onKeyDown={onActivateKey(() => toggle(entry))}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();

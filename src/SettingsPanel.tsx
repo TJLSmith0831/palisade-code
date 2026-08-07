@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Modal from "./Modal";
 
 // Personal display preferences (D24 precedent: layout is personal, not
 // project config) — localStorage, not .project-settings.json.
@@ -92,9 +93,8 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
   };
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="commandbar settings-panel" onClick={(event) => event.stopPropagation()} data-testid="settings-panel">
-        <div className="settings-section">
+    <Modal onClose={onClose} label="Settings" className="settings-panel" testId="settings-panel">
+      <div className="settings-section">
           <label>Color scheme</label>
           <div className="accent-swatches" data-testid="accent-swatches">
             {ACCENT_PRESETS.map((preset) => (
@@ -154,8 +154,7 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
           </button>
         </div>
 
-        <span className="hint">Esc to close</span>
-      </div>
-    </div>
+      <span className="hint">Esc to close</span>
+    </Modal>
   );
 }

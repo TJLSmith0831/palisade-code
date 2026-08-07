@@ -6,6 +6,7 @@ import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } f
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import * as api from "./api";
 import { languageExtensionFor, mediaKindFor, mimeTypeFor } from "./codeLanguage";
+import { describeError } from "./errors";
 import { EDITOR_FONT_CHANGED_EVENT, loadEditorFont, loadEditorFontSize } from "./SettingsPanel";
 
 type Props = {
@@ -63,7 +64,7 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
           setTimeout(() => setFormatResult(null), 4000);
         }
       })
-      .catch((err) => setError(String(err)))
+      .catch((err) => setError(describeError(err)))
       .finally(() => setSaving(false));
   }, [projectHash, path, content, saving]);
   const saveRef = useRef(save);
@@ -83,13 +84,13 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
       api
         .readFileBase64(projectHash, path)
         .then((base64) => setMediaSrc(`data:${mimeTypeFor(path)};base64,${base64}`))
-        .catch((err) => setError(String(err)));
+        .catch((err) => setError(describeError(err)));
       return;
     }
     api
       .readFileContent(projectHash, path)
       .then(setContent)
-      .catch((err) => setError(String(err)));
+      .catch((err) => setError(describeError(err)));
   }, [projectHash, path]);
 
   // Mount the CM6 view once a file's content has loaded; remount only on a
@@ -169,6 +170,7 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
                 className="ds-icon-btn"
                 onClick={() => setImageZoom((z) => clampZoom(z - 0.25))}
                 title="Zoom out"
+                aria-label="Zoom out"
                 data-testid="image-zoom-out"
               >
                 −
@@ -180,6 +182,7 @@ export default function FileEditorPane({ projectHash, path, onSave }: Props) {
                 className="ds-icon-btn"
                 onClick={() => setImageZoom((z) => clampZoom(z + 0.25))}
                 title="Zoom in"
+                aria-label="Zoom in"
                 data-testid="image-zoom-in"
               >
                 +

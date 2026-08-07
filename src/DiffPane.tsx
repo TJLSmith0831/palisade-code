@@ -4,6 +4,8 @@ import type { StructuredPatch, StructuredPatchHunk } from "diff";
 import * as api from "./api";
 import type { FileStatus } from "./api";
 import DiffRows from "./DiffRows";
+import { describeError } from "./errors";
+import Modal from "./Modal";
 import { rowsFromHunk } from "./diffLines";
 import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
 
@@ -89,7 +91,7 @@ export default function DiffPane({ projectHash }: Props) {
       setAheadBehind(ab);
       setError(null);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   }, [projectHash]);
 
@@ -104,7 +106,7 @@ export default function DiffPane({ projectHash }: Props) {
         await action();
         await refresh();
       } catch (err) {
-        setError(String(err));
+        setError(describeError(err));
       } finally {
         setBusy(false);
       }
@@ -184,6 +186,7 @@ export default function DiffPane({ projectHash }: Props) {
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder="Commit message"
+            aria-label="Commit message"
             data-testid="commit-message"
           />
           <button
@@ -200,7 +203,7 @@ export default function DiffPane({ projectHash }: Props) {
 
       {hasStaged && (
         <section className="diff-section" data-testid="staged-section">
-          <h4>Staged Changes</h4>
+          <h2 className="ds-section-heading">Staged Changes</h2>
           {stagedFiles.map((file) => (
             <FileDiff
               key={pathFromPatch(file)}
@@ -215,7 +218,7 @@ export default function DiffPane({ projectHash }: Props) {
 
       {(workingFiles.length > 0 || untracked.length > 0) && (
         <section className="diff-section" data-testid="changes-section">
-          <h4>Changes</h4>
+          <h2 className="ds-section-heading">Changes</h2>
           {workingFiles.map((file) => (
             <FileDiff
               key={pathFromPatch(file)}
@@ -254,19 +257,20 @@ export default function DiffPane({ projectHash }: Props) {
       )}
 
       {confirmDiscard && (
-        <div className="overlay" onClick={() => setConfirmDiscard(null)}>
-          <div className="commandbar" onClick={(event) => event.stopPropagation()}>
-            <label>
-              Discard changes to "{confirmDiscard.path}"? This can't be undone.
-            </label>
-            <div className="confirm-actions">
-              <button onClick={discard} className="danger" data-testid="confirm-discard" autoFocus>
-                Discard
-              </button>
-              <button onClick={() => setConfirmDiscard(null)}>Cancel</button>
-            </div>
+        <Modal
+          onClose={() => setConfirmDiscard(null)}
+          label={`Discard changes to "${confirmDiscard.path}"?`}
+        >
+          <label>
+            Discard changes to "{confirmDiscard.path}"? This can't be undone.
+          </label>
+          <div className="confirm-actions">
+            <button onClick={discard} className="danger" data-testid="confirm-discard" autoFocus>
+              Discard
+            </button>
+            <button onClick={() => setConfirmDiscard(null)}>Cancel</button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

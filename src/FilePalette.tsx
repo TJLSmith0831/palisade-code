@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
+import { RenameIcon, DeleteIcon } from "./icons";
+import Modal from "./Modal";
 
 const MAX_RESULTS = 50;
 
@@ -62,7 +65,7 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
       await onCreate(path);
       select(path);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setBusy(false);
     }
@@ -79,7 +82,7 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
       await onRename(from, to.trim());
       setRenaming(null);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setBusy(false);
     }
@@ -92,20 +95,20 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
       await onDelete(path);
       setConfirmingDelete(null);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="commandbar file-palette" onClick={(event) => event.stopPropagation()}>
-        <input
+    <Modal onClose={onClose} label="File palette" className="file-palette">
+      <input
           ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search files, or type a new path to create one…"
+          aria-label="Search files"
           autoComplete="off"
           disabled={renaming !== null}
           data-testid="file-palette-input"
@@ -211,7 +214,7 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
                     }}
                     data-testid="file-palette-rename"
                   >
-                    ✎
+                    <RenameIcon />
                   </button>
                   <button
                     className="file-palette-row-action delete"
@@ -222,17 +225,16 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
                     }}
                     data-testid="file-palette-delete"
                   >
-                    ×
+                    <DeleteIcon />
                   </button>
                 </div>
               </li>
             ),
           )}
-        </ul>
-        <span className="hint">
-          ↑↓ to navigate · Enter to open{canCreate ? " or create" : ""} · ✎ to rename/move · Esc to cancel
-        </span>
-      </div>
-    </div>
+      </ul>
+      <span className="hint">
+        ↑↓ to navigate · Enter to open{canCreate ? " or create" : ""} · ✎ to rename/move · Esc to cancel
+      </span>
+    </Modal>
   );
 }

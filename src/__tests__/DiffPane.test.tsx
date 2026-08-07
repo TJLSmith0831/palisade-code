@@ -209,4 +209,22 @@ describe("DiffPane", () => {
 
     await waitFor(() => expect(screen.getByText(/working tree clean/i)).toBeDefined());
   });
+
+  it("uses h2 for section headings, not h4 (no h1-h3 exists above these panes)", async () => {
+    mockGit((cmd) => {
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+    render(<DiffPane projectHash="proj-1" />);
+    await waitFor(() => expect(screen.getByTestId("changes-section")).toBeDefined());
+    expect(screen.getByText("Changes").tagName).toBe("H2");
+    expect(screen.queryByRole("heading", { level: 4 })).toBeNull();
+  });
+
+  it("labels the commit message textarea, not just its placeholder", async () => {
+    mockGit(() => undefined);
+    render(<DiffPane projectHash="proj-1" />);
+    await waitFor(() => expect(screen.getByTestId("commit-message")).toBeDefined());
+    expect(screen.getByLabelText(/commit message/i)).toBe(screen.getByTestId("commit-message"));
+  });
 });

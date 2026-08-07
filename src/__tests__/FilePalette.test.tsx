@@ -18,6 +18,11 @@ describe("FilePalette", () => {
     expect(screen.getAllByTestId("file-palette-result")).toHaveLength(files.length);
   });
 
+  it("labels the search input, not just its placeholder", () => {
+    render(<FilePalette files={files} onSelect={vi.fn()} onClose={vi.fn()} {...noopHandlers} />);
+    expect(screen.getByLabelText(/search files/i)).toBe(screen.getByTestId("file-palette-input"));
+  });
+
   it("ranks fuzzy matches and opens the selected file", () => {
     const onSelect = vi.fn();
     const onClose = vi.fn();

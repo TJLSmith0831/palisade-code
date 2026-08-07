@@ -743,6 +743,70 @@ fn list_all_files(project_hash: String) -> Res<Vec<String>> {
     Ok(files)
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct TextMatch {
+    path: String,
+    line: usize,
+    text: String,
+}
+
+const MAX_TEXT_MATCHES: usize = 200;
+
+/// Walks `root` with the same skip rules as `list_all_files`, returning every
+/// line containing `query` (case-insensitive), capped at `MAX_TEXT_MATCHES`.
+/// Files that fail UTF-8 decoding (binaries, images) are silently skipped.
+fn search_text_in(root: &Path, query: &str) -> Vec<TextMatch> {
+    let mut matches = Vec::new();
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return matches;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    'walk: while let Some(dir) = stack.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if should_skip_entry(&name) {
+                continue;
+            }
+            let full = entry.path();
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                stack.push(full);
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&full) else {
+                continue;
+            };
+            let rel = full
+                .strip_prefix(root)
+                .unwrap_or(&full)
+                .to_string_lossy()
+                .to_string();
+            for (i, line) in content.lines().enumerate() {
+                if line.to_lowercase().contains(&needle) {
+                    matches.push(TextMatch {
+                        path: rel.clone(),
+                        line: i + 1,
+                        text: line.trim().to_string(),
+                    });
+                    if matches.len() >= MAX_TEXT_MATCHES {
+                        break 'walk;
+                    }
+                }
+            }
+        }
+    }
+    matches
+}
+
+#[tauri::command]
+fn search_text(project_hash: String, query: String) -> Res<Vec<TextMatch>> {
+    let root = project_root(&project_hash)?;
+    Ok(search_text_in(&root, &query))
+}
+
 /// Resolves `relative_path` against `root`, requiring it to already exist
 /// and stay inside the project.
 fn resolve_existing_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
@@ -923,6 +987,7 @@ pub fn run() {
             git_init,
             list_directory,
             list_all_files,
+            search_text,
             read_file_content,
             read_file_base64,
             write_file_content,
@@ -1039,6 +1104,40 @@ mod tests {
             resolve_existing_path(&canonical_root, "present.json").unwrap(),
             canonical_root.join("present.json"),
         );
+    }
+
+    #[test]
+    fn search_text_in_finds_case_insensitive_matches_with_line_numbers() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "hello\nWorld\nfoo bar\n").unwrap();
+
+        let matches = search_text_in(&canonical_root, "world");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "a.txt");
+        assert_eq!(matches[0].line, 2);
+        assert_eq!(matches[0].text, "World");
+    }
+
+    #[test]
+    fn search_text_in_skips_the_same_directories_list_all_files_skips() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir_all(canonical_root.join("node_modules")).unwrap();
+        std::fs::write(canonical_root.join("node_modules/dep.js"), "needle\n").unwrap();
+        std::fs::write(canonical_root.join("real.js"), "needle\n").unwrap();
+
+        let matches = search_text_in(&canonical_root, "needle");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "real.js");
+    }
+
+    #[test]
+    fn search_text_in_returns_nothing_for_a_blank_query() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "anything\n").unwrap();
+        assert!(search_text_in(&canonical_root, "  ").is_empty());
     }
 
     #[test]

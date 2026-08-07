@@ -6,6 +6,7 @@ import "@uiw/react-markdown-preview/markdown.css";
 
 import * as api from "./api";
 import type { GraphifyOptions, GraphifyRun } from "./api";
+import { describeError } from "./errors";
 import GraphView from "./GraphView";
 
 type Props = {
@@ -49,7 +50,7 @@ export default function GraphPane({ projectHash }: Props) {
               if (!cancelled) setRun(fresh);
             },
             (err) => {
-              if (!cancelled) setError(String(err));
+              if (!cancelled) setError(describeError(err));
             },
           )
           .finally(() => {
@@ -79,7 +80,7 @@ export default function GraphPane({ projectHash }: Props) {
     try {
       setRun(await api.runGraphify(projectHash, subpath, options));
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setBusy(false);
     }
@@ -95,7 +96,7 @@ export default function GraphPane({ projectHash }: Props) {
     try {
       setAnswer(await api.queryGraphify(projectHash, subcommand, args));
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setBusy(false);
     }
@@ -121,6 +122,7 @@ export default function GraphPane({ projectHash }: Props) {
             if (next.trim() && options.incremental) setOptions({ ...options, incremental: false });
           }}
           placeholder="whole project (or a subdirectory)"
+          aria-label="Subdirectory scope"
           data-testid="graph-scope"
         />
         {(["incremental", "deep"] as const).map((key) => (
@@ -175,6 +177,7 @@ export default function GraphPane({ projectHash }: Props) {
                   onChange={(event) => setPathA(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && onQuery()}
                   placeholder="Node A"
+                  aria-label="Node A"
                   data-testid="graph-question-a"
                 />
                 <input
@@ -182,6 +185,7 @@ export default function GraphPane({ projectHash }: Props) {
                   onChange={(event) => setPathB(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && onQuery()}
                   placeholder="Node B"
+                  aria-label="Node B"
                   data-testid="graph-question-b"
                 />
               </>
@@ -191,6 +195,7 @@ export default function GraphPane({ projectHash }: Props) {
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && onQuery()}
                 placeholder="Ask the graph…"
+                aria-label="Ask the graph"
                 data-testid="graph-question"
               />
             )}

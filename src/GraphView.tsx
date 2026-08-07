@@ -142,6 +142,13 @@ export function buildModel(graph: { nodes?: unknown; links?: unknown; edges?: un
 
 const radiusOf = (node: Node) => Math.min(9, 3 + Math.sqrt(node.degree));
 
+/** Whether the canvas paint loop needs another frame: either the force
+ * simulation is still actively moving nodes, or something else (pan, zoom,
+ * a host resize) changed the picture since the last paint. */
+export function shouldRedraw(state: { simulationAlpha: number; alphaMin: number; dirty: boolean }): boolean {
+  return state.dirty || state.simulationAlpha >= state.alphaMin;
+}
+
 /**
  * Pull each node gently toward its community's centroid. Link structure alone
  * only clusters communities that happen to be densely interlinked; this makes
@@ -177,6 +184,24 @@ export default function GraphView({ graph }: { graph: object }) {
   const fitRef = useRef<((width: number, height: number) => void) | null>(null);
   /** Once the reader pans or zooms, auto-fit stops taking the view from them. */
   const touchedRef = useRef(false);
+
+  // Paint-loop scheduling: the simulation itself ticks on its own d3-timer
+  // regardless of whether we're painting; these just decide whether *we*
+  // need another requestAnimationFrame to draw the result of that tick, a
+  // pan/zoom, or a host resize.
+  const frameRef = useRef(0);
+  const scheduledRef = useRef(false);
+  const dirtyRef = useRef(true);
+  const drawRef = useRef<() => void>(() => {});
+  const scheduleDraw = () => {
+    if (scheduledRef.current) return;
+    scheduledRef.current = true;
+    frameRef.current = requestAnimationFrame(drawRef.current);
+  };
+  const markDirty = () => {
+    dirtyRef.current = true;
+    scheduleDraw();
+  };
 
   const colorFor = useMemo(
     () => new Map(model.communities.map((c) => [c.name, c.color])),
@@ -216,7 +241,6 @@ export default function GraphView({ graph }: { graph: object }) {
       .force("y", forceY().strength(0.03))
       .force("cluster", clusterForce(model.nodes));
 
-    let frame = 0;
     let fitted = false;
 
     /** Frame the settled layout once, unless the reader has already moved. */
@@ -237,6 +261,7 @@ export default function GraphView({ graph }: { graph: object }) {
     fitRef.current = fitToView;
 
     const draw = () => {
+      scheduledRef.current = false;
       const context = canvas.getContext("2d");
       if (!context) return;
       const { width, height } = canvas.getBoundingClientRect();
@@ -281,12 +306,30 @@ export default function GraphView({ graph }: { graph: object }) {
         context.fill();
       }
       context.restore();
-      frame = requestAnimationFrame(draw);
+
+      // Still settling? Always keep painting. Otherwise, only if something
+      // (pan/zoom/resize) touched the picture since this frame started.
+      const redraw = shouldRedraw({
+        simulationAlpha: simulation.alpha(),
+        alphaMin: simulation.alphaMin(),
+        dirty: dirtyRef.current,
+      });
+      dirtyRef.current = false;
+      if (redraw) scheduleDraw();
     };
-    frame = requestAnimationFrame(draw);
+    drawRef.current = draw;
+    dirtyRef.current = true;
+    scheduleDraw();
+
+    // No per-frame size check backs this once the loop can idle, so a real
+    // resize (e.g. dragging the sidebar wider) needs its own wake-up.
+    const resizeObserver = new ResizeObserver(() => markDirty());
+    resizeObserver.observe(canvas);
 
     return () => {
-      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      cancelAnimationFrame(frameRef.current);
+      scheduledRef.current = false;
       simulation.stop();
     };
   }, [model, colorFor, hidden]);
@@ -313,6 +356,7 @@ export default function GraphView({ graph }: { graph: object }) {
       viewRef.current.y += event.clientY - dragging.current.y;
       dragging.current = { x: event.clientX, y: event.clientY };
       touchedRef.current = true;
+      markDirty();
       setHover(null);
       return;
     }
@@ -344,6 +388,7 @@ export default function GraphView({ graph }: { graph: object }) {
     view.x = mouseX - ((mouseX - view.x) / view.k) * next;
     view.y = mouseY - ((mouseY - view.y) / view.k) * next;
     view.k = next;
+    markDirty();
   };
 
   const toggle = (name: string) =>
@@ -373,6 +418,7 @@ export default function GraphView({ graph }: { graph: object }) {
             const rect = event.currentTarget.getBoundingClientRect();
             touchedRef.current = false;
             fitRef.current?.(rect.width, rect.height);
+            markDirty();
           }}
           onWheel={onWheel}
         />
