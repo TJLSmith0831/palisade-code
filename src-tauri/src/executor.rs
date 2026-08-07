@@ -115,7 +115,7 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 

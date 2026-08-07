@@ -8,12 +8,9 @@ import GraphView from "./GraphView";
 
 type Props = {
   projectHash: string;
-  threadId: string | null;
-  /** Called after a successful run so the chat pane picks up the injection. */
-  onInjected: () => void;
 };
 
-export default function GraphPane({ projectHash, threadId, onInjected }: Props) {
+export default function GraphPane({ projectHash }: Props) {
   const [run, setRun] = useState<GraphifyRun | null>(null);
   const [subpath, setSubpath] = useState("");
   const [options, setOptions] = useState<GraphifyOptions>({
@@ -44,7 +41,7 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
       () => {
         setBusy(true);
         api
-          .runGraphify(projectHash, null, "", { incremental: false, codeOnly: true, deep: false })
+          .runGraphify(projectHash, "", { incremental: false, codeOnly: true, deep: false })
           .then(
             (fresh) => {
               if (!cancelled) setRun(fresh);
@@ -75,17 +72,11 @@ export default function GraphPane({ projectHash, threadId, onInjected }: Props) 
   }, [projectHash]);
 
   const onRun = async () => {
-    if (!threadId) {
-      setError("Select a thread first — the run summary is injected into it.");
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
-      setRun(await api.runGraphify(projectHash, threadId, subpath, options));
-      onInjected();
+      setRun(await api.runGraphify(projectHash, subpath, options));
     } catch (err) {
-      // A failed run shows why here and injects nothing into the thread.
       setError(String(err));
     } finally {
       setBusy(false);

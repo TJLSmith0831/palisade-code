@@ -39,14 +39,13 @@ describe("GraphPane", () => {
       return Promise.reject(new Error(`unexpected command ${cmd}`));
     });
 
-    render(<GraphPane projectHash="proj-1" threadId={null} onInjected={vi.fn()} />);
+    render(<GraphPane projectHash="proj-1" />);
 
     await waitFor(() => expect(screen.getByTestId("graph-view")).toBeDefined());
 
-    // Auto-compile must not require (or use) a thread — no injection prompt.
     expect(screen.queryByTestId("graph-error")).toBeNull();
     const runCall = invokeMock.mock.calls.find(([cmd]) => cmd === "run_graphify");
-    expect(runCall?.[1]).toMatchObject({ projectHash: "proj-1", threadId: null });
+    expect(runCall?.[1]).toMatchObject({ projectHash: "proj-1" });
   });
 
   it("shows the existing run without re-compiling when one is already on disk", async () => {
@@ -62,7 +61,7 @@ describe("GraphPane", () => {
       return Promise.reject(new Error(`unexpected command ${cmd}`));
     });
 
-    render(<GraphPane projectHash="proj-1" threadId={null} onInjected={vi.fn()} />);
+    render(<GraphPane projectHash="proj-1" />);
 
     await waitFor(() => expect(screen.getByTestId("graph-view")).toBeDefined());
     expect(invokeMock.mock.calls.some(([cmd]) => cmd === "run_graphify")).toBe(false);

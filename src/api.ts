@@ -135,15 +135,9 @@ export type GraphifyRun = {
   summary: string;
 };
 
-export const runGraphify = (
-  projectHash: string,
-  threadId: string | null,
-  subpath: string,
-  options: GraphifyOptions,
-) =>
+export const runGraphify = (projectHash: string, subpath: string, options: GraphifyOptions) =>
   invoke<GraphifyRun>("run_graphify", {
     projectHash,
-    threadId,
     subpath,
     options,
   });

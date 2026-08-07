@@ -69,12 +69,12 @@
 
 ## 6. Graphify MCP auto-registration
 
-- [ ] 6.1 Extend `start_watcher` (lib.rs:56) or add a sibling `ensure_graphify_mcp` step on project load: if `graphify` is on PATH, register its MCP server with the detected executor
-- [ ] 6.2 Implement Claude registration: write/merge a project-root `.mcp.json` pointing at `python -m graphify.serve graphify-out/graph.json` (stdio); idempotent (no-op if already registered)
-- [ ] 6.3 Implement Codex registration: write the equivalent Codex MCP config (verify exact shape against a real Codex install at apply time — Open question D21)
-- [ ] 6.4 Remove the existing summary-injection path (`run_graphify` → inject into thread in integrations.rs); keep the GraphPane manual run/query/path/explain UI for humans
-- [ ] 6.5 Verify: agent turn can call graph tools; GraphPane still works unchanged; idempotent re-registration; graphify-missing skips cleanly
-- [ ] 6.6 Add a test for the idempotent registration (register twice = one config entry)
+- [x] 6.1 Extend `start_watcher` (lib.rs:56) or add a sibling `ensure_graphify_mcp` step on project load: if `graphify` is on PATH, register its MCP server with the detected executor — implemented as a sibling `ensure_graphify_mcp`, called from `switch_project` alongside `start_watcher`
+- [x] 6.2 Implement Claude registration: write/merge a project-root `.mcp.json` pointing at the graphify MCP server (stdio); idempotent (no-op if already registered) — **command corrected at apply time**: the real `graphifyy` PyPI package installs a dedicated `graphify-mcp` console script (which itself wraps `python -m graphify.serve`), not a bare `python -m graphify.serve` invocation; `.mcp.json` points at the resolved `graphify-mcp` binary with an absolute `--graph <out_dir>/graph.json` path
+- [x] 6.3 Implement Codex registration — **D21's Open question resolved**: Codex has no MCP config that loads unconditionally per-project; `codex mcp add` only ever writes the user's global `~/.codex/config.toml`. Verified (web search + local Codex install) that Codex *does* support a project-scoped `.codex/config.toml` with its own `[mcp_servers.*]` table, but only for projects marked `trust_level = "trusted"` in the global config's `[projects."<path>"]` section — untrusted projects have their local `.codex/` layer silently ignored. Implemented as: write/merge `.codex/config.toml` (mirrors Claude's `.mcp.json`, gitignoreable) + a minimal one-line trust entry added to `~/.codex/config.toml` only when the project has no existing trust decision yet (never overrides an explicit trusted/untrusted the user already set). This is a smaller, more targeted home-config touch than D21 anticipated, but the only mechanism Codex actually offers — flagged to the user before implementing.
+- [x] 6.4 Remove the existing summary-injection path (`run_graphify` → inject into thread in integrations.rs); keep the GraphPane manual run/query/path/explain UI for humans
+- [x] 6.5 Verify: agent turn can call graph tools; GraphPane still works unchanged; idempotent re-registration; graphify-missing skips cleanly — verified via `cargo test`/`pnpm test` plus a live check against the real installed `graphify-mcp` binary on this machine; a full agent-turn tool call was not exercised (would spend a real API turn)
+- [x] 6.6 Add a test for the idempotent registration (register twice = one config entry) — `integrations.rs`: `claude_mcp_registration_is_idempotent_and_preserves_other_servers`, `codex_mcp_registration_is_idempotent_and_preserves_other_servers`, `codex_registration_never_overrides_an_existing_trust_decision`
 
 ## 7. project-settings.json
 

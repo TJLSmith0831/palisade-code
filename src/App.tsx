@@ -1054,13 +1054,7 @@ export default function App() {
                 </ul>
               </div>
             )}
-            {rightTab === "codemap" && project && (
-              <GraphPane
-                projectHash={project.hash}
-                threadId={thread?.id ?? null}
-                onInjected={() => refresh().catch(fail)}
-              />
-            )}
+            {rightTab === "codemap" && project && <GraphPane projectHash={project.hash} />}
             {rightTab === "terminal" && terminalPlacement === "sidebar" && project && (
               <TerminalPane
                 projectHash={project.hash}

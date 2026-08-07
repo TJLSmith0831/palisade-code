@@ -1,10 +1,11 @@
 //! Graphify code maps.
 //!
-//! Results feed the executor the same way `/go` and `/propose` do — by
-//! appending a `role: "tool"` message to the thread, which becomes part of
-//! what the executor sees on its next turn. The injected summary is bounded so
-//! one run can't dominate a thread's context; the full report and graph stay
-//! in the results pane.
+//! The executor reaches the graph directly as MCP tools (D9/D21) — Floo
+//! idempotently registers Graphify's `graphify-mcp` server with the detected
+//! executor on project load (`ensure_claude_mcp`/`ensure_codex_mcp`), so the
+//! agent queries it mid-turn instead of relying on a pre-injected summary.
+//! The manual run/query/path/explain UI in `GraphPane` is unchanged and
+//! stays for humans.
 //!
 //! Web search is deliberately absent: both executors have it built in, so a
 //! harness-side search integration would only duplicate a tool the executor
@@ -18,7 +19,8 @@ use std::thread;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::store::Res;
 
@@ -198,6 +200,125 @@ pub fn graphify_query(bin: &Path, subcommand: &str, args: &[&str], out_dir: &Pat
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// ------------------------------------------------------- mcp registration
+
+/// Idempotently merges Graphify's MCP server into a Claude project's
+/// `.mcp.json` (D9/D21). Only the `graphify` key is touched — any other
+/// servers the user already configured are left as-is. `mcp_bin` and
+/// `graph_path` are resolved, absolute paths so the spawned server doesn't
+/// depend on whatever PATH/cwd Claude happens to launch it with.
+pub fn ensure_claude_mcp(project_root: &Path, mcp_bin: &Path, graph_path: &Path) -> Res<()> {
+    let config_path = project_root.join(".mcp.json");
+    let mut doc: Value = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)
+            .map_err(|err| format!("read {}: {err}", config_path.display()))?;
+        serde_json::from_str(&raw).map_err(|err| format!("parse {}: {err}", config_path.display()))?
+    } else {
+        json!({})
+    };
+
+    let entry = json!({
+        "command": mcp_bin.to_string_lossy(),
+        "args": ["--graph", graph_path.to_string_lossy()],
+    });
+    let root = doc.as_object_mut().ok_or("`.mcp.json` root is not an object")?;
+    let servers = root
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("`.mcp.json`'s `mcpServers` is not an object")?;
+    if servers.get("graphify") == Some(&entry) {
+        return Ok(());
+    }
+    servers.insert("graphify".to_string(), entry);
+
+    let pretty =
+        serde_json::to_string_pretty(&doc).map_err(|err| format!("encode {}: {err}", config_path.display()))?;
+    std::fs::write(&config_path, pretty + "\n")
+        .map_err(|err| format!("write {}: {err}", config_path.display()))
+}
+
+/// Idempotently merges Graphify's MCP server into a Codex project's
+/// `.codex/config.toml`. Unlike Claude, Codex has no project-scoped MCP
+/// config that loads unconditionally — it only reads `.codex/config.toml`
+/// for projects it has already marked trusted (verified against Codex CLI
+/// 0.146.0: an untrusted project's local config is silently ignored), so
+/// this also ensures the project is trusted before writing the server entry.
+/// `codex_home` is `~/.codex` in production, injected so tests never touch
+/// the real machine's Codex config.
+pub fn ensure_codex_mcp(project_root: &Path, mcp_bin: &Path, graph_path: &Path, codex_home: &Path) -> Res<()> {
+    ensure_codex_project_trusted(project_root, codex_home)?;
+
+    let config_path = project_root.join(".codex").join("config.toml");
+    let mut doc = read_toml(&config_path)?;
+
+    let bin_str = mcp_bin.to_string_lossy().to_string();
+    let graph_str = graph_path.to_string_lossy().to_string();
+    let mcp_servers = doc["mcp_servers"]
+        .or_insert(Item::Table(Table::new()))
+        .as_table_mut()
+        .ok_or("`mcp_servers` is not a table")?;
+    let already_registered = mcp_servers.get("graphify").is_some_and(|entry| {
+        entry.get("command").and_then(|v| v.as_str()) == Some(bin_str.as_str())
+            && entry.get("args").and_then(|v| v.as_array()).is_some_and(|args| {
+                args.iter().filter_map(|v| v.as_str()).eq(["--graph", graph_str.as_str()])
+            })
+    });
+    if already_registered {
+        return Ok(());
+    }
+
+    let mut entry = Table::new();
+    entry["command"] = value(bin_str);
+    let mut args = toml_edit::Array::new();
+    args.push("--graph");
+    args.push(graph_str);
+    entry["args"] = value(args);
+    mcp_servers.insert("graphify", Item::Table(entry));
+
+    write_toml(&config_path, &doc)
+}
+
+/// Marks `project_root` trusted in the user's global `~/.codex/config.toml`
+/// — the same key Codex itself writes when a user answers "yes" to its own
+/// "do you trust this folder?" prompt (documented, supported to set
+/// manually). Only adds an entry where none exists yet; an explicit
+/// trust decision the user already made (trusted or not) is never touched.
+fn ensure_codex_project_trusted(project_root: &Path, codex_home: &Path) -> Res<()> {
+    let config_path = codex_home.join("config.toml");
+    let mut doc = read_toml(&config_path)?;
+
+    let key = project_root.to_string_lossy().to_string();
+    let projects = doc["projects"]
+        .or_insert(Item::Table(Table::new()))
+        .as_table_mut()
+        .ok_or("`projects` is not a table")?;
+    if projects.contains_key(&key) {
+        return Ok(());
+    }
+
+    let mut entry = Table::new();
+    entry["trust_level"] = value("trusted");
+    projects.insert(&key, Item::Table(entry));
+
+    write_toml(&config_path, &doc)
+}
+
+fn read_toml(path: &Path) -> Res<DocumentMut> {
+    if !path.exists() {
+        return Ok(DocumentMut::new());
+    }
+    let raw = std::fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
+    raw.parse::<DocumentMut>().map_err(|err| format!("parse {}: {err}", path.display()))
+}
+
+fn write_toml(path: &Path, doc: &DocumentMut) -> Res<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
+    }
+    std::fs::write(path, doc.to_string()).map_err(|err| format!("write {}: {err}", path.display()))
 }
 
 // -------------------------------------------------------------- always-on
@@ -577,5 +698,128 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("subdirectory"), "got {error}");
+    }
+
+    // ------------------------------------------------- mcp registration
+
+    #[test]
+    fn claude_mcp_registration_writes_a_new_mcp_json() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = Path::new("/usr/local/bin/graphify-mcp");
+        let graph = root.path().join("graphify-out/graph.json");
+
+        ensure_claude_mcp(root.path(), bin, &graph).unwrap();
+
+        let raw = std::fs::read_to_string(root.path().join(".mcp.json")).unwrap();
+        let doc: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["mcpServers"]["graphify"]["command"], "/usr/local/bin/graphify-mcp");
+        assert_eq!(doc["mcpServers"]["graphify"]["args"][0], "--graph");
+    }
+
+    #[test]
+    fn claude_mcp_registration_is_idempotent_and_preserves_other_servers() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(".mcp.json"),
+            r#"{"mcpServers":{"other":{"command":"whatever"}}}"#,
+        )
+        .unwrap();
+        let bin = Path::new("/usr/local/bin/graphify-mcp");
+        let graph = root.path().join("graphify-out/graph.json");
+
+        ensure_claude_mcp(root.path(), bin, &graph).unwrap();
+        ensure_claude_mcp(root.path(), bin, &graph).unwrap();
+
+        let raw = std::fs::read_to_string(root.path().join(".mcp.json")).unwrap();
+        let doc: Value = serde_json::from_str(&raw).unwrap();
+        let servers = doc["mcpServers"].as_object().unwrap();
+        assert_eq!(servers.len(), 2, "must not duplicate on re-registration: {servers:?}");
+        assert!(servers.contains_key("other"), "an unrelated server must survive registration");
+    }
+
+    #[test]
+    fn codex_mcp_registration_writes_project_config_and_trusts_the_project() {
+        let project = tempfile::tempdir().unwrap();
+        let codex_home = tempfile::tempdir().unwrap();
+        let bin = Path::new("/usr/local/bin/graphify-mcp");
+        let graph = project.path().join("graphify-out/graph.json");
+
+        ensure_codex_mcp(project.path(), bin, &graph, codex_home.path()).unwrap();
+
+        let project_config =
+            std::fs::read_to_string(project.path().join(".codex/config.toml")).unwrap();
+        let doc: DocumentMut = project_config.parse().unwrap();
+        assert_eq!(doc["mcp_servers"]["graphify"]["command"].as_str(), Some("/usr/local/bin/graphify-mcp"));
+
+        let home_config = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let home_doc: DocumentMut = home_config.parse().unwrap();
+        let key = project.path().to_string_lossy().to_string();
+        assert_eq!(home_doc["projects"][key.as_str()]["trust_level"].as_str(), Some("trusted"));
+    }
+
+    #[test]
+    fn codex_mcp_registration_is_idempotent_and_preserves_other_servers() {
+        let project = tempfile::tempdir().unwrap();
+        let codex_home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join(".codex")).unwrap();
+        std::fs::write(
+            project.path().join(".codex/config.toml"),
+            "[mcp_servers.other]\ncommand = \"whatever\"\n",
+        )
+        .unwrap();
+        let bin = Path::new("/usr/local/bin/graphify-mcp");
+        let graph = project.path().join("graphify-out/graph.json");
+
+        ensure_codex_mcp(project.path(), bin, &graph, codex_home.path()).unwrap();
+        ensure_codex_mcp(project.path(), bin, &graph, codex_home.path()).unwrap();
+
+        let project_config =
+            std::fs::read_to_string(project.path().join(".codex/config.toml")).unwrap();
+        let doc: DocumentMut = project_config.parse().unwrap();
+        let servers = doc["mcp_servers"].as_table().unwrap();
+        assert_eq!(servers.len(), 2, "must not duplicate on re-registration");
+        assert!(servers.contains_key("other"), "an unrelated server must survive registration");
+    }
+
+    #[test]
+    fn codex_registration_never_overrides_an_existing_trust_decision() {
+        // A project the user (or Codex itself) already marked untrusted must
+        // stay untrusted — Floo only ever fills in a *missing* trust entry.
+        let project = tempfile::tempdir().unwrap();
+        let codex_home = tempfile::tempdir().unwrap();
+        let key = project.path().to_string_lossy().to_string();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            format!("[projects.\"{key}\"]\ntrust_level = \"untrusted\"\n"),
+        )
+        .unwrap();
+
+        ensure_codex_project_trusted(project.path(), codex_home.path()).unwrap();
+
+        let home_config = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let home_doc: DocumentMut = home_config.parse().unwrap();
+        assert_eq!(home_doc["projects"][key.as_str()]["trust_level"].as_str(), Some("untrusted"));
+    }
+
+    /// Exercises the real `find_on_path` lookup rather than a fixed fake
+    /// path — self-skips on a machine without `graphify-mcp` installed,
+    /// same pattern as `a_binary_outside_the_minimal_path_is_still_found`
+    /// in executor.rs.
+    #[test]
+    fn real_graphify_mcp_binary_resolves_and_registers_cleanly() {
+        let Some(bin) = crate::executor::find_on_path("graphify-mcp") else {
+            eprintln!("graphify-mcp not on PATH on this machine — skipping live check");
+            return;
+        };
+        let project = tempfile::tempdir().unwrap();
+        let codex_home = tempfile::tempdir().unwrap();
+        let graph = default_out_dir(project.path()).join("graph.json");
+
+        ensure_claude_mcp(project.path(), &bin, &graph).unwrap();
+        ensure_codex_mcp(project.path(), &bin, &graph, codex_home.path()).unwrap();
+
+        assert!(project.path().join(".mcp.json").exists());
+        assert!(project.path().join(".codex/config.toml").exists());
+        assert!(codex_home.path().join("config.toml").exists());
     }
 }

@@ -46,7 +46,36 @@ fn add_project(path: String) -> Res<Project> {
 fn switch_project(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, hash: String) -> Res<Project> {
     let project = store::touch_project(&floo_home(), &hash)?;
     start_watcher(&app, &harness, &project);
+    ensure_graphify_mcp(&app, &harness, &project);
     Ok(project)
+}
+
+/// Idempotently registers Graphify's MCP server (D9/D21) with whichever
+/// executor is detected, so the agent gets graph tools mid-turn instead of
+/// a pre-injected summary. A missing `graphify-mcp` binary or no detected
+/// executor is skipped silently — the general `graphify` PATH warning
+/// already covers a missing install. A registration failure (e.g. an
+/// unwritable project dir) surfaces through the same `graphify-warning`
+/// event a failed watcher spawn already uses.
+fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
+    let Some(bin) = executor::find_on_path("graphify-mcp") else {
+        return;
+    };
+    let Ok((kind, _)) = selected_executor(harness) else {
+        return;
+    };
+
+    let root = PathBuf::from(&project.root);
+    let graph_path = integrations::default_out_dir(&root).join("graph.json");
+    let result = match kind {
+        Kind::Claude => integrations::ensure_claude_mcp(&root, &bin, &graph_path),
+        Kind::Codex => {
+            integrations::ensure_codex_mcp(&root, &bin, &graph_path, &executor::home().join(".codex"))
+        }
+    };
+    if let Err(message) = result {
+        let _ = app.emit("graphify-warning", format!("Graphify MCP registration failed: {message}"));
+    }
 }
 
 /// Replaces whatever `graphify watch` was running (if any — `Watcher`'s
@@ -414,16 +443,13 @@ fn graphify_bin() -> Res<PathBuf> {
         .ok_or_else(|| "`graphify` is not on PATH — install it to build code maps.".into())
 }
 
-/// Run Graphify over the active project (or a subdirectory of it). With a
-/// `thread_id` (a user-triggered run), also inject a bounded summary into
-/// that thread; a failed run injects nothing. Without one (an automatic
-/// compile — e.g. on first opening a project with no prior run — or a
-/// project that has no threads yet), Graphify still runs and its output is
-/// still written to disk, just with nothing to inject into.
+/// Run Graphify over the active project (or a subdirectory of it). The
+/// executor reaches this same graph directly via MCP tools (D9/D21) — this
+/// command only serves the human-facing GraphPane, so its output is just
+/// written to disk and returned, never injected into a thread.
 #[tauri::command]
 fn run_graphify(
     project_hash: String,
-    thread_id: Option<String>,
     subpath: String,
     options: integrations::GraphifyOptions,
 ) -> Res<integrations::GraphifyRun> {
@@ -443,15 +469,7 @@ fn run_graphify(
     };
 
     let out_dir = integrations::default_out_dir(&root);
-    let run = integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)?;
-    if let Some(thread_id) = thread_id {
-        let mode = store::list_threads(&floo_home(), &project_hash)?
-            .into_iter()
-            .find(|t| t.id == thread_id)
-            .map_or_else(|| "spec".to_string(), |t| t.current_mode);
-        store::append_message(&floo_home(), &project_hash, &thread_id, "tool", &mode, &run.summary)?;
-    }
-    Ok(run)
+    integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)
 }
 
 /// Load a previous run's output without re-running the extract.
