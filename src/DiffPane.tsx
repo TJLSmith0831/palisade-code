@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Badge } from "@mantine/core";
 import type { StructuredPatch, StructuredPatchHunk } from "diff";
 
 import * as api from "./api";
@@ -234,7 +235,9 @@ export default function DiffPane({ projectHash }: Props) {
             <div key={entry.path} className="diff-file" data-testid="diff-untracked-file">
               <div className="diff-file-head">
                 <span className="diff-file-path">{entry.path}</span>
-                <span className="diff-badge">new</span>
+                <Badge size="xs" variant="light" color="var(--success)">
+                  new
+                </Badge>
                 <span className="diff-spacer" />
                 <button
                   onClick={() => setConfirmDiscard({ path: entry.path, untracked: true })}

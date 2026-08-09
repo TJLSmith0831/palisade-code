@@ -19,6 +19,7 @@ import {
   SegmentedControl,
   ActionIcon,
   Loader,
+  Badge,
 } from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -281,9 +282,9 @@ function ChatSurface({
           Rename
         </button>
         {thread.openSpecChangeName && (
-          <span className="change-chip" data-testid="change-chip">
+          <Badge size="sm" variant="default" tt="none" data-testid="change-chip">
             {thread.openSpecChangeName}
-          </span>
+          </Badge>
         )}
         <div className="spacer" />
       </div>
@@ -1753,11 +1754,12 @@ export default function App() {
                                       </div>
                                     </div>
                                     <span className="ds-thread-meta">
-                                      <span
-                                        className={`badge ${t.currentMode}`}
+                                      <Badge
+                                        size="xs"
+                                        variant={t.currentMode === "spec" ? "light" : "default"}
                                       >
                                         {t.currentMode}
-                                      </span>
+                                      </Badge>
                                     </span>
                                   </li>
                                 ))}
@@ -2007,9 +2009,12 @@ export default function App() {
                           </div>
                         </div>
                         <span className="ds-thread-meta">
-                          <span className={`badge ${t.currentMode}`}>
+                          <Badge
+                            size="xs"
+                            variant={t.currentMode === "spec" ? "light" : "default"}
+                          >
                             {t.currentMode}
-                          </span>
+                          </Badge>
                         </span>
                       </li>
                     ))}
