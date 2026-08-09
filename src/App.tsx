@@ -623,6 +623,16 @@ export default function App() {
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  // Set when the filesystem watcher reports the open file changed underneath
+  // us; the editor pane decides whether that's a silent reload or a prompt.
+  const [externalChange, setExternalChange] = useState<{
+    path: string;
+    at: number;
+  } | null>(null);
+  // Mirrors selectedFile for the fs-changed listener, which is registered
+  // once — same reason `current` exists for project/thread.
+  const selectedFileRef = useRef(selectedFile);
+  selectedFileRef.current = selectedFile;
   const [centerTab, setCenterTab] = useState<"editor" | "diff">("editor");
   // Which workspace shell is rendered — layout only, independent of a thread's
   // own Spec/Go mode (see openspec/changes/vibe-editor-shell-redesign).
@@ -1071,6 +1081,31 @@ export default function App() {
       warned.then((un) => un());
     };
   }, [refresh]);
+
+  // Files changing for a reason that wasn't us — an agent turn writing
+  // directly to disk, a branch switch, another editor. Kept as its own
+  // effect (rather than folded into the executor stream above) because the
+  // executor's own FileEdit events only describe what the agent *says* it
+  // wrote, and say nothing about git or anything outside Floo.
+  useEffect(() => {
+    const changed = listen<api.FsChanged>("fs-changed", ({ payload }) => {
+      // A late event from the project the user just left would otherwise
+      // refresh the new project's tree.
+      if (payload.projectHash !== current.current.project?.hash) return;
+      // The tree and the ⌘P palette both cache; without this they keep
+      // showing files the agent already renamed or deleted.
+      filesCache.current.delete(payload.projectHash);
+      setFileTreeRefreshToken((t) => t + 1);
+
+      const open = selectedFileRef.current;
+      if (open && payload.paths.includes(open)) {
+        setExternalChange({ path: open, at: Date.now() });
+      }
+    });
+    return () => {
+      changed.then((un) => un());
+    };
+  }, []);
 
   const onGo = async () => {
     const { project, thread } = current.current;
@@ -1572,6 +1607,7 @@ export default function App() {
                       path={selectedFile}
                       onSave={handleFileSave}
                       onDirtyChange={setEditorDirty}
+                      externalChange={externalChange}
                     />
                   ) : (
                     <div
@@ -1936,6 +1972,7 @@ export default function App() {
                       path={selectedFile}
                       onSave={handleFileSave}
                       onDirtyChange={setEditorDirty}
+                      externalChange={externalChange}
                     />
                   )
                 ) : (

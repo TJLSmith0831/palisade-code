@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert } from "@mantine/core";
+import { Alert, Button, Group } from "@mantine/core";
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -15,6 +15,10 @@ type Props = {
   path: string | null;
   onSave?: (edit: { path: string; before: string; after: string }) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** Bumped by `App` when the filesystem watcher reports this file changed
+   * underneath us. A clean buffer reloads silently; a dirty one raises the
+   * conflict banner so the user picks which version survives. */
+  externalChange?: { path: string; at: number } | null;
 };
 
 const MIN_ZOOM = 0.1;
@@ -27,7 +31,13 @@ const editorFontTheme = () =>
     ".cm-scroller": { fontFamily: loadEditorFont(), lineHeight: "1.55" },
   });
 
-export default function FileEditorPane({ projectHash, path, onSave, onDirtyChange }: Props) {
+export default function FileEditorPane({
+  projectHash,
+  path,
+  onSave,
+  onDirtyChange,
+  externalChange,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const languageCompartment = useRef(new Compartment());
@@ -45,36 +55,75 @@ export default function FileEditorPane({ projectHash, path, onSave, onDirtyChang
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [formatResult, setFormatResult] = useState<string | null>(null);
+  // The file changed on disk while this buffer was dirty, so neither version
+  // can be discarded without asking.
+  const [conflict, setConflict] = useState(false);
+  // Bumped to re-read the file and rebuild the view — the reload half of the
+  // conflict banner, and the silent path when the buffer was clean.
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
+    // Without this, unmounting the pane (shell toggle, editor/diff switch)
+    // leaves the parent believing a file it no longer shows is still dirty,
+    // and the discard guards then fire against nothing.
+    return () => onDirtyChange?.(false);
   }, [dirty, onDirtyChange]);
 
-  const save = useCallback(() => {
-    const view = viewRef.current;
-    if (!path || !view || saving) return;
-    const after = view.state.doc.toString();
-    setSaving(true);
-    setError(null);
-    setFormatResult(null);
-    api
-      .writeFileContent(projectHash, path, after)
-      .then((format) => {
-        onSaveRef.current?.({ path, before: content ?? "", after });
-        setContent(after);
-        setDirty(false);
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-        if (format) {
-          setFormatResult(format);
-          setTimeout(() => setFormatResult(null), 4000);
-        }
-      })
-      .catch((err) => setError(describeError(err)))
-      .finally(() => setSaving(false));
-  }, [projectHash, path, content, saving]);
+  const reload = useCallback(() => {
+    setConflict(false);
+    setReloadToken((token) => token + 1);
+  }, []);
+
+  const save = useCallback(
+    (options?: { overwrite?: boolean }) => {
+      const view = viewRef.current;
+      if (!path || !view || saving) return;
+      const after = view.state.doc.toString();
+      setSaving(true);
+      setError(null);
+      setFormatResult(null);
+      // What we believe is on disk. The backend refuses the write if that's
+      // no longer true, which catches a change that landed inside the
+      // watcher's debounce window. "Keep mine" deliberately drops the claim.
+      const expectedPrevious = options?.overwrite ? null : content;
+      api
+        .writeFileContent(projectHash, path, after, expectedPrevious)
+        .then((format) => {
+          onSaveRef.current?.({ path, before: content ?? "", after });
+          setContent(after);
+          setDirty(false);
+          setConflict(false);
+          setSaved(true);
+          setTimeout(() => setSaved(false), 2000);
+          if (format) {
+            setFormatResult(format);
+            setTimeout(() => setFormatResult(null), 4000);
+          }
+        })
+        .catch((err) => {
+          // A stale save isn't a failure to report, it's a choice to offer.
+          if (api.isConflictError(err)) setConflict(true);
+          else setError(describeError(err));
+        })
+        .finally(() => setSaving(false));
+    },
+    [projectHash, path, content, saving]
+  );
   const saveRef = useRef(save);
   saveRef.current = save;
+
+  // Read through a ref so this reacts only to a new change event, not to the
+  // buffer going dirty afterwards.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(() => {
+    if (!externalChange || !path || externalChange.path !== path) return;
+    // Nothing of the user's to lose, so take the new version silently —
+    // this is also what makes an agent's edit show up while you watch.
+    if (!dirtyRef.current) reload();
+    else setConflict(true);
+  }, [externalChange, path, reload]);
 
   // Load file content on path change.
   useEffect(() => {
@@ -84,6 +133,7 @@ export default function FileEditorPane({ projectHash, path, onSave, onDirtyChang
     setError(null);
     setDirty(false);
     setSaved(false);
+    setConflict(false);
     if (!path) return;
     const mediaKind = mediaKindFor(path);
     if (mediaKind) {
@@ -97,7 +147,7 @@ export default function FileEditorPane({ projectHash, path, onSave, onDirtyChang
       .readFileContent(projectHash, path)
       .then(setContent)
       .catch((err) => setError(describeError(err)));
-  }, [projectHash, path]);
+  }, [projectHash, path, reloadToken]);
 
   // Mount the CM6 view once a file's content has loaded; remount only on a
   // real file switch (path change), not on every save — `save()` also calls
@@ -139,7 +189,7 @@ export default function FileEditorPane({ projectHash, path, onSave, onDirtyChang
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, contentLoaded]);
+  }, [path, contentLoaded, reloadToken]);
 
   // Live-reconfigure the font on a settings change, without waiting for the
   // next file switch to remount the view (mirrors languageCompartment's use
@@ -243,10 +293,43 @@ export default function FileEditorPane({ projectHash, path, onSave, onDirtyChang
           </span>
         )}
         {saved && <span className="ds-editor-saved">Saved</span>}
-        <button className="ds-editor-save-btn" onClick={save} disabled={!dirty || saving}>
+        <button className="ds-editor-save-btn" onClick={() => save()} disabled={!dirty || saving}>
           {saving ? "Saving…" : dirty ? "Save *" : "Save"}
         </button>
       </div>
+      {conflict && (
+        <Alert
+          color="var(--warning)"
+          variant="light"
+          m="8px 16px 0"
+          title="Changed on disk"
+          data-testid="file-conflict-banner"
+        >
+          <p>
+            {path} was changed by something else — the agent, a branch switch, or another
+            editor — and you have unsaved edits. Only one version can survive.
+          </p>
+          <Group gap="xs" mt="xs">
+            <Button
+              size="xs"
+              variant="default"
+              onClick={reload}
+              data-testid="conflict-reload"
+            >
+              Discard mine, reload
+            </Button>
+            <Button
+              size="xs"
+              variant="default"
+              onClick={() => save({ overwrite: true })}
+              disabled={saving}
+              data-testid="conflict-overwrite"
+            >
+              Keep mine, overwrite
+            </Button>
+          </Group>
+        </Alert>
+      )}
       <div className="ds-editor-body" ref={hostRef} data-testid="file-editor-cm" />
     </div>
   );

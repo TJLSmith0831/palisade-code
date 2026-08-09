@@ -797,6 +797,11 @@ pub struct Harness {
     /// project hash it belongs to so a re-open after a project switch knows
     /// to kill the stale one instead of re-attaching to it.
     pub terminal: Mutex<Option<(String, crate::terminal::Terminal)>>,
+    /// Watches the active project for changes Floo didn't make, so the open
+    /// editor and file tree can reconcile instead of silently going stale.
+    /// Also owns the "we just wrote this" suppression set — kept inside the
+    /// watcher rather than as a sibling field so the two can't disagree.
+    pub fswatch: Mutex<Option<crate::fswatch::FsWatcher>>,
 }
 
 // ------------------------------------------------------------------ tests

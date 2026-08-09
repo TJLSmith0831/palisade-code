@@ -223,12 +223,37 @@ export const readFileContent = (projectHash: string, relativePath: string) =>
 export const readFileBase64 = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_base64", { projectHash, relativePath });
 
-/** Resolves to a format-on-save summary (D14), or `null` if nothing matched. */
+/** Emitted when the project's files change for a reason that wasn't us —
+ * an agent turn, a `git checkout`, or another editor. `paths` are
+ * project-relative and already filtered by the file tree's skip list. */
+export type FsChanged = { projectHash: string; paths: string[] };
+
+/** Rust prefixes a refused stale save with this (`CONFLICT_PREFIX` in
+ * `lib.rs`) so a buffer that's out of date can offer a reload instead of
+ * being reported as a generic write failure. */
+export const CONFLICT_PREFIX = "CONFLICT:";
+
+export const isConflictError = (err: unknown) =>
+  String(err).includes(CONFLICT_PREFIX);
+
+/** Resolves to a format-on-save summary (D14), or `null` if nothing matched.
+ *
+ * `expectedPrevious` is the content the caller believes is on disk; the save
+ * is refused with a `CONFLICT_PREFIX` error if that's no longer true. Pass
+ * `null` (the default) to write unconditionally, which is what creating a
+ * file does. */
 export const writeFileContent = (
   projectHash: string,
   relativePath: string,
   content: string,
-) => invoke<string | null>("write_file_content", { projectHash, relativePath, content });
+  expectedPrevious: string | null = null,
+) =>
+  invoke<string | null>("write_file_content", {
+    projectHash,
+    relativePath,
+    content,
+    expectedPrevious,
+  });
 
 /** Renames or moves a file/directory — a full path edit doubles as a move. */
 export const renamePath = (projectHash: string, from: string, to: string) =>

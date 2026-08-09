@@ -1,4 +1,5 @@
 mod executor;
+mod fswatch;
 mod git;
 mod integrations;
 mod pidguard;
@@ -50,6 +51,7 @@ fn add_project(path: String) -> Res<Project> {
 fn switch_project(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, hash: String) -> Res<Project> {
     let project = store::touch_project(&floo_home(), &hash)?;
     start_watcher(&app, &harness, &project);
+    start_fs_watcher(&app, &harness, &project);
     ensure_graphify_mcp(&app, &harness, &project);
 
     let root = Path::new(&project.root);
@@ -118,6 +120,43 @@ fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, pr
         PathBuf::from(&project.root),
         move || {
             let _ = app_update.emit("graphify-updated", &hash_update);
+        },
+        move |message| {
+            let _ = app_crash.emit("harness-warning", message);
+        },
+    ));
+}
+
+/// Payload for the `fs-changed` event. Carries the project hash so a late
+/// event from the project the user just left can be ignored rather than
+/// refreshing the new project's tree.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FsChanged {
+    project_hash: String,
+    paths: Vec<String>,
+}
+
+/// Replaces whatever filesystem watcher was running with one scoped to the
+/// newly active project (`FsWatcher`'s `Drop` stops the old one), so the
+/// editor and file tree find out when the agent, a `git checkout`, or
+/// another editor changes something underneath them. A watcher that can't
+/// start surfaces once through `harness-warning` and leaves the app working
+/// without reconciliation — the same degradation as a missing `graphify`.
+fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
+    let mut slot = harness.fswatch.lock().unwrap();
+    *slot = None;
+
+    let app_change = app.clone();
+    let hash_change = project.hash.clone();
+    let app_crash = app.clone();
+    *slot = Some(fswatch::FsWatcher::spawn(
+        PathBuf::from(&project.root),
+        move |paths| {
+            let _ = app_change.emit(
+                "fs-changed",
+                FsChanged { project_hash: hash_change.clone(), paths },
+            );
         },
         move |message| {
             let _ = app_crash.emit("harness-warning", message);
@@ -676,7 +715,7 @@ fn git_init(project_hash: String) -> Res<()> {
 /// usual dotfile/build-output skip list is left in for the caller to see
 /// (the tree's "Show Hidden Files" toggle) — not real `.gitignore` parsing,
 /// just the same skip rule inverted.
-fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
+pub(crate) fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
     if name == ".git" {
         return true;
     }
@@ -881,21 +920,83 @@ fn resolve_creatable_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
     Ok(target)
 }
 
+/// Prefix on the error a stale save returns, so the frontend can tell "your
+/// buffer is out of date" apart from a real write failure and offer to
+/// reload instead of just reporting it.
+pub(crate) const CONFLICT_PREFIX: &str = "CONFLICT:";
+
 /// Saves the file (creating it, and any missing parent directories, if it
 /// doesn't exist yet), then runs any matching `formatOnSave` command (D14)
 /// and returns a summary of what it did — `None` when no pattern matched.
+///
+/// `expected_previous` is the content the caller believes is currently on
+/// disk. When supplied and the file says otherwise, the write is refused —
+/// the editor's backstop for a change that landed inside the filesystem
+/// watcher's debounce window, where the reload banner wouldn't have appeared
+/// yet. Callers that legitimately write blind (creating a file, seeding
+/// `.project-settings.json`) pass `None` and are unaffected.
 #[tauri::command]
 fn write_file_content(
+    harness: tauri::State<'_, Harness>,
     project_hash: String,
     relative_path: String,
     content: String,
+    expected_previous: Option<String>,
 ) -> Res<Option<String>> {
     let root = project_root(&project_hash)?;
     let resolved = resolve_creatable_path(&root, &relative_path)?;
+
+    check_not_stale(&resolved, expected_previous.as_deref(), &relative_path)?;
+
+    // Recorded before the write so the event can't beat us to the watcher.
+    note_self_write(&harness, &resolved);
     std::fs::write(&resolved, content).map_err(|err| format!("cannot write file: {err}"))?;
 
     let (settings, _) = settings::load(&root);
     Ok(settings::run_format_on_save(&settings, &root, &relative_path))
+}
+
+/// Refuses a delete that would take the whole project with it. An empty
+/// relative path resolves straight to the project root, and `delete_path`
+/// recurses — nothing in the UI can ask for that, but this is a reachable
+/// IPC command. Both sides are canonicalized so a symlinked project root
+/// can't sneak past the comparison.
+fn check_not_project_root(root: &Path, target: &Path) -> Res<()> {
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canonical_target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    if canonical_target == canonical_root {
+        return Err("refusing to delete the project root".into());
+    }
+    Ok(())
+}
+
+/// Refuses a save whose starting point no longer matches the file on disk.
+/// `None` means the caller isn't claiming to know the previous content and
+/// the write goes through unconditionally, which is what creating a new file
+/// does. A file that doesn't exist yet can't be stale, and one that isn't
+/// readable as text is left to the write itself to fail on.
+fn check_not_stale(resolved: &Path, expected_previous: Option<&str>, relative_path: &str) -> Res<()> {
+    let Some(expected) = expected_previous else {
+        return Ok(());
+    };
+    let Ok(on_disk) = std::fs::read_to_string(resolved) else {
+        return Ok(());
+    };
+    if on_disk == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "{CONFLICT_PREFIX} {relative_path} changed on disk since you opened it"
+    ))
+}
+
+/// Tells the filesystem watcher that the change it's about to see is ours,
+/// so a save doesn't come straight back as a "changed on disk" banner. A
+/// no-op when no project is active or the watcher failed to start.
+fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Path) {
+    if let Some(watcher) = harness.fswatch.lock().unwrap().as_ref() {
+        watcher.note_self_write(resolved);
+    }
 }
 
 /// Renames or moves a file or directory within the project (the file
@@ -903,21 +1004,34 @@ fn write_file_content(
 /// so this is also how "reorganize" works). Refuses to clobber an existing
 /// file at the destination.
 #[tauri::command]
-fn rename_path(project_hash: String, from: String, to: String) -> Res<()> {
+fn rename_path(
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    from: String,
+    to: String,
+) -> Res<()> {
     let root = project_root(&project_hash)?;
     let source = resolve_existing_path(&root, &from)?;
     let target = resolve_creatable_path(&root, &to)?;
     if target.exists() {
         return Err(format!("{to} already exists"));
     }
+    note_self_write(&harness, &source);
+    note_self_write(&harness, &target);
     std::fs::rename(&source, &target).map_err(|err| format!("rename: {err}"))
 }
 
 /// Deletes a file or directory (recursively) from the project.
 #[tauri::command]
-fn delete_path(project_hash: String, relative_path: String) -> Res<()> {
+fn delete_path(
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    relative_path: String,
+) -> Res<()> {
     let root = project_root(&project_hash)?;
     let target = resolve_existing_path(&root, &relative_path)?;
+    check_not_project_root(&root, &target)?;
+    note_self_write(&harness, &target);
     if target.is_dir() {
         std::fs::remove_dir_all(&target).map_err(|err| format!("delete directory: {err}"))
     } else {
@@ -1114,6 +1228,68 @@ mod tests {
             resolve_existing_path(&canonical_root, "present.json").unwrap(),
             canonical_root.join("present.json"),
         );
+    }
+
+    #[test]
+    fn a_save_whose_starting_point_still_matches_disk_goes_through() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("notes.txt");
+        std::fs::write(&file, "line one\n").unwrap();
+
+        assert!(check_not_stale(&file, Some("line one\n"), "notes.txt").is_ok());
+    }
+
+    #[test]
+    fn a_save_based_on_stale_content_is_refused_as_a_conflict() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("notes.txt");
+        // What the agent (or a git checkout) left behind, which is not what
+        // the editor loaded.
+        std::fs::write(&file, "rewritten by someone else\n").unwrap();
+
+        let error = check_not_stale(&file, Some("line one\n"), "notes.txt").unwrap_err();
+        assert!(error.starts_with(CONFLICT_PREFIX), "frontend keys off this prefix: {error}");
+        assert!(error.contains("notes.txt"), "got {error}");
+    }
+
+    #[test]
+    fn a_caller_that_claims_no_starting_point_still_writes_blind() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("notes.txt");
+        std::fs::write(&file, "anything at all\n").unwrap();
+
+        // Creating a file and seeding .project-settings.json both go this
+        // way — they must not start failing now that the check exists.
+        assert!(check_not_stale(&file, None, "notes.txt").is_ok());
+    }
+
+    #[test]
+    fn a_save_that_creates_a_new_file_is_never_stale() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("brand-new.txt");
+
+        assert!(check_not_stale(&missing, Some(""), "brand-new.txt").is_ok());
+    }
+
+    #[test]
+    fn deleting_the_project_root_itself_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        // What `delete_path(hash, "")` resolves to.
+        let resolved = resolve_existing_path(&canonical_root, "").unwrap();
+
+        let error = check_not_project_root(&canonical_root, &resolved).unwrap_err();
+        assert!(error.contains("project root"), "got {error}");
+    }
+
+    #[test]
+    fn deleting_a_file_inside_the_project_is_still_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("doomed.txt"), "bye").unwrap();
+        let resolved = resolve_existing_path(&canonical_root, "doomed.txt").unwrap();
+
+        assert!(check_not_project_root(&canonical_root, &resolved).is_ok());
     }
 
     #[test]
