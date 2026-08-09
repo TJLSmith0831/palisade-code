@@ -247,7 +247,7 @@ input[type="checkbox"] {
   border: 1px solid var(--border);
   border-radius: 9999px;
   padding: 2px;
-  margin-left: 5%;
+  margin-left: max(92px, 5%);
 }
 
 .ds-shell-toggle button {
@@ -1915,6 +1915,12 @@ details.graph-report-wrap > summary {
     outline-color 120ms ease-out;
   outline: 2px dashed transparent;
   outline-offset: -2px;
+  align-items: flex-end;
+}
+
+.composer textarea {
+  flex: 1;
+  min-width: 0;
 }
 
 .composer.drag-active {

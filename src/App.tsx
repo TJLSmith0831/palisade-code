@@ -283,7 +283,12 @@ function ChatSurface({
           Rename
         </button>
         {thread.openSpecChangeName && (
-          <Badge size="sm" variant="default" tt="none" data-testid="change-chip">
+          <Badge
+            size="sm"
+            variant="default"
+            tt="none"
+            data-testid="change-chip"
+          >
             {thread.openSpecChangeName}
           </Badge>
         )}
@@ -335,10 +340,31 @@ function ChatSurface({
           event.preventDefault();
           onSend();
         }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          width: "100%",
+          padding: 8,
+          border: "1px solid var(--border)",
+          borderRadius: 14,
+          background: "var(--surface)",
+          boxSizing: "border-box",
+        }}
       >
+        {/* Message input */}
         <Textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+
+              if (!busy && draft.trim()) {
+                event.currentTarget.form?.requestSubmit();
+              }
+            }
+          }}
           placeholder={
             flightSelected
               ? "Message, or /propose"
@@ -348,78 +374,129 @@ function ChatSurface({
           data-testid="composer-input"
           minRows={1}
           maxRows={6}
-          style={{ resize: "vertical", width: "80%" }}
-        />
-        <SegmentedControl
-          data-testid="mode-selector"
-          value={thread.currentMode}
-          onChange={(value) => {
-            if (value === "spec") {
-              onSpec();
-            } else {
-              onGo();
-            }
-          }}
-          disabled={busy || !flightSelected}
-          data={[
-            { label: "Spec  S", value: "spec" },
-            { label: "Go  G", value: "go" },
-          ]}
           styles={{
             root: {
-              background: "transparent",
-              padding: 0,
-              gap: 4,
+              width: "100%",
             },
-            indicator: {
-              background: "var(--mantine-color-dark-8)",
-              boxShadow: "0 2px 8px rgba(0, 0, 0, 0.25)",
-              borderRadius: 8,
-            },
-            label: {
-              fontSize: 12,
-              fontWeight: 500,
-            },
-            control: {
+            input: {
+              width: "100%",
+              minHeight: 42,
+              padding: "10px 12px",
               border: 0,
-              borderRadius: 8,
               background: "transparent",
-              padding: "4px 10px",
+              boxShadow: "none",
+              resize: "none",
+              fontSize: 14,
+              lineHeight: 1.5,
             },
           }}
         />
-        <ActionIcon
-          type="submit"
-          data-testid="composer-send"
-          disabled={busy}
-          aria-label="Send message"
-          title="Send message"
-          size="lg"
-          radius="md"
-          variant="filled"
-          styles={{
-            root: {
-              backgroundColor: "#66F978",
-              color: "#0B1710",
-            },
+
+        {/* Bottom controls */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 6,
+            width: "100%",
+            minHeight: 32,
           }}
         >
-          {/* Send icon */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#0B1710"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+          <SegmentedControl
+            data-testid="mode-selector"
+            value={thread.currentMode}
+            onChange={(value) => {
+              if (value === "spec") {
+                onSpec();
+              } else {
+                onGo();
+              }
+            }}
+            disabled={busy || !flightSelected}
+            data={[
+              { label: "Spec  S", value: "spec" },
+              { label: "Go  G", value: "go" },
+            ]}
+            size="xs"
+            styles={{
+              root: {
+                background: "transparent",
+                padding: 2.08,
+                gap: 2,
+                height: 31.2,
+              },
+              indicator: {
+                background: "var(--active-row)",
+                boxShadow: "0 1px 4px rgba(0, 0, 0, 0.25)",
+                borderRadius: 7,
+              },
+              label: {
+                fontSize: 11,
+                fontWeight: 500,
+                lineHeight: 1,
+              },
+              control: {
+                height: 27.04,
+                minHeight: 27.04,
+                border: 0,
+                borderRadius: 7,
+                background: "transparent",
+                padding: "0 12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              },
+            }}
+          />
+
+          <ActionIcon
+            type="submit"
+            data-testid="composer-send"
+            disabled={busy || !draft.trim()}
+            aria-label="Send message"
+            title="Send message"
+            size={30}
+            radius="md"
+            variant="filled"
+            styles={{
+              root: {
+                flexShrink: 0,
+                backgroundColor: "var(--accent)",
+                color: "var(--accent-on)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "transform 100ms ease, opacity 100ms ease",
+                "&:hover": {
+                  backgroundColor: "var(--accent)",
+                  opacity: 0.9,
+                },
+                "&:active": {
+                  transform: "scale(0.94)",
+                },
+                "&:disabled": {
+                  opacity: 0.4,
+                },
+              },
+            }}
           >
-            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-            <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
-          </svg>
-        </ActionIcon>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+              <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
+            </svg>
+          </ActionIcon>
+        </div>
       </form>
     </>
   );
@@ -1762,7 +1839,11 @@ export default function App() {
                                     <span className="ds-thread-meta">
                                       <Badge
                                         size="xs"
-                                        variant={t.currentMode === "spec" ? "light" : "default"}
+                                        variant={
+                                          t.currentMode === "spec"
+                                            ? "light"
+                                            : "default"
+                                        }
                                       >
                                         {t.currentMode}
                                       </Badge>
@@ -2017,7 +2098,9 @@ export default function App() {
                         <span className="ds-thread-meta">
                           <Badge
                             size="xs"
-                            variant={t.currentMode === "spec" ? "light" : "default"}
+                            variant={
+                              t.currentMode === "spec" ? "light" : "default"
+                            }
                           >
                             {t.currentMode}
                           </Badge>
