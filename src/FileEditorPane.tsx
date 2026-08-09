@@ -52,6 +52,10 @@ type Props = {
   externalChange?: { path: string; at: number } | null;
   /** A line to scroll to and select, from a workspace-search result. */
   revealLine?: { path: string; line: number; at: number } | null;
+  /** Cursor offset to open a restored tab at. Applied only when the file is
+   * first read from disk, never over an in-memory session. */
+  initialCursor?: number;
+  onCursorChange?: (path: string, offset: number) => void;
 };
 
 const MIN_ZOOM = 0.1;
@@ -125,6 +129,8 @@ export default function FileEditorPane({
   onDirtyChange,
   externalChange,
   revealLine,
+  initialCursor,
+  onCursorChange,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -135,6 +141,10 @@ export default function FileEditorPane({
   // the latest callback/path without re-mounting the EditorView per render.
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+  const onCursorRef = useRef(onCursorChange);
+  onCursorRef.current = onCursorChange;
+  const initialCursorRef = useRef(initialCursor);
+  initialCursorRef.current = initialCursor;
 
   const [mediaSrc, setMediaSrc] = useState<string | null>(null);
   const [imageZoom, setImageZoom] = useState(1);
@@ -250,6 +260,9 @@ export default function FileEditorPane({
       ]),
       languageCompartment.current.of(languageExtensionFor(forPath)),
       EditorView.updateListener.of((update) => {
+        if (update.selectionSet || update.docChanged) {
+          onCursorRef.current?.(forPath, update.state.selection.main.head);
+        }
         if (!update.docChanged) return;
         setDirty(update.state.doc.toString() !== baselineRef.current);
       }),
@@ -305,8 +318,11 @@ export default function FileEditorPane({
       .readFileContent(projectHash, path)
       .then((text) => {
         if (cancelled) return;
+        // Restored cursor is clamped: the file may have changed on disk
+        // since the session was written.
+        const anchor = Math.min(Math.max(initialCursorRef.current ?? 0, 0), text.length);
         sessions.set(key, {
-          json: EditorState.create({ doc: text }).toJSON(),
+          json: EditorState.create({ doc: text, selection: { anchor } }).toJSON(),
           baseline: text,
         });
         baselineRef.current = text;

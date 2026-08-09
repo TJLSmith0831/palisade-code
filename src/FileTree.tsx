@@ -14,6 +14,11 @@ type Props = {
    * project switch. Operations the tree performs on itself refresh just the
    * affected directory instead, without touching this. */
   refreshToken?: number;
+  /** Directories to re-expand on mount, from the saved session. */
+  initialExpanded?: string[];
+  onExpandedChange?: (dirs: string[]) => void;
+  initialIncludeHidden?: boolean;
+  onIncludeHiddenChange?: (includeHidden: boolean) => void;
   /** The tree's own create/rename/delete/move — so the caller can keep the
    * open editor tab and the file-palette cache in sync. */
   onPathRenamed?: (from: string, to: string) => void;
@@ -49,6 +54,10 @@ export default function FileTree({
   onSelectFile,
   activePath,
   refreshToken,
+  initialExpanded,
+  onExpandedChange,
+  initialIncludeHidden,
+  onIncludeHiddenChange,
   onPathRenamed,
   onPathDeleted,
   onFilesChanged,
@@ -61,7 +70,7 @@ export default function FileTree({
   const [creating, setCreating] = useState<{ parentPath: string; kind: "file" | "folder" } | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null); // "" = root/background
-  const [includeHidden, setIncludeHidden] = useState(false);
+  const [includeHidden, setIncludeHidden] = useState(initialIncludeHidden ?? false);
   const editInputRef = useRef<HTMLInputElement>(null);
 
   // Expansion lives in the tree controller; selection stays controlled off the
@@ -75,12 +84,51 @@ export default function FileTree({
   const treeRef = useRef(tree);
   treeRef.current = tree;
 
+  // Restored once per project, not on every refresh — a token bump means
+  // the tree collapsed for an unrelated reason and re-expanding then would
+  // fight the user.
+  const restoredFor = useRef<string | null>(null);
+
   useEffect(() => {
     setError(null);
     setChildren(new Map());
     treeRef.current.collapseAllNodes();
-    api.listDirectory(projectHash, "", includeHidden).then(setRoots, (err) => setError(describeError(err)));
+    api.listDirectory(projectHash, "", includeHidden).then(async (entries) => {
+      setRoots(entries);
+      if (restoredFor.current === projectHash || !initialExpanded?.length) return;
+      restoredFor.current = projectHash;
+      // Each restored directory needs its children fetched, the same way
+      // expanding it by hand would.
+      const loaded = await Promise.all(
+        initialExpanded.map(async (dir) => {
+          try {
+            return [dir, await api.listDirectory(projectHash, dir, includeHidden)] as const;
+          } catch {
+            // A directory that no longer exists just doesn't come back.
+            return null;
+          }
+        }),
+      );
+      setChildren((prev) => {
+        const next = new Map(prev);
+        for (const entry of loaded) if (entry) next.set(entry[0], entry[1]);
+        return next;
+      });
+      for (const entry of loaded) if (entry) treeRef.current.expand(entry[0]);
+    }, (err) => setError(describeError(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectHash, refreshToken, includeHidden]);
+
+  // Report expansion upward so it can be saved. Derived from the controller
+  // rather than tracked separately, so it can't drift from what's on screen.
+  const expandedState = tree.expandedState;
+  useEffect(() => {
+    onExpandedChange?.(
+      Object.entries(expandedState)
+        .filter(([, isOpen]) => isOpen)
+        .map(([dir]) => dir),
+    );
+  }, [expandedState, onExpandedChange]);
 
   useEffect(() => {
     editInputRef.current?.focus();
@@ -369,7 +417,10 @@ export default function FileTree({
         label: includeHidden ? "Hide Gitignored/Hidden Files" : "Show Gitignored/Hidden Files",
         onSelect: () => {
           setMenu(null);
-          setIncludeHidden((prev) => !prev);
+          setIncludeHidden((prev) => {
+            onIncludeHiddenChange?.(!prev);
+            return !prev;
+          });
         },
       });
     }

@@ -54,6 +54,7 @@ import FileEditorPane, {
 } from "./FileEditorPane";
 import TabBar, { basename } from "./TabBar";
 import { useOpenTabs } from "./openTabs";
+import { loadSession, saveSession, type EditorSession } from "./session";
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
@@ -638,6 +639,14 @@ export default function App() {
     path: string;
     at: number;
   } | null>(null);
+  // The saved session for the active project, restored on switch and kept
+  // up to date as the editor changes.
+  // `session` drives rendering (restored cursors, expanded dirs); the ref is
+  // the live copy that accumulates changes between saves. Deliberately NOT
+  // re-synced from state on every render — cursor updates are written
+  // straight into the ref, and a render-time assignment would erase them.
+  const [session, setSession] = useState<EditorSession | null>(null);
+  const sessionRef = useRef<EditorSession | null>(null);
   // A search result to scroll to once its file is open.
   const [revealLine, setRevealLine] = useState<{
     path: string;
@@ -667,7 +676,15 @@ export default function App() {
   // own Spec/Go mode (see openspec/changes/vibe-editor-shell-redesign).
   // Defaults to "editor" (today's layout) so existing users see no change
   // until they opt into "vibe" via the toggle.
-  const [centerShell, setCenterShell] = useState<"vibe" | "editor">("editor");
+  const [centerShell, setCenterShellState] = useState<"vibe" | "editor">("editor");
+  // Set once the user picks a shell themselves. The launch restore runs
+  // asynchronously, and without this it would undo a choice made while the
+  // project was still loading.
+  const shellChosenRef = useRef(false);
+  const setCenterShell = useCallback((shell: "vibe" | "editor") => {
+    shellChosenRef.current = true;
+    setCenterShellState(shell);
+  }, []);
   const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">(
     "threads"
   );
@@ -827,6 +844,15 @@ export default function App() {
     async (next: Project) => {
       try {
         const previous = currentProjectRef.current;
+        // Applied before the awaits below: anything the user clicks while
+        // the project is still loading has to win, not be undone by a
+        // restore landing a moment later.
+        const saved = loadSession(next.hash);
+        sessionRef.current = saved;
+        setSession(saved);
+        if (!shellChosenRef.current) setCenterShellState(saved.centerShell);
+        setDiffOpen(saved.diffOpen);
+
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
         // Editing sessions are per-project; keeping them would leak memory
@@ -834,8 +860,27 @@ export default function App() {
         if (previous && previous !== refreshed.hash) evictProjectSessions(previous);
         currentProjectRef.current = refreshed.hash;
         tabsRef.current.closeAll();
-        setDiffOpen(false);
         setFileEdits([]);
+
+        // Reopen what was on screen last time. Files that have since gone
+        // are dropped silently — an agent deleting one between sessions is
+        // routine here.
+        const alive = await Promise.all(
+          saved.openPaths.map(async (path) => {
+            try {
+              await api.readFileContent(refreshed.hash, path);
+              return path;
+            } catch (err) {
+              // A binary or oversized file is still a legitimate tab; only
+              // a genuinely missing one gets dropped.
+              return api.isBinaryError(err) || api.tooLargeBytes(err) !== null ? path : null;
+            }
+          })
+        );
+        for (const path of alive) if (path) tabsRef.current.open(path);
+        if (saved.activePath && alive.includes(saved.activePath)) {
+          tabsRef.current.open(saved.activePath);
+        }
         const found = await api.listThreads(refreshed.hash);
         setThreads(found);
         await refreshBranches(refreshed.hash);
@@ -1184,6 +1229,61 @@ export default function App() {
     return () => {
       changed.then((un) => un());
     };
+  }, []);
+
+  // Persist the editor's shape as it changes. Cheap enough to do on every
+  // change (localStorage, one small object) that it doesn't need debouncing,
+  // and it means a crash doesn't cost the layout.
+  useEffect(() => {
+    const hash = project?.hash;
+    if (!hash || !sessionRef.current) return;
+    const next: EditorSession = {
+      ...sessionRef.current,
+      openPaths: tabs.tabs.map((tab) => tab.path),
+      activePath: tabs.activePath,
+      centerShell,
+      diffOpen,
+    };
+    sessionRef.current = next;
+    saveSession(hash, next);
+  }, [project?.hash, tabs.tabs, tabs.activePath, centerShell, diffOpen]);
+
+  const rememberCursor = useCallback((path: string, offset: number) => {
+    const current = sessionRef.current;
+    if (!current || current.cursors[path] === offset) return;
+    sessionRef.current = { ...current, cursors: { ...current.cursors, [path]: offset } };
+  }, []);
+
+  // Cursor moves constantly, so it rides along with the next save rather
+  // than writing to storage on every keystroke. Flushed when you leave a
+  // file (its cursor is now final) and when the window goes away.
+  //
+  // Deliberately not flushed on unmount: React unmounts during teardown,
+  // and a write there outlives whatever cleared storage before it.
+  useEffect(() => {
+    const flush = () => {
+      const hash = currentProjectRef.current;
+      if (hash && sessionRef.current) saveSession(hash, sessionRef.current);
+    };
+    window.addEventListener("beforeunload", flush);
+    return () => window.removeEventListener("beforeunload", flush);
+  }, []);
+
+  useEffect(() => {
+    const hash = currentProjectRef.current;
+    if (hash && sessionRef.current) saveSession(hash, sessionRef.current);
+  }, [tabs.activePath]);
+
+  const rememberExpandedDirs = useCallback((dirs: string[]) => {
+    const current = sessionRef.current;
+    if (!current) return;
+    sessionRef.current = { ...current, expandedDirs: dirs };
+  }, []);
+
+  const rememberIncludeHidden = useCallback((includeHidden: boolean) => {
+    const current = sessionRef.current;
+    if (!current) return;
+    sessionRef.current = { ...current, includeHidden };
   }, []);
 
   const onGo = async () => {
@@ -1638,6 +1738,10 @@ export default function App() {
                     onSelectFile={selectFile}
                     activePath={selectedFile}
                     refreshToken={fileTreeRefreshToken}
+                    initialExpanded={session?.expandedDirs}
+                    onExpandedChange={rememberExpandedDirs}
+                    initialIncludeHidden={session?.includeHidden}
+                    onIncludeHiddenChange={rememberIncludeHidden}
                     onPathRenamed={onTreePathRenamed}
                     onPathDeleted={onTreePathDeleted}
                     onFilesChanged={onTreeFilesChanged}
@@ -1683,6 +1787,10 @@ export default function App() {
                       onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
                       revealLine={revealLine}
+                      initialCursor={
+                        selectedFile ? session?.cursors[selectedFile] : undefined
+                      }
+                      onCursorChange={rememberCursor}
                     />
                   ) : (
                     <div
@@ -2073,6 +2181,10 @@ export default function App() {
                       onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
                       revealLine={revealLine}
+                      initialCursor={
+                        selectedFile ? session?.cursors[selectedFile] : undefined
+                      }
+                      onCursorChange={rememberCursor}
                     />
                   )
                 ) : (
@@ -2274,6 +2386,10 @@ export default function App() {
                             onSelectFile={selectFile}
                             activePath={selectedFile}
                             refreshToken={fileTreeRefreshToken}
+                            initialExpanded={session?.expandedDirs}
+                            onExpandedChange={rememberExpandedDirs}
+                            initialIncludeHidden={session?.includeHidden}
+                            onIncludeHiddenChange={rememberIncludeHidden}
                             onPathRenamed={onTreePathRenamed}
                             onPathDeleted={onTreePathDeleted}
                             onFilesChanged={onTreeFilesChanged}

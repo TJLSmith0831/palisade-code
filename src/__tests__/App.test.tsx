@@ -1326,6 +1326,90 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
   });
 });
 
+describe("Session restore", () => {
+  const project = {
+    hash: "proj-1", root: "/tmp/p", displayName: "p",
+    createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z",
+  };
+  const router = (missing: string[] = []) => (cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "list_projects") return Promise.resolve([project]);
+    if (cmd === "switch_project") return Promise.resolve(project);
+    if (cmd === "list_threads") return Promise.resolve([]);
+    if (cmd === "preflight") {
+      return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+    }
+    if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+    if (cmd === "list_directory") {
+      return Promise.resolve(String(args?.relativePath ?? "") === ""
+        ? [{ name: "a.ts", is_dir: false, path: "a.ts" }, { name: "b.ts", is_dir: false, path: "b.ts" }]
+        : []);
+    }
+    if (cmd === "read_file_content") {
+      const path = String(args?.relativePath ?? "");
+      return missing.includes(path)
+        ? Promise.reject(new Error(`no such file: ${path}`))
+        : Promise.resolve("content\n");
+    }
+    return Promise.resolve([]);
+  };
+
+  it("reopens the tabs that were open, with the same one active", async () => {
+    localStorage.setItem(
+      "floo:session:proj-1",
+      JSON.stringify({ openPaths: ["a.ts", "b.ts"], activePath: "a.ts" }),
+    );
+    invokeMock.mockImplementation(router());
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getAllByTestId("file-tab")).toHaveLength(2));
+    expect(screen.getAllByTestId("file-tab").map((t) => t.getAttribute("data-path")))
+      .toEqual(["a.ts", "b.ts"]);
+    await waitFor(() =>
+      expect(screen.getByTestId("breadcrumbs").textContent).toContain("a.ts")
+    );
+  });
+
+  it("drops a tab whose file has gone since last time", async () => {
+    localStorage.setItem(
+      "floo:session:proj-1",
+      JSON.stringify({ openPaths: ["a.ts", "deleted.ts"], activePath: "a.ts" }),
+    );
+    invokeMock.mockImplementation(router(["deleted.ts"]));
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getAllByTestId("file-tab")).toHaveLength(1));
+    expect(screen.getAllByTestId("file-tab")[0]).toHaveAttribute("data-path", "a.ts");
+  });
+
+  it("comes back in the shell it was left in", async () => {
+    localStorage.setItem(
+      "floo:session:proj-1",
+      JSON.stringify({ openPaths: [], activePath: null, centerShell: "vibe" }),
+    );
+    invokeMock.mockImplementation(router());
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
+  });
+
+  it("records what is open so the next launch can restore it", async () => {
+    invokeMock.mockImplementation(router());
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("b.ts"));
+    await waitFor(() => expect(screen.getAllByTestId("file-tab")).toHaveLength(1));
+
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("floo:session:proj-1") ?? "{}");
+      expect(saved.openPaths).toEqual(["b.ts"]);
+      expect(saved.activePath).toBe("b.ts");
+    });
+  });
+});
+
 describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
   it("renders the file tree on the left and Editor/Diff tabs in the center", async () => {
     render(<App />);
