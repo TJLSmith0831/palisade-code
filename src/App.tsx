@@ -18,6 +18,7 @@ import {
   Textarea,
   SegmentedControl,
   ActionIcon,
+  Loader,
 } from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -322,11 +323,7 @@ function ChatSurface({
         {busy && (
           <div className="working" data-testid="working">
             executor working
-            <span className="working-dots">
-              <span />
-              <span />
-              <span />
-            </span>
+            <Loader type="dots" size={16} color="var(--muted)" />
           </div>
         )}
       </div>

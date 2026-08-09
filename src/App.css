@@ -1421,44 +1421,12 @@ input[type="checkbox"] {
   font-style: italic;
 }
 
-.working-dots {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.working-dots span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: working-pulse 1.4s ease-in-out infinite;
-}
-
-.working-dots span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.working-dots span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes working-pulse {
-  0%,
-  80%,
-  100% {
-    opacity: 0.2;
-    transform: scale(0.8);
-  }
-  40% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
+/* Mantine's Loader animates unconditionally: `respectReducedMotion` only sets
+   a root attribute, and Loader never opts in with `data-reduce-motion`. Keep
+   the accommodation the hand-rolled dots had, for every Loader in the app. */
 @media (prefers-reduced-motion: reduce) {
-  .working-dots span {
+  .mantine-Loader-root > * {
     animation: none;
-    opacity: 1;
   }
 }
 
