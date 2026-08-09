@@ -177,9 +177,9 @@ describe("Top chrome (merged-design v2)", () => {
     await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
     // The single thread auto-selects on load, so chat (and its composer) is
     // already visible in the Editor shell's right rail — no interaction needed.
-    await waitFor(() => expect(screen.getByTestId("mode-selector")).toBeDefined());
-    expect(screen.getByTestId("mode-spec")).toBeDefined();
-    expect(screen.getByTestId("mode-go")).toBeDefined();
+    const modeSelector = await screen.findByTestId("mode-selector");
+    expect(within(modeSelector).getByRole("radio", { name: /Spec/ })).toBeDefined();
+    expect(within(modeSelector).getByRole("radio", { name: /Go/ })).toBeDefined();
     unmount();
   });
 

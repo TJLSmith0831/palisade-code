@@ -352,6 +352,7 @@ function ChatSurface({
           style={{ resize: "vertical", width: "80%" }}
         />
         <SegmentedControl
+          data-testid="mode-selector"
           value={thread.currentMode}
           onChange={(value) => {
             if (value === "spec") {
