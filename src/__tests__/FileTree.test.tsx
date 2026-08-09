@@ -1,5 +1,10 @@
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MantineProvider } from "@mantine/core";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
 
@@ -83,6 +88,22 @@ describe("FileTree", () => {
       expect(calls.some((c) => c.cmd === "write_file_content" && c.args?.relativePath === "new-file.md")).toBe(true),
     );
     expect(onSelectFile).toHaveBeenCalledWith("new-file.md");
+  });
+
+  // Mantine Tree's treeitem keydown calls preventDefault on Space (to expand),
+  // and the create/rename inputs are descendants, so it would swallow spaces
+  // typed into them. Guards the expandOnSpace={false} that stops it.
+  it("lets a space be typed into the new-file name", async () => {
+    const user = userEvent.setup();
+    render(<FileTree projectHash="good" projectName="p" onSelectFile={vi.fn()} activePath={null} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeDefined());
+
+    fireEvent.contextMenu(screen.getByTestId("file-tree").querySelector(".ds-tree-body")!);
+    fireEvent.click(screen.getByText("New File"));
+
+    const input = screen.getByTestId("tree-create-input") as HTMLInputElement;
+    await user.type(input, "my notes.md");
+    expect(input.value).toBe("my notes.md");
   });
 
   it("creates a new folder via the context menu and expands it", async () => {
@@ -183,7 +204,13 @@ describe("FileTree", () => {
     render(<FileTree projectHash="good" projectName="p" onSelectFile={onSelectFile} activePath={null} />);
     const row = (await screen.findByText("README.md")).closest(".ds-tree-row")!;
 
-    expect(row).toHaveAttribute("tabIndex", "0");
+    // Rows are now real treeitems in a tree, which uses roving tabindex: one
+    // tab stop for the whole tree (the first root), arrow keys to move within
+    // it — rather than every row being its own tab stop.
+    expect(row.closest('[role="treeitem"]')).not.toBeNull();
+    expect(screen.getByRole("tree")).toBeDefined();
+    const [firstRoot] = screen.getAllByRole("treeitem");
+    expect(firstRoot).toHaveAttribute("tabindex", "0");
 
     fireEvent.keyDown(row, { key: "Enter" });
     expect(onSelectFile).toHaveBeenCalledWith("README.md");

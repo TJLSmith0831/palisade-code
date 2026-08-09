@@ -711,7 +711,12 @@ input[type="checkbox"] {
 
 .ds-tree-row {
   font-size: 11px;
-  padding: 3px 10px;
+  padding-block: 3px;
+  padding-inline-end: 10px;
+  /* 10px base indent plus Mantine Tree's per-level offset (levelOffset={12}),
+     which it publishes as --label-offset on the owning <li>. A `padding`
+     shorthand here would clobber it and flatten the tree. */
+  padding-inline-start: calc(10px + var(--label-offset, 0px));
   cursor: pointer;
   display: flex;
   align-items: center;

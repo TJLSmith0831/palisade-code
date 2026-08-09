@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Tree, useTree, type RenderTreeNodePayload, type TreeNodeData } from "@mantine/core";
 import * as api from "./api";
-import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
 import { NewFileIcon, NewFolderIcon } from "./icons";
 
@@ -30,6 +30,12 @@ type ContextMenuState = {
   target: { path: string; isDir: boolean } | null;
 };
 
+/** Sentinel value for the inline "new file/folder" row. It is not a real
+ * entry, but riding in the node list gets it rendered at the right depth by
+ * the tree itself. Relative paths are `/`-joined and never start with a
+ * colon, so this can't collide with one. */
+const CREATE_NODE = ":new:";
+
 const dirOf = (path: string) => {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? "" : path.slice(0, idx);
@@ -48,7 +54,6 @@ export default function FileTree({
   onFilesChanged,
 }: Props) {
   const [roots, setRoots] = useState<Entry[]>([]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [children, setChildren] = useState<Map<string, Entry[]>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
@@ -59,10 +64,21 @@ export default function FileTree({
   const [includeHidden, setIncludeHidden] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
 
+  // Expansion lives in the tree controller; selection stays controlled off the
+  // `activePath` prop, so nothing here ever writes it.
+  const selectedState = useMemo(() => (activePath ? [activePath] : []), [activePath]);
+  const tree = useTree({ selectedState });
+  const { expand, toggleExpanded } = tree;
+  // Reached through a ref, never a dependency: useTree's methods are
+  // useCallback'd on the expanded state, so depending on one re-runs the fetch
+  // effect on every expand/collapse — which sets roots, re-renders, and loops.
+  const treeRef = useRef(tree);
+  treeRef.current = tree;
+
   useEffect(() => {
     setError(null);
-    setExpanded(new Set());
     setChildren(new Map());
+    treeRef.current.collapseAllNodes();
     api.listDirectory(projectHash, "", includeHidden).then(setRoots, (err) => setError(describeError(err)));
   }, [projectHash, refreshToken, includeHidden]);
 
@@ -93,15 +109,7 @@ export default function FileTree({
         return;
       }
       const path = entry.path;
-      setExpanded((prev) => {
-        const next = new Set(prev);
-        if (next.has(path)) {
-          next.delete(path);
-        } else {
-          next.add(path);
-        }
-        return next;
-      });
+      toggleExpanded(path);
       if (!children.has(path)) {
         try {
           const entries = await api.listDirectory(projectHash, path, includeHidden);
@@ -111,7 +119,7 @@ export default function FileTree({
         }
       }
     },
-    [projectHash, children, onSelectFile, includeHidden],
+    [projectHash, children, onSelectFile, includeHidden, toggleExpanded],
   );
 
   const runRename = async (path: string, newName: string) => {
@@ -156,7 +164,7 @@ export default function FileTree({
         await api.writeFileContent(projectHash, path, "");
       } else {
         await api.createDirectory(projectHash, path);
-        setExpanded((prev) => new Set(prev).add(path));
+        expand(path);
       }
       setCreating(null);
       await refreshDir(parentPath);
@@ -187,9 +195,7 @@ export default function FileTree({
 
   const openCreate = (parentPath: string, kind: "file" | "folder") => {
     setMenu(null);
-    if (parentPath && !expanded.has(parentPath)) {
-      setExpanded((prev) => new Set(prev).add(parentPath));
-    }
+    if (parentPath) expand(parentPath);
     if (parentPath && !children.has(parentPath)) {
       api.listDirectory(projectHash, parentPath, includeHidden).then(
         (entries) => setChildren((prev) => new Map(prev).set(parentPath, entries)),
@@ -199,39 +205,74 @@ export default function FileTree({
     setCreating({ parentPath, kind });
   };
 
-  const renderCreateInput = (depth: number) => (
-    <div className="ds-tree-row editing" style={{ paddingLeft: 10 + depth * 12 }}>
-      <input
-        ref={editInputRef}
-        defaultValue=""
-        data-testid="tree-create-input"
-        placeholder={creating?.kind === "folder" ? "Folder name" : "File name"}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && creating) {
-            runCreate(creating.parentPath, creating.kind, event.currentTarget.value);
-          } else if (event.key === "Escape") {
-            setCreating(null);
-          }
-        }}
-        onBlur={() => setCreating(null)}
-      />
-    </div>
+  // `Tree` re-runs `controller.initialize(data)` whenever this array's identity
+  // changes, so it must stay memoized or every render loops.
+  const nodes = useMemo(() => {
+    const build = (entries: Entry[]): TreeNodeData[] =>
+      entries.map((entry) => {
+        if (!entry.is_dir) {
+          return { value: entry.path, label: entry.name, nodeProps: { entry } };
+        }
+        const kids = build(children.get(entry.path) ?? []);
+        if (creating?.parentPath === entry.path) {
+          kids.push({ value: CREATE_NODE, label: "" });
+        }
+        return { value: entry.path, label: entry.name, nodeProps: { entry }, children: kids };
+      });
+
+    const top = build(roots);
+    if (creating?.parentPath === "") top.unshift({ value: CREATE_NODE, label: "" });
+    return top;
+  }, [roots, children, creating]);
+
+  const entriesByPath = useMemo(() => {
+    const map = new Map<string, Entry>();
+    const walk = (entries: Entry[]) => {
+      for (const entry of entries) {
+        map.set(entry.path, entry);
+        if (entry.is_dir) walk(children.get(entry.path) ?? []);
+      }
+    };
+    walk(roots);
+    return map;
+  }, [roots, children]);
+
+  const createInput = () => (
+    <input
+      ref={editInputRef}
+      defaultValue=""
+      data-testid="tree-create-input"
+      placeholder={creating?.kind === "folder" ? "Folder name" : "File name"}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && creating) {
+          runCreate(creating.parentPath, creating.kind, event.currentTarget.value);
+        } else if (event.key === "Escape") {
+          setCreating(null);
+        }
+      }}
+      onBlur={() => setCreating(null)}
+    />
   );
 
-  const renderEntry = (entry: Entry, depth: number): ReactNode => {
-    const isOpen = expanded.has(entry.path);
-    const kids = children.get(entry.path) ?? [];
-    const isActive = activePath === entry.path;
-    const isDropTarget = entry.is_dir && dragOver === entry.path;
+  const renderNode = (payload: RenderTreeNodePayload) => {
+    const { node, expanded, elementProps } = payload;
+    // Drop Mantine's own label styling/handlers — this row keeps the app's
+    // `.ds-tree-row` treatment and its native drag-and-drop.
+    const { className: _c, style: _s, onClick: _o, ...rest } = elementProps;
+
+    if (node.value === CREATE_NODE) {
+      return (
+        <div {...rest} className="ds-tree-row editing">
+          {createInput()}
+        </div>
+      );
+    }
+
+    const entry = node.nodeProps?.entry as Entry;
 
     if (confirmingDelete === entry.path) {
       return (
-        <div
-          key={entry.path}
-          className="ds-tree-row confirm-delete"
-          style={{ paddingLeft: 10 + depth * 12 }}
-          data-testid="tree-confirm-delete"
-        >
+        <div {...rest} className="ds-tree-row confirm-delete" data-testid="tree-confirm-delete">
           <span>Delete {entry.name}?</span>
           <div className="spacer" />
           <button className="danger" onClick={() => runDelete(entry.path)} data-testid="tree-confirm-delete-yes">
@@ -246,7 +287,7 @@ export default function FileTree({
 
     if (renaming === entry.path) {
       return (
-        <div key={entry.path} className="ds-tree-row editing" style={{ paddingLeft: 10 + depth * 12 }}>
+        <div {...rest} className="ds-tree-row editing">
           <input
             ref={editInputRef}
             defaultValue={entry.name}
@@ -261,46 +302,42 @@ export default function FileTree({
       );
     }
 
+    const isActive = activePath === entry.path;
+    const isDropTarget = entry.is_dir && dragOver === entry.path;
+
     return (
-      <div key={entry.path}>
-        <div
-          className={`ds-tree-row ${entry.is_dir ? "folder" : "file"} ${isActive ? "active" : ""} ${isDropTarget ? "drop-target" : ""}`}
-          style={{ paddingLeft: 10 + depth * 12 }}
-          role="button"
-          tabIndex={0}
-          onClick={() => toggle(entry)}
-          onKeyDown={onActivateKey(() => toggle(entry))}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setMenu({ x: event.clientX, y: event.clientY, target: { path: entry.path, isDir: entry.is_dir } });
-          }}
-          draggable
-          onDragStart={(event) => {
-            event.dataTransfer.setData("text/plain", entry.path);
-            event.dataTransfer.effectAllowed = "move";
-          }}
-          onDragOver={(event) => {
-            if (!entry.is_dir) return;
-            event.preventDefault();
-            setDragOver(entry.path);
-          }}
-          onDragLeave={() => setDragOver((prev) => (prev === entry.path ? null : prev))}
-          onDrop={(event) => {
-            if (!entry.is_dir) return;
-            event.preventDefault();
-            event.stopPropagation();
-            setDragOver(null);
-            const source = event.dataTransfer.getData("text/plain");
-            if (source) runMove(source, entry.path);
-          }}
-          data-testid="tree-row"
-        >
-          <span className="ds-chevron">{entry.is_dir ? (isOpen ? "▾" : "▸") : "▸"}</span>
-          <span className="ds-tree-label">{entry.name}</span>
-        </div>
-        {entry.is_dir && isOpen && kids.map((child) => renderEntry(child, depth + 1))}
-        {entry.is_dir && isOpen && creating?.parentPath === entry.path && renderCreateInput(depth + 1)}
+      <div
+        {...rest}
+        className={`ds-tree-row ${entry.is_dir ? "folder" : "file"} ${isActive ? "active" : ""} ${isDropTarget ? "drop-target" : ""}`}
+        onClick={() => toggle(entry)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setMenu({ x: event.clientX, y: event.clientY, target: { path: entry.path, isDir: entry.is_dir } });
+        }}
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", entry.path);
+          event.dataTransfer.effectAllowed = "move";
+        }}
+        onDragOver={(event) => {
+          if (!entry.is_dir) return;
+          event.preventDefault();
+          setDragOver(entry.path);
+        }}
+        onDragLeave={() => setDragOver((prev) => (prev === entry.path ? null : prev))}
+        onDrop={(event) => {
+          if (!entry.is_dir) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setDragOver(null);
+          const source = event.dataTransfer.getData("text/plain");
+          if (source) runMove(source, entry.path);
+        }}
+        data-testid="tree-row"
+      >
+        <span className="ds-chevron">{entry.is_dir ? (expanded ? "▾" : "▸") : "▸"}</span>
+        <span className="ds-tree-label">{entry.name}</span>
       </div>
     );
   };
@@ -385,8 +422,27 @@ export default function FileTree({
         }}
       >
         {error && <div className="ds-tree-error">{error}</div>}
-        {creating?.parentPath === "" && renderCreateInput(0)}
-        {roots.map((entry) => renderEntry(entry, 0))}
+        <Tree
+          tree={tree}
+          data={nodes}
+          levelOffset={12}
+          expandOnClick={false}
+          expandOnSpace={false}
+          renderNode={renderNode}
+          // Mantine handles the arrow keys; Enter is unhandled and Space is
+          // switched off above (it would otherwise swallow spaces typed into
+          // the rename/create inputs). Reading `event.key` here rather than
+          // `nativeEvent.code` keeps plain `keyDown` events working.
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if ((event.target as HTMLElement).tagName === "INPUT") return;
+            const row = (event.target as HTMLElement).closest<HTMLElement>("[data-value]");
+            const entry = row && entriesByPath.get(row.dataset.value!);
+            if (!entry) return;
+            event.preventDefault();
+            toggle(entry);
+          }}
+        />
       </div>
 
       {menu && (
