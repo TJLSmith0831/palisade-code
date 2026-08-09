@@ -1,6 +1,10 @@
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MantineProvider } from "@mantine/core";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));

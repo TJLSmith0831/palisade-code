@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Badge } from "@mantine/core";
+import { Alert, Badge, Modal as MantineModal } from "@mantine/core";
 import type { StructuredPatch, StructuredPatchHunk } from "diff";
 
 import * as api from "./api";
 import type { FileStatus } from "./api";
 import DiffRows from "./DiffRows";
 import { describeError } from "./errors";
-import Modal from "./Modal";
 import { rowsFromHunk } from "./diffLines";
 import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
 
@@ -272,9 +271,11 @@ export default function DiffPane({ projectHash }: Props) {
       )}
 
       {confirmDiscard && (
-        <Modal
+        <MantineModal
+          opened
           onClose={() => setConfirmDiscard(null)}
-          label={`Discard changes to "${confirmDiscard.path}"?`}
+          title={`Discard changes to "${confirmDiscard.path}"?`}
+          transitionProps={{ duration: 0 }}
         >
           <label>
             Discard changes to "{confirmDiscard.path}"? This can't be undone.
@@ -285,7 +286,7 @@ export default function DiffPane({ projectHash }: Props) {
             </button>
             <button onClick={() => setConfirmDiscard(null)}>Cancel</button>
           </div>
-        </Modal>
+        </MantineModal>
       )}
     </div>
   );
