@@ -81,8 +81,10 @@ beforeEach(() => {
     if (cmd === "list_threads") return Promise.resolve([]);
     if (cmd === "preflight") {
       return Promise.resolve({
-        claude: null,
-        codex: null,
+        agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ],
         selected: null,
         openspec: false,
         grillApply: false,
@@ -164,7 +166,10 @@ describe("Top chrome (merged-design v2)", () => {
       if (cmd === "list_threads") return Promise.resolve([{ id: "t1", projectHash: "proj-1", title: "Test Thread", createdAt: "2026-08-06T00:00:00Z", updatedAt: "2026-08-06T00:00:00Z", currentMode: "spec", openSpecChangeName: null, executorSessionId: null }]);
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -193,8 +198,10 @@ describe("Top chrome (merged-design v2)", () => {
       if (cmd === "list_projects") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
-          claude: "/usr/local/bin/claude",
-          codex: null,
+          agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ],
           selected: "claude",
           openspec: true,
           grillApply: false,
@@ -379,8 +386,10 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
       }
       if (cmd === "preflight") {
         return Promise.resolve({
-          claude: null,
-          codex: null,
+          agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -449,7 +458,10 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
         ]);
       }
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -491,7 +503,10 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
       }
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -594,7 +609,10 @@ describe("Settings panel (D14/D15)", () => {
         return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "read_file_content") return Promise.resolve('{"formatOnSave":{}}');
       if (cmd === "write_file_content") writeCalls.push(args);
@@ -622,7 +640,10 @@ describe("Settings panel (D14/D15)", () => {
         return Promise.resolve({ hash: "proj-1", root: "/tmp/floo-network", displayName: "floo-network", createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: "claude", openspec: true, grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "read_file_content") return Promise.reject(new Error("no such file"));
       if (cmd === "write_file_content") {
@@ -756,7 +777,10 @@ describe("Keyboard navigation (accessibility)", () => {
       }
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -792,7 +816,10 @@ describe("Keyboard navigation (accessibility)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -831,7 +858,10 @@ describe("Keyboard navigation (accessibility)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -873,7 +903,10 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") {
@@ -936,7 +969,10 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
       if (cmd === "switch_project") return Promise.resolve(project(String(args?.hash ?? "proj-1"), "one"));
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") {
@@ -981,7 +1017,10 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") {
@@ -1033,7 +1072,10 @@ describe("Labeled inputs (accessibility)", () => {
       }
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -1060,7 +1102,10 @@ describe("Labeled inputs (accessibility)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -1089,7 +1134,10 @@ describe("Error banner provenance", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -1169,8 +1217,10 @@ describe("First-run onboarding", () => {
       if (cmd === "list_projects") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
-          claude: null,
-          codex: null,
+          agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1230,7 +1280,10 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
       }
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -1298,7 +1351,10 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
       }
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") {
@@ -1392,7 +1448,10 @@ describe("Session restore", () => {
     if (cmd === "switch_project") return Promise.resolve(project);
     if (cmd === "list_threads") return Promise.resolve([]);
     if (cmd === "preflight") {
-      return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
     }
     if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
     if (cmd === "list_directory") {
@@ -1489,7 +1548,10 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
       }
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -1520,7 +1582,10 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
       }
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "preflight") {
-        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+        return Promise.resolve({ agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
       }
       if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
@@ -1587,8 +1652,10 @@ describe("Project switching", () => {
       if (cmd === "list_threads") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
-          claude: null,
-          codex: null,
+          agents: [
+          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1644,7 +1711,10 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
       if (cmd === "list_projects") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
-          claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true,
+          agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: "claude", openspec: true,
           grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z",
         });
       }
@@ -1663,7 +1733,10 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
       if (cmd === "list_projects") return Promise.resolve([]);
       if (cmd === "preflight") {
         return Promise.resolve({
-          claude: "/usr/local/bin/claude", codex: null, selected: "claude", openspec: true,
+          agents: [
+          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
+          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+        ], selected: "claude", openspec: true,
           grillApply: false, ponytail: true, graphify: true, ready: true, warnings: [], checkedAt: "2026-08-06T00:00:00Z",
         });
       }

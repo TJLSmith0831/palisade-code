@@ -18,7 +18,6 @@ export type ThreadMeta = {
   updatedAt: string;
   currentMode: Mode;
   openSpecChangeName: string | null;
-  executorSessionId: string | null;
 };
 
 export type Message = {
@@ -27,6 +26,8 @@ export type Message = {
   role: "user" | "assistant" | "system" | "tool";
   mode: Mode;
   content: string;
+  /** Absent on messages written before sessions had identities. */
+  sessionId?: string | null;
 };
 
 export const listProjects = () => invoke<Project[]>("list_projects");
@@ -73,10 +74,21 @@ export const readThread = (projectHash: string, threadId: string) =>
 
 // ------------------------------------------------------- executor handoff
 
+/** Detection status for one row of the backend's `KNOWN_AGENTS` table. */
+export type AgentStatus = {
+  id: string;
+  label: string;
+  path: string | null;
+  skillsOk: boolean;
+  pluginOk: boolean;
+};
+
 export type Preflight = {
-  claude: string | null;
-  codex: string | null;
-  selected: "claude" | "codex" | null;
+  /** One entry per known agent, in the backend's table order. Iterate this —
+   * adding an agent must not require a change here or at any call site. */
+  agents: AgentStatus[];
+  /** The id of the first agent in table order that was found on PATH. */
+  selected: string | null;
   openspec: boolean;
   grillApply: boolean;
   ponytail: boolean;
@@ -104,6 +116,17 @@ export type ExecutorEvent =
   | { kind: "done" }
   | { kind: "crashed"; exitCode: number | null; message: string };
 
+/**
+ * What the `executor-event` listener actually receives. Every event names the
+ * session and thread that produced it, so two concurrent sessions can be told
+ * apart instead of collapsing into one global stream.
+ */
+export type Envelope = {
+  sessionId: string;
+  threadId: string;
+  event: ExecutorEvent;
+};
+
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
 export const sendMessage = (
@@ -118,7 +141,132 @@ export const specMode = (projectHash: string, threadId: string) =>
   invoke<ThreadMeta>("spec_mode", { projectHash, threadId });
 export const propose = (projectHash: string, threadId: string) =>
   invoke<void>("propose", { projectHash, threadId });
-export const stopExecutor = () => invoke<void>("stop_executor");
+/** Stop one session, or every live session when no id is given. */
+export const stopExecutor = (sessionId?: string) =>
+  invoke<void>("stop_executor", { sessionId: sessionId ?? null });
+
+/** One run of one agent against one thread. */
+export type SessionRecord = {
+  id: string;
+  threadId: string;
+  projectHash: string;
+  agentId: string;
+  mode: Mode;
+  providerHandle: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  outcome: "done" | "crashed" | "cancelled" | "interrupted" | null;
+  gitHeadBefore: string | null;
+  gitHeadAfter: string | null;
+};
+
+/** What each live session is doing. A list, not one global busy flag. */
+export type SessionStatus = {
+  id: string;
+  threadId: string;
+  agentId: string;
+  mode: Mode;
+  busy: boolean;
+};
+
+export const executorStatus = () => invoke<SessionStatus[]>("executor_status");
+export const listSessions = (projectHash: string, threadId: string) =>
+  invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
+/** Release a thread's idle sessions. Sessions mid-turn keep running. */
+export const leaveThread = (threadId: string) =>
+  invoke<void>("leave_thread", { threadId });
+
+// ------------------------------------------------------------ verification
+
+/**
+ * One run of one verify command. This is the only evidence Floo accepts that
+ * something works: a named command exited with a given code at a given commit.
+ * Render the code and the commit — never summarise a set of these into
+ * "complete" or "satisfied".
+ */
+export type VerificationRun = {
+  id: string;
+  projectHash: string;
+  threadId: string | null;
+  sessionId: string | null;
+  name: string;
+  command: string;
+  exitCode: number;
+  outputTail: string;
+  gitHead: string | null;
+  at: string;
+};
+
+/** What a session changed, with its own uncertainty attached. */
+export type Attribution = {
+  sessionId: string;
+  committed: string[];
+  uncommitted: string[];
+  concurrentSessions: number;
+  /** True while more than one session shares the root — the dirty set can't
+   * honestly be split, so the UI must say so rather than pick. */
+  ambiguous: boolean;
+};
+
+/** Resolves as soon as the run *starts*; the result arrives as an event. */
+export const runVerify = (
+  projectHash: string,
+  name: string,
+  threadId?: string | null,
+  sessionId?: string | null,
+) =>
+  invoke<void>("run_verify", {
+    projectHash,
+    name,
+    threadId: threadId ?? null,
+    sessionId: sessionId ?? null,
+  });
+export const listVerifications = (projectHash: string) =>
+  invoke<VerificationRun[]>("list_verifications", { projectHash });
+/** `[name, command]` pairs from the project's `.project-settings.json`. */
+export const verifyCommands = (projectHash: string) =>
+  invoke<[string, string][]>("verify_commands", { projectHash });
+export const sessionAttribution = (
+  projectHash: string,
+  threadId: string,
+  sessionId: string,
+) =>
+  invoke<Attribution>("session_attribution", {
+    projectHash,
+    threadId,
+    sessionId,
+  });
+
+// ----------------------------------------------------------- spec reference
+
+/**
+ * One OpenSpec change, as the `openspec` CLI reports it. `completedTasks` is
+ * the agent's own checkbox self-report — render it as such, never as a claim
+ * that the change is done.
+ */
+export type SpecChange = {
+  name: string;
+  completedTasks: number;
+  totalTasks: number;
+  lastModified: string | null;
+  status: string | null;
+};
+
+/** A propose turn produced more than one change; the user picks which. */
+export type SpecLinkAmbiguous = { threadId: string; names: string[] };
+
+export const listSpecChanges = (projectHash: string) =>
+  invoke<SpecChange[]>("list_spec_changes", { projectHash });
+export const showSpecChange = (projectHash: string, name: string) =>
+  invoke<unknown | null>("show_spec_change", { projectHash, name });
+/** `null` means "openspec isn't installed, so we can't tell" — not "invalid". */
+export const validateSpecChanges = (projectHash: string) =>
+  invoke<boolean | null>("validate_spec_changes", { projectHash });
+export const setSpecChange = (
+  projectHash: string,
+  threadId: string,
+  name: string | null,
+) => invoke<ThreadMeta>("set_spec_change", { projectHash, threadId, name });
 
 // ----------------------------------------------------------------- graphify
 

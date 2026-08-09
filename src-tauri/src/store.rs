@@ -5,9 +5,11 @@
 //! reading it from the environment, so tests can point at a tempdir without
 //! process-global state. `floo_home()` is only called by the command layer.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -76,8 +78,45 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Res<()> {
 
 pub fn list_projects(home: &Path) -> Res<Vec<Project>> {
     let mut projects: Vec<Project> = read_json(&index_path(home))?;
+    if adopt_orphan_projects(home, &mut projects) {
+        save_projects(home, &projects)?;
+    }
     projects.sort_by(|a, b| b.last_accessed_at.cmp(&a.last_accessed_at));
     Ok(projects)
+}
+
+/// The index and the `projects/` directory can diverge — a lost or rewritten
+/// `projects.json` leaves real thread history permanently unreachable. Each
+/// project dir keeps its own authoritative `project.json`, so any directory
+/// holding a parseable one is adopted back into the index. Nothing is ever
+/// deleted: a directory without a valid `project.json` is simply skipped.
+/// Returns whether the index changed.
+fn adopt_orphan_projects(home: &Path, projects: &mut Vec<Project>) -> bool {
+    let Ok(entries) = fs::read_dir(home.join("projects")) else {
+        return false;
+    };
+    let mut adopted = false;
+    for entry in entries.flatten() {
+        let hash = entry.file_name().to_string_lossy().to_string();
+        if projects.iter().any(|p| p.hash == hash) {
+            continue;
+        }
+        let body = match fs::read_to_string(entry.path().join("project.json")) {
+            Ok(body) => body,
+            Err(_) => continue,
+        };
+        match serde_json::from_str::<Project>(&body) {
+            // A `project.json` naming a different hash than its own directory
+            // isn't a project we can address; adopting it would key the index
+            // on a path that doesn't exist.
+            Ok(project) if project.hash == hash => {
+                projects.push(project);
+                adopted = true;
+            }
+            _ => continue,
+        }
+    }
+    adopted
 }
 
 fn save_projects(home: &Path, projects: &[Project]) -> Res<()> {
@@ -153,14 +192,17 @@ pub struct ThreadMeta {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
-    /// "spec" | "go"
+    /// "spec" | "go" — the thread's *intent*: what a new session starts as and
+    /// what the UI preselects. Enforcement is per session (D19), so this no
+    /// longer describes what is running.
     pub current_mode: String,
     pub open_spec_change_name: Option<String>,
-    /// The executor's own conversation id, so `/go` can carry history forward
-    /// after an app restart. Defaulted so pre-existing sidecars still parse.
-    #[serde(default)]
-    pub executor_session_id: Option<String>,
 }
+// `executorSessionId` used to live here. It was a provider-private resume
+// handle on a provider-independent entity, and it was written unconditionally
+// even for Codex, which never used it. It now lives on `SessionRecord`; the
+// field is still tolerated on disk (serde ignores unknown keys) and is read
+// exactly once, by `read_sessions`' legacy shim.
 
 fn meta_path(home: &Path, hash: &str, id: &str) -> PathBuf {
     threads_dir(home, hash).join(format!("{id}.meta.json"))
@@ -181,7 +223,6 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         updated_at: stamp,
         current_mode: "spec".into(),
         open_spec_change_name: None,
-        executor_session_id: None,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -201,6 +242,7 @@ pub fn delete_thread(home: &Path, hash: &str, id: &str) -> Res<()> {
         }
     };
     remove(meta_path(home, hash, id))?;
+    remove(sessions_path(home, hash, id))?;
     remove(log_path(home, hash, id))
 }
 
@@ -241,13 +283,6 @@ pub fn rename_thread(home: &Path, hash: &str, id: &str, title: &str) -> Res<Thre
     update_thread(home, hash, id, |m| m.title = title.trim().to_string())
 }
 
-/// Remember (or forget) the executor conversation backing this thread.
-pub fn set_executor_session(home: &Path, hash: &str, id: &str, session: Option<&str>) -> Res<ThreadMeta> {
-    update_thread(home, hash, id, |m| {
-        m.executor_session_id = session.map(str::to_string)
-    })
-}
-
 /// Link a thread to the OpenSpec change `/propose` created for it.
 pub fn set_open_spec_change(home: &Path, hash: &str, id: &str, change: Option<&str>) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| {
@@ -262,8 +297,271 @@ pub fn set_thread_mode(home: &Path, hash: &str, id: &str, mode: &str) -> Res<Thr
         return Err(format!("invalid mode: {mode}"));
     }
     let meta = update_thread(home, hash, id, |m| m.current_mode = mode.to_string())?;
-    append_message(home, hash, id, "tool", mode, &format!("Switched to {mode} mode"))?;
+    append_message(home, hash, id, "tool", mode, &format!("Switched to {mode} mode"), None)?;
     Ok(meta)
+}
+
+// ---------------------------------------------------------------- sessions
+
+/// One run of one agent against one thread. Appended twice — once open, once
+/// closed — to `<ulid>.sessions.jsonl`; the later row for an id wins, so the
+/// log stays append-only and a torn close can never lose the open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRecord {
+    pub id: String,
+    pub thread_id: String,
+    pub project_hash: String,
+    /// Which agent ran — `"claude"`, `"codex"`, …
+    pub agent_id: String,
+    /// "spec" | "go" — the flag this session actually ran under.
+    pub mode: String,
+    /// The agent's own conversation handle. Provider-private: a Claude UUID
+    /// means nothing to Codex, so it is only ever reused by the same agent.
+    #[serde(default)]
+    pub provider_handle: Option<String>,
+    pub started_at: String,
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    /// "done" | "crashed" | "cancelled" | "interrupted"; `None` while live.
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub git_head_before: Option<String>,
+    #[serde(default)]
+    pub git_head_after: Option<String>,
+    /// Paths already dirty when the session opened. The *delta* against the
+    /// tree now is what this session left uncommitted — exact only while no
+    /// other session shares the root, which is why attribution carries its own
+    /// ambiguity flag (D13).
+    #[serde(default)]
+    pub dirty_before: Option<Vec<String>>,
+}
+
+fn sessions_path(home: &Path, hash: &str, id: &str) -> PathBuf {
+    threads_dir(home, hash).join(format!("{id}.sessions.jsonl"))
+}
+
+fn append_session(home: &Path, record: &SessionRecord) -> Res<()> {
+    let path = sessions_path(home, &record.project_hash, &record.thread_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| e("create thread dir", err))?;
+    }
+    let line = serde_json::to_string(record).map_err(|err| e("serialize session", err))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|err| e(&format!("open {}", path.display()), err))?;
+    if !ends_with_newline(&path)? {
+        file.write_all(b"\n").map_err(|err| e("close torn line", err))?;
+    }
+    file.write_all(line.as_bytes()).map_err(|err| e("append session", err))?;
+    file.write_all(b"\n").map_err(|err| e("append newline", err))?;
+    file.sync_all().map_err(|err| e("fsync session log", err))
+}
+
+/// Record a session starting. The returned record is what `close_session`
+/// later amends.
+#[allow(clippy::too_many_arguments)]
+pub fn open_session(
+    home: &Path,
+    hash: &str,
+    thread_id: &str,
+    id: &str,
+    agent_id: &str,
+    mode: &str,
+    provider_handle: Option<&str>,
+    git_head_before: Option<&str>,
+    dirty_before: Option<Vec<String>>,
+) -> Res<SessionRecord> {
+    let record = SessionRecord {
+        id: id.to_string(),
+        thread_id: thread_id.to_string(),
+        project_hash: hash.to_string(),
+        agent_id: agent_id.to_string(),
+        mode: mode.to_string(),
+        provider_handle: provider_handle.map(str::to_string),
+        started_at: now(),
+        ended_at: None,
+        outcome: None,
+        git_head_before: git_head_before.map(str::to_string),
+        git_head_after: None,
+        dirty_before,
+    };
+    append_session(home, &record)?;
+    Ok(record)
+}
+
+/// Record a session ending. Appends an amended copy rather than rewriting the
+/// open row — closing an already-closed session is a no-op, so a crash
+/// followed by a terminate can't overwrite the real cause.
+pub fn close_session(
+    home: &Path,
+    hash: &str,
+    thread_id: &str,
+    id: &str,
+    outcome: &str,
+    git_head_after: Option<&str>,
+) -> Res<Option<SessionRecord>> {
+    let Some(mut record) = read_sessions(home, hash, thread_id)?.into_iter().find(|r| r.id == id)
+    else {
+        return Ok(None);
+    };
+    if record.ended_at.is_some() {
+        return Ok(Some(record));
+    }
+    record.ended_at = Some(now());
+    record.outcome = Some(outcome.to_string());
+    record.git_head_after = git_head_after.map(str::to_string);
+    append_session(home, &record)?;
+    Ok(Some(record))
+}
+
+/// Every session ever run against a thread, oldest first. The last row for an
+/// id wins. A thread with no session log but a legacy `executorSessionId` on
+/// its sidecar yields exactly one synthesized closed record (see below).
+pub fn read_sessions(home: &Path, hash: &str, thread_id: &str) -> Res<Vec<SessionRecord>> {
+    let path = sessions_path(home, hash, thread_id);
+    let body = match fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(legacy_session(home, hash, thread_id).into_iter().collect())
+        }
+        Err(err) => return Err(e("read session log", err)),
+    };
+
+    let mut records: Vec<SessionRecord> = vec![];
+    let mut offset = 0usize;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches('\n');
+        if !trimmed.trim().is_empty() {
+            match serde_json::from_str::<SessionRecord>(trimmed) {
+                Ok(record) => match records.iter_mut().find(|r| r.id == record.id) {
+                    Some(existing) => *existing = record,
+                    None => records.push(record),
+                },
+                Err(_) => log_corrupt_line(home, thread_id, offset),
+            }
+        }
+        offset += line.len();
+    }
+    Ok(records)
+}
+
+/// Threads written before sessions existed carry the executor's handle on
+/// their sidecar. `ensure_session` wrote that field unconditionally, including
+/// for Codex — which never used it — so only Claude can consume such a handle,
+/// and attributing it to Claude is the one reading that doesn't fabricate a
+/// resumable session for an agent that never had one.
+fn legacy_session(home: &Path, hash: &str, thread_id: &str) -> Option<SessionRecord> {
+    let body = fs::read_to_string(meta_path(home, hash, thread_id)).ok()?;
+    let meta: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let handle = meta.get("executorSessionId")?.as_str()?.to_string();
+    let stamp = meta
+        .get("updatedAt")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map_or_else(now, str::to_string);
+    Some(SessionRecord {
+        id: format!("legacy-{thread_id}"),
+        thread_id: thread_id.to_string(),
+        project_hash: hash.to_string(),
+        agent_id: "claude".into(),
+        mode: meta.get("currentMode").and_then(|v| v.as_str()).unwrap_or("spec").to_string(),
+        provider_handle: Some(handle),
+        started_at: stamp.clone(),
+        ended_at: Some(stamp),
+        outcome: Some("interrupted".into()),
+        git_head_before: None,
+        git_head_after: None,
+        dirty_before: None,
+    })
+}
+
+/// No process survives an app restart, so any record still open whose session
+/// isn't in the live set was interrupted. Called from the read path rather
+/// than a startup sweep: the invariant holds continuously, not just at launch,
+/// and a thread nobody opens costs nothing.
+pub fn close_stale_sessions(home: &Path, hash: &str, thread_id: &str, live: &[String]) -> Res<Vec<SessionRecord>> {
+    for record in read_sessions(home, hash, thread_id)? {
+        if record.ended_at.is_none() && !live.contains(&record.id) {
+            close_session(home, hash, thread_id, &record.id, "interrupted", None)?;
+        }
+    }
+    read_sessions(home, hash, thread_id)
+}
+
+// ----------------------------------------------------------- verification
+
+/// One run of one verify command. The whole point of this record: a spec is
+/// never complete because a model said so — it is green because a named
+/// command exited 0 at a named commit (D3). Nothing here is a judgement; the
+/// exit code is reported as-is and rendered as-is.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationRun {
+    pub id: String,
+    pub project_hash: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// The key from `.project-settings.json`'s `verify` map.
+    pub name: String,
+    pub command: String,
+    pub exit_code: i32,
+    pub output_tail: String,
+    #[serde(default)]
+    pub git_head: Option<String>,
+    pub at: String,
+}
+
+fn verify_path(home: &Path, hash: &str) -> PathBuf {
+    project_dir(home, hash).join("verify.jsonl")
+}
+
+pub fn append_verification(home: &Path, run: &VerificationRun) -> Res<VerificationRun> {
+    let path = verify_path(home, &run.project_hash);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| e("create project dir", err))?;
+    }
+    let line = serde_json::to_string(run).map_err(|err| e("serialize verification", err))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|err| e(&format!("open {}", path.display()), err))?;
+    if !ends_with_newline(&path)? {
+        file.write_all(b"\n").map_err(|err| e("close torn line", err))?;
+    }
+    file.write_all(line.as_bytes()).map_err(|err| e("append verification", err))?;
+    file.write_all(b"\n").map_err(|err| e("append newline", err))?;
+    file.sync_all().map_err(|err| e("fsync verify log", err))?;
+    Ok(run.clone())
+}
+
+/// Every verification run for a project, oldest first.
+pub fn read_verifications(home: &Path, hash: &str) -> Res<Vec<VerificationRun>> {
+    let path = verify_path(home, hash);
+    let body = match fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(err) => return Err(e("read verify log", err)),
+    };
+    let mut runs = vec![];
+    let mut offset = 0usize;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches('\n');
+        if !trimmed.trim().is_empty() {
+            match serde_json::from_str::<VerificationRun>(trimmed) {
+                Ok(run) => runs.push(run),
+                Err(_) => log_corrupt_line(home, hash, offset),
+            }
+        }
+        offset += line.len();
+    }
+    Ok(runs)
 }
 
 // --------------------------------------------------------- session storage
@@ -277,20 +575,49 @@ pub struct Message {
     /// "spec" | "go" — the mode active when the message was written
     pub mode: String,
     pub content: String,
+    /// Which session produced this message. Defaulted so rows written before
+    /// sessions had identities still parse; `None` means "written by a build
+    /// that had no session id to record", never "no session".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// Next `seq` per log path, alongside the file length it was computed at.
+/// Appending used to re-read the whole log every time (O(n) per append, O(n²)
+/// per thread). The recorded length is the validity check: if anything other
+/// than this process's own appends changed the file, the entry is stale and
+/// the seq is recomputed from disk.
+static SEQ_CACHE: Mutex<Option<HashMap<PathBuf, (u64, u64)>>> = Mutex::new(None);
+
+fn file_len(path: &Path) -> u64 {
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
 /// Append one JSON line to the thread's log and fsync before returning.
-pub fn append_message(home: &Path, hash: &str, id: &str, role: &str, mode: &str, content: &str) -> Res<Message> {
+#[allow(clippy::too_many_arguments)]
+pub fn append_message(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    role: &str,
+    mode: &str,
+    content: &str,
+    session_id: Option<&str>,
+) -> Res<Message> {
     let path = log_path(home, hash, id);
-    // ponytail: next seq comes from re-reading the log — O(n) per append, fine
-    // for a desktop chat log; cache the tail seq in memory if it ever bites.
-    let seq = read_thread(home, hash, id)?.last().map_or(0, |m| m.seq + 1);
+    let mut cache = SEQ_CACHE.lock().map_err(|err| e("seq cache", err))?;
+    let cache = cache.get_or_insert_with(HashMap::new);
+    let seq = match cache.get(&path) {
+        Some((len, seq)) if *len == file_len(&path) => *seq,
+        _ => read_thread(home, hash, id)?.last().map_or(0, |m| m.seq + 1),
+    };
     let message = Message {
         seq,
         ts: now(),
         role: role.to_string(),
         mode: mode.to_string(),
         content: content.to_string(),
+        session_id: session_id.map(str::to_string),
     };
     let line = serde_json::to_string(&message).map_err(|err| e("serialize message", err))?;
 
@@ -310,6 +637,7 @@ pub fn append_message(home: &Path, hash: &str, id: &str, role: &str, mode: &str,
     file.write_all(line.as_bytes()).map_err(|err| e("append message", err))?;
     file.write_all(b"\n").map_err(|err| e("append newline", err))?;
     file.sync_all().map_err(|err| e("fsync session log", err))?;
+    cache.insert(path.clone(), (file_len(&path), seq + 1));
     Ok(message)
 }
 
@@ -479,7 +807,7 @@ mod tests {
         let thread = create_thread(home.path(), &project.hash, "t").unwrap();
 
         for i in 0..5 {
-            append_message(home.path(), &project.hash, &thread.id, "user", "spec", &format!("m{i}")).unwrap();
+            append_message(home.path(), &project.hash, &thread.id, "user", "spec", &format!("m{i}"), None).unwrap();
         }
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.len(), 5);
@@ -493,7 +821,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let project = add_project(home.path(), repo.path()).unwrap();
         let thread = create_thread(home.path(), &project.hash, "t").unwrap();
-        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "good").unwrap();
+        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "good", None).unwrap();
 
         let path = log_path(home.path(), &project.hash, &thread.id);
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
@@ -508,7 +836,7 @@ mod tests {
         assert!(harness_log.contains("byte offset"));
 
         // A later good append still lands after the torn line.
-        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "after").unwrap();
+        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "after", None).unwrap();
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.last().unwrap().content, "after");
     }
@@ -537,39 +865,243 @@ mod tests {
         assert!(set_thread_mode(home.path(), &project.hash, &thread.id, "turbo").is_err());
     }
 
-    /// `/go` carries history forward by resuming the executor's own session,
-    /// so that id has to outlive the app process, not just the live child.
+    /// A sidecar still carrying the retired `executorSessionId` must load —
+    /// the field is tolerated on disk, just no longer part of the type.
     #[test]
-    fn the_executor_session_id_survives_on_the_sidecar() {
-        let home = home();
-        let repo = tempfile::tempdir().unwrap();
-        let project = add_project(home.path(), repo.path()).unwrap();
-        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
-        assert_eq!(thread.executor_session_id, None);
-
-        set_executor_session(home.path(), &project.hash, &thread.id, Some("sess-1")).unwrap();
-        // Re-reading from disk is what a restarted app actually does.
-        let reloaded = list_threads(home.path(), &project.hash).unwrap();
-        assert_eq!(reloaded[0].executor_session_id.as_deref(), Some("sess-1"));
-
-        // A crash clears it so the next attempt isn't stuck resuming a session
-        // the executor may no longer have.
-        set_executor_session(home.path(), &project.hash, &thread.id, None).unwrap();
-        let reloaded = list_threads(home.path(), &project.hash).unwrap();
-        assert_eq!(reloaded[0].executor_session_id, None);
-    }
-
-    /// Sidecars written before this field existed must still load.
-    #[test]
-    fn a_sidecar_without_the_session_field_still_parses() {
+    fn a_sidecar_with_or_without_the_retired_session_field_still_parses() {
         let legacy = r#"{
             "id": "01ABC", "projectHash": "h", "title": "t",
             "createdAt": "2026-08-03T00:00:00+00:00", "updatedAt": "2026-08-03T00:00:00+00:00",
             "currentMode": "spec", "openSpecChangeName": null
         }"#;
-        let meta: ThreadMeta = serde_json::from_str(legacy).unwrap();
-        assert_eq!(meta.executor_session_id, None);
-        assert_eq!(meta.current_mode, "spec");
+        assert_eq!(serde_json::from_str::<ThreadMeta>(legacy).unwrap().current_mode, "spec");
+
+        let with_field = legacy.replace(
+            r#""openSpecChangeName": null"#,
+            r#""openSpecChangeName": null, "executorSessionId": "sess-1""#,
+        );
+        let meta: ThreadMeta = serde_json::from_str(&with_field).unwrap();
+        assert_eq!(meta.id, "01ABC");
+        // And writing it back does not carry the retired field forward.
+        assert!(!serde_json::to_string(&meta).unwrap().contains("executorSessionId"));
+    }
+
+    /// Task 2.14: the record is the durable answer to "what ran, and how did
+    /// it end" — an open row on start, an amended row on close.
+    #[test]
+    fn a_session_is_recorded_open_then_closed_with_its_outcome() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        let opened = open_session(
+            home.path(), &project.hash, &thread.id, "s1", "claude", "go", Some("uuid-1"), Some("abc123"), None,
+        )
+        .unwrap();
+        assert_eq!(opened.ended_at, None);
+        assert_eq!(opened.outcome, None);
+
+        let live = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
+        assert_eq!(live.len(), 1, "the open row is readable on its own");
+        assert_eq!(live[0].provider_handle.as_deref(), Some("uuid-1"));
+
+        for outcome in ["done", "crashed", "cancelled"] {
+            let home = tempfile::tempdir().unwrap();
+            let project = add_project(home.path(), repo.path()).unwrap();
+            let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+            open_session(home.path(), &project.hash, &thread.id, "s1", "claude", "go", None, None, None).unwrap();
+            close_session(home.path(), &project.hash, &thread.id, "s1", outcome, Some("def456")).unwrap();
+
+            let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
+            assert_eq!(records.len(), 1, "the close amends the open, it does not duplicate it");
+            assert_eq!(records[0].outcome.as_deref(), Some(outcome));
+            assert!(records[0].ended_at.is_some());
+            assert_eq!(records[0].git_head_after.as_deref(), Some("def456"));
+        }
+    }
+
+    /// Closing twice must not rewrite how a session actually ended — a crash
+    /// followed by the harness tidying up stays a crash.
+    #[test]
+    fn closing_an_already_closed_session_keeps_the_first_outcome() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        open_session(home.path(), &project.hash, &thread.id, "s1", "claude", "go", None, None, None).unwrap();
+        close_session(home.path(), &project.hash, &thread.id, "s1", "crashed", None).unwrap();
+        close_session(home.path(), &project.hash, &thread.id, "s1", "cancelled", None).unwrap();
+
+        let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
+        assert_eq!(records[0].outcome.as_deref(), Some("crashed"));
+    }
+
+    /// Task 2.15: no process survives a restart, so a record left open by one
+    /// is not "still running" — it was interrupted.
+    #[test]
+    fn a_record_left_open_by_a_dead_process_closes_as_interrupted() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        open_session(home.path(), &project.hash, &thread.id, "dead", "claude", "go", None, None, None).unwrap();
+        open_session(home.path(), &project.hash, &thread.id, "alive", "codex", "spec", None, None, None).unwrap();
+
+        let records =
+            close_stale_sessions(home.path(), &project.hash, &thread.id, &["alive".to_string()]).unwrap();
+        let by_id = |id: &str| records.iter().find(|r| r.id == id).unwrap().clone();
+        assert_eq!(by_id("dead").outcome.as_deref(), Some("interrupted"));
+        assert_eq!(by_id("alive").outcome, None, "a session that is actually live stays open");
+    }
+
+    /// Task 2.16: `ensure_session` wrote the handle unconditionally, including
+    /// for Codex, which never used it — so only Claude can be credited with it.
+    #[test]
+    fn a_thread_with_only_a_legacy_handle_yields_one_synthesized_claude_record() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        // Write the retired field back onto the sidecar, as an old build would.
+        let path = meta_path(home.path(), &project.hash, &thread.id);
+        let mut raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        raw["executorSessionId"] = serde_json::Value::String("legacy-uuid".into());
+        fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+
+        let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].agent_id, "claude");
+        assert_eq!(records[0].provider_handle.as_deref(), Some("legacy-uuid"));
+        assert!(records[0].ended_at.is_some(), "a legacy session is not live");
+
+        // Once the thread has a real session log, the shim stops firing.
+        open_session(home.path(), &project.hash, &thread.id, "s1", "codex", "spec", None, None, None).unwrap();
+        let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
+        assert_eq!(records.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["s1"]);
+    }
+
+    #[test]
+    fn a_thread_with_no_history_at_all_has_no_sessions() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert!(read_sessions(home.path(), &project.hash, &thread.id).unwrap().is_empty());
+    }
+
+    /// Task 0.6: `projects.json` is a cache over the per-project `project.json`
+    /// files. If it loses an entry, that project's whole thread history becomes
+    /// permanently unreachable — so listing reconciles instead of trusting it.
+    #[test]
+    fn a_project_missing_from_the_index_is_adopted_back_from_its_directory() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+
+        // Simulate the divergence: index emptied, directory left intact.
+        save_projects(home.path(), &[]).unwrap();
+
+        let listed = list_projects(home.path()).unwrap();
+        assert_eq!(listed, vec![project.clone()], "the orphaned directory is adopted");
+
+        // The adoption is written back, not recomputed on every read.
+        let index: Vec<Project> = read_json(&index_path(home.path())).unwrap();
+        assert_eq!(index, vec![project]);
+    }
+
+    #[test]
+    fn a_directory_without_a_valid_project_json_is_not_adopted() {
+        let home = home();
+        fs::create_dir_all(home.path().join("projects/nonsense")).unwrap();
+        fs::write(home.path().join("projects/nonsense/project.json"), "{not json").unwrap();
+        fs::create_dir_all(home.path().join("projects/bare")).unwrap();
+
+        assert!(list_projects(home.path()).unwrap().is_empty());
+        // And nothing was deleted to achieve that.
+        assert!(home.path().join("projects/bare").exists());
+        assert!(home.path().join("projects/nonsense/project.json").exists());
+    }
+
+    /// Task 0.7: appends used to re-read the whole log to find the next `seq`.
+    /// Volume is what exposes both the cost and any off-by-one in the cache.
+    #[test]
+    fn five_hundred_appends_stay_monotonic_and_read_back_in_order() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        for i in 0..500 {
+            let message =
+                append_message(home.path(), &project.hash, &thread.id, "user", "spec", &format!("m{i}"), None)
+                    .unwrap();
+            assert_eq!(message.seq, i, "the returned message carries its own seq");
+        }
+
+        let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
+        assert_eq!(messages.len(), 500);
+        assert!(
+            messages.iter().enumerate().all(|(i, m)| m.seq == i as u64 && m.content == format!("m{i}")),
+            "seq must be gapless, duplicate-free, and in order"
+        );
+    }
+
+    /// The cache is only valid while the file is exactly as this process left
+    /// it; anything else on disk means recompute rather than trust it.
+    #[test]
+    fn the_seq_cache_falls_back_when_the_log_changed_underneath_it() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "one", None).unwrap();
+
+        // Another writer appends a real message behind our back.
+        let path = log_path(home.path(), &project.hash, &thread.id);
+        let smuggled = Message {
+            seq: 1,
+            ts: now(),
+            role: "user".into(),
+            mode: "spec".into(),
+            content: "smuggled".into(),
+            session_id: None,
+        };
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&smuggled).unwrap()).unwrap();
+
+        let next = append_message(home.path(), &project.hash, &thread.id, "user", "spec", "three", None).unwrap();
+        assert_eq!(next.seq, 2, "a stale cache entry must not reuse a taken seq");
+    }
+
+    /// Task 1.9: every message written before sessions had identities is still
+    /// history, and must load rather than be dropped as a corrupt line.
+    #[test]
+    fn a_message_without_a_session_id_still_parses() {
+        let legacy = r#"{"seq":0,"ts":"2026-08-03T00:00:00+00:00","role":"user","mode":"spec","content":"hi"}"#;
+        let message: Message = serde_json::from_str(legacy).unwrap();
+        assert_eq!(message.session_id, None);
+        assert_eq!(message.content, "hi");
+
+        let stamped = append_message_fixture("sess-9");
+        assert_eq!(stamped.session_id.as_deref(), Some("sess-9"));
+        // The field is omitted rather than written as null, so old builds and
+        // legacy rows stay byte-identical in shape.
+        assert!(!serde_json::to_string(&message).unwrap().contains("sessionId"));
+    }
+
+    fn append_message_fixture(session: &str) -> Message {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        append_message(home.path(), &project.hash, &thread.id, "assistant", "go", "out", Some(session))
+            .unwrap();
+        read_thread(home.path(), &project.hash, &thread.id).unwrap().remove(0)
     }
 
     #[test]
