@@ -1,6 +1,6 @@
 import { ActionIcon, CloseButton, Tabs, Tooltip } from "@mantine/core";
-import { IconGitCompare } from "@tabler/icons-react";
-import type { OpenTab } from "./openTabs";
+import { IconGitCompare, IconMarkdown } from "@tabler/icons-react";
+import { isMarkdownPath, type OpenTab } from "./openTabs";
 
 type Props = {
   tabs: OpenTab[];
@@ -10,6 +10,9 @@ type Props = {
   /** Whether the centre pane is showing the diff rather than a file. */
   diffOpen: boolean;
   onToggleDiff: () => void;
+  /** Whether the active Markdown tab is showing its preview pane. */
+  activeMdPreview: boolean;
+  onToggleMdPreview: () => void;
 };
 
 /** `src/components/Foo.tsx` -> `Foo.tsx`. The full path is the tooltip. */
@@ -29,6 +32,8 @@ export default function TabBar({
   onClose,
   diffOpen,
   onToggleDiff,
+  activeMdPreview,
+  onToggleMdPreview,
 }: Props) {
   return (
     <div className="ds-editor-tabs" data-testid="editor-tabs">
@@ -90,6 +95,25 @@ export default function TabBar({
         </Tabs.List>
       </Tabs>
 
+      {isMarkdownPath(activePath) && (
+        <Tooltip
+          label={activeMdPreview ? "Hide preview" : "Show preview"}
+          withinPortal
+        >
+          <ActionIcon
+            variant={activeMdPreview ? "filled" : "subtle"}
+            aria-label={activeMdPreview ? "Hide preview" : "Show preview"}
+            aria-pressed={activeMdPreview}
+            onClick={onToggleMdPreview}
+            data-testid="toggle-md-preview"
+            ml="auto"
+            style={{ marginBottom: "0.25rem" }}
+          >
+            <IconMarkdown size={16} />
+          </ActionIcon>
+        </Tooltip>
+      )}
+
       <Tooltip
         label={diffOpen ? "Back to editor" : "Review changes"}
         withinPortal
@@ -100,7 +124,7 @@ export default function TabBar({
           aria-pressed={diffOpen}
           onClick={onToggleDiff}
           data-testid="toggle-diff"
-          ml="auto"
+          ml={isMarkdownPath(activePath) ? undefined : "auto"}
           style={{ marginBottom: "0.25rem" }}
         >
           <IconGitCompare size={16} />

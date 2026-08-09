@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render as rtlRender, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { act } from "react";
@@ -13,16 +18,43 @@ import type { ReactElement } from "react";
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
+// Lightweight stand-in for the WYSIWYG Markdown editor — the real one is a
+// heavy dependency that doesn't need to be exercised to verify the pane's
+// wiring. The mock exposes the same controlled-editor surface the pane uses.
+vi.mock("@uiw/react-md-editor", () => {
+  const MDEditor = ({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange?: (value: string) => void;
+  }) => (
+    <textarea
+      data-testid="md-editor"
+      value={value}
+      onChange={(event) => onChange?.(event.target.value)}
+    />
+  );
+  MDEditor.Markdown = ({ source }: { source: string }) => (
+    <div data-testid="md-preview">{source}</div>
+  );
+  return { default: MDEditor };
+});
+
 import FileEditorPane, { evictProjectSessions } from "../FileEditorPane";
 
-const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
+const render = (ui: ReactElement) =>
+  rtlRender(ui, { wrapper: MantineProvider });
 
 /** Reaches the mounted EditorView through the DOM node CodeMirror tags. */
 function viewFromDom(): EditorView {
-  const content = document.querySelector(".cm-content") as HTMLElement & { cmTile?: unknown };
+  const content = document.querySelector(".cm-content") as HTMLElement & {
+    cmTile?: unknown;
+  };
   const seen = new Set<unknown>();
   const find = (node: unknown, depth: number): EditorView | null => {
-    if (!node || depth > 4 || typeof node !== "object" || seen.has(node)) return null;
+    if (!node || depth > 4 || typeof node !== "object" || seen.has(node))
+      return null;
     seen.add(node);
     const candidate = node as { dispatch?: unknown; state?: { doc?: unknown } };
     if (typeof candidate.dispatch === "function" && candidate.state?.doc) {
@@ -47,7 +79,8 @@ describe("FileEditorPane", () => {
     evictProjectSessions("abc");
     invokeMock.mockReset();
     invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "read_file_content") return Promise.resolve("line one\nline two\n");
+      if (cmd === "read_file_content")
+        return Promise.resolve("line one\nline two\n");
       if (cmd === "read_file_base64") return Promise.resolve("Zm9v");
       if (cmd === "write_file_content") return Promise.resolve();
       return Promise.reject(new Error(`unexpected command ${cmd}`));
@@ -61,23 +94,41 @@ describe("FileEditorPane", () => {
 
   it("renders file content in a CodeMirror editor once loaded (open from tree)", async () => {
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
-    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
-    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    await waitFor(() =>
+      expect(screen.getByTestId("file-editor")).toBeDefined()
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
     expect(screen.getByText("src/foo.ts")).toBeDefined();
   });
 
   it("shows a plain-text editor for an unrecognized file extension without erroring", async () => {
     render(<FileEditorPane projectHash="abc" path="data/file.xyz" />);
-    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
-    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    await waitFor(() =>
+      expect(screen.getByTestId("file-editor")).toBeDefined()
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
     expect(screen.queryByTestId("file-editor-error")).toBeNull();
   });
 
   it("marks dirty on edit and saves via the Save button, clearing the dirty indicator", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
-    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onSave={onSave} />);
-    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    render(
+      <FileEditorPane projectHash="abc" path="src/foo.ts" onSave={onSave} />
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
 
     const saveBtn = screen.getByRole("button", { name: /^save$/i });
     expect(saveBtn).toHaveProperty("disabled", true);
@@ -86,41 +137,73 @@ describe("FileEditorPane", () => {
     content.focus();
     await user.type(content, "x");
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined()
+    );
 
     await user.click(screen.getByRole("button", { name: /save \*/i }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty("disabled", true));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty(
+        "disabled",
+        true
+      )
+    );
   });
 
   it("reports dirty state changes via onDirtyChange, so a caller can guard navigation away from unsaved edits", async () => {
     const user = userEvent.setup();
     const onDirtyChange = vi.fn();
-    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={onDirtyChange} />);
-    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    render(
+      <FileEditorPane
+        projectHash="abc"
+        path="src/foo.ts"
+        onDirtyChange={onDirtyChange}
+      />
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
     expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false);
 
     const content = document.querySelector(".cm-content") as HTMLElement;
     content.focus();
     await user.type(content, "x");
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true));
+    await waitFor(() =>
+      expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true)
+    );
 
     await user.click(screen.getByRole("button", { name: /save \*/i }));
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false));
+    await waitFor(() =>
+      expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false)
+    );
   });
 
   it("does not remount the CodeMirror view on save (preserves cursor/undo/scroll state)", async () => {
     const user = userEvent.setup();
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
-    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
 
-    const contentBefore = document.querySelector(".ds-editor-body .cm-content") as HTMLElement;
+    const contentBefore = document.querySelector(
+      ".ds-editor-body .cm-content"
+    ) as HTMLElement;
     contentBefore.focus();
     await user.type(contentBefore, "x");
     await user.click(screen.getByRole("button", { name: /save \*/i }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty("disabled", true));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^save$/i })).toHaveProperty(
+        "disabled",
+        true
+      )
+    );
 
     const contentAfter = document.querySelector(".ds-editor-body .cm-content");
     expect(contentAfter).toBe(contentBefore);
@@ -129,22 +212,32 @@ describe("FileEditorPane", () => {
   it("offers autocomplete suggestions from the document and dismisses on Escape", async () => {
     const user = userEvent.setup();
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
-    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
 
     const content = document.querySelector(".cm-content") as HTMLElement;
     content.focus();
     await user.type(content, "lin");
 
-    await waitFor(() => expect(document.querySelector(".cm-tooltip-autocomplete")).not.toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".cm-tooltip-autocomplete")).not.toBeNull()
+    );
 
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(document.querySelector(".cm-tooltip-autocomplete")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".cm-tooltip-autocomplete")).toBeNull()
+    );
   });
 
   it("renders an image preview (not the text editor) for a .gif path, with working zoom", async () => {
     const user = userEvent.setup();
     render(<FileEditorPane projectHash="abc" path="assets/demo.gif" />);
-    await waitFor(() => expect(screen.getByTestId("file-editor-media")).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByTestId("file-editor-media")).toBeDefined()
+    );
     expect(screen.queryByTestId("file-editor-error")).toBeNull();
     const img = document.querySelector("img") as HTMLImageElement;
     expect(img.src).toBe("data:image/gif;base64,Zm9v");
@@ -157,14 +250,18 @@ describe("FileEditorPane", () => {
 
   it("renders a video preview for an .mp4 path", async () => {
     render(<FileEditorPane projectHash="abc" path="assets/clip.mp4" />);
-    await waitFor(() => expect(screen.getByTestId("file-editor-media")).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByTestId("file-editor-media")).toBeDefined()
+    );
     expect(document.querySelector("video")).not.toBeNull();
   });
 
   it("has in-buffer find wired up, panel and Cmd+F binding both", async () => {
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
     await waitFor(() =>
-      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
     );
     expect(document.querySelector(".cm-search")).toBeNull();
 
@@ -176,49 +273,68 @@ describe("FileEditorPane", () => {
     act(() => {
       openSearchPanel(view);
     });
-    await waitFor(() => expect(document.querySelector(".cm-search")).not.toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".cm-search")).not.toBeNull()
+    );
 
     expect(searchKeymap.some((binding) => binding.key === "Mod-f")).toBe(true);
   });
 
   it("renders a fold gutter so long blocks can be collapsed", async () => {
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
-    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
-    await waitFor(() => expect(document.querySelector(".cm-foldGutter")).not.toBeNull());
+    await waitFor(() =>
+      expect(screen.getByTestId("file-editor")).toBeDefined()
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".cm-foldGutter")).not.toBeNull()
+    );
   });
 
   describe("files it declines to open", () => {
     it("explains a binary file instead of failing to decode it", async () => {
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.reject(new Error("BINARY:"));
+        if (cmd === "read_file_content")
+          return Promise.reject(new Error("BINARY:"));
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
       render(<FileEditorPane projectHash="abc" path="build/out.bin" />);
 
-      await waitFor(() => expect(screen.getByTestId("file-unopenable")).toBeDefined());
-      expect(screen.getByTestId("file-unopenable").textContent).toContain("binary");
+      await waitFor(() =>
+        expect(screen.getByTestId("file-unopenable")).toBeDefined()
+      );
+      expect(screen.getByTestId("file-unopenable").textContent).toContain(
+        "binary"
+      );
       expect(screen.queryByTestId("file-editor-error")).toBeNull();
     });
 
     it("names the size of a file too large to edit", async () => {
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.reject(new Error("TOO_LARGE: 52428800"));
+        if (cmd === "read_file_content")
+          return Promise.reject(new Error("TOO_LARGE: 52428800"));
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
       render(<FileEditorPane projectHash="abc" path="logs/huge.log" />);
 
-      await waitFor(() => expect(screen.getByTestId("file-unopenable")).toBeDefined());
-      expect(screen.getByTestId("file-unopenable").textContent).toContain("50.0 MB");
+      await waitFor(() =>
+        expect(screen.getByTestId("file-unopenable")).toBeDefined()
+      );
+      expect(screen.getByTestId("file-unopenable").textContent).toContain(
+        "50.0 MB"
+      );
     });
 
     it("still reports a genuine read failure as an error", async () => {
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.reject(new Error("cannot read file: EACCES"));
+        if (cmd === "read_file_content")
+          return Promise.reject(new Error("cannot read file: EACCES"));
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
       render(<FileEditorPane projectHash="abc" path="secret.txt" />);
 
-      await waitFor(() => expect(screen.getByTestId("file-editor-error")).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByTestId("file-editor-error")).toBeDefined()
+      );
       expect(screen.queryByTestId("file-unopenable")).toBeNull();
     });
   });
@@ -228,15 +344,22 @@ describe("FileEditorPane", () => {
   describe("when the file changes on disk", () => {
     it("reloads silently if nothing of the user's would be lost", async () => {
       const { rerender } = render(
-        <FileEditorPane projectHash="abc" path="src/foo.ts" externalChange={null} />
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={null}
+        />
       );
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       // What the agent left behind.
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.resolve("rewritten by the agent\n");
+        if (cmd === "read_file_content")
+          return Promise.resolve("rewritten by the agent\n");
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
       rerender(
@@ -258,16 +381,24 @@ describe("FileEditorPane", () => {
     it("raises the conflict banner instead of discarding unsaved edits", async () => {
       const user = userEvent.setup();
       const { rerender } = render(
-        <FileEditorPane projectHash="abc" path="src/foo.ts" externalChange={null} />
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={null}
+        />
       );
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       const content = document.querySelector(".cm-content") as HTMLElement;
       content.focus();
       await user.type(content, "mine");
-      await waitFor(() => expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined()
+      );
 
       rerender(
         <FileEditorPane
@@ -277,27 +408,40 @@ describe("FileEditorPane", () => {
         />
       );
 
-      await waitFor(() => expect(screen.getByTestId("file-conflict-banner")).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByTestId("file-conflict-banner")).toBeDefined()
+      );
       // The user's edit is still there — nothing was silently thrown away.
-      expect(document.querySelector(".cm-content")?.textContent).toContain("mine");
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "mine"
+      );
     });
 
     it("shows the new content after 'discard mine, reload', not the version it had before", async () => {
       const user = userEvent.setup();
       const { rerender } = render(
-        <FileEditorPane projectHash="abc" path="src/foo.ts" externalChange={null} />
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={null}
+        />
       );
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       const content = document.querySelector(".cm-content") as HTMLElement;
       content.focus();
       await user.type(content, "mine");
-      await waitFor(() => expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined()
+      );
 
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.resolve("what the agent wrote\n");
+        if (cmd === "read_file_content")
+          return Promise.resolve("what the agent wrote\n");
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
       rerender(
@@ -307,7 +451,9 @@ describe("FileEditorPane", () => {
           externalChange={{ path: "src/foo.ts", at: 1 }}
         />
       );
-      await waitFor(() => expect(screen.getByTestId("file-conflict-banner")).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByTestId("file-conflict-banner")).toBeDefined()
+      );
 
       await user.click(screen.getByTestId("conflict-reload"));
 
@@ -322,16 +468,24 @@ describe("FileEditorPane", () => {
           "what the agent wrote"
         )
       );
-      expect(document.querySelector(".cm-content")?.textContent).not.toContain("mine");
+      expect(document.querySelector(".cm-content")?.textContent).not.toContain(
+        "mine"
+      );
       expect(screen.queryByTestId("file-conflict-banner")).toBeNull();
     });
 
     it("ignores a change to a different file", async () => {
       const { rerender } = render(
-        <FileEditorPane projectHash="abc" path="src/foo.ts" externalChange={null} />
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={null}
+        />
       );
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       rerender(
@@ -350,11 +504,16 @@ describe("FileEditorPane", () => {
     const conflictOnFirstSave = () => {
       let saves = 0;
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.resolve("line one\nline two\n");
+        if (cmd === "read_file_content")
+          return Promise.resolve("line one\nline two\n");
         if (cmd === "write_file_content") {
           saves += 1;
           return saves === 1
-            ? Promise.reject(new Error("CONFLICT: src/foo.ts changed on disk since you opened it"))
+            ? Promise.reject(
+                new Error(
+                  "CONFLICT: src/foo.ts changed on disk since you opened it"
+                )
+              )
             : Promise.resolve();
         }
         return Promise.reject(new Error(`unexpected command ${cmd}`));
@@ -366,7 +525,9 @@ describe("FileEditorPane", () => {
       conflictOnFirstSave();
       render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       const content = document.querySelector(".cm-content") as HTMLElement;
@@ -374,7 +535,9 @@ describe("FileEditorPane", () => {
       await user.type(content, "x");
       await user.click(screen.getByRole("button", { name: /save \*/i }));
 
-      await waitFor(() => expect(screen.getByTestId("file-conflict-banner")).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByTestId("file-conflict-banner")).toBeDefined()
+      );
       // A conflict is a choice to offer, not an error to report.
       expect(screen.queryByTestId("file-editor-error")).toBeNull();
     });
@@ -383,30 +546,42 @@ describe("FileEditorPane", () => {
       const user = userEvent.setup();
       conflictOnFirstSave();
       const onSave = vi.fn();
-      render(<FileEditorPane projectHash="abc" path="src/foo.ts" onSave={onSave} />);
+      render(
+        <FileEditorPane projectHash="abc" path="src/foo.ts" onSave={onSave} />
+      );
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       const content = document.querySelector(".cm-content") as HTMLElement;
       content.focus();
       await user.type(content, "x");
       await user.click(screen.getByRole("button", { name: /save \*/i }));
-      await waitFor(() => expect(screen.getByTestId("file-conflict-banner")).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByTestId("file-conflict-banner")).toBeDefined()
+      );
 
       await user.click(screen.getByTestId("conflict-overwrite"));
 
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      const retry = invokeMock.mock.calls.filter((c) => c[0] === "write_file_content").at(-1);
+      const retry = invokeMock.mock.calls
+        .filter((c) => c[0] === "write_file_content")
+        .at(-1);
       expect(retry?.[1]).toMatchObject({ expectedPrevious: null });
-      await waitFor(() => expect(screen.queryByTestId("file-conflict-banner")).toBeNull());
+      await waitFor(() =>
+        expect(screen.queryByTestId("file-conflict-banner")).toBeNull()
+      );
     });
 
     it("sends what it believes is on disk with an ordinary save", async () => {
       const user = userEvent.setup();
       render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
       await waitFor(() =>
-        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
       );
 
       const content = document.querySelector(".cm-content") as HTMLElement;
@@ -415,8 +590,12 @@ describe("FileEditorPane", () => {
       await user.click(screen.getByRole("button", { name: /save \*/i }));
 
       await waitFor(() => {
-        const write = invokeMock.mock.calls.find((c) => c[0] === "write_file_content");
-        expect(write?.[1]).toMatchObject({ expectedPrevious: "line one\nline two\n" });
+        const write = invokeMock.mock.calls.find(
+          (c) => c[0] === "write_file_content"
+        );
+        expect(write?.[1]).toMatchObject({
+          expectedPrevious: "line one\nline two\n",
+        });
       });
     });
   });
@@ -425,45 +604,76 @@ describe("FileEditorPane", () => {
     const user = userEvent.setup();
     const onDirtyChange = vi.fn();
     const { unmount } = render(
-      <FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={onDirtyChange} />
+      <FileEditorPane
+        projectHash="abc"
+        path="src/foo.ts"
+        onDirtyChange={onDirtyChange}
+      />
     );
     await waitFor(() =>
-      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
     );
 
     const content = document.querySelector(".cm-content") as HTMLElement;
     content.focus();
     await user.type(content, "work in progress");
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true));
+    await waitFor(() =>
+      expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true)
+    );
 
     // Looking at the diff, or switching shells, unmounts this pane. The tab
     // list owns dirtiness, so neither may quietly turn the file clean.
     unmount();
 
     const reopened = vi.fn();
-    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={reopened} />);
-    await waitFor(() =>
-      expect(document.querySelector(".cm-content")?.textContent).toContain("work in progress")
+    render(
+      <FileEditorPane
+        projectHash="abc"
+        path="src/foo.ts"
+        onDirtyChange={reopened}
+      />
     );
-    await waitFor(() => expect(reopened).toHaveBeenLastCalledWith("src/foo.ts", true));
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "work in progress"
+      )
+    );
+    await waitFor(() =>
+      expect(reopened).toHaveBeenLastCalledWith("src/foo.ts", true)
+    );
     // Restored from the cached session, not re-read from disk.
-    expect(invokeMock.mock.calls.filter((c) => c[0] === "read_file_content")).toHaveLength(1);
-
+    expect(
+      invokeMock.mock.calls.filter((c) => c[0] === "read_file_content")
+    ).toHaveLength(1);
   });
 
   it("still reports edits after the pane has unmounted and come back", async () => {
     const user = userEvent.setup();
-    const first = render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    const first = render(
+      <FileEditorPane projectHash="abc" path="src/foo.ts" />
+    );
     await waitFor(() =>
-      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
     );
     // Unmount while clean, so the restored session starts clean too and a
     // later edit is a real false -> true transition.
     first.unmount();
 
     const onDirtyChange = vi.fn();
-    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={onDirtyChange} />);
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false));
+    render(
+      <FileEditorPane
+        projectHash="abc"
+        path="src/foo.ts"
+        onDirtyChange={onDirtyChange}
+      />
+    );
+    await waitFor(() =>
+      expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false)
+    );
 
     const content = document.querySelector(".cm-content") as HTMLElement;
     content.focus();
@@ -473,18 +683,23 @@ describe("FileEditorPane", () => {
     // over the component instance that created them. Restoring one wholesale
     // left the update listener reporting into a component that no longer
     // existed, and the file quietly stopped going dirty from then on.
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true));
+    await waitFor(() =>
+      expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true)
+    );
   });
 
   it("starts from disk again once a file's session has been evicted (its tab closed)", async () => {
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
     await waitFor(() =>
-      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
     );
 
     evictProjectSessions("abc");
     invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "read_file_content") return Promise.resolve("fresh from disk\n");
+      if (cmd === "read_file_content")
+        return Promise.resolve("fresh from disk\n");
       return Promise.reject(new Error(`unexpected command ${cmd}`));
     });
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
@@ -494,4 +709,94 @@ describe("FileEditorPane", () => {
     );
   });
 
+  describe("Markdown RTE and preview mode", () => {
+    it("renders the WYSIWYG editor (no preview) for a .md file by default", async () => {
+      render(<FileEditorPane projectHash="abc" path="README.md" />);
+      // Wait for the file to load and seed the WYSIWYG editor.
+      await waitFor(() =>
+        expect(
+          (screen.getByTestId("md-editor") as HTMLTextAreaElement).value
+        ).toContain("line one")
+      );
+      // CodeMirror stays mounted as the backing store but is hidden.
+      const cm = screen.getByTestId("file-editor-cm");
+      expect(cm.style.display).toBe("none");
+    });
+
+    it("renders CodeMirror (not the RTE) for a non-markdown file", async () => {
+      render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("file-editor-cm")).toBeDefined()
+      );
+      expect(screen.queryByTestId("md-editor")).toBeNull();
+    });
+
+    it("fires onToggleMdPreview on Cmd+Shift+V for a .md file", async () => {
+      const onToggleMdPreview = vi.fn();
+      render(
+        <FileEditorPane
+          projectHash="abc"
+          path="README.md"
+          onToggleMdPreview={onToggleMdPreview}
+        />
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("file-editor-cm")).toBeDefined()
+      );
+
+      fireEvent.keyDown(window, {
+        key: "v",
+        metaKey: true,
+        shiftKey: true,
+      });
+      expect(onToggleMdPreview).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire onToggleMdPreview on Cmd+Shift+V for a non-markdown file", async () => {
+      const onToggleMdPreview = vi.fn();
+      render(
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          onToggleMdPreview={onToggleMdPreview}
+        />
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("file-editor-cm")).toBeDefined()
+      );
+
+      fireEvent.keyDown(window, {
+        key: "v",
+        metaKey: true,
+        shiftKey: true,
+      });
+      expect(onToggleMdPreview).not.toHaveBeenCalled();
+    });
+
+    it("marks dirty and saves from the RTE", async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_content") return Promise.resolve("# Title\n");
+        if (cmd === "write_file_content") return Promise.resolve();
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      });
+      render(
+        <FileEditorPane projectHash="abc" path="README.md" onSave={onSave} />
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("md-editor")).toBeDefined()
+      );
+
+      const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
+      await user.type(editor, "!");
+      // The save button should become enabled (dirty).
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined()
+      );
+      await user.click(screen.getByRole("button", { name: /save \*/i }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].after).toContain("!");
+    });
+  });
 });

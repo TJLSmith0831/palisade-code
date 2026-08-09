@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Group } from "@mantine/core";
+import MDEditor from "@uiw/react-md-editor";
+import "@uiw/react-md-editor/markdown-editor.css";
+import "@uiw/react-markdown-preview/markdown.css";
 import { EditorState, Compartment } from "@codemirror/state";
 import {
   EditorView,
@@ -18,7 +21,12 @@ import {
   historyKeymap,
   indentWithTab,
 } from "@codemirror/commands";
-import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import {
+  autocompletion,
+  completeAnyWord,
+  closeBrackets,
+  closeBracketsKeymap,
+} from "@codemirror/autocomplete";
 import {
   syntaxHighlighting,
   defaultHighlightStyle,
@@ -27,10 +35,20 @@ import {
   codeFolding,
   foldKeymap,
 } from "@codemirror/language";
-import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import {
+  search,
+  searchKeymap,
+  highlightSelectionMatches,
+} from "@codemirror/search";
 import * as api from "./api";
-import { languageExtensionFor, loadLanguageFor, mediaKindFor, mimeTypeFor } from "./codeLanguage";
+import {
+  languageExtensionFor,
+  loadLanguageFor,
+  mediaKindFor,
+  mimeTypeFor,
+} from "./codeLanguage";
 import { describeError } from "./errors";
+import { isMarkdownPath } from "./openTabs";
 import {
   EDITOR_FONT_CHANGED_EVENT,
   EDITOR_WRAP_CHANGED_EVENT,
@@ -56,11 +74,29 @@ type Props = {
    * first read from disk, never over an in-memory session. */
   initialCursor?: number;
   onCursorChange?: (path: string, offset: number) => void;
+  /** Whether to show the Markdown preview pane alongside the WYSIWYG editor.
+   * Only honored for `.md`/`.markdown` files; ignored otherwise. */
+  mdPreview?: boolean;
+  onToggleMdPreview?: () => void;
+};
+
+/** Resolves the app's effective color mode from the `data-theme` attribute on
+ * <html> ("light" | "dark" | absent for "auto"), falling back to the system
+ * preference via `prefers-color-scheme`. The WYSIWYG Markdown editor needs a
+ * concrete "light" | "dark" value for its `data-color-mode` prop since it
+ * doesn't read the app's own `data-theme` cascade. */
+const resolvedColorMode = (): "light" | "dark" => {
+  const attr = document.documentElement.dataset.theme;
+  if (attr === "light" || attr === "dark") return attr;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 };
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
-const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+const clampZoom = (zoom: number) =>
+  Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 
 /** A file's editing session: its CodeMirror state serialized (document,
  * cursor, selection, undo history) plus the text it was last in agreement
@@ -79,7 +115,8 @@ type Session = { json: unknown; baseline: string };
  * what used to throw away cursor position and undo history. */
 const sessions = new Map<string, Session>();
 
-const sessionKey = (projectHash: string, path: string) => `${projectHash}:${path}`;
+const sessionKey = (projectHash: string, path: string) =>
+  `${projectHash}:${path}`;
 
 /** Forgets a file's editing session — called when its tab closes or its
  * project goes away, so a reopened tab starts from disk rather than from a
@@ -104,7 +141,11 @@ export function sessionIsDirty(projectHash: string, path: string): boolean {
 /** The document text out of a serialized session. */
 function docOf(session: Session): string {
   const doc = (session.json as { doc?: unknown })?.doc;
-  return typeof doc === "string" ? doc : Array.isArray(doc) ? doc.join("\n") : "";
+  return typeof doc === "string"
+    ? doc
+    : Array.isArray(doc)
+      ? doc.join("\n")
+      : "";
 }
 
 /** CodeMirror's serializable state fields — undo history is the one that
@@ -131,6 +172,8 @@ export default function FileEditorPane({
   revealLine,
   initialCursor,
   onCursorChange,
+  mdPreview = false,
+  onToggleMdPreview,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -145,8 +188,21 @@ export default function FileEditorPane({
   onCursorRef.current = onCursorChange;
   const initialCursorRef = useRef(initialCursor);
   initialCursorRef.current = initialCursor;
+  const onToggleMdPreviewRef = useRef(onToggleMdPreview);
+  onToggleMdPreviewRef.current = onToggleMdPreview;
 
   const [mediaSrc, setMediaSrc] = useState<string | null>(null);
+  // The controlled value for the WYSIWYG Markdown editor. The CodeMirror doc
+  // remains the source of truth for save/dirty/session; this mirrors it so
+  // the rich editor renders the same text and writes edits back through
+  // `view.dispatch`.
+  const [mdValue, setMdValue] = useState("");
+  // Resolved color mode for the WYSIWYG editor, which uses `data-color-mode`
+  // rather than inheriting from the app's `data-theme` cascade. Tracks the
+  // app's theme attribute on <html> and the system preference when it's "auto".
+  const [colorMode, setColorMode] = useState<"light" | "dark">(() =>
+    resolvedColorMode()
+  );
   const [imageZoom, setImageZoom] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -230,6 +286,19 @@ export default function FileEditorPane({
   const saveRef = useRef(save);
   saveRef.current = save;
 
+  // Writes a WYSIWYG edit back into the CodeMirror doc, which owns save/dirty
+  // state. A full-document replacement keeps the session in sync; the undo
+  // stack grows one entry per edit, which is acceptable for a first pass.
+  const handleMdChange = useCallback((value?: string) => {
+    if (value === undefined) return;
+    setMdValue(value);
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: value },
+    });
+  }, []);
+
   const buildExtensions = useCallback(
     (forPath: string) => [
       lineNumbers(),
@@ -266,7 +335,9 @@ export default function FileEditorPane({
         if (!update.docChanged) return;
         setDirty(update.state.doc.toString() !== baselineRef.current);
       }),
-      wrapCompartment.current.of(loadEditorWrap() ? EditorView.lineWrapping : []),
+      wrapCompartment.current.of(
+        loadEditorWrap() ? EditorView.lineWrapping : []
+      ),
       fontCompartment.current.of(editorFontTheme()),
     ],
     []
@@ -299,7 +370,9 @@ export default function FileEditorPane({
     if (mediaKind) {
       api
         .readFileBase64(projectHash, path)
-        .then((base64) => setMediaSrc(`data:${mimeTypeFor(path)};base64,${base64}`))
+        .then((base64) =>
+          setMediaSrc(`data:${mimeTypeFor(path)};base64,${base64}`)
+        )
         .catch((err) => setError(describeError(err)));
       return;
     }
@@ -320,9 +393,15 @@ export default function FileEditorPane({
         if (cancelled) return;
         // Restored cursor is clamped: the file may have changed on disk
         // since the session was written.
-        const anchor = Math.min(Math.max(initialCursorRef.current ?? 0, 0), text.length);
+        const anchor = Math.min(
+          Math.max(initialCursorRef.current ?? 0, 0),
+          text.length
+        );
         sessions.set(key, {
-          json: EditorState.create({ doc: text, selection: { anchor } }).toJSON(),
+          json: EditorState.create({
+            doc: text,
+            selection: { anchor },
+          }).toJSON(),
           baseline: text,
         });
         baselineRef.current = text;
@@ -371,7 +450,10 @@ export default function FileEditorPane({
       // then would push the document we just discarded straight back over
       // the one we just fetched.
       if (sessions.get(key) === session) {
-        sessions.set(key, { ...session, json: view.state.toJSON(SERIALIZED_FIELDS) });
+        sessions.set(key, {
+          ...session,
+          json: view.state.toJSON(SERIALIZED_FIELDS),
+        });
       }
       view.destroy();
       viewRef.current = null;
@@ -383,7 +465,9 @@ export default function FileEditorPane({
   // for per-file language selection).
   useEffect(() => {
     const onFontChanged = () => {
-      viewRef.current?.dispatch({ effects: fontCompartment.current.reconfigure(editorFontTheme()) });
+      viewRef.current?.dispatch({
+        effects: fontCompartment.current.reconfigure(editorFontTheme()),
+      });
     };
     const onWrapChanged = () => {
       viewRef.current?.dispatch({
@@ -404,7 +488,8 @@ export default function FileEditorPane({
   // there. Keyed on the event rather than the line so jumping to the same
   // result twice still moves the cursor back to it.
   useEffect(() => {
-    if (!revealLine || !path || revealLine.path !== path || viewSeq === 0) return;
+    if (!revealLine || !path || revealLine.path !== path || viewSeq === 0)
+      return;
     const view = viewRef.current;
     if (!view) return;
     const lineCount = view.state.doc.lines;
@@ -416,6 +501,48 @@ export default function FileEditorPane({
     });
     view.focus();
   }, [revealLine, path, viewSeq]);
+
+  // Seed the WYSIWYG editor from the CodeMirror doc whenever a Markdown file
+  // is loaded. CodeMirror stays the source of truth, so this is a one-way
+  // pull at the view-build boundary.
+  useEffect(() => {
+    if (!isMarkdownPath(path) || viewSeq === 0) return;
+    setMdValue(viewRef.current?.state.doc.toString() ?? "");
+  }, [path, viewSeq]);
+
+  // Keep the WYSIWYG editor's color mode in sync with the app's theme. The
+  // app sets `data-theme` on <html>; when it's "auto" the system preference
+  // decides. We watch both so cycling the theme updates the RTE live.
+  useEffect(() => {
+    const update = () => setColorMode(resolvedColorMode());
+    update();
+    const themeObserver = new MutationObserver(update);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", update);
+    return () => {
+      themeObserver.disconnect();
+      media.removeEventListener("change", update);
+    };
+  }, []);
+
+  // Cmd+Shift+V toggles the Markdown preview pane, but only for Markdown
+  // files. Bound at the window level so it works whether focus is in the
+  // WYSIWYG editor or its preview.
+  useEffect(() => {
+    if (!isMarkdownPath(path)) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+        onToggleMdPreviewRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [path]);
 
   // Highlighting for file types that aren't bundled (HTML, YAML, SQL, shell
   // and the rest) arrives a moment after the view, via the same compartment
@@ -495,13 +622,18 @@ export default function FileEditorPane({
         <div
           className="ds-media-preview-body"
           onWheel={(event) => {
-            if (mediaKind !== "image" || !(event.ctrlKey || event.metaKey)) return;
+            if (mediaKind !== "image" || !(event.ctrlKey || event.metaKey))
+              return;
             event.preventDefault();
             setImageZoom((z) => clampZoom(z - event.deltaY * 0.01));
           }}
         >
           {mediaKind === "image" ? (
-            <img src={mediaSrc} alt={path} style={{ transform: `scale(${imageZoom})` }} />
+            <img
+              src={mediaSrc}
+              alt={path}
+              style={{ transform: `scale(${imageZoom})` }}
+            />
           ) : (
             <video src={mediaSrc} controls autoPlay loop muted />
           )}
@@ -537,12 +669,19 @@ export default function FileEditorPane({
         <span className="ds-editor-path">{path}</span>
         <span className="ds-editor-spacer" />
         {formatResult && (
-          <span className="ds-editor-format-result" data-testid="format-on-save-result">
+          <span
+            className="ds-editor-format-result"
+            data-testid="format-on-save-result"
+          >
             {formatResult}
           </span>
         )}
         {saved && <span className="ds-editor-saved">Saved</span>}
-        <button className="ds-editor-save-btn" onClick={() => save()} disabled={!dirty || saving}>
+        <button
+          className="ds-editor-save-btn"
+          onClick={() => save()}
+          disabled={!dirty || saving}
+        >
           {saving ? "Saving…" : dirty ? "Save *" : "Save"}
         </button>
       </div>
@@ -555,8 +694,9 @@ export default function FileEditorPane({
           data-testid="file-conflict-banner"
         >
           <p>
-            {path} was changed by something else — the agent, a branch switch, or another
-            editor — and you have unsaved edits. Only one version can survive.
+            {path} was changed by something else — the agent, a branch switch,
+            or another editor — and you have unsaved edits. Only one version can
+            survive.
           </p>
           <Group gap="xs" mt="xs">
             <Button
@@ -579,7 +719,26 @@ export default function FileEditorPane({
           </Group>
         </Alert>
       )}
-      <div className="ds-editor-body" ref={hostRef} data-testid="file-editor-cm" />
+      {isMarkdownPath(path) && (
+        <div className="ds-editor-body ds-md-rich" data-testid="file-editor-md">
+          <MDEditor
+            value={mdValue}
+            onChange={handleMdChange}
+            data-color-mode={colorMode}
+            preview={mdPreview ? "live" : "edit"}
+            height="100%"
+          />
+        </div>
+      )}
+      {/* CodeMirror stays mounted (hidden for Markdown files) so it remains
+       * the source of truth for save/dirty/session state. The WYSIWYG editor
+       * writes back through `view.dispatch`. */}
+      <div
+        className="ds-editor-body"
+        ref={hostRef}
+        data-testid="file-editor-cm"
+        style={isMarkdownPath(path) ? { display: "none" } : undefined}
+      />
     </div>
   );
 }

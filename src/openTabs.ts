@@ -6,10 +6,24 @@ export type OpenTab = {
    * active tab is mounted, so a pane-owned flag would be lost the moment you
    * switched away from a file you'd edited. */
   dirty: boolean;
+  /** Whether the tab is showing the Markdown preview pane alongside the
+   * WYSIWYG editor. Only meaningful for `.md`/`.markdown` files (which always
+   * open in the RTE), but kept on every tab so it survives switching away
+   * and back without resetting the view. */
+  mdPreview: boolean;
 };
 
 /** How many closed tabs Cmd+Shift+T can walk back through. */
 const REOPEN_DEPTH = 10;
+
+/** Whether `path` is a Markdown file the RTE/preview applies to. Shared
+ * by `TabBar` (button visibility), `FileEditorPane` (rendering guard), and
+ * `open` (default RTE state) so there's one definition of "markdown". */
+export const isMarkdownPath = (path: string | null): boolean => {
+  if (!path) return false;
+  const lower = path.toLowerCase();
+  return lower.endsWith(".md") || lower.endsWith(".markdown");
+};
 
 /** Rewrites `path` when `from` is renamed to `to`, following directory
  * renames into their children. `null` when the path is unaffected. */
@@ -39,7 +53,9 @@ export function useOpenTabs() {
 
   const open = useCallback((path: string) => {
     setTabs((current) =>
-      current.some((tab) => tab.path === path) ? current : [...current, { path, dirty: false }]
+      current.some((tab) => tab.path === path)
+        ? current
+        : [...current, { path, dirty: false, mdPreview: false }]
     );
     setActivePath(path);
     closed.current = closed.current.filter((p) => p !== path);
@@ -48,23 +64,28 @@ export function useOpenTabs() {
   /** Removes tabs matching `matches`, keeping the selection sensible: when
    * the active tab goes, the neighbour to its right takes over, falling back
    * to the left (what every editor does). */
-  const removeWhere = useCallback((matches: (path: string) => boolean, remember: boolean) => {
-    setTabs((current) => {
-      const index = current.findIndex((tab) => matches(tab.path));
-      if (index === -1) return current;
-      const remaining = current.filter((tab) => !matches(tab.path));
-      if (remember) {
-        const gone = current.filter((tab) => matches(tab.path)).map((tab) => tab.path);
-        closed.current = [...closed.current, ...gone].slice(-REOPEN_DEPTH);
-      }
-      setActivePath((active) => {
-        if (active !== null && !matches(active)) return active;
-        if (remaining.length === 0) return null;
-        return remaining[Math.min(index, remaining.length - 1)].path;
+  const removeWhere = useCallback(
+    (matches: (path: string) => boolean, remember: boolean) => {
+      setTabs((current) => {
+        const index = current.findIndex((tab) => matches(tab.path));
+        if (index === -1) return current;
+        const remaining = current.filter((tab) => !matches(tab.path));
+        if (remember) {
+          const gone = current
+            .filter((tab) => matches(tab.path))
+            .map((tab) => tab.path);
+          closed.current = [...closed.current, ...gone].slice(-REOPEN_DEPTH);
+        }
+        setActivePath((active) => {
+          if (active !== null && !matches(active)) return active;
+          if (remaining.length === 0) return null;
+          return remaining[Math.min(index, remaining.length - 1)].path;
+        });
+        return remaining;
       });
-      return remaining;
-    });
-  }, []);
+    },
+    []
+  );
 
   const close = useCallback(
     (path: string) => removeWhere((candidate) => candidate === path, true),
@@ -73,7 +94,8 @@ export function useOpenTabs() {
 
   /** A file that no longer exists — dropped without offering to reopen it. */
   const dropPath = useCallback(
-    (path: string) => removeWhere((candidate) => isAtOrUnder(candidate, path), false),
+    (path: string) =>
+      removeWhere((candidate) => isAtOrUnder(candidate, path), false),
     [removeWhere]
   );
 
@@ -84,7 +106,9 @@ export function useOpenTabs() {
         return next === null ? tab : { ...tab, path: next };
       })
     );
-    setActivePath((active) => (active === null ? null : renamedTo(active, from, to) ?? active));
+    setActivePath((active) =>
+      active === null ? null : (renamedTo(active, from, to) ?? active)
+    );
   }, []);
 
   const setDirty = useCallback((path: string, dirty: boolean) => {
@@ -92,6 +116,17 @@ export function useOpenTabs() {
       const tab = current.find((t) => t.path === path);
       if (!tab || tab.dirty === dirty) return current;
       return current.map((t) => (t.path === path ? { ...t, dirty } : t));
+    });
+  }, []);
+
+  /** Toggles the Markdown preview pane for a tab. No-op for a path that isn't
+   * open, so callers don't have to guard against a stale toggle firing after
+   * a tab closes. */
+  const setMdPreview = useCallback((path: string, mdPreview: boolean) => {
+    setTabs((current) => {
+      const tab = current.find((t) => t.path === path);
+      if (!tab || tab.mdPreview === mdPreview) return current;
+      return current.map((t) => (t.path === path ? { ...t, mdPreview } : t));
     });
   }, []);
 
@@ -131,12 +166,14 @@ export function useOpenTabs() {
     activePath,
     activeTab,
     activeIsDirty: activeTab?.dirty ?? false,
+    activeMdPreview: activeTab?.mdPreview ?? false,
     anyDirty: tabs.some((tab) => tab.dirty),
     open,
     close,
     dropPath,
     rename,
     setDirty,
+    setMdPreview,
     closeAll,
     reopenLast,
     cycle,

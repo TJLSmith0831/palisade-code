@@ -24,7 +24,7 @@ import {
   Badge,
   Alert,
 } from "@mantine/core";
-import { IconGitCompare } from "@tabler/icons-react";
+import { IconGitCompare, IconMarkdown } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -54,6 +54,7 @@ import FileEditorPane, {
   evictProjectSessions,
 } from "./FileEditorPane";
 import TabBar, { basename } from "./TabBar";
+import { isMarkdownPath } from "./openTabs";
 import { useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
@@ -636,6 +637,13 @@ export default function App() {
   // Editor never closes anything or loses where you were in a file.
   const tabs = useOpenTabs();
   const selectedFile = tabs.activePath;
+  // Cmd+Shift+V or the IconMarkdown button flips the active Markdown tab
+  // between its CodeMirror source and the WYSIWYG editor. No-op for non-md.
+  const toggleMdPreview = useCallback(() => {
+    if (selectedFile && isMarkdownPath(selectedFile)) {
+      tabs.setMdPreview(selectedFile, !tabs.activeMdPreview);
+    }
+  }, [selectedFile, tabs.activeMdPreview, tabs.setMdPreview]);
   // Set when the filesystem watcher reports an open file changed underneath
   // us; the editor pane decides whether that's a silent reload or a prompt.
   const [externalChange, setExternalChange] = useState<{
@@ -679,7 +687,9 @@ export default function App() {
   // own Spec/Go mode (see openspec/changes/vibe-editor-shell-redesign).
   // Defaults to "editor" (today's layout) so existing users see no change
   // until they opt into "vibe" via the toggle.
-  const [centerShell, setCenterShellState] = useState<"vibe" | "editor">("editor");
+  const [centerShell, setCenterShellState] = useState<"vibe" | "editor">(
+    "editor"
+  );
   // Set once the user picks a shell themselves. The launch restore runs
   // asynchronously, and without this it would undo a choice made while the
   // project was still loading.
@@ -875,7 +885,8 @@ export default function App() {
         setProject(refreshed);
         // Editing sessions are per-project; keeping them would leak memory
         // and let a stale document reappear if the project came back.
-        if (previous && previous !== refreshed.hash) evictProjectSessions(previous);
+        if (previous && previous !== refreshed.hash)
+          evictProjectSessions(previous);
         currentProjectRef.current = refreshed.hash;
         tabsRef.current.closeAll();
         setFileEdits([]);
@@ -891,7 +902,9 @@ export default function App() {
             } catch (err) {
               // A binary or oversized file is still a legitimate tab; only
               // a genuinely missing one gets dropped.
-              return api.isBinaryError(err) || api.tooLargeBytes(err) !== null ? path : null;
+              return api.isBinaryError(err) || api.tooLargeBytes(err) !== null
+                ? path
+                : null;
             }
           })
         );
@@ -1270,7 +1283,10 @@ export default function App() {
   const rememberCursor = useCallback((path: string, offset: number) => {
     const current = sessionRef.current;
     if (!current || current.cursors[path] === offset) return;
-    sessionRef.current = { ...current, cursors: { ...current.cursors, [path]: offset } };
+    sessionRef.current = {
+      ...current,
+      cursors: { ...current.cursors, [path]: offset },
+    };
   }, []);
 
   // Cursor moves constantly, so it rides along with the next save rather
@@ -1453,7 +1469,10 @@ export default function App() {
     [tabs]
   );
 
-  const onTreePathDeleted = useCallback((path: string) => tabs.dropPath(path), [tabs]);
+  const onTreePathDeleted = useCallback(
+    (path: string) => tabs.dropPath(path),
+    [tabs]
+  );
 
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
@@ -1878,6 +1897,8 @@ export default function App() {
                   onClose={closeTab}
                   diffOpen={diffOpen}
                   onToggleDiff={() => setDiffOpen((open) => !open)}
+                  activeMdPreview={tabs.activeMdPreview}
+                  onToggleMdPreview={toggleMdPreview}
                 />
                 <div className="ds-breadcrumbs" data-testid="breadcrumbs">
                   <span>{project?.displayName ?? "—"}</span>
@@ -1898,9 +1919,13 @@ export default function App() {
                       externalChange={externalChange}
                       revealLine={revealLine}
                       initialCursor={
-                        selectedFile ? session?.cursors[selectedFile] : undefined
+                        selectedFile
+                          ? session?.cursors[selectedFile]
+                          : undefined
                       }
                       onCursorChange={rememberCursor}
+                      mdPreview={tabs.activeMdPreview}
+                      onToggleMdPreview={toggleMdPreview}
                     />
                   ) : (
                     <div
@@ -1920,7 +1945,12 @@ export default function App() {
                   )
                 ) : (
                   <div className="messages" data-testid="messages">
-                    {project && <DiffPane projectHash={project.hash} refreshToken={diffRefreshToken} />}
+                    {project && (
+                      <DiffPane
+                        projectHash={project.hash}
+                        refreshToken={diffRefreshToken}
+                      />
+                    )}
                     {(() => {
                       const threadEdits = thread
                         ? filterForTab(
@@ -1972,27 +2002,28 @@ export default function App() {
                 {/* Hidden rather than unmounted while collapsed: unmounting
                     disposes the xterm instance, so every collapse threw away
                     the scrollback and re-spawned the shell on reopen. */}
-                {terminalPlacement === "bottom" && terminalEverOpened.current && (
-                  <div
-                    className="ds-terminal-panel"
-                    data-testid="terminal-panel"
-                    hidden={terminalPanel.collapsed}
-                    style={
-                      {
-                        "--terminal-h": `${terminalPanel.size}px`,
-                        display: terminalPanel.collapsed ? "none" : undefined,
-                      } as CSSProperties
-                    }
-                  >
-                    {project && (
-                      <TerminalPane
-                        projectHash={project.hash}
-                        placement={terminalPlacement}
-                        onTogglePlacement={toggleTerminalPlacement}
-                      />
-                    )}
-                  </div>
-                )}
+                {terminalPlacement === "bottom" &&
+                  terminalEverOpened.current && (
+                    <div
+                      className="ds-terminal-panel"
+                      data-testid="terminal-panel"
+                      hidden={terminalPanel.collapsed}
+                      style={
+                        {
+                          "--terminal-h": `${terminalPanel.size}px`,
+                          display: terminalPanel.collapsed ? "none" : undefined,
+                        } as CSSProperties
+                      }
+                    >
+                      {project && (
+                        <TerminalPane
+                          projectHash={project.hash}
+                          placement={terminalPlacement}
+                          onTogglePlacement={toggleTerminalPlacement}
+                        />
+                      )}
+                    </div>
+                  )}
               </main>
 
               {!rightPanel.collapsed && (
@@ -2252,8 +2283,13 @@ export default function App() {
                     Editor shell finds everything still open. */}
                 <div className="ds-file-tabs" data-testid="vibe-file-tabs">
                   {selectedFile ? (
-                    <span className="ds-tab active" data-testid="vibe-active-file">
-                      {tabs.activeIsDirty && <span className="ds-tab-dirty">●</span>}
+                    <span
+                      className="ds-tab active"
+                      data-testid="vibe-active-file"
+                    >
+                      {tabs.activeIsDirty && (
+                        <span className="ds-tab-dirty">●</span>
+                      )}
                       {basename(selectedFile)}
                     </span>
                   ) : (
@@ -2274,14 +2310,40 @@ export default function App() {
                       </Button>
                     </Tooltip>
                   )}
-                  <Tooltip label={diffOpen ? "Back to editor" : "Review changes"} withinPortal>
+                  {isMarkdownPath(selectedFile) && (
+                    <Tooltip
+                      label={
+                        tabs.activeMdPreview ? "Hide preview" : "Show preview"
+                      }
+                      withinPortal
+                    >
+                      <ActionIcon
+                        variant={tabs.activeMdPreview ? "filled" : "subtle"}
+                        aria-label={
+                          tabs.activeMdPreview ? "Hide preview" : "Show preview"
+                        }
+                        aria-pressed={tabs.activeMdPreview}
+                        onClick={toggleMdPreview}
+                        data-testid="vibe-toggle-md-preview"
+                        ml="auto"
+                      >
+                        <IconMarkdown size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                  <Tooltip
+                    label={diffOpen ? "Back to editor" : "Review changes"}
+                    withinPortal
+                  >
                     <ActionIcon
                       variant={diffOpen ? "filled" : "subtle"}
-                      aria-label={diffOpen ? "Back to editor" : "Review changes"}
+                      aria-label={
+                        diffOpen ? "Back to editor" : "Review changes"
+                      }
                       aria-pressed={diffOpen}
                       onClick={() => setDiffOpen((open) => !open)}
                       data-testid="vibe-toggle-diff"
-                      ml="auto"
+                      ml={isMarkdownPath(selectedFile) ? undefined : "auto"}
                     >
                       <IconGitCompare size={16} />
                     </ActionIcon>
@@ -2297,14 +2359,23 @@ export default function App() {
                       externalChange={externalChange}
                       revealLine={revealLine}
                       initialCursor={
-                        selectedFile ? session?.cursors[selectedFile] : undefined
+                        selectedFile
+                          ? session?.cursors[selectedFile]
+                          : undefined
                       }
                       onCursorChange={rememberCursor}
+                      mdPreview={tabs.activeMdPreview}
+                      onToggleMdPreview={toggleMdPreview}
                     />
                   )
                 ) : (
                   <div className="messages" data-testid="vibe-files-content">
-                    {project && <DiffPane projectHash={project.hash} refreshToken={diffRefreshToken} />}
+                    {project && (
+                      <DiffPane
+                        projectHash={project.hash}
+                        refreshToken={diffRefreshToken}
+                      />
+                    )}
                     {(() => {
                       const threadEdits = thread
                         ? filterForTab(

@@ -57,8 +57,12 @@ describe("useOpenTabs", () => {
     const view = withTabs("a.ts", "b.ts");
     act(() => view.result.current.setDirty("a.ts", true));
 
-    expect(view.result.current.tabs.find((t) => t.path === "a.ts")?.dirty).toBe(true);
-    expect(view.result.current.tabs.find((t) => t.path === "b.ts")?.dirty).toBe(false);
+    expect(view.result.current.tabs.find((t) => t.path === "a.ts")?.dirty).toBe(
+      true
+    );
+    expect(view.result.current.tabs.find((t) => t.path === "b.ts")?.dirty).toBe(
+      false
+    );
     expect(view.result.current.anyDirty).toBe(true);
     // b.ts is the active tab, and it is clean — a global flag would have
     // reported the editor as dirty here.
@@ -138,5 +142,56 @@ describe("useOpenTabs", () => {
     expect(paths(view)).toEqual([]);
     expect(view.result.current.activePath).toBeNull();
     expect(view.result.current.anyDirty).toBe(false);
+  });
+
+  describe("Markdown preview mode", () => {
+    it("defaults to false for a newly opened .md tab", () => {
+      const view = withTabs("README.md");
+      expect(
+        view.result.current.tabs.find((t) => t.path === "README.md")?.mdPreview
+      ).toBe(false);
+      expect(view.result.current.activeMdPreview).toBe(false);
+    });
+
+    it("defaults to false for a non-markdown tab", () => {
+      const view = withTabs("src/foo.ts");
+      expect(
+        view.result.current.tabs.find((t) => t.path === "src/foo.ts")?.mdPreview
+      ).toBe(false);
+      expect(view.result.current.activeMdPreview).toBe(false);
+    });
+
+    it("flips preview on for a tab and reports it as active", () => {
+      const view = withTabs("README.md");
+      act(() => view.result.current.setMdPreview("README.md", true));
+      expect(
+        view.result.current.tabs.find((t) => t.path === "README.md")?.mdPreview
+      ).toBe(true);
+      expect(view.result.current.activeMdPreview).toBe(true);
+    });
+
+    it("ignores preview reports for a file that isn't open", () => {
+      const view = withTabs("README.md");
+      act(() => view.result.current.setMdPreview("gone.md", true));
+      expect(view.result.current.activeMdPreview).toBe(false);
+    });
+
+    it("preserves preview state across a rename", () => {
+      const view = withTabs("old.md");
+      act(() => view.result.current.setMdPreview("old.md", true));
+      act(() => view.result.current.rename("old.md", "new.md"));
+      expect(
+        view.result.current.tabs.find((t) => t.path === "new.md")?.mdPreview
+      ).toBe(true);
+      expect(view.result.current.activeMdPreview).toBe(true);
+    });
+
+    it("re-defaults to false when a .md tab is reopened after closeAll", () => {
+      const view = withTabs("README.md");
+      act(() => view.result.current.setMdPreview("README.md", true));
+      act(() => view.result.current.closeAll());
+      act(() => view.result.current.open("README.md"));
+      expect(view.result.current.activeMdPreview).toBe(false);
+    });
   });
 });
