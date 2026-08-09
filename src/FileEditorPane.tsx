@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Group } from "@mantine/core";
 import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLine,
+  drawSelection,
+  rectangularSelection,
+  crosshairCursor,
+  highlightSpecialChars,
+} from "@codemirror/view";
 import {
   defaultKeymap,
   history,
@@ -10,11 +19,25 @@ import {
   indentWithTab,
 } from "@codemirror/commands";
 import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+import {
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  bracketMatching,
+  foldGutter,
+  codeFolding,
+  foldKeymap,
+} from "@codemirror/language";
+import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import * as api from "./api";
-import { languageExtensionFor, mediaKindFor, mimeTypeFor } from "./codeLanguage";
+import { languageExtensionFor, loadLanguageFor, mediaKindFor, mimeTypeFor } from "./codeLanguage";
 import { describeError } from "./errors";
-import { EDITOR_FONT_CHANGED_EVENT, loadEditorFont, loadEditorFontSize } from "./SettingsPanel";
+import {
+  EDITOR_FONT_CHANGED_EVENT,
+  EDITOR_WRAP_CHANGED_EVENT,
+  loadEditorFont,
+  loadEditorFontSize,
+  loadEditorWrap,
+} from "./SettingsPanel";
 
 type Props = {
   projectHash: string;
@@ -82,6 +105,11 @@ function docOf(session: Session): string {
  * matters here, and it has to be named on both sides of the round trip. */
 const SERIALIZED_FIELDS = { history: historyField };
 
+const formatBytes = (bytes: number) => {
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
+};
+
 const editorFontTheme = () =>
   EditorView.theme({
     "&": { height: "100%", fontSize: `${loadEditorFontSize()}px` },
@@ -99,6 +127,7 @@ export default function FileEditorPane({
   const viewRef = useRef<EditorView | null>(null);
   const languageCompartment = useRef(new Compartment());
   const fontCompartment = useRef(new Compartment());
+  const wrapCompartment = useRef(new Compartment());
   // Refs so the update/save listeners (bound once per file load) always see
   // the latest callback/path without re-mounting the EditorView per render.
   const onSaveRef = useRef(onSave);
@@ -114,6 +143,11 @@ export default function FileEditorPane({
   // The file changed on disk while this buffer was dirty, so neither version
   // can be discarded without asking.
   const [conflict, setConflict] = useState(false);
+  // Files we decline to open, and why — a 40 MB log and a stray .bin are
+  // both fine to have in a project, they just aren't editable here.
+  const [unopenable, setUnopenable] = useState<
+    { kind: "binary" } | { kind: "tooLarge"; bytes: number } | null
+  >(null);
   // Bumped to re-read from disk, having dropped the cached session.
   const [reloadToken, setReloadToken] = useState(0);
   // Incremented once per session becoming available (loaded from disk, or
@@ -185,24 +219,38 @@ export default function FileEditorPane({
 
   const buildExtensions = useCallback(
     (forPath: string) => [
-          lineNumbers(),
-          highlightActiveLine(),
-          history(),
-          closeBrackets(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          autocompletion({ override: [completeAnyWord] }),
-          keymap.of([
-            { key: "Mod-s", run: () => (saveRef.current(), true) },
-            ...closeBracketsKeymap,
-            ...defaultKeymap,
-            ...historyKeymap,
-            indentWithTab,
-          ]),
-          languageCompartment.current.of(languageExtensionFor(forPath)),
-          EditorView.updateListener.of((update) => {
-            if (!update.docChanged) return;
-            setDirty(update.state.doc.toString() !== baselineRef.current);
-          }),
+      lineNumbers(),
+      highlightActiveLine(),
+      highlightSpecialChars(),
+      history(),
+      closeBrackets(),
+      bracketMatching(),
+      codeFolding(),
+      foldGutter(),
+      // Multi-cursor: drawSelection renders the extra carets, and
+      // rectangularSelection/crosshairCursor give Alt-drag column select.
+      drawSelection(),
+      rectangularSelection(),
+      crosshairCursor(),
+      highlightSelectionMatches(),
+      search({ top: true }),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      autocompletion({ override: [completeAnyWord] }),
+      keymap.of([
+        { key: "Mod-s", run: () => (saveRef.current(), true) },
+        ...closeBracketsKeymap,
+        ...searchKeymap,
+        ...foldKeymap,
+        ...defaultKeymap,
+        ...historyKeymap,
+        indentWithTab,
+      ]),
+      languageCompartment.current.of(languageExtensionFor(forPath)),
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged) return;
+        setDirty(update.state.doc.toString() !== baselineRef.current);
+      }),
+      wrapCompartment.current.of(loadEditorWrap() ? EditorView.lineWrapping : []),
       fontCompartment.current.of(editorFontTheme()),
     ],
     []
@@ -228,6 +276,7 @@ export default function FileEditorPane({
     setError(null);
     setSaved(false);
     setConflict(false);
+    setUnopenable(null);
     if (!path) return;
 
     const mediaKind = mediaKindFor(path);
@@ -262,7 +311,11 @@ export default function FileEditorPane({
         setViewSeq((seq) => seq + 1);
       })
       .catch((err) => {
-        if (!cancelled) setError(describeError(err));
+        if (cancelled) return;
+        const bytes = api.tooLargeBytes(err);
+        if (bytes !== null) setUnopenable({ kind: "tooLarge", bytes });
+        else if (api.isBinaryError(err)) setUnopenable({ kind: "binary" });
+        else setError(describeError(err));
       });
     return () => {
       cancelled = true;
@@ -313,9 +366,37 @@ export default function FileEditorPane({
     const onFontChanged = () => {
       viewRef.current?.dispatch({ effects: fontCompartment.current.reconfigure(editorFontTheme()) });
     };
+    const onWrapChanged = () => {
+      viewRef.current?.dispatch({
+        effects: wrapCompartment.current.reconfigure(
+          loadEditorWrap() ? EditorView.lineWrapping : []
+        ),
+      });
+    };
     window.addEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
-    return () => window.removeEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
+    window.addEventListener(EDITOR_WRAP_CHANGED_EVENT, onWrapChanged);
+    return () => {
+      window.removeEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
+      window.removeEventListener(EDITOR_WRAP_CHANGED_EVENT, onWrapChanged);
+    };
   }, []);
+
+  // Highlighting for file types that aren't bundled (HTML, YAML, SQL, shell
+  // and the rest) arrives a moment after the view, via the same compartment
+  // the bundled languages are configured through.
+  useEffect(() => {
+    if (!path || viewSeq === 0) return;
+    let cancelled = false;
+    void loadLanguageFor(path).then((language) => {
+      if (cancelled || !language) return;
+      viewRef.current?.dispatch({
+        effects: languageCompartment.current.reconfigure(language),
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, viewSeq]);
 
   if (!path) {
     return <p className="empty">Select a file from the explorer to view it.</p>;
@@ -388,6 +469,23 @@ export default function FileEditorPane({
           ) : (
             <video src={mediaSrc} controls autoPlay loop muted />
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (unopenable) {
+    return (
+      <div className="ds-media-preview" data-testid="file-unopenable">
+        <div className="ds-editor-toolbar">
+          <span className="ds-editor-path">{path}</span>
+        </div>
+        <div className="ds-media-preview-body">
+          <p className="empty">
+            {unopenable.kind === "binary"
+              ? "This looks like a binary file, so there's nothing useful to show as text."
+              : `This file is ${formatBytes(unopenable.bytes)} — too large to open in the editor without freezing it.`}
+          </p>
         </div>
       </div>
     );

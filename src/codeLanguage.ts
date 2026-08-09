@@ -24,11 +24,36 @@ const byExtension: Record<string, () => Extension> = {
   css: () => css(),
 };
 
-/** Extensions for the file at `path`, or `[]` (plain text) if unrecognized. */
+/** Extensions for the file at `path`, or `[]` (plain text) if unrecognized.
+ *
+ * Synchronous, and covers the languages bundled directly. Anything else
+ * goes through `loadLanguageFor`, which can't answer until a chunk has
+ * loaded — going async for these too would flash unhighlighted text on
+ * every open of the file types this app is mostly used on. */
 export function languageExtensionFor(path: string): Extension[] {
   const ext = path.split(".").pop()?.toLowerCase();
   const make = ext ? byExtension[ext] : undefined;
   return make ? [make()] : [];
+}
+
+/** Highlighting for everything `languageExtensionFor` doesn't bundle —
+ * HTML, YAML, TOML, SQL, shell, C/C++, Java and the rest of CodeMirror's
+ * catalogue, each loaded on demand the first time such a file is opened.
+ * Resolves `null` when the file genuinely has no known language. */
+export async function loadLanguageFor(path: string): Promise<Extension | null> {
+  if (languageExtensionFor(path).length > 0) return null;
+  const filename = path.slice(path.lastIndexOf("/") + 1);
+  const { languages } = await import("@codemirror/language-data");
+  const { LanguageDescription } = await import("@codemirror/language");
+  const found = LanguageDescription.matchFilename(languages, filename);
+  if (!found) return null;
+  try {
+    return await found.load();
+  } catch {
+    // A missing or broken language chunk is not worth failing the file
+    // open over — plain text still edits fine.
+    return null;
+  }
 }
 
 const imageExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
+import { act } from "react";
+import { openSearchPanel, searchKeymap } from "@codemirror/search";
+import type { EditorView } from "@codemirror/view";
 import type { ReactElement } from "react";
 
 // Hoisted so individual tests can re-point a command (a stale-save refusal,
@@ -13,6 +16,28 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 import FileEditorPane, { evictProjectSessions } from "../FileEditorPane";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
+
+/** Reaches the mounted EditorView through the DOM node CodeMirror tags. */
+function viewFromDom(): EditorView {
+  const content = document.querySelector(".cm-content") as HTMLElement & { cmTile?: unknown };
+  const seen = new Set<unknown>();
+  const find = (node: unknown, depth: number): EditorView | null => {
+    if (!node || depth > 4 || typeof node !== "object" || seen.has(node)) return null;
+    seen.add(node);
+    const candidate = node as { dispatch?: unknown; state?: { doc?: unknown } };
+    if (typeof candidate.dispatch === "function" && candidate.state?.doc) {
+      return node as EditorView;
+    }
+    for (const key of Object.keys(node)) {
+      const hit = find((node as Record<string, unknown>)[key], depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const view = find(content.cmTile, 0);
+  if (!view) throw new Error("no EditorView mounted");
+  return view;
+}
 
 describe("FileEditorPane", () => {
   beforeEach(() => {
@@ -134,6 +159,68 @@ describe("FileEditorPane", () => {
     render(<FileEditorPane projectHash="abc" path="assets/clip.mp4" />);
     await waitFor(() => expect(screen.getByTestId("file-editor-media")).toBeDefined());
     expect(document.querySelector("video")).not.toBeNull();
+  });
+
+  it("has in-buffer find wired up, panel and Cmd+F binding both", async () => {
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+    );
+    expect(document.querySelector(".cm-search")).toBeNull();
+
+    // Driving the real Cmd+F through jsdom doesn't reach CodeMirror's
+    // keymap, so this asserts the two halves separately: the search
+    // extension is installed (its panel opens), and Mod-f is bound to the
+    // command that opens it.
+    const view = viewFromDom();
+    act(() => {
+      openSearchPanel(view);
+    });
+    await waitFor(() => expect(document.querySelector(".cm-search")).not.toBeNull());
+
+    expect(searchKeymap.some((binding) => binding.key === "Mod-f")).toBe(true);
+  });
+
+  it("renders a fold gutter so long blocks can be collapsed", async () => {
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
+    await waitFor(() => expect(document.querySelector(".cm-foldGutter")).not.toBeNull());
+  });
+
+  describe("files it declines to open", () => {
+    it("explains a binary file instead of failing to decode it", async () => {
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_content") return Promise.reject(new Error("BINARY:"));
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      });
+      render(<FileEditorPane projectHash="abc" path="build/out.bin" />);
+
+      await waitFor(() => expect(screen.getByTestId("file-unopenable")).toBeDefined());
+      expect(screen.getByTestId("file-unopenable").textContent).toContain("binary");
+      expect(screen.queryByTestId("file-editor-error")).toBeNull();
+    });
+
+    it("names the size of a file too large to edit", async () => {
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_content") return Promise.reject(new Error("TOO_LARGE: 52428800"));
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      });
+      render(<FileEditorPane projectHash="abc" path="logs/huge.log" />);
+
+      await waitFor(() => expect(screen.getByTestId("file-unopenable")).toBeDefined());
+      expect(screen.getByTestId("file-unopenable").textContent).toContain("50.0 MB");
+    });
+
+    it("still reports a genuine read failure as an error", async () => {
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_content") return Promise.reject(new Error("cannot read file: EACCES"));
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      });
+      render(<FileEditorPane projectHash="abc" path="secret.txt" />);
+
+      await waitFor(() => expect(screen.getByTestId("file-editor-error")).toBeDefined());
+      expect(screen.queryByTestId("file-unopenable")).toBeNull();
+    });
   });
 
   // Reconciliation with changes Floo didn't make — an agent turn writing to

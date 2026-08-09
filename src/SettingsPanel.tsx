@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Modal } from "@mantine/core";
+import { Modal, Switch } from "@mantine/core";
 
 // Personal display preferences (D24 precedent: layout is personal, not
 // project config) — localStorage, not .project-settings.json.
@@ -10,6 +10,10 @@ export const EDITOR_FONT_SIZE_KEY = "floo:editorFontSize";
  * mounted `FileEditorPane` can reconfigure live instead of waiting for the
  * next file switch. */
 export const EDITOR_FONT_CHANGED_EVENT = "floo:editor-font-changed";
+export const EDITOR_WRAP_KEY = "floo:editorWrap";
+/** Same idea as EDITOR_FONT_CHANGED_EVENT: lets a mounted editor
+ * reconfigure its wrap compartment without waiting for a file switch. */
+export const EDITOR_WRAP_CHANGED_EVENT = "floo:editor-wrap-changed";
 
 export const ACCENT_PRESETS = [
   { name: "Dragon Green", hue: 145 },
@@ -49,6 +53,12 @@ export function loadEditorFont(): string {
   return localStorage.getItem(EDITOR_FONT_KEY) || DEFAULT_EDITOR_FONT;
 }
 
+/** Off by default: code is written to a column, and soft-wrapping it by
+ * default hides that the line is long. */
+export function loadEditorWrap(): boolean {
+  return localStorage.getItem(EDITOR_WRAP_KEY) === "1";
+}
+
 export function loadEditorFontSize(): number {
   const stored = Number(localStorage.getItem(EDITOR_FONT_SIZE_KEY));
   return Number.isFinite(stored) && stored >= MIN_FONT_SIZE && stored <= MAX_FONT_SIZE
@@ -65,6 +75,7 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
   const [accentHue, setAccentHueState] = useState(loadAccentHue);
   const [editorFont, setEditorFontState] = useState(loadEditorFont);
   const [editorFontSize, setEditorFontSizeState] = useState(loadEditorFontSize);
+  const [editorWrap, setEditorWrapState] = useState(loadEditorWrap);
 
   const setAccentHue = (hue: number) => {
     setAccentHueState(hue);
@@ -75,6 +86,12 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
     setEditorFontState(value);
     localStorage.setItem(EDITOR_FONT_KEY, value);
     window.dispatchEvent(new Event(EDITOR_FONT_CHANGED_EVENT));
+  };
+
+  const setEditorWrap = (wrap: boolean) => {
+    setEditorWrapState(wrap);
+    localStorage.setItem(EDITOR_WRAP_KEY, wrap ? "1" : "0");
+    window.dispatchEvent(new Event(EDITOR_WRAP_CHANGED_EVENT));
   };
 
   const setEditorFontSize = (size: number) => {
@@ -131,6 +148,15 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
             />
             <span className="settings-unit">px</span>
           </div>
+        </div>
+
+        <div className="settings-section">
+          <Switch
+            label="Wrap long lines"
+            checked={editorWrap}
+            onChange={(event) => setEditorWrap(event.currentTarget.checked)}
+            data-testid="editor-wrap-toggle"
+          />
         </div>
 
         <div className="settings-section">

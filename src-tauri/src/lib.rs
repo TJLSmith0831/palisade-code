@@ -868,10 +868,46 @@ fn resolve_existing_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
     Ok(resolved)
 }
 
+/// Above this, a file is refused rather than loaded. The whole document
+/// crosses IPC and becomes one CodeMirror doc, so a multi-megabyte file
+/// hangs the command thread and then the editor — better to say so.
+const MAX_EDITABLE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Distinguishable prefixes so the frontend can explain *why* a file didn't
+/// open, instead of showing a generic read error for a perfectly healthy
+/// 40 MB log or a `.png` that wandered out of the media list.
+pub(crate) const TOO_LARGE_PREFIX: &str = "TOO_LARGE:";
+pub(crate) const BINARY_PREFIX: &str = "BINARY:";
+
+/// A NUL byte in the first few KB means this isn't text. Same heuristic
+/// `git` uses to decide a file is binary, and it costs one short read.
+fn looks_binary(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 8000];
+    match file.read(&mut head) {
+        Ok(n) => head[..n].contains(&0),
+        Err(_) => false,
+    }
+}
+
 #[tauri::command]
 fn read_file_content(project_hash: String, relative_path: String) -> Res<String> {
     let root = project_root(&project_hash)?;
     let resolved = resolve_existing_path(&root, &relative_path)?;
+
+    let size = std::fs::metadata(&resolved)
+        .map_err(|err| format!("cannot read file: {err}"))?
+        .len();
+    if size > MAX_EDITABLE_BYTES {
+        return Err(format!("{TOO_LARGE_PREFIX} {size}"));
+    }
+    if looks_binary(&resolved) {
+        return Err(BINARY_PREFIX.to_string());
+    }
+
     std::fs::read_to_string(&resolved)
         .map_err(|err| format!("cannot read file: {err}"))
 }
@@ -1228,6 +1264,30 @@ mod tests {
             resolve_existing_path(&canonical_root, "present.json").unwrap(),
             canonical_root.join("present.json"),
         );
+    }
+
+    #[test]
+    fn a_file_with_nul_bytes_is_reported_as_binary_rather_than_a_decode_error() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("thing.bin");
+        std::fs::write(&file, [0x89, 0x50, 0x00, 0x4e, 0x47]).unwrap();
+        assert!(looks_binary(&file));
+    }
+
+    #[test]
+    fn ordinary_source_files_are_not_mistaken_for_binary() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("main.rs");
+        std::fs::write(&file, "fn main() {\n    println!(\"hi — ünïcode\");\n}\n").unwrap();
+        assert!(!looks_binary(&file));
+    }
+
+    #[test]
+    fn an_empty_file_is_not_binary() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("empty.txt");
+        std::fs::write(&file, "").unwrap();
+        assert!(!looks_binary(&file));
     }
 
     #[test]
