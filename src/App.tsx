@@ -782,13 +782,27 @@ export default function App() {
   const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  // The terminal is spawned lazily — a shell per project on launch is not
+  // what anyone wants. Once opened it stays mounted, so collapsing the
+  // panel keeps the scrollback instead of disposing the instance.
+  const terminalEverOpened = useRef(false);
+  if (terminalPlacement === "bottom" && !terminalPanel.collapsed) {
+    terminalEverOpened.current = true;
+  }
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
   const filesCache = useRef<Map<string, string[]>>(new Map());
   const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0);
+  // Bumped when the working tree changes under the diff — an agent turn
+  // ending, or a save. The pane used to fetch once on mount and then show
+  // that forever.
+  const [diffRefreshToken, setDiffRefreshToken] = useState(0);
 
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
       setFileEdits((prev) => [...prev, edit]);
+      // A save changes the working tree, so the diff behind the toggle is
+      // now out of date.
+      setDiffRefreshToken((t) => t + 1);
     },
     []
   );
@@ -1188,6 +1202,7 @@ export default function App() {
       async ({ payload }) => {
         if (payload.kind === "done" || payload.kind === "crashed") {
           setBusy(false);
+          setDiffRefreshToken((t) => t + 1);
           await refresh().catch(fail);
           return;
         }
@@ -1905,7 +1920,7 @@ export default function App() {
                   )
                 ) : (
                   <div className="messages" data-testid="messages">
-                    {project && <DiffPane projectHash={project.hash} />}
+                    {project && <DiffPane projectHash={project.hash} refreshToken={diffRefreshToken} />}
                     {(() => {
                       const threadEdits = thread
                         ? filterForTab(
@@ -1945,33 +1960,38 @@ export default function App() {
                 )}
 
                 {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
-                  <>
-                    <div
-                      className="ds-resize-handle ds-resize-handle-y"
-                      data-testid="resize-terminal-panel"
-                      onPointerDown={bindDrag(
-                        terminalPanel.handleProps,
-                        "row-resize"
-                      )}
-                    />
-                    <div
-                      className="ds-terminal-panel"
-                      data-testid="terminal-panel"
-                      style={
-                        {
-                          "--terminal-h": `${terminalPanel.size}px`,
-                        } as CSSProperties
-                      }
-                    >
-                      {project && (
-                        <TerminalPane
-                          projectHash={project.hash}
-                          placement={terminalPlacement}
-                          onTogglePlacement={toggleTerminalPlacement}
-                        />
-                      )}
-                    </div>
-                  </>
+                  <div
+                    className="ds-resize-handle ds-resize-handle-y"
+                    data-testid="resize-terminal-panel"
+                    onPointerDown={bindDrag(
+                      terminalPanel.handleProps,
+                      "row-resize"
+                    )}
+                  />
+                )}
+                {/* Hidden rather than unmounted while collapsed: unmounting
+                    disposes the xterm instance, so every collapse threw away
+                    the scrollback and re-spawned the shell on reopen. */}
+                {terminalPlacement === "bottom" && terminalEverOpened.current && (
+                  <div
+                    className="ds-terminal-panel"
+                    data-testid="terminal-panel"
+                    hidden={terminalPanel.collapsed}
+                    style={
+                      {
+                        "--terminal-h": `${terminalPanel.size}px`,
+                        display: terminalPanel.collapsed ? "none" : undefined,
+                      } as CSSProperties
+                    }
+                  >
+                    {project && (
+                      <TerminalPane
+                        projectHash={project.hash}
+                        placement={terminalPlacement}
+                        onTogglePlacement={toggleTerminalPlacement}
+                      />
+                    )}
+                  </div>
                 )}
               </main>
 
@@ -2284,7 +2304,7 @@ export default function App() {
                   )
                 ) : (
                   <div className="messages" data-testid="vibe-files-content">
-                    {project && <DiffPane projectHash={project.hash} />}
+                    {project && <DiffPane projectHash={project.hash} refreshToken={diffRefreshToken} />}
                     {(() => {
                       const threadEdits = thread
                         ? filterForTab(

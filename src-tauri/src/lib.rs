@@ -573,13 +573,31 @@ fn query_graphify(project_hash: String, subcommand: String, args: Vec<String>) -
 /// panel re-attaches to the same session (spec: "single terminal instance")
 /// instead of spawning a second one.
 #[tauri::command]
-fn terminal_spawn(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, project_hash: String) -> Res<()> {
-    {
+fn terminal_spawn(
+    app: tauri::AppHandle,
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+) -> Res<Option<String>> {
+    // The display name of a project whose shell this call is about to kill.
+    // Single terminal instance is deliberate (D-spec), but it used to happen
+    // silently: a build or dev server running in another project's shell
+    // died on project switch with nothing said about it.
+    let replaced = {
         let existing = harness.terminal.lock().unwrap();
-        if existing.as_ref().is_some_and(|(hash, _)| hash == &project_hash) {
-            return Ok(());
+        match existing.as_ref() {
+            Some((hash, _)) if hash == &project_hash => return Ok(None),
+            Some((hash, _)) => store::list_projects(&floo_home())
+                .ok()
+                .and_then(|projects| {
+                    projects
+                        .into_iter()
+                        .find(|p| &p.hash == hash)
+                        .map(|p| p.display_name)
+                }),
+            None => None,
         }
-    }
+    };
+
     let root = project_root(&project_hash)?;
     let app_output = app.clone();
     let term = terminal::Terminal::spawn(&root, move |bytes| {
@@ -587,8 +605,9 @@ fn terminal_spawn(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, pro
         let _ = app_output.emit("terminal-output", BASE64_STANDARD.encode(&bytes));
     })
     .map_err(|err| format!("start terminal: {err}"))?;
+    // Assigning here drops the previous Terminal, whose Drop kills its shell.
     *harness.terminal.lock().unwrap() = Some((project_hash, term));
-    Ok(())
+    Ok(replaced)
 }
 
 #[tauri::command]

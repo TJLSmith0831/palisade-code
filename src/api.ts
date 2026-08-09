@@ -151,8 +151,10 @@ export const queryGraphify = (
 
 // ---------------------------------------------------------------- terminal
 
+/** Resolves to the display name of a project whose shell was killed to make
+ * room for this one, or `null` when nothing was replaced. */
 export const terminalSpawn = (projectHash: string) =>
-  invoke<void>("terminal_spawn", { projectHash });
+  invoke<string | null>("terminal_spawn", { projectHash });
 export const terminalInput = (data: string) =>
   invoke<void>("terminal_input", { data });
 export const terminalResize = (cols: number, rows: number) =>

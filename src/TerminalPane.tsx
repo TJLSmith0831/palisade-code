@@ -49,7 +49,17 @@ export default function TerminalPane({ projectHash, placement, onTogglePlacement
     term.open(host);
     fit.fit();
 
-    api.terminalSpawn(projectHash).catch((err) => term.writeln(`\r\n[terminal error: ${err}]`));
+    api
+      .terminalSpawn(projectHash)
+      .then((replaced) => {
+        // Only one terminal exists at a time, so switching projects kills
+        // the previous project's shell. Say so in the terminal itself
+        // rather than letting a running build vanish without a word.
+        if (replaced) {
+          term.writeln(`\r\n[closed the terminal for "${replaced}" — one shell at a time]`);
+        }
+      })
+      .catch((err) => term.writeln(`\r\n[terminal error: ${err}]`));
 
     const onData = term.onData((data) => {
       api.terminalInput(data).catch(() => {});

@@ -9,7 +9,13 @@ import { describeError } from "./errors";
 import { rowsFromHunk } from "./diffLines";
 import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
 
-type Props = { projectHash: string };
+type Props = {
+  projectHash: string;
+  /** Bumped when something outside this pane changed the working tree — an
+   * agent turn finishing, or a save. Without it the diff is whatever it was
+   * when the pane mounted, which is stale the moment the agent writes. */
+  refreshToken?: number;
+};
 
 function FileDiff({
   file,
@@ -56,7 +62,7 @@ function FileDiff({
   );
 }
 
-export default function DiffPane({ projectHash }: Props) {
+export default function DiffPane({ projectHash, refreshToken }: Props) {
   const [isRepo, setIsRepo] = useState(true);
   const [status, setStatus] = useState<FileStatus[]>([]);
   const [workingFiles, setWorkingFiles] = useState<StructuredPatch[]>([]);
@@ -97,7 +103,7 @@ export default function DiffPane({ projectHash }: Props) {
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, refreshToken]);
 
   const run = useCallback(
     async (action: () => Promise<void>) => {
