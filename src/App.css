@@ -90,7 +90,9 @@ html,
   background: transparent;
   color: var(--fg);
   font:
-    13px/1.5 system-ui,
+    13px/1.5 "Geist Sans",
+    Inter,
+    system-ui,
     -apple-system,
     "Segoe UI",
     Roboto,
@@ -120,8 +122,8 @@ pre,
 .message .meta,
 .thread-meta {
   font-family:
-    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
-    monospace;
+    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
+    Consolas, monospace;
 }
 
 button,
@@ -346,7 +348,7 @@ input[type="checkbox"] {
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 9px;
   transition: all 120ms ease-out;
 }
@@ -453,7 +455,7 @@ input[type="checkbox"] {
 }
 
 .ds-rail-label {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -519,7 +521,7 @@ input[type="checkbox"] {
 .ds-branch-list li {
   padding: 6px 10px;
   font-size: 12px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
 }
@@ -656,7 +658,7 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   min-height: 0;
 }
 
@@ -890,7 +892,7 @@ input[type="checkbox"] {
 }
 
 .ds-tab {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11px;
   padding: 5px 10px;
   border-radius: 5px 5px 0 0;
@@ -954,7 +956,7 @@ input[type="checkbox"] {
   background: var(--editor-bg);
   display: flex;
   flex-direction: column;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1005,7 +1007,7 @@ input[type="checkbox"] {
 
 .ds-editor-path {
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }
 
 .ds-editor-spacer {
@@ -1105,7 +1107,7 @@ input[type="checkbox"] {
 /* --- breadcrumbs (v2) --------------------------------------------------- */
 
 .ds-breadcrumbs {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 10px;
   color: var(--muted);
   padding: 8px 12px 6px;
@@ -1251,7 +1253,7 @@ input[type="checkbox"] {
   border-right: 1px solid var(--border);
   background: transparent;
   white-space: nowrap;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }
 
 .ds-file-tabs button[data-active] {
@@ -1520,7 +1522,7 @@ input[type="checkbox"] {
   width: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1619,7 +1621,7 @@ input[type="checkbox"] {
   border-radius: 6px;
   background: var(--surface);
   color: var(--fg);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
 }
 
@@ -1668,7 +1670,7 @@ input[type="checkbox"] {
 
 .diff-file-path {
   color: var(--fg);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }
 
 .diff-spacer {
@@ -2001,8 +2003,8 @@ details.graph-report-wrap > summary {
 .editor .w-md-editor textarea {
   color: var(--fg);
   font-family:
-    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
-    monospace;
+    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
+    Consolas, monospace;
   font-size: 13px;
 }
 
@@ -2029,8 +2031,8 @@ details.graph-report-wrap > summary {
   background: var(--bg);
   color: var(--accent);
   font-family:
-    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
-    monospace;
+    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
+    Consolas, monospace;
 }
 
 .wmde-markdown pre {
@@ -2150,8 +2152,8 @@ details.graph-report-wrap > summary {
   text-overflow: ellipsis;
   color: var(--muted);
   font-family:
-    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
-    monospace;
+    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
+    Consolas, monospace;
   font-size: 12px;
 }
 
@@ -2357,5 +2359,5 @@ details.graph-report-wrap > summary {
 .ds-command-chord {
   margin-left: auto;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }

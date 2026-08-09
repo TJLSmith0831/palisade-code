@@ -1,14 +1,21 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { MantineProvider, createTheme, localStorageColorSchemeManager, type CSSVariablesResolver } from "@mantine/core";
+import {
+  MantineProvider,
+  createTheme,
+  localStorageColorSchemeManager,
+  type CSSVariablesResolver,
+} from "@mantine/core";
 import "@mantine/core/styles.css";
 import App, { THEME_KEY } from "./App";
 
 // Radius/font tokens mirror DESIGN.md's documented scale (rounded, typography).
 const theme = createTheme({
   radius: { xs: "4px", sm: "6px", md: "8px", lg: "12px", xl: "9999px" },
-  fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif',
-  fontFamilyMonospace: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace',
+  fontFamily:
+    '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif',
+  fontFamilyMonospace:
+    '"Geist Mono", "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace',
 });
 
 // Point Mantine's own CSS variables at the app's existing OKLCH tokens (App.css :root)
@@ -33,8 +40,10 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-disabled-border": "var(--border)",
     "--mantine-primary-color-filled": "var(--accent)",
     "--mantine-primary-color-filled-hover": "var(--accent)",
-    "--mantine-primary-color-light": "color-mix(in oklab, var(--accent), transparent 80%)",
-    "--mantine-primary-color-light-hover": "color-mix(in oklab, var(--accent), transparent 65%)",
+    "--mantine-primary-color-light":
+      "color-mix(in oklab, var(--accent), transparent 80%)",
+    "--mantine-primary-color-light-hover":
+      "color-mix(in oklab, var(--accent), transparent 65%)",
     "--mantine-primary-color-light-color": "var(--accent)",
     "--mantine-primary-color-contrast": "var(--accent-on)",
   },
@@ -56,5 +65,5 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     >
       <App />
     </MantineProvider>
-  </React.StrictMode>,
+  </React.StrictMode>
 );

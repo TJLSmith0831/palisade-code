@@ -34,7 +34,7 @@ export default function TerminalPane({ projectHash, placement, onTogglePlacement
     if (!host) return;
 
     const term = new Terminal({
-      fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
+      fontFamily: "'Geist Mono', 'SF Mono', ui-monospace, Menlo, monospace",
       fontSize: 12,
       cursorBlink: true,
       theme: {

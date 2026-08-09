@@ -25,7 +25,7 @@ export const ACCENT_PRESETS = [
 ] as const;
 
 export const FONT_PRESETS = [
-  { name: "Default", value: "ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Monaco, Consolas, monospace" },
+  { name: "Default", value: "'Geist Mono', 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Monaco, Consolas, monospace" },
   { name: "JetBrains Mono", value: "'JetBrains Mono', ui-monospace, monospace" },
   { name: "Fira Code", value: "'Fira Code', ui-monospace, monospace" },
   { name: "Menlo", value: "Menlo, ui-monospace, monospace" },
