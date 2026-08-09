@@ -10,12 +10,16 @@ import type { ReactElement } from "react";
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
-import FileEditorPane from "../FileEditorPane";
+import FileEditorPane, { evictProjectSessions } from "../FileEditorPane";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 describe("FileEditorPane", () => {
   beforeEach(() => {
+    // Editing sessions live at module scope so they can outlive the pane
+    // unmounting. That also means they outlive a test, so each one starts
+    // from a clean slate rather than inheriting the last test's document.
+    evictProjectSessions("abc");
     invokeMock.mockReset();
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "read_file_content") return Promise.resolve("line one\nline two\n");
@@ -70,15 +74,15 @@ describe("FileEditorPane", () => {
     const onDirtyChange = vi.fn();
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={onDirtyChange} />);
     await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false);
 
     const content = document.querySelector(".cm-content") as HTMLElement;
     content.focus();
     await user.type(content, "x");
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true));
 
     await user.click(screen.getByRole("button", { name: /save \*/i }));
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false));
   });
 
   it("does not remount the CodeMirror view on save (preserves cursor/undo/scroll state)", async () => {
@@ -330,7 +334,7 @@ describe("FileEditorPane", () => {
     });
   });
 
-  it("reports itself clean when unmounted, so a caller's discard guard can't fire for a file that isn't open", async () => {
+  it("keeps a file's unsaved edits and cursor when the pane unmounts and comes back", async () => {
     const user = userEvent.setup();
     const onDirtyChange = vi.fn();
     const { unmount } = render(
@@ -342,10 +346,65 @@ describe("FileEditorPane", () => {
 
     const content = document.querySelector(".cm-content") as HTMLElement;
     content.focus();
-    await user.type(content, "x");
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    await user.type(content, "work in progress");
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true));
 
+    // Looking at the diff, or switching shells, unmounts this pane. The tab
+    // list owns dirtiness, so neither may quietly turn the file clean.
     unmount();
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+    const reopened = vi.fn();
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={reopened} />);
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("work in progress")
+    );
+    await waitFor(() => expect(reopened).toHaveBeenLastCalledWith("src/foo.ts", true));
+    // Restored from the cached session, not re-read from disk.
+    expect(invokeMock.mock.calls.filter((c) => c[0] === "read_file_content")).toHaveLength(1);
+
   });
+
+  it("still reports edits after the pane has unmounted and come back", async () => {
+    const user = userEvent.setup();
+    const first = render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+    );
+    // Unmount while clean, so the restored session starts clean too and a
+    // later edit is a real false -> true transition.
+    first.unmount();
+
+    const onDirtyChange = vi.fn();
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" onDirtyChange={onDirtyChange} />);
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", false));
+
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "x");
+
+    // A CodeMirror state carries the extensions that built it, which close
+    // over the component instance that created them. Restoring one wholesale
+    // left the update listener reporting into a component that no longer
+    // existed, and the file quietly stopped going dirty from then on.
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("src/foo.ts", true));
+  });
+
+  it("starts from disk again once a file's session has been evicted (its tab closed)", async () => {
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+    );
+
+    evictProjectSessions("abc");
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "read_file_content") return Promise.resolve("fresh from disk\n");
+      return Promise.reject(new Error(`unexpected command ${cmd}`));
+    });
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("fresh from disk")
+    );
+  });
+
 });

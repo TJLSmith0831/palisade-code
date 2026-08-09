@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Group } from "@mantine/core";
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  defaultKeymap,
+  history,
+  historyField,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
 import { autocompletion, completeAnyWord, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import * as api from "./api";
@@ -14,7 +20,9 @@ type Props = {
   projectHash: string;
   path: string | null;
   onSave?: (edit: { path: string; before: string; after: string }) => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Tagged with the path because the tab list, not this pane, owns which
+   * files have unsaved edits. */
+  onDirtyChange?: (path: string, dirty: boolean) => void;
   /** Bumped by `App` when the filesystem watcher reports this file changed
    * underneath us. A clean buffer reloads silently; a dirty one raises the
    * conflict banner so the user picks which version survives. */
@@ -24,6 +32,55 @@ type Props = {
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
 const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+
+/** A file's editing session: its CodeMirror state serialized (document,
+ * cursor, selection, undo history) plus the text it was last in agreement
+ * with on disk. Dirtiness is `doc !== baseline`, so it survives the pane
+ * unmounting — switching shells or looking at the diff can't quietly turn a
+ * tab with unsaved work back into a clean one.
+ *
+ * Serialized rather than held as a live `EditorState` because a state's
+ * extensions close over the component instance that built them. Reusing one
+ * after a remount would leave the update listener calling the previous
+ * instance's setters, and the file would silently stop reporting dirty. */
+type Session = { json: unknown; baseline: string };
+
+/** Module-level so it outlives the component: the pane unmounts on every
+ * shell toggle and diff toggle, and rebuilding from scratch each time is
+ * what used to throw away cursor position and undo history. */
+const sessions = new Map<string, Session>();
+
+const sessionKey = (projectHash: string, path: string) => `${projectHash}:${path}`;
+
+/** Forgets a file's editing session — called when its tab closes or its
+ * project goes away, so a reopened tab starts from disk rather than from a
+ * stale document. */
+export function evictEditorSession(projectHash: string, path: string) {
+  sessions.delete(sessionKey(projectHash, path));
+}
+
+export function evictProjectSessions(projectHash: string) {
+  for (const key of [...sessions.keys()]) {
+    if (key.startsWith(`${projectHash}:`)) sessions.delete(key);
+  }
+}
+
+/** Whether a file has unsaved edits according to its cached session. Lets
+ * the tab list recover dirtiness for a tab whose pane isn't mounted. */
+export function sessionIsDirty(projectHash: string, path: string): boolean {
+  const session = sessions.get(sessionKey(projectHash, path));
+  return session ? docOf(session) !== session.baseline : false;
+}
+
+/** The document text out of a serialized session. */
+function docOf(session: Session): string {
+  const doc = (session.json as { doc?: unknown })?.doc;
+  return typeof doc === "string" ? doc : Array.isArray(doc) ? doc.join("\n") : "";
+}
+
+/** CodeMirror's serializable state fields — undo history is the one that
+ * matters here, and it has to be named on both sides of the round trip. */
+const SERIALIZED_FIELDS = { history: historyField };
 
 const editorFontTheme = () =>
   EditorView.theme({
@@ -47,7 +104,6 @@ export default function FileEditorPane({
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
 
-  const [content, setContent] = useState<string | null>(null);
   const [mediaSrc, setMediaSrc] = useState<string | null>(null);
   const [imageZoom, setImageZoom] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -58,28 +114,32 @@ export default function FileEditorPane({
   // The file changed on disk while this buffer was dirty, so neither version
   // can be discarded without asking.
   const [conflict, setConflict] = useState(false);
-  // Bumped to re-read the file — the reload half of the conflict banner, and
-  // the silent path when the buffer was clean.
+  // Bumped to re-read from disk, having dropped the cached session.
   const [reloadToken, setReloadToken] = useState(0);
-  // Incremented once per *load*, and never on save. The view is rebuilt from
-  // this rather than from "content stopped being null", because a reload's
-  // read can resolve before React commits the intervening `setContent(null)`
-  // — the content then changes without ever crossing the null boundary, and
-  // a view keyed on that boundary would keep showing the previous file.
-  const [loadSeq, setLoadSeq] = useState(0);
+  // Incremented once per session becoming available (loaded from disk, or
+  // restored from cache). The view is built from this rather than from the
+  // content changing, so a read that resolves inside an unrelated commit
+  // can't leave a previous file's document on screen.
+  const [viewSeq, setViewSeq] = useState(0);
+  // What we believe is currently on disk. Dirtiness is measured against it,
+  // so undoing back to the original correctly reads as clean.
+  const baselineRef = useRef("");
 
+  // Tagged with the path: the tab list owns dirtiness, and an untagged
+  // report would land on whichever tab happened to be active. Deliberately
+  // has no unmount reset — a tab with unsaved work stays dirty while you
+  // look at the diff or switch shells.
   useEffect(() => {
-    onDirtyChange?.(dirty);
-    // Without this, unmounting the pane (shell toggle, editor/diff switch)
-    // leaves the parent believing a file it no longer shows is still dirty,
-    // and the discard guards then fire against nothing.
-    return () => onDirtyChange?.(false);
-  }, [dirty, onDirtyChange]);
+    if (path) onDirtyChange?.(path, dirty);
+  }, [path, dirty, onDirtyChange]);
 
   const reload = useCallback(() => {
     setConflict(false);
+    // Drop the session so the load effect can't serve the stale document
+    // back from cache.
+    if (path) evictEditorSession(projectHash, path);
     setReloadToken((token) => token + 1);
-  }, []);
+  }, [projectHash, path]);
 
   const save = useCallback(
     (options?: { overwrite?: boolean }) => {
@@ -92,12 +152,16 @@ export default function FileEditorPane({
       // What we believe is on disk. The backend refuses the write if that's
       // no longer true, which catches a change that landed inside the
       // watcher's debounce window. "Keep mine" deliberately drops the claim.
-      const expectedPrevious = options?.overwrite ? null : content;
+      const expectedPrevious = options?.overwrite ? null : baselineRef.current;
       api
         .writeFileContent(projectHash, path, after, expectedPrevious)
         .then((format) => {
-          onSaveRef.current?.({ path, before: content ?? "", after });
-          setContent(after);
+          onSaveRef.current?.({ path, before: baselineRef.current, after });
+          baselineRef.current = after;
+          sessions.set(sessionKey(projectHash, path), {
+            json: view.state.toJSON(SERIALIZED_FIELDS),
+            baseline: after,
+          });
           setDirty(false);
           setConflict(false);
           setSaved(true);
@@ -114,10 +178,35 @@ export default function FileEditorPane({
         })
         .finally(() => setSaving(false));
     },
-    [projectHash, path, content, saving]
+    [projectHash, path, saving]
   );
   const saveRef = useRef(save);
   saveRef.current = save;
+
+  const buildExtensions = useCallback(
+    (forPath: string) => [
+          lineNumbers(),
+          highlightActiveLine(),
+          history(),
+          closeBrackets(),
+          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          autocompletion({ override: [completeAnyWord] }),
+          keymap.of([
+            { key: "Mod-s", run: () => (saveRef.current(), true) },
+            ...closeBracketsKeymap,
+            ...defaultKeymap,
+            ...historyKeymap,
+            indentWithTab,
+          ]),
+          languageCompartment.current.of(languageExtensionFor(forPath)),
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged) return;
+            setDirty(update.state.doc.toString() !== baselineRef.current);
+          }),
+      fontCompartment.current.of(editorFontTheme()),
+    ],
+    []
+  );
 
   // Read through a ref so this reacts only to a new change event, not to the
   // buffer going dirty afterwards.
@@ -131,16 +220,16 @@ export default function FileEditorPane({
     else setConflict(true);
   }, [externalChange, path, reload]);
 
-  // Load file content on path change.
+  // Make a session available for `path`: restored from cache when this file
+  // has been open before, otherwise read from disk.
   useEffect(() => {
-    setContent(null);
     setMediaSrc(null);
     setImageZoom(1);
     setError(null);
-    setDirty(false);
     setSaved(false);
     setConflict(false);
     if (!path) return;
+
     const mediaKind = mediaKindFor(path);
     if (mediaKind) {
       api
@@ -149,56 +238,73 @@ export default function FileEditorPane({
         .catch((err) => setError(describeError(err)));
       return;
     }
+
+    const key = sessionKey(projectHash, path);
+    const cached = sessions.get(key);
+    if (cached) {
+      baselineRef.current = cached.baseline;
+      setDirty(docOf(cached) !== cached.baseline);
+      setViewSeq((seq) => seq + 1);
+      return;
+    }
+
+    let cancelled = false;
     api
       .readFileContent(projectHash, path)
       .then((text) => {
-        setContent(text);
-        setLoadSeq((seq) => seq + 1);
+        if (cancelled) return;
+        sessions.set(key, {
+          json: EditorState.create({ doc: text }).toJSON(),
+          baseline: text,
+        });
+        baselineRef.current = text;
+        setDirty(false);
+        setViewSeq((seq) => seq + 1);
       })
-      .catch((err) => setError(describeError(err)));
+      .catch((err) => {
+        if (!cancelled) setError(describeError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [projectHash, path, reloadToken]);
 
-  // Mount the CM6 view once a file's content has loaded; remount only on a
-  // real file switch (path change), not on every save — `save()` also calls
-  // `setContent`, and keying this effect on `content` would tear down and
-  // recreate the view (losing cursor/selection/undo history) on every save.
-  const contentLoaded = content !== null;
+  // Build the view from the file's session. Recreating it from the cached
+  // EditorState restores document, cursor, selection and undo history
+  // together, so switching tabs (or away to the diff and back) picks up
+  // exactly where the user left off.
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || content === null || !path) return;
+    if (!host || !path || viewSeq === 0) return;
+    const key = sessionKey(projectHash, path);
+    const session = sessions.get(key);
+    if (!session) return;
 
-    const state = EditorState.create({
-      doc: content,
-      extensions: [
-        lineNumbers(),
-        highlightActiveLine(),
-        history(),
-        closeBrackets(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        autocompletion({ override: [completeAnyWord] }),
-        keymap.of([
-          { key: "Mod-s", run: () => (saveRef.current(), true) },
-          ...closeBracketsKeymap,
-          ...defaultKeymap,
-          ...historyKeymap,
-          indentWithTab,
-        ]),
-        languageCompartment.current.of(languageExtensionFor(path)),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) setDirty(true);
-        }),
-        fontCompartment.current.of(editorFontTheme()),
-      ],
-    });
-
+    // Extensions are rebuilt here rather than restored: they close over this
+    // component instance, and a serialized session carries only document,
+    // selection and undo history.
+    const state = EditorState.fromJSON(
+      session.json as Parameters<typeof EditorState.fromJSON>[0],
+      { extensions: buildExtensions(path) },
+      SERIALIZED_FIELDS
+    );
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
     return () => {
+      // Stash the live state before tearing down, or every unmount would
+      // roll the file back to however it looked when it was first opened.
+      //
+      // Only when the cache still holds the session this view was built
+      // from: a reload (and a save) replaces it wholesale, and stashing
+      // then would push the document we just discarded straight back over
+      // the one we just fetched.
+      if (sessions.get(key) === session) {
+        sessions.set(key, { ...session, json: view.state.toJSON(SERIALIZED_FIELDS) });
+      }
       view.destroy();
       viewRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, contentLoaded, loadSeq]);
+  }, [projectHash, path, viewSeq, buildExtensions]);
 
   // Live-reconfigure the font on a settings change, without waiting for the
   // next file switch to remount the view (mirrors languageCompartment's use
@@ -287,7 +393,7 @@ export default function FileEditorPane({
     );
   }
 
-  if (content === null) {
+  if (viewSeq === 0) {
     return <p className="empty">Loading…</p>;
   }
 

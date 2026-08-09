@@ -18,10 +18,12 @@ import {
   Textarea,
   SegmentedControl,
   ActionIcon,
+  Button,
   Loader,
   Badge,
   Alert,
 } from "@mantine/core";
+import { IconGitCompare } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -46,7 +48,12 @@ import {
   mergeDeltas,
   type Item,
 } from "./EventView";
-import FileEditorPane from "./FileEditorPane";
+import FileEditorPane, {
+  evictEditorSession,
+  evictProjectSessions,
+} from "./FileEditorPane";
+import TabBar, { basename } from "./TabBar";
+import { useOpenTabs } from "./openTabs";
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
@@ -602,9 +609,9 @@ export default function App() {
   // Vibe shell: File Explorer collapsible disclosure in the right rail,
   // collapsed by default (mirrors editorRailOpen's pattern).
   const [vibeExplorerOpen, setVibeExplorerOpen] = useState(false);
-  // Vibe shell's Edited Files column: "changes" (diff/turn-history, default)
-  // or "file" (the currently selectedFile, opened from the File Explorer).
-  const [vibeFileTab, setVibeFileTab] = useState<"changes" | "file">("changes");
+  // (Vibe's "changes vs file" state used to live here. It said the same
+  // thing as the Editor shell's own editor/diff state, and the two could
+  // disagree — they're now one `diffOpen`, shared by both shells.)
   // Live-filters the "select" bar's option list (branch picker) as the user
   // types, the same fuzzy-match convention FilePalette/TextSearchPalette use.
   const [selectQuery, setSelectQuery] = useState("");
@@ -621,19 +628,35 @@ export default function App() {
   const [live, setLive] = useState<ExecutorEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [editorDirty, setEditorDirty] = useState(false);
-  // Set when the filesystem watcher reports the open file changed underneath
+  // The open files. Shared by both shells, so switching between Vibe and
+  // Editor never closes anything or loses where you were in a file.
+  const tabs = useOpenTabs();
+  const selectedFile = tabs.activePath;
+  // Set when the filesystem watcher reports an open file changed underneath
   // us; the editor pane decides whether that's a silent reload or a prompt.
   const [externalChange, setExternalChange] = useState<{
     path: string;
     at: number;
   } | null>(null);
-  // Mirrors selectedFile for the fs-changed listener, which is registered
+  // Mirrors the open paths for the fs-changed listener, which is registered
   // once — same reason `current` exists for project/thread.
-  const selectedFileRef = useRef(selectedFile);
-  selectedFileRef.current = selectedFile;
-  const [centerTab, setCenterTab] = useState<"editor" | "diff">("editor");
+  const openPathsRef = useRef<string[]>([]);
+  openPathsRef.current = tabs.tabs.map((tab) => tab.path);
+  // Read through a ref by `selectProject`, whose identity has to stay stable
+  // — the launch-restore effect depends on it, and re-running that would
+  // re-select the first project on every render.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  // Which project's editing sessions are currently cached.
+  const currentProjectRef = useRef<string | null>(null);
+  // The keyboard handler is registered once; these keep it pointed at the
+  // live tab list without re-binding on every tab change.
+  const activePathRef = useRef<string | null>(null);
+  activePathRef.current = tabs.activePath;
+  // Whether the centre pane is showing the diff instead of a file. One state
+  // for both shells — it used to be `centerTab` in one and `vibeFileTab` in
+  // the other, two names for the same idea that could disagree.
+  const [diffOpen, setDiffOpen] = useState(false);
   // Which workspace shell is rendered — layout only, independent of a thread's
   // own Spec/Go mode (see openspec/changes/vibe-editor-shell-redesign).
   // Defaults to "editor" (today's layout) so existing users see no change
@@ -794,12 +817,18 @@ export default function App() {
     }
   }, []);
 
-  const selectProject = useCallback(
+  const selectProjectNow = useCallback(
     async (next: Project) => {
       try {
+        const previous = currentProjectRef.current;
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
-        setSelectedFile(null);
+        // Editing sessions are per-project; keeping them would leak memory
+        // and let a stale document reappear if the project came back.
+        if (previous && previous !== refreshed.hash) evictProjectSessions(previous);
+        currentProjectRef.current = refreshed.hash;
+        tabsRef.current.closeAll();
+        setDiffOpen(false);
         setFileEdits([]);
         const found = await api.listThreads(refreshed.hash);
         setThreads(found);
@@ -814,6 +843,33 @@ export default function App() {
       }
     },
     [selectThread, refreshBranches]
+  );
+
+  const selectProject = useCallback(
+    async (next: Project) => {
+      // Switching projects closes every tab, so unsaved work would go with
+      // it. Opening a file has been guarded for a while; this path never
+      // was, and it is the one that discards every dirty buffer at once.
+      const open = tabsRef.current;
+      if (!open.anyDirty) {
+        await selectProjectNow(next);
+        return;
+      }
+      const dirty = open.tabs.filter((tab) => tab.dirty);
+      setBar({
+        kind: "confirm",
+        label:
+          dirty.length === 1
+            ? `Discard unsaved changes to "${dirty[0].path}"?`
+            : `Discard unsaved changes to ${dirty.length} files?`,
+        confirmLabel: "Discard",
+        onConfirm: () => {
+          setBar(null);
+          void selectProjectNow(next);
+        },
+      });
+    },
+    [selectProjectNow]
   );
 
   // Restore the most recently used project on launch.
@@ -857,27 +913,40 @@ export default function App() {
     });
   };
 
-  // Guards navigating away from a dirty editor: file-tree/palette/find-in-files
-  // selection and opening project-settings.json all route through this instead
-  // of calling setSelectedFile directly, so an in-progress edit can't be
-  // silently discarded the way it could before.
+  // Opening a file now adds a tab rather than replacing the one open file,
+  // so switching away no longer risks anything and needs no confirmation.
+  // The discard guard moved to closing a tab, which is where work actually
+  // gets thrown away.
   const selectFile = useCallback(
     (path: string) => {
-      if (editorDirty && selectedFile && selectedFile !== path) {
-        setBar({
-          kind: "confirm",
-          label: `Discard unsaved changes to "${selectedFile}"?`,
-          confirmLabel: "Discard",
-          onConfirm: () => {
-            setBar(null);
-            setSelectedFile(path);
-          },
-        });
+      setDiffOpen(false);
+      tabs.open(path);
+    },
+    [tabs]
+  );
+
+  const closeTab = useCallback(
+    (path: string) => {
+      const tab = tabs.tabs.find((t) => t.path === path);
+      const forget = () => {
+        if (project) evictEditorSession(project.hash, path);
+        tabs.close(path);
+      };
+      if (!tab?.dirty) {
+        forget();
         return;
       }
-      setSelectedFile(path);
+      setBar({
+        kind: "confirm",
+        label: `Discard unsaved changes to "${path}"?`,
+        confirmLabel: "Discard",
+        onConfirm: () => {
+          setBar(null);
+          forget();
+        },
+      });
     },
-    [editorDirty, selectedFile]
+    [tabs, project]
   );
 
   // Opens project-settings.json (D14/D15) in the editor, creating it with a
@@ -898,7 +967,7 @@ export default function App() {
         return;
       }
     }
-    setCenterTab("editor");
+    setDiffOpen(false);
     selectFile(PROJECT_SETTINGS_FILE);
   };
 
@@ -1097,9 +1166,10 @@ export default function App() {
       filesCache.current.delete(payload.projectHash);
       setFileTreeRefreshToken((t) => t + 1);
 
-      const open = selectedFileRef.current;
-      if (open && payload.paths.includes(open)) {
-        setExternalChange({ path: open, at: Date.now() });
+      for (const open of openPathsRef.current) {
+        if (payload.paths.includes(open)) {
+          setExternalChange({ path: open, at: Date.now() });
+        }
       }
     });
     return () => {
@@ -1231,7 +1301,7 @@ export default function App() {
       await api.renamePath(project.hash, from, to);
       await refreshPaletteFiles();
       setFileTreeRefreshToken((t) => t + 1);
-      setSelectedFile((current) => (current === from ? to : current));
+      tabs.rename(from, to);
     },
     [project, refreshPaletteFiles]
   );
@@ -1242,7 +1312,7 @@ export default function App() {
       await api.deletePath(project.hash, path);
       await refreshPaletteFiles();
       setFileTreeRefreshToken((t) => t + 1);
-      setSelectedFile((current) => (current === path ? null : current));
+      tabs.dropPath(path);
     },
     [project, refreshPaletteFiles]
   );
@@ -1250,20 +1320,15 @@ export default function App() {
   // The file tree performs its own create/rename/delete/move (surgical
   // per-directory refresh, no full-tree collapse) — these just keep the
   // open editor tab and the file-palette cache in sync afterward.
-  const onTreePathRenamed = useCallback((from: string, to: string) => {
-    setSelectedFile((current) => {
-      if (current === from) return to;
-      if (current?.startsWith(`${from}/`))
-        return to + current.slice(from.length);
-      return current;
-    });
-  }, []);
+  const onTreePathRenamed = useCallback(
+    (from: string, to: string) => tabs.rename(from, to),
+    [tabs]
+  );
 
-  const onTreePathDeleted = useCallback((path: string) => {
-    setSelectedFile((current) =>
-      current === path || current?.startsWith(`${path}/`) ? null : current
-    );
-  }, []);
+  const onTreePathDeleted = useCallback((path: string) => tabs.dropPath(path), [tabs]);
+
+  const closeTabRef = useRef(closeTab);
+  closeTabRef.current = closeTab;
 
   const onTreeFilesChanged = useCallback(() => {
     if (project) filesCache.current.delete(project.hash);
@@ -1284,6 +1349,21 @@ export default function App() {
         openTextSearch();
       }
       if (event.key === "Escape") setBar(null);
+      // Cmd+W closes the active tab rather than the window — the window is
+      // still reachable with Cmd+Q, and losing the whole app because you
+      // meant to close a file is the worse mistake.
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "w") {
+        event.preventDefault();
+        if (activePathRef.current) closeTabRef.current(activePathRef.current);
+      }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "t") {
+        event.preventDefault();
+        tabsRef.current.reopenLast();
+      }
+      if (event.ctrlKey && event.key === "Tab") {
+        event.preventDefault();
+        tabsRef.current.cycle(event.shiftKey ? -1 : 1);
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
         event.preventDefault();
         rightPanel.toggleCollapsed();
@@ -1565,32 +1645,17 @@ export default function App() {
               )}
 
               <main className="main" data-testid="main-pane">
-                <Tabs
-                  value={centerTab}
-                  onChange={(value) =>
-                    value && setCenterTab(value as "editor" | "diff")
-                  }
-                >
-                  <Tabs.List
-                    className="ds-editor-tabs"
-                    data-testid="editor-tabs"
-                  >
-                    <Tabs.Tab
-                      value="editor"
-                      className="ds-tab"
-                      data-testid="tab-editor"
-                    >
-                      Editor
-                    </Tabs.Tab>
-                    <Tabs.Tab
-                      value="diff"
-                      className="ds-tab diff"
-                      data-testid="tab-diff"
-                    >
-                      Code Change Diff
-                    </Tabs.Tab>
-                  </Tabs.List>
-                </Tabs>
+                <TabBar
+                  tabs={tabs.tabs}
+                  activePath={selectedFile}
+                  onSelect={(path) => {
+                    setDiffOpen(false);
+                    tabs.open(path);
+                  }}
+                  onClose={closeTab}
+                  diffOpen={diffOpen}
+                  onToggleDiff={() => setDiffOpen((open) => !open)}
+                />
                 <div className="ds-breadcrumbs" data-testid="breadcrumbs">
                   <span>{project?.displayName ?? "—"}</span>
                   {selectedFile && (
@@ -1600,13 +1665,13 @@ export default function App() {
                     </>
                   )}
                 </div>
-                {centerTab === "editor" ? (
+                {!diffOpen ? (
                   project ? (
                     <FileEditorPane
                       projectHash={project.hash}
                       path={selectedFile}
                       onSave={handleFileSave}
-                      onDirtyChange={setEditorDirty}
+                      onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
                     />
                   ) : (
@@ -1948,30 +2013,54 @@ export default function App() {
               </section>
 
               <section className="ds-vibe-files" data-testid="col-files">
-                <Tabs
-                  value={vibeFileTab}
-                  onChange={(value) =>
-                    value && setVibeFileTab(value as "changes" | "file")
-                  }
-                >
-                  <Tabs.List className="ds-file-tabs">
-                    <Tabs.Tab value="changes" data-testid="vibe-tab-changes">
-                      Changes
-                    </Tabs.Tab>
-                    {selectedFile && (
-                      <Tabs.Tab value="file" data-testid="vibe-tab-file">
-                        {selectedFile}
-                      </Tabs.Tab>
-                    )}
-                  </Tabs.List>
-                </Tabs>
-                {vibeFileTab === "file" && selectedFile ? (
+                {/* Vibe is chat-first and shares its width with the
+                    conversation, so it shows the active file rather than a
+                    full tab strip. Tab state is shared, so switching to the
+                    Editor shell finds everything still open. */}
+                <div className="ds-file-tabs" data-testid="vibe-file-tabs">
+                  {selectedFile ? (
+                    <span className="ds-tab active" data-testid="vibe-active-file">
+                      {tabs.activeIsDirty && <span className="ds-tab-dirty">●</span>}
+                      {basename(selectedFile)}
+                    </span>
+                  ) : (
+                    <span className="hint">No file open</span>
+                  )}
+                  {tabs.tabs.length > 1 && (
+                    <Tooltip
+                      label={`${tabs.tabs.length - 1} more open — open the Editor shell`}
+                      withinPortal
+                    >
+                      <Button
+                        variant="subtle"
+                        size="compact-xs"
+                        onClick={() => setCenterShell("editor")}
+                        data-testid="vibe-more-tabs"
+                      >
+                        +{tabs.tabs.length - 1}
+                      </Button>
+                    </Tooltip>
+                  )}
+                  <Tooltip label={diffOpen ? "Back to editor" : "Review changes"} withinPortal>
+                    <ActionIcon
+                      variant={diffOpen ? "filled" : "subtle"}
+                      aria-label={diffOpen ? "Back to editor" : "Review changes"}
+                      aria-pressed={diffOpen}
+                      onClick={() => setDiffOpen((open) => !open)}
+                      data-testid="vibe-toggle-diff"
+                      ml="auto"
+                    >
+                      <IconGitCompare size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                </div>
+                {!diffOpen && selectedFile ? (
                   project && (
                     <FileEditorPane
                       projectHash={project.hash}
                       path={selectedFile}
                       onSave={handleFileSave}
-                      onDirtyChange={setEditorDirty}
+                      onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
                     />
                   )
@@ -2169,10 +2258,9 @@ export default function App() {
                           <FileTree
                             projectHash={project.hash}
                             projectName={project.displayName}
-                            onSelectFile={(path) => {
-                              selectFile(path);
-                              setVibeFileTab("file");
-                            }}
+                            // `selectFile` already leaves the diff, so
+                            // picking a file in Vibe lands on that file.
+                            onSelectFile={selectFile}
                             activePath={selectedFile}
                             refreshToken={fileTreeRefreshToken}
                             onPathRenamed={onTreePathRenamed}

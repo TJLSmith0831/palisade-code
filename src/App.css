@@ -916,6 +916,36 @@ input[type="checkbox"] {
   color: var(--accent);
 }
 
+/* Unsaved marker on a file tab. Sits before the filename so the row of
+   tabs can be scanned down its left edge for "what have I not saved". */
+.ds-tab-dirty {
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+/* The tab strip scrolls rather than shrinking its tabs to nothing, and the
+   diff toggle stays pinned past the end of it. */
+.ds-editor-tabs .mantine-Tabs-list {
+  border-bottom: none;
+  flex: 1;
+  min-width: 0;
+}
+
+.ds-editor-tabs .mantine-Tabs-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Vibe's strip: the active file, an overflow count, and the same toggle. */
+.ds-file-tabs {
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.ds-file-tabs .ds-tab.active {
+  color: var(--fg);
+}
+
 /* --- file editor (v2) ---------------------------------------------------- */
 
 .ds-code-editor {

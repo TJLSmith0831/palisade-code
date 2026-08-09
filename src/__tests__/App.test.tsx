@@ -518,21 +518,19 @@ describe("Editor chrome (merged-design v2)", () => {
     expect(screen.getByTestId("editor-tabs")).toBeDefined();
   });
 
-  it("has a Code Change Diff tab, and no separate Console Chat tab (chat moved to the right panel)", () => {
+  it("reaches the diff through a button, not a tab competing with the open files", () => {
     render(<App />);
-    expect(screen.getByTestId("tab-diff")).toBeDefined();
+    // The tab strip belongs to the files being edited; the diff is a view
+    // you toggle into from the far right of it.
+    expect(screen.getByTestId("toggle-diff")).toBeDefined();
+    expect(screen.queryByTestId("tab-diff")).toBeNull();
     expect(screen.queryByTestId("tab-chat")).toBeNull();
   });
 
-  it("defaults to the Editor tab, listed first, ahead of Diff", () => {
+  it("starts on the editor with the diff toggle unpressed and no files open", () => {
     render(<App />);
-    const tabs = screen.getByTestId("editor-tabs");
-    const order = Array.from(tabs.querySelectorAll("[data-testid]")).map((el) =>
-      el.getAttribute("data-testid"),
-    );
-    expect(order).toEqual(["tab-editor", "tab-diff"]);
-    expect(screen.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true");
-    expect(within(tabs).getByText("Editor")).toBeDefined();
+    expect(screen.getByTestId("toggle-diff")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryAllByTestId("file-tab")).toHaveLength(0);
   });
 
   it("renders breadcrumbs", () => {
@@ -549,7 +547,6 @@ describe("Editor chrome (merged-design v2)", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
-    fireEvent.click(screen.getByTestId("tab-editor"));
     fireEvent.click(screen.getByText("AGENTS.md"));
 
     await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
@@ -559,11 +556,11 @@ describe("Editor chrome (merged-design v2)", () => {
     expect(within(screen.getByTestId("main-pane")).queryByText("Create a thread to get started.")).toBeNull();
   });
 
-  it("shows the diff tab empty state even when no thread exists", async () => {
+  it("shows the diff empty state even when no thread exists", async () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("editor-tabs")).toBeDefined());
-    fireEvent.click(screen.getByTestId("tab-diff"));
+    fireEvent.click(screen.getByTestId("toggle-diff"));
 
     await waitFor(() => {
       expect(within(screen.getByTestId("main-pane")).queryByText("Create a thread to get started.")).toBeNull();
@@ -861,7 +858,7 @@ describe("Keyboard navigation (accessibility)", () => {
 });
 
 describe("Unsaved-edit guard (data-loss prevention)", () => {
-  it("confirms before discarding an unsaved edit when switching files via the tree, and doesn't switch on Cancel", async () => {
+  it("keeps an unsaved edit alive when you open another file, and confirms only when its tab is closed", async () => {
     const user = userEvent.setup();
     invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "list_projects") {
@@ -901,19 +898,73 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
     cmContent.focus();
     await user.type(cmContent, "x");
 
+    // Opening another file no longer costs you the first one, so there is
+    // nothing to confirm — both stay open and a.ts keeps its edit.
     fireEvent.click(screen.getByText("b.ts"));
+    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain("b.ts"));
+    expect(screen.queryByTestId("confirm-delete")).toBeNull();
+    expect(screen.getAllByTestId("file-tab")).toHaveLength(2);
 
+    const dirtyTab = screen
+      .getAllByTestId("file-tab")
+      .find((tab) => tab.getAttribute("data-path") === "a.ts");
+    expect(dirtyTab).toHaveAttribute("data-dirty", "true");
+
+    // Closing it is where the work would actually be thrown away.
+    fireEvent.click(within(dirtyTab!).getByTestId("file-tab-close"));
     const discardBtn = await screen.findByTestId("confirm-delete");
     expect(discardBtn).toHaveTextContent("Discard");
-    expect(screen.getByTestId("breadcrumbs").textContent).toContain("a.ts");
 
     fireEvent.click(screen.getByText("Cancel"));
-    expect(screen.queryByTestId("confirm-delete")).toBeNull();
-    expect(screen.getByTestId("breadcrumbs").textContent).toContain("a.ts");
+    expect(screen.getAllByTestId("file-tab")).toHaveLength(2);
 
-    fireEvent.click(screen.getByText("b.ts"));
+    fireEvent.click(within(dirtyTab!).getByTestId("file-tab-close"));
     fireEvent.click(screen.getByTestId("confirm-delete"));
-    await waitFor(() => expect(screen.getByTestId("breadcrumbs").textContent).toContain("b.ts"));
+    await waitFor(() => expect(screen.getAllByTestId("file-tab")).toHaveLength(1));
+  });
+
+  it("guards the whole tab list when switching projects, not just the visible file", async () => {
+    const user = userEvent.setup();
+    const project = (hash: string, name: string) => ({
+      hash, root: `/tmp/${name}`, displayName: name,
+      createdAt: "2026-08-06T00:00:00Z", lastAccessedAt: "2026-08-06T00:00:00Z",
+    });
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") return Promise.resolve([project("proj-1", "one"), project("proj-2", "two")]);
+      if (cmd === "switch_project") return Promise.resolve(project(String(args?.hash ?? "proj-1"), "one"));
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({ claude: null, codex: null, selected: null, openspec: false, grillApply: false, ponytail: false, graphify: false, ready: false, warnings: [], checkedAt: "2026-08-06T00:00:00Z" });
+      }
+      if (cmd === "load_graphify") return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") {
+        return Promise.resolve(String(args?.relativePath ?? "") === ""
+          ? [{ name: "a.ts", is_dir: false, path: "a.ts" }]
+          : []);
+      }
+      if (cmd === "read_file_content") return Promise.resolve("content\n");
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
+    fireEvent.click(screen.getByText("a.ts"));
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("content"));
+
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    cmContent.focus();
+    await user.type(cmContent, "x");
+    await waitFor(() =>
+      expect(screen.getAllByTestId("file-tab")[0]).toHaveAttribute("data-dirty", "true")
+    );
+
+    // Switching projects closes every tab at once — the expensive version of
+    // the mistake the file-open path has guarded against for a while.
+    fireEvent.change(screen.getByTestId("project-picker"), { target: { value: "proj-2" } });
+
+    const discard = await screen.findByTestId("confirm-delete");
+    expect(discard).toHaveTextContent("Discard");
+    expect(screen.getAllByTestId("file-tab")).toHaveLength(1);
   });
 
   it("switches files immediately with no prompt when there's nothing unsaved", async () => {
@@ -1265,8 +1316,10 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
 
-    await waitFor(() => expect(screen.getByTestId("vibe-tab-file")).toBeDefined());
-    expect(screen.getByTestId("vibe-tab-file")).toHaveAttribute("aria-selected", "true");
+    // Vibe shows the active file rather than a full tab strip, and now
+    // lands on the file instead of on the changes view.
+    await waitFor(() => expect(screen.getByTestId("vibe-active-file")).toBeDefined());
+    expect(screen.getByTestId("vibe-toggle-diff")).toHaveAttribute("aria-pressed", "false");
     await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("content"));
   });
 });
