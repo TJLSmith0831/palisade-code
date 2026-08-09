@@ -29,8 +29,10 @@ afterEach(() => {
   localStorage.clear();
   // Clear any appearance override properties the panel may have set on <html>.
   [
-    "--chrome-bg-light-override",
-    "--chrome-bg-dark-override",
+    "--app-shell-light-override",
+    "--app-shell-dark-override",
+    "--shell-accent-light-override",
+    "--shell-accent-dark-override",
     "--code-comment-light-override",
     "--code-comment-dark-override",
     "--code-text-light-override",
@@ -133,9 +135,9 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     invokeMock.mockReset();
   });
 
-  it("loads .project-settings.json on mount and highlights the matching shell-color swatch", async () => {
-    // Ocean Blue (hue 250) is the third shell preset (index 2: Default=0,
-    // Dragon Green=1, Ocean Blue=2). Stored as the project's shellColor.
+  it("loads .project-settings.json on mount and highlights the matching app-shell swatch", async () => {
+    // Nord is the third shell preset (index 2: Default=0, One Dark=1,
+    // Nord=2). Stored as the project's appShellColor.
     invokeMock.mockImplementation(
       (cmd: string, args: Record<string, unknown>) => {
         if (
@@ -147,9 +149,9 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
               formatOnSave: {},
               executorOverride: null,
               appearance: {
-                shellColor: {
-                  light: "oklch(97% 0.004 250)",
-                  dark: "oklch(15% 0.004 250)",
+                appShellColor: {
+                  light: "#eceff4",
+                  dark: "#2e3440",
                 },
               },
             })
@@ -168,8 +170,10 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     );
 
     await waitFor(() => {
-      const lightSwatches = screen.getAllByTestId("shell-swatch-light");
-      // Ocean Blue (index 2) should be marked active.
+      const lightSwatches = screen.getAllByTestId(
+        "app-shell-swatches-light-swatch"
+      );
+      // Nord (index 2) should be marked active.
       expect(lightSwatches[2]).toHaveAttribute("aria-pressed", "true");
     });
   });
@@ -191,16 +195,16 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
 
     await waitFor(() => {
       expect(
-        screen.getAllByTestId("shell-swatch-light").length
+        screen.getAllByTestId("app-shell-swatches-light-swatch").length
       ).toBeGreaterThan(0);
     });
     // No swatch should be active when nothing is stored.
-    screen.getAllByTestId("shell-swatch-light").forEach((s) => {
+    screen.getAllByTestId("app-shell-swatches-light-swatch").forEach((s) => {
       expect(s).toHaveAttribute("aria-pressed", "false");
     });
   });
 
-  it("clicking a shell-color swatch sets the CSS override and persists the merged appearance alongside existing settings", async () => {
+  it("clicking an app-shell swatch sets only the outer-shell overrides and persists the merged appearance alongside existing settings", async () => {
     // The file already has formatOnSave + executorOverride; the appearance
     // key must be merged in without clobbering them.
     invokeMock.mockImplementation(
@@ -231,21 +235,27 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
 
     await waitFor(() =>
       expect(
-        screen.getAllByTestId("shell-swatch-light").length
+        screen.getAllByTestId("app-shell-swatches-light-swatch").length
       ).toBeGreaterThan(0)
     );
 
-    // Click the third light shell swatch (Ocean Blue, index 2).
-    fireEvent.click(screen.getAllByTestId("shell-swatch-light")[2]);
+    // Click the third light app-shell swatch (Nord, index 2).
+    fireEvent.click(
+      screen.getAllByTestId("app-shell-swatches-light-swatch")[2]
+    );
 
-    // The dark override property should be set immediately for preview.
-    await waitFor(() =>
+    await waitFor(() => {
       expect(
         document.documentElement.style.getPropertyValue(
-          "--chrome-bg-light-override"
+          "--app-shell-light-override"
         )
-      ).toMatch(/oklch/)
-    );
+      ).toBe("#eceff4");
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--shell-accent-light-override"
+        )
+      ).toBe("");
+    });
 
     // The persisted JSON should contain both the original keys and the new appearance.
     await waitFor(() => {
@@ -256,7 +266,142 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       const written = JSON.parse(writeCall![1].content as string);
       expect(written.formatOnSave).toEqual({ "\\.rs$": "cargo fmt" });
       expect(written.executorOverride).toBe("codex");
-      expect(written.appearance.shellColor.light).toMatch(/oklch/);
+      expect(written.appearance.appShellColor.light).toBe("#eceff4");
+    });
+  });
+
+  it("clicking a shell-accent swatch sets only the raised-surface overrides and persists shellAccentColor", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args: Record<string, unknown>) => {
+        if (
+          cmd === "read_file_content" &&
+          args?.relativePath === ".project-settings.json"
+        ) {
+          return Promise.resolve(
+            JSON.stringify({
+              formatOnSave: { "\\.rs$": "cargo fmt" },
+              executorOverride: "codex",
+            })
+          );
+        }
+        if (cmd === "write_file_content") return Promise.resolve();
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      }
+    );
+
+    render(
+      <SettingsPanel
+        projectHash="proj1"
+        onOpenProjectSettings={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId("shell-accent-swatches-light-swatch").length
+      ).toBeGreaterThan(0)
+    );
+
+    fireEvent.click(
+      screen.getAllByTestId("shell-accent-swatches-light-swatch")[2]
+    );
+
+    await waitFor(() => {
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--shell-accent-light-override"
+        )
+      ).toBe("#eceff4");
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--app-shell-light-override"
+        )
+      ).toBe("");
+    });
+
+    await waitFor(() => {
+      const writeCall = invokeMock.mock.calls.find(
+        (c) => c[0] === "write_file_content"
+      );
+      expect(writeCall).toBeDefined();
+      const written = JSON.parse(writeCall![1].content as string);
+      expect(written.appearance.shellAccentColor.light).toBe("#eceff4");
+    });
+  });
+
+  it("clicking 'Reset to default' clears all appearance overrides and persists an empty appearance", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args: Record<string, unknown>) => {
+        if (
+          cmd === "read_file_content" &&
+          args?.relativePath === ".project-settings.json"
+        ) {
+          return Promise.resolve(
+            JSON.stringify({
+              appearance: {
+                appShellColor: { light: "#eceff4", dark: "#2e3440" },
+                shellAccentColor: { light: "#d8dee9", dark: "#3b4252" },
+                commentColor: { light: "#a3a3a3", dark: "#7f8c8d" },
+                codeTextColor: { light: "#222222", dark: "#e8b8d0" },
+              },
+            })
+          );
+        }
+        if (cmd === "write_file_content") return Promise.resolve();
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      }
+    );
+
+    render(
+      <SettingsPanel
+        projectHash="proj1"
+        onOpenProjectSettings={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    // Wait for the stored appearance to be applied.
+    await waitFor(() => {
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--app-shell-light-override"
+        )
+      ).toBe("#eceff4");
+    });
+
+    fireEvent.click(screen.getByTestId("reset-appearance-button"));
+
+    // All appearance override properties should be removed from <html>.
+    await waitFor(() => {
+      [
+        "--app-shell-light-override",
+        "--app-shell-dark-override",
+        "--shell-accent-light-override",
+        "--shell-accent-dark-override",
+        "--code-comment-light-override",
+        "--code-comment-dark-override",
+        "--code-text-light-override",
+        "--code-text-dark-override",
+      ].forEach((k) => {
+        expect(document.documentElement.style.getPropertyValue(k)).toBe("");
+      });
+    });
+
+    // No swatch should remain active after reset.
+    screen.getAllByTestId("app-shell-swatches-light-swatch").forEach((s) => {
+      expect(s).toHaveAttribute("aria-pressed", "false");
+    });
+
+    // The persisted appearance should be empty.
+    await waitFor(() => {
+      const writeCall = invokeMock.mock.calls
+        .slice()
+        .reverse()
+        .find((c) => c[0] === "write_file_content");
+      expect(writeCall).toBeDefined();
+      const written = JSON.parse(writeCall![1].content as string);
+      expect(written.appearance).toEqual({});
     });
   });
 });

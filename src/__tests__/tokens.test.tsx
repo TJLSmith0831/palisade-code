@@ -61,10 +61,10 @@ describe("CSS token system (merged-design.json)", () => {
 
   it("has the accent token set to Dragon Fire Green", () =>
     ok("--accent", "88", "0.21", "145"));
-  it("has the chrome-bg token wrapped in a dark override fallback", () => {
+  it("has the chrome-bg token wrapped in the app-shell dark override fallback", () => {
     const val = rootVar("--chrome-bg");
     expect(val).toMatch(
-      /var\(--chrome-bg-dark-override,\s*oklch\(15%\s*0\.0040*\s+250\)\)/
+      /var\(--app-shell-dark-override,\s*oklch\(15%\s*0\.0040*\s+250\)\)/
     );
   });
   it("has the new editor-bg token", () =>
@@ -134,13 +134,12 @@ describe("CSS token system (merged-design.json)", () => {
   });
 });
 
-describe("Appearance override tokens (shell/comment/text colors)", () => {
-  // The three theme blocks that each define their own --chrome-bg: the dark
-  // default (:root), the auto-light (:root:not([data-theme]) inside the
-  // prefers-color-scheme media query), and the explicit light
-  // (:root[data-theme="light"]). Each must wrap --chrome-bg in a
-  // theme-specific override fallback so applyAppearance() can set the
-  // override custom property from JS without touching CSS.
+describe("Appearance override tokens (app shell / shell accent / code colors)", () => {
+  // The shell is split into two concepts:
+  // - app shell: outer black frame / chrome / backdrop (`--chrome-bg`, `--bg`, `--backdrop`)
+  // - shell accent: raised inner panels like the editor surface (`--editor-bg`, `--surface`, `--surface-warm`)
+  // Each theme block must wrap those vars in override fallbacks so applyAppearance()
+  // can switch them independently from JS without rewriting CSS.
   const okOverride = (
     selector: string,
     name: string,
@@ -158,31 +157,83 @@ describe("Appearance override tokens (shell/comment/text colors)", () => {
     );
   };
 
-  it("wraps --chrome-bg in a dark override in :root (dark default)", () =>
+  it("wraps --chrome-bg in an app-shell dark override in :root", () =>
     okOverride(
       ":root",
       "--chrome-bg",
-      "chrome-bg-dark-override",
+      "app-shell-dark-override",
       "15",
       "0.004",
       "250"
     ));
-  it("wraps --chrome-bg in a light override in :root:not([data-theme]) (auto light)", () =>
+  it("wraps --chrome-bg in an app-shell light override in :root:not([data-theme])", () =>
     okOverride(
       ":root:not([data-theme])",
       "--chrome-bg",
-      "chrome-bg-light-override",
+      "app-shell-light-override",
       "97",
       "0.004",
       "250"
     ));
-  it("wraps --chrome-bg in a light override in :root[data-theme=light]", () =>
+  it("wraps --bg in an app-shell dark override in :root", () =>
     okOverride(
-      ':root[data-theme="light"]',
-      "--chrome-bg",
-      "chrome-bg-light-override",
-      "97",
-      "0.004",
+      ":root",
+      "--bg",
+      "app-shell-dark-override",
+      "18",
+      "0.005",
+      "250"
+    ));
+  it("wraps --bg in an app-shell light override in :root:not([data-theme])", () =>
+    okOverride(
+      ":root:not([data-theme])",
+      "--bg",
+      "app-shell-light-override",
+      "99",
+      "0.003",
+      "250"
+    ));
+  it("wraps --backdrop in an app-shell dark override in :root", () => {
+    const val = varInSelector(":root", "--backdrop");
+    expect(val).toMatch(
+      /var\(--app-shell-dark-override,\s*oklch\(11%\s*0\.0150*\s+var\(--accent-hue,\s*145\)\)\)/
+    );
+  });
+
+  it("wraps --editor-bg in a shell-accent dark override in :root", () =>
+    okOverride(
+      ":root",
+      "--editor-bg",
+      "shell-accent-dark-override",
+      "20",
+      "0.005",
+      "250"
+    ));
+  it("wraps --surface in a shell-accent dark override in :root", () =>
+    okOverride(
+      ":root",
+      "--surface",
+      "shell-accent-dark-override",
+      "22",
+      "0.006",
+      "250"
+    ));
+  it("wraps --surface-warm in a shell-accent dark override in :root", () =>
+    okOverride(
+      ":root",
+      "--surface-warm",
+      "shell-accent-dark-override",
+      "26",
+      "0.008",
+      "250"
+    ));
+  it("wraps --editor-bg in a shell-accent light override in :root:not([data-theme])", () =>
+    okOverride(
+      ":root:not([data-theme])",
+      "--editor-bg",
+      "shell-accent-light-override",
+      "98",
+      "0.003",
       "250"
     ));
 

@@ -1,27 +1,22 @@
 import { useEffect, useState } from "react";
-import { Modal, Switch } from "@mantine/core";
+import { Modal, Button } from "@mantine/core";
 import * as api from "./api";
 
-// Personal display preferences (D24 precedent: layout is personal, not
-// project config) — localStorage, not .project-settings.json.
+// Personal display preferences — localStorage, not .project-settings.json.
 export const ACCENT_HUE_KEY = "floo:accentHue";
 export const EDITOR_FONT_KEY = "floo:editorFont";
 export const EDITOR_FONT_SIZE_KEY = "floo:editorFontSize";
-/** Dispatched on `window` whenever the editor font/size changes, so a
- * mounted `FileEditorPane` can reconfigure live instead of waiting for the
- * next file switch. */
+
 export const EDITOR_FONT_CHANGED_EVENT = "floo:editor-font-changed";
+
 export const EDITOR_WRAP_KEY = "floo:editorWrap";
-/** Same idea as EDITOR_FONT_CHANGED_EVENT: lets a mounted editor
- * reconfigure its wrap compartment without waiting for a file switch. */
 export const EDITOR_WRAP_CHANGED_EVENT = "floo:editor-wrap-changed";
 
-/** Project-scoped settings file (Rust-owned keys: formatOnSave,
- * executorOverride). The appearance key below is frontend-only and
- * round-trips safely because serde ignores unknown fields. Duplicated as
- * a literal in App.tsx — a one-line const in two files beats a circular
- * import between App.tsx and SettingsPanel.tsx. */
 export const PROJECT_SETTINGS_FILE = ".project-settings.json";
+
+/* -------------------------------------------------------------------------- */
+/* Accent colors                                                              */
+/* -------------------------------------------------------------------------- */
 
 export const ACCENT_PRESETS = [
   { name: "Dragon Green", hue: 145 },
@@ -30,79 +25,215 @@ export const ACCENT_PRESETS = [
   { name: "Amber", hue: 95 },
   { name: "Rose", hue: 350 },
   { name: "Teal", hue: 190 },
+  { name: "Red", hue: 25 },
+  { name: "Orange", hue: 55 },
 ] as const;
 
-// --- Appearance (project-scoped OKLCH color pickers) ----------------------
-//
-// Three categories — shell (chrome background), code comment, code text —
-// each with independent light/dark values. Swatches reuse the existing
-// ACCENT_PRESETS hues plus a chroma-0 "Default" entry, wrapped in a
-// per-category lightness/chroma envelope that stays within the existing
-// token ranges (--chrome-bg, --muted, --fg) so contrast is preserved.
+/* -------------------------------------------------------------------------- */
+/* Appearance colors                                                          */
+/*                                                                            */
+/* These are deliberately explicit rather than generated from accent hues.   */
+/* Shell colors represent recognizable IDE/theme families.                    */
+/* -------------------------------------------------------------------------- */
 
-export type ThemeColor = { light: string; dark: string };
+export type ThemeColor = {
+  light: string;
+  dark: string;
+};
+
 export type Appearance = {
-  shellColor?: ThemeColor;
+  appShellColor?: ThemeColor;
+  shellAccentColor?: ThemeColor;
   commentColor?: ThemeColor;
   codeTextColor?: ThemeColor;
 };
 
-type Preset = { name: string; light: string; dark: string };
+type Preset = {
+  name: string;
+  light: string;
+  dark: string;
+};
 
-/** Build a preset list from ACCENT_PRESETS plus a chroma-0 Default, using
- * the given lightness/chroma envelope per theme. The Default entry uses
- * chroma 0 (pure gray) so it's visually distinct from any named hue that
- * happens to share its hue angle (e.g. Ocean Blue is also hue 250). */
-function buildPresets(env: {
-  lightL: number;
-  lightC: number;
-  darkL: number;
-  darkC: number;
-}): Preset[] {
-  return [{ name: "Default", hue: 250 }, ...ACCENT_PRESETS].map((p, i) => ({
-    name: p.name,
-    light:
-      i === 0
-        ? `oklch(${env.lightL}% 0 ${p.hue})`
-        : `oklch(${env.lightL}% ${env.lightC} ${p.hue})`,
-    dark:
-      i === 0
-        ? `oklch(${env.darkL}% 0 ${p.hue})`
-        : `oklch(${env.darkL}% ${env.darkC} ${p.hue})`,
-  }));
-}
+/**
+ * Shell backgrounds inspired by established editor palettes:
+ *
+ * One Light / One Dark
+ * Nord
+ * Solarized
+ * Gruvbox
+ * Catppuccin
+ * Rosé Pine
+ * Tokyo Night
+ * Warm / GitHub
+ */
+export const SHELL_PRESETS: Preset[] = [
+  {
+    name: "Default",
+    light: "#f7f8fa",
+    dark: "#181a1d",
+  },
+  {
+    name: "One Dark",
+    light: "#fafafa",
+    dark: "#282c34",
+  },
+  {
+    name: "Nord",
+    light: "#eceff4",
+    dark: "#2e3440",
+  },
+  {
+    name: "Solarized",
+    light: "#fdf6e3",
+    dark: "#002b36",
+  },
+  {
+    name: "Gruvbox",
+    light: "#fbf1c7",
+    dark: "#282828",
+  },
+  {
+    name: "Catppuccin",
+    light: "#eff1f5",
+    dark: "#1e1e2e",
+  },
+  {
+    name: "Rosé Pine",
+    light: "#faf4ed",
+    dark: "#191724",
+  },
+  {
+    name: "Tokyo Night",
+    light: "#f1f3f8",
+    dark: "#1a1b26",
+  },
+];
 
-// Shell: matches --chrome-bg envelopes (dark 15% 0.004, light 97% 0.004).
-export const SHELL_PRESETS = buildPresets({
-  lightL: 97,
-  lightC: 0.004,
-  darkL: 15,
-  darkC: 0.004,
-});
-// Comment: matches --muted envelopes (dark 66% 0.012, light 46% 0.012).
-export const COMMENT_PRESETS = buildPresets({
-  lightL: 46,
-  lightC: 0.012,
-  darkL: 66,
-  darkC: 0.012,
-});
-// Code text: matches --fg envelopes (dark 96% 0.003, light 20% 0.006).
-export const CODE_TEXT_PRESETS = buildPresets({
-  lightL: 20,
-  lightC: 0.006,
-  darkL: 96,
-  darkC: 0.003,
-});
+/**
+ * Muted syntax-comment colors inspired by popular editor themes.
+ *
+ * Comments intentionally remain lower-contrast than executable code.
+ */
+export const COMMENT_PRESETS: Preset[] = [
+  {
+    name: "Default Gray",
+    light: "#68727d",
+    dark: "#6272a4",
+  },
+  {
+    name: "Sage",
+    light: "#5f6b5d",
+    dark: "#a3be8c",
+  },
+  {
+    name: "Slate",
+    light: "#61707d",
+    dark: "#7f8c8d",
+  },
+  {
+    name: "Lavender",
+    light: "#6d6875",
+    dark: "#a6a0b5",
+  },
+  {
+    name: "Warm Gray",
+    light: "#756f64",
+    dark: "#a3a29a",
+  },
+  {
+    name: "Rose",
+    light: "#7a666b",
+    dark: "#b48e8e",
+  },
+  {
+    name: "Teal",
+    light: "#5f7775",
+    dark: "#8fbcbb",
+  },
+  {
+    name: "Purple",
+    light: "#6b6680",
+    dark: "#b39bc8",
+  },
+  {
+    name: "Olive",
+    light: "#697a62",
+    dark: "#a3be8c",
+  },
+  {
+    name: "Amber",
+    light: "#7a6a4f",
+    dark: "#d0b878",
+  },
+];
+
+/**
+ * Base editor text colors.
+ *
+ * These are intentionally closer to foreground colors than comment colors,
+ * but still offer meaningful warm/cool alternatives.
+ */
+export const CODE_TEXT_PRESETS: Preset[] = [
+  {
+    name: "Default",
+    light: "#17191c",
+    dark: "#f2f4f7",
+  },
+  {
+    name: "Cool",
+    light: "#17202b",
+    dark: "#d7e2e8",
+  },
+  {
+    name: "Mint",
+    light: "#17241f",
+    dark: "#b8e6d5",
+  },
+  {
+    name: "Blue",
+    light: "#172035",
+    dark: "#b9cbf5",
+  },
+  {
+    name: "Rose",
+    light: "#271a21",
+    dark: "#f2c8c4",
+  },
+  {
+    name: "Pink",
+    light: "#271a24",
+    dark: "#e8b8d0",
+  },
+  {
+    name: "Warm",
+    light: "#282018",
+    dark: "#f0dcc1",
+  },
+  {
+    name: "Amber",
+    light: "#282414",
+    dark: "#f2dd92",
+  },
+];
+
+/* -------------------------------------------------------------------------- */
+/* Appearance persistence                                                     */
+/* -------------------------------------------------------------------------- */
 
 export function applyAppearance(appearance: Appearance) {
   const set = (key: string, value?: string) =>
     value
       ? document.documentElement.style.setProperty(key, value)
       : document.documentElement.style.removeProperty(key);
-  set("--chrome-bg-light-override", appearance.shellColor?.light);
-  set("--chrome-bg-dark-override", appearance.shellColor?.dark);
+
+  set("--app-shell-light-override", appearance.appShellColor?.light);
+  set("--app-shell-dark-override", appearance.appShellColor?.dark);
+  set("--shell-accent-light-override", appearance.shellAccentColor?.light);
+  set("--shell-accent-dark-override", appearance.shellAccentColor?.dark);
+
   set("--code-comment-light-override", appearance.commentColor?.light);
   set("--code-comment-dark-override", appearance.commentColor?.dark);
+
   set("--code-text-light-override", appearance.codeTextColor?.light);
   set("--code-text-dark-override", appearance.codeTextColor?.dark);
 }
@@ -112,28 +243,44 @@ export async function loadAppearance(projectHash: string): Promise<Appearance> {
     const raw = JSON.parse(
       await api.readFileContent(projectHash, PROJECT_SETTINGS_FILE)
     );
-    return raw.appearance ?? {};
+    const appearance = (raw.appearance ?? {}) as Appearance & {
+      shellColor?: ThemeColor;
+    };
+
+    return {
+      appShellColor: appearance.appShellColor ?? appearance.shellColor,
+      shellAccentColor: appearance.shellAccentColor,
+      commentColor: appearance.commentColor,
+      codeTextColor: appearance.codeTextColor,
+    };
   } catch {
-    return {}; // missing/malformed file — same tolerance as the Rust loader
+    return {};
   }
 }
 
 async function saveAppearance(projectHash: string, appearance: Appearance) {
   let parsed: Record<string, unknown> = {};
+
   try {
     parsed = JSON.parse(
       await api.readFileContent(projectHash, PROJECT_SETTINGS_FILE)
     );
   } catch {
-    /* file missing or malformed — start fresh */
+    // File missing or malformed — start fresh.
   }
+
   parsed.appearance = appearance;
+
   await api.writeFileContent(
     projectHash,
     PROJECT_SETTINGS_FILE,
     JSON.stringify(parsed, null, 2) + "\n"
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/* Editor settings                                                            */
+/* -------------------------------------------------------------------------- */
 
 export const FONT_PRESETS = [
   {
@@ -145,25 +292,40 @@ export const FONT_PRESETS = [
     name: "JetBrains Mono",
     value: "'JetBrains Mono', ui-monospace, monospace",
   },
-  { name: "Fira Code", value: "'Fira Code', ui-monospace, monospace" },
-  { name: "Menlo", value: "Menlo, ui-monospace, monospace" },
-  { name: "SF Mono", value: "'SF Mono', ui-monospace, monospace" },
-  { name: "Consolas", value: "Consolas, ui-monospace, monospace" },
+  {
+    name: "Fira Code",
+    value: "'Fira Code', ui-monospace, monospace",
+  },
+  {
+    name: "Menlo",
+    value: "Menlo, ui-monospace, monospace",
+  },
+  {
+    name: "SF Mono",
+    value: "'SF Mono', ui-monospace, monospace",
+  },
+  {
+    name: "Consolas",
+    value: "Consolas, ui-monospace, monospace",
+  },
 ] as const;
 
 export const DEFAULT_ACCENT_HUE: number = ACCENT_PRESETS[0].hue;
 export const DEFAULT_EDITOR_FONT: string = FONT_PRESETS[0].value;
 export const DEFAULT_EDITOR_FONT_SIZE = 12;
+
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
 
 export function loadAccentHue(): number {
   const stored = Number(localStorage.getItem(ACCENT_HUE_KEY));
+
   return Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_ACCENT_HUE;
 }
 
 export function applyAccentHue(hue: number) {
   document.documentElement.style.setProperty("--accent-hue", String(hue));
+
   localStorage.setItem(ACCENT_HUE_KEY, String(hue));
 }
 
@@ -171,20 +333,23 @@ export function loadEditorFont(): string {
   return localStorage.getItem(EDITOR_FONT_KEY) || DEFAULT_EDITOR_FONT;
 }
 
-/** Off by default: code is written to a column, and soft-wrapping it by
- * default hides that the line is long. */
 export function loadEditorWrap(): boolean {
   return localStorage.getItem(EDITOR_WRAP_KEY) === "1";
 }
 
 export function loadEditorFontSize(): number {
   const stored = Number(localStorage.getItem(EDITOR_FONT_SIZE_KEY));
+
   return Number.isFinite(stored) &&
     stored >= MIN_FONT_SIZE &&
     stored <= MAX_FONT_SIZE
     ? stored
     : DEFAULT_EDITOR_FONT_SIZE;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Component                                                                  */
+/* -------------------------------------------------------------------------- */
 
 type Props = {
   projectHash: string;
@@ -203,17 +368,21 @@ export default function SettingsPanel({
   const [editorWrap, setEditorWrapState] = useState(loadEditorWrap);
   const [appearance, setAppearance] = useState<Appearance>({});
 
-  // Load project-scoped appearance on mount / project switch. An empty
-  // projectHash (no project open) skips the read entirely.
   useEffect(() => {
     if (!projectHash) {
       setAppearance({});
       return;
     }
+
     let cancelled = false;
+
     loadAppearance(projectHash).then((a) => {
-      if (!cancelled) setAppearance(a);
+      if (!cancelled) {
+        setAppearance(a);
+        applyAppearance(a);
+      }
     });
+
     return () => {
       cancelled = true;
     };
@@ -237,29 +406,157 @@ export default function SettingsPanel({
   };
 
   const setEditorFontSize = (size: number) => {
-    if (!Number.isFinite(size) || size < MIN_FONT_SIZE || size > MAX_FONT_SIZE)
+    if (
+      !Number.isFinite(size) ||
+      size < MIN_FONT_SIZE ||
+      size > MAX_FONT_SIZE
+    ) {
       return;
+    }
+
     setEditorFontSizeState(size);
     localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
+
     window.dispatchEvent(new Event(EDITOR_FONT_CHANGED_EVENT));
   };
 
-  /** Pick a color for one category/theme, apply it live, and persist the
-   * merged appearance to .project-settings.json. Mirrors the accent-swatch
-   * handler's click → apply → persist shape, just async on the persist leg. */
   const pickColor = (
     category: keyof Appearance,
     theme: "light" | "dark",
     value: string
   ) => {
     const current = appearance[category] ?? {};
+
     const next: Appearance = {
       ...appearance,
-      [category]: { ...current, [theme]: value },
+      [category]: {
+        ...current,
+        [theme]: value,
+      },
     };
+
     setAppearance(next);
     applyAppearance(next);
-    if (projectHash) void saveAppearance(projectHash, next);
+
+    if (projectHash) {
+      void saveAppearance(projectHash, next);
+    }
+  };
+
+  const resetAppearance = () => {
+    const next: Appearance = {};
+    setAppearance(next);
+    applyAppearance(next);
+
+    if (projectHash) {
+      void saveAppearance(projectHash, next);
+    }
+  };
+
+  /* ------------------------------------------------------------------------ */
+  /* Design tokens                                                            */
+  /* ------------------------------------------------------------------------ */
+
+  const panel = "#202224";
+  const field = "#17191c";
+  const border = "#33373c";
+  const borderSubtle = "#2a2e33";
+  const text = "#e5e7eb";
+  const muted = "#9299a2";
+  const dim = "#686f78";
+  const accent = `oklch(65% 0.18 ${accentHue})`;
+
+  const sectionLabel = {
+    color: text,
+    fontSize: 13,
+    fontWeight: 600,
+    letterSpacing: "-0.01em",
+    marginBottom: 10,
+  } as const;
+
+  const rowLabel = {
+    width: 46,
+    flexShrink: 0,
+    color: muted,
+    fontSize: 11,
+    fontWeight: 600,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.07em",
+  };
+
+  const swatchSize = 32;
+
+  const SwatchRow = ({
+    label,
+    presets,
+    theme,
+    category,
+    testId,
+  }: {
+    label: string;
+    presets: Preset[];
+    theme: "light" | "dark";
+    category: keyof Appearance;
+    testId: string;
+  }) => {
+    const selected = appearance[category]?.[theme];
+
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          minHeight: 42,
+        }}
+      >
+        <span style={rowLabel}>{label}</span>
+
+        <div
+          data-testid={testId}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          {presets.map((preset) => {
+            const value = preset[theme];
+            const active = selected === value;
+
+            return (
+              <button
+                key={`${preset.name}-${theme}`}
+                type="button"
+                title={preset.name}
+                aria-label={`${label} ${preset.name}`}
+                aria-pressed={active}
+                onClick={() => pickColor(category, theme, value)}
+                data-testid={`${testId}-swatch`}
+                style={{
+                  position: "relative",
+                  width: swatchSize,
+                  height: swatchSize,
+                  padding: 0,
+                  flexShrink: 0,
+                  border: active
+                    ? `2px solid ${text}`
+                    : `1px solid rgba(255,255,255,.08)`,
+                  outline: active ? `2px solid ${accent}` : "none",
+                  outlineOffset: 1,
+                  borderRadius: "50%",
+                  background: value,
+                  cursor: "pointer",
+                  boxSizing: "border-box",
+                  transition: "transform 100ms ease, box-shadow 100ms ease",
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -267,195 +564,472 @@ export default function SettingsPanel({
       opened
       onClose={onClose}
       title="Settings"
-      className="settings-panel"
+      centered
+      size={700}
+      padding={0}
+      radius={14}
+      transitionProps={{
+        duration: 120,
+        transition: "fade",
+      }}
       data-testid="settings-panel"
+      styles={{
+        overlay: {
+          background: "rgba(0, 0, 0, .68)",
+          backdropFilter: "blur(5px)",
+        },
+        content: {
+          background: panel,
+          border: `1px solid ${border}`,
+          boxShadow: "0 28px 80px rgba(0,0,0,.55), 0 8px 28px rgba(0,0,0,.35)",
+          overflow: "hidden",
+        },
+        header: {
+          minHeight: 62,
+          padding: "0 18px 0 22px",
+          background: panel,
+          borderBottom: `1px solid ${borderSubtle}`,
+        },
+        title: {
+          color: text,
+          fontSize: 17,
+          fontWeight: 500,
+          letterSpacing: "-0.025em",
+        },
+        close: {
+          width: 32,
+          height: 32,
+          color: "#9ca3ab",
+          borderRadius: 7,
+        },
+        body: {
+          padding: 0,
+          background: panel,
+        },
+      }}
     >
-      <div className="settings-section">
-        <label>Color scheme</label>
-        <div className="accent-swatches" data-testid="accent-swatches">
-          {ACCENT_PRESETS.map((preset) => (
-            <button
-              key={preset.hue}
-              className={`accent-swatch ${accentHue === preset.hue ? "active" : ""}`}
-              style={{ background: `oklch(65% 0.18 ${preset.hue})` }}
-              title={preset.name}
-              aria-label={preset.name}
-              aria-pressed={accentHue === preset.hue}
-              onClick={() => setAccentHue(preset.hue)}
-              data-testid="accent-swatch"
-            />
-          ))}
-        </div>
-      </div>
+      <div
+        style={{
+          maxHeight: "calc(100vh - 110px)",
+          overflowY: "auto",
+          padding: "18px 22px 16px",
+        }}
+      >
+        {/* ---------------------------------------------------------------- */}
+        {/* Color scheme                                                     */}
+        {/* ---------------------------------------------------------------- */}
 
-      <div className="settings-section">
-        <label>Shell color</label>
-        <div className="appearance-row">
-          <span className="appearance-row-label">Light</span>
-          <div className="accent-swatches" data-testid="shell-swatches-light">
-            {SHELL_PRESETS.map((preset, i) => (
-              <button
-                key={`${preset.name}-${i}`}
-                className={`accent-swatch ${appearance.shellColor?.light === preset.light ? "active" : ""}`}
-                style={{ background: preset.light }}
-                title={preset.name}
-                aria-label={`Shell light ${preset.name}`}
-                aria-pressed={appearance.shellColor?.light === preset.light}
-                onClick={() => pickColor("shellColor", "light", preset.light)}
-                data-testid="shell-swatch-light"
-              />
-            ))}
-          </div>
-        </div>
-        <div className="appearance-row">
-          <span className="appearance-row-label">Dark</span>
-          <div className="accent-swatches" data-testid="shell-swatches-dark">
-            {SHELL_PRESETS.map((preset, i) => (
-              <button
-                key={`${preset.name}-${i}`}
-                className={`accent-swatch ${appearance.shellColor?.dark === preset.dark ? "active" : ""}`}
-                style={{ background: preset.dark }}
-                title={preset.name}
-                aria-label={`Shell dark ${preset.name}`}
-                aria-pressed={appearance.shellColor?.dark === preset.dark}
-                onClick={() => pickColor("shellColor", "dark", preset.dark)}
-                data-testid="shell-swatch-dark"
-              />
-            ))}
-          </div>
-        </div>
-      </div>
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>Color scheme</div>
 
-      <div className="settings-section">
-        <label>Code comments</label>
-        <div className="appearance-row">
-          <span className="appearance-row-label">Light</span>
-          <div className="accent-swatches" data-testid="comment-swatches-light">
-            {COMMENT_PRESETS.map((preset, i) => (
-              <button
-                key={`${preset.name}-${i}`}
-                className={`accent-swatch ${appearance.commentColor?.light === preset.light ? "active" : ""}`}
-                style={{ background: preset.light }}
-                title={preset.name}
-                aria-label={`Comment light ${preset.name}`}
-                aria-pressed={appearance.commentColor?.light === preset.light}
-                onClick={() => pickColor("commentColor", "light", preset.light)}
-                data-testid="comment-swatch-light"
-              />
-            ))}
-          </div>
-        </div>
-        <div className="appearance-row">
-          <span className="appearance-row-label">Dark</span>
-          <div className="accent-swatches" data-testid="comment-swatches-dark">
-            {COMMENT_PRESETS.map((preset, i) => (
-              <button
-                key={`${preset.name}-${i}`}
-                className={`accent-swatch ${appearance.commentColor?.dark === preset.dark ? "active" : ""}`}
-                style={{ background: preset.dark }}
-                title={preset.name}
-                aria-label={`Comment dark ${preset.name}`}
-                aria-pressed={appearance.commentColor?.dark === preset.dark}
-                onClick={() => pickColor("commentColor", "dark", preset.dark)}
-                data-testid="comment-swatch-dark"
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <label>Code text</label>
-        <div className="appearance-row">
-          <span className="appearance-row-label">Light</span>
-          <div className="accent-swatches" data-testid="text-swatches-light">
-            {CODE_TEXT_PRESETS.map((preset, i) => (
-              <button
-                key={`${preset.name}-${i}`}
-                className={`accent-swatch ${appearance.codeTextColor?.light === preset.light ? "active" : ""}`}
-                style={{ background: preset.light }}
-                title={preset.name}
-                aria-label={`Code text light ${preset.name}`}
-                aria-pressed={appearance.codeTextColor?.light === preset.light}
-                onClick={() =>
-                  pickColor("codeTextColor", "light", preset.light)
-                }
-                data-testid="text-swatch-light"
-              />
-            ))}
-          </div>
-        </div>
-        <div className="appearance-row">
-          <span className="appearance-row-label">Dark</span>
-          <div className="accent-swatches" data-testid="text-swatches-dark">
-            {CODE_TEXT_PRESETS.map((preset, i) => (
-              <button
-                key={`${preset.name}-${i}`}
-                className={`accent-swatch ${appearance.codeTextColor?.dark === preset.dark ? "active" : ""}`}
-                style={{ background: preset.dark }}
-                title={preset.name}
-                aria-label={`Code text dark ${preset.name}`}
-                aria-pressed={appearance.codeTextColor?.dark === preset.dark}
-                onClick={() => pickColor("codeTextColor", "dark", preset.dark)}
-                data-testid="text-swatch-dark"
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <label htmlFor="editorFontSelect">Editor font</label>
-        <div className="settings-row">
-          <select
-            id="editorFontSelect"
-            value={editorFont}
-            onChange={(event) => setEditorFont(event.target.value)}
-            data-testid="editor-font-select"
+          <div
+            data-testid="accent-swatches"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
           >
-            {FONT_PRESETS.map((preset) => (
-              <option key={preset.value} value={preset.value}>
-                {preset.name}
-              </option>
-            ))}
-          </select>
-          <input
-            id="editorFontSize"
-            type="number"
-            min={MIN_FONT_SIZE}
-            max={MAX_FONT_SIZE}
-            value={editorFontSize}
-            aria-label="Editor font size"
-            onChange={(event) => setEditorFontSize(Number(event.target.value))}
-            data-testid="editor-font-size-input"
+            {ACCENT_PRESETS.map((preset) => {
+              const active = accentHue === preset.hue;
+
+              return (
+                <button
+                  key={preset.hue}
+                  type="button"
+                  title={preset.name}
+                  aria-label={preset.name}
+                  aria-pressed={active}
+                  onClick={() => setAccentHue(preset.hue)}
+                  data-testid="accent-swatch"
+                  style={{
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    borderRadius: "50%",
+                    border: active
+                      ? `2px solid ${text}`
+                      : "2px solid transparent",
+                    outline: active ? `2px solid ${accent}` : "none",
+                    outlineOffset: 1,
+                    background: `oklch(65% 0.18 ${preset.hue})`,
+                    cursor: "pointer",
+                    boxSizing: "border-box",
+                  }}
+                />
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* App shell                                                         */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>App shell</div>
+
+          <SwatchRow
+            label="Light"
+            presets={SHELL_PRESETS}
+            theme="light"
+            category="appShellColor"
+            testId="app-shell-swatches-light"
           />
-          <span className="settings-unit">px</span>
-        </div>
-      </div>
 
-      <div className="settings-section">
-        <Switch
-          label="Wrap long lines"
-          checked={editorWrap}
-          onChange={(event) => setEditorWrap(event.currentTarget.checked)}
-          data-testid="editor-wrap-toggle"
-        />
-      </div>
+          <SwatchRow
+            label="Dark"
+            presets={SHELL_PRESETS}
+            theme="dark"
+            category="appShellColor"
+            testId="app-shell-swatches-dark"
+          />
+        </section>
 
-      <div className="settings-section">
+        {/* ---------------------------------------------------------------- */}
+        {/* Shell accent                                                      */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>Shell accent</div>
+
+          <SwatchRow
+            label="Light"
+            presets={SHELL_PRESETS}
+            theme="light"
+            category="shellAccentColor"
+            testId="shell-accent-swatches-light"
+          />
+
+          <SwatchRow
+            label="Dark"
+            presets={SHELL_PRESETS}
+            theme="dark"
+            category="shellAccentColor"
+            testId="shell-accent-swatches-dark"
+          />
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Code comments                                                     */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>Code comments</div>
+
+          <SwatchRow
+            label="Light"
+            presets={COMMENT_PRESETS}
+            theme="light"
+            category="commentColor"
+            testId="comment-swatches-light"
+          />
+
+          <SwatchRow
+            label="Dark"
+            presets={COMMENT_PRESETS}
+            theme="dark"
+            category="commentColor"
+            testId="comment-swatches-dark"
+          />
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Code text                                                         */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>Code text</div>
+
+          <SwatchRow
+            label="Light"
+            presets={CODE_TEXT_PRESETS}
+            theme="light"
+            category="codeTextColor"
+            testId="text-swatches-light"
+          />
+
+          <SwatchRow
+            label="Dark"
+            presets={CODE_TEXT_PRESETS}
+            theme="dark"
+            category="codeTextColor"
+            testId="text-swatches-dark"
+          />
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Reset appearance                                                  */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <Button
+            size="xs"
+            variant="default"
+            onClick={resetAppearance}
+            data-testid="reset-appearance-button"
+            fullWidth
+          >
+            Reset to default
+          </Button>
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Editor font                                                       */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>Editor font</div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <select
+              id="editorFontSelect"
+              value={editorFont}
+              onChange={(event) => setEditorFont(event.target.value)}
+              data-testid="editor-font-select"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: 42,
+                padding: "0 12px",
+                color: text,
+                background: field,
+                border: `1px solid ${border}`,
+                borderRadius: 7,
+                outline: "none",
+                fontFamily: "inherit",
+                fontSize: 13,
+                cursor: "pointer",
+                boxSizing: "border-box",
+              }}
+            >
+              {FONT_PRESETS.map((preset) => (
+                <option key={preset.value} value={preset.value}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+
+            <input
+              id="editorFontSize"
+              type="number"
+              min={MIN_FONT_SIZE}
+              max={MAX_FONT_SIZE}
+              value={editorFontSize}
+              aria-label="Editor font size"
+              onChange={(event) =>
+                setEditorFontSize(Number(event.target.value))
+              }
+              data-testid="editor-font-size-input"
+              style={{
+                width: 72,
+                height: 42,
+                padding: "0 10px",
+                color: text,
+                background: field,
+                border: `1px solid ${border}`,
+                borderRadius: 7,
+                outline: "none",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: 13,
+                textAlign: "center",
+                boxSizing: "border-box",
+              }}
+            />
+
+            <span
+              style={{
+                color: muted,
+                fontSize: 12,
+                width: 18,
+              }}
+            >
+              px
+            </span>
+          </div>
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Wrap                                                               */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingBottom: 18,
+            marginBottom: 16,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                color: text,
+                fontSize: 13,
+                fontWeight: 500,
+              }}
+            >
+              Wrap long lines
+            </div>
+
+            <div
+              style={{
+                marginTop: 3,
+                color: dim,
+                fontSize: 11,
+              }}
+            >
+              Soft-wrap lines that exceed the editor width
+            </div>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={editorWrap}
+            aria-label="Wrap long lines"
+            onClick={() => setEditorWrap(!editorWrap)}
+            data-testid="editor-wrap-toggle"
+            style={{
+              position: "relative",
+              width: 42,
+              height: 24,
+              padding: 2,
+              flexShrink: 0,
+              border: "none",
+              borderRadius: 999,
+              background: editorWrap ? accent : "#343940",
+              cursor: "pointer",
+              transition: "background 120ms ease",
+              boxSizing: "border-box",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 4,
+                left: editorWrap ? 22 : 4,
+                width: 16,
+                height: 16,
+                borderRadius: "50%",
+                background: "#fff",
+                boxShadow: "0 1px 3px rgba(0,0,0,.35)",
+                transition: "left 120ms ease",
+              }}
+            />
+          </button>
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Project settings                                                   */}
+        {/* ---------------------------------------------------------------- */}
+
         <button
-          className="settings-link"
+          type="button"
           onClick={() => {
             onClose();
             onOpenProjectSettings();
           }}
           data-testid="open-project-settings"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: 0,
+            color: accent,
+            background: "transparent",
+            border: "none",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
         >
-          Edit .project-settings.json →
+          Edit .project-settings.json
+          <span style={{ fontSize: 14 }}>→</span>
         </button>
-      </div>
 
-      <span className="hint">Esc to close</span>
+        {/* ---------------------------------------------------------------- */}
+        {/* Footer                                                             */}
+        {/* ---------------------------------------------------------------- */}
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            marginTop: 18,
+            color: dim,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 11,
+          }}
+        >
+          <kbd
+            style={{
+              padding: "2px 6px",
+              color: muted,
+              background: "transparent",
+              border: `1px solid ${border}`,
+              borderRadius: 4,
+              fontFamily: "inherit",
+              fontSize: 10,
+            }}
+          >
+            Esc
+          </kbd>
+
+          <span style={{ marginLeft: 7 }}>to close</span>
+        </div>
+      </div>
     </Modal>
   );
 }

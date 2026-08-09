@@ -2,12 +2,15 @@
   /* Dragon Fire Workbench v2 tokens — from merged-design.json */
   /* Overridden inline (documentElement.style) by the accent-color picker. */
   --accent-hue: 145;
-  --backdrop: oklch(11% 0.015 var(--accent-hue, 145));
-  --chrome-bg: var(--chrome-bg-dark-override, oklch(15% 0.004 250));
-  --bg: oklch(18% 0.005 250);
-  --surface: oklch(22% 0.006 250);
-  --surface-warm: oklch(26% 0.008 250);
-  --editor-bg: oklch(20% 0.005 250);
+  --backdrop: var(
+    --app-shell-dark-override,
+    oklch(11% 0.015 var(--accent-hue, 145))
+  );
+  --chrome-bg: var(--app-shell-dark-override, oklch(15% 0.004 250));
+  --bg: var(--app-shell-dark-override, oklch(18% 0.005 250));
+  --surface: var(--shell-accent-dark-override, oklch(22% 0.006 250));
+  --surface-warm: var(--shell-accent-dark-override, oklch(26% 0.008 250));
+  --editor-bg: var(--shell-accent-dark-override, oklch(20% 0.005 250));
   --active-row: oklch(24% 0.02 var(--accent-hue, 145));
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
@@ -48,12 +51,15 @@
 /* Auto: follow the OS unless the user picked an explicit theme (data-theme). */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --backdrop: oklch(92% 0.015 var(--accent-hue, 145));
-    --chrome-bg: var(--chrome-bg-light-override, oklch(97% 0.004 250));
-    --bg: oklch(99% 0.003 250);
-    --surface: oklch(96% 0.004 250);
-    --surface-warm: oklch(93% 0.006 250);
-    --editor-bg: oklch(98% 0.003 250);
+    --backdrop: var(
+      --app-shell-light-override,
+      oklch(92% 0.015 var(--accent-hue, 145))
+    );
+    --chrome-bg: var(--app-shell-light-override, oklch(97% 0.004 250));
+    --bg: var(--app-shell-light-override, oklch(99% 0.003 250));
+    --surface: var(--shell-accent-light-override, oklch(96% 0.004 250));
+    --surface-warm: var(--shell-accent-light-override, oklch(93% 0.006 250));
+    --editor-bg: var(--shell-accent-light-override, oklch(98% 0.003 250));
     --active-row: oklch(90% 0.04 var(--accent-hue, 145));
     --fg: oklch(20% 0.006 250);
     --muted: oklch(46% 0.012 250);
@@ -83,12 +89,15 @@
 }
 
 :root[data-theme="light"] {
-  --backdrop: oklch(92% 0.015 var(--accent-hue, 145));
-  --chrome-bg: var(--chrome-bg-light-override, oklch(97% 0.004 250));
-  --bg: oklch(99% 0.003 250);
-  --surface: oklch(96% 0.004 250);
-  --surface-warm: oklch(93% 0.006 250);
-  --editor-bg: oklch(98% 0.003 250);
+  --backdrop: var(
+    --app-shell-light-override,
+    oklch(92% 0.015 var(--accent-hue, 145))
+  );
+  --chrome-bg: var(--app-shell-light-override, oklch(97% 0.004 250));
+  --bg: var(--app-shell-light-override, oklch(99% 0.003 250));
+  --surface: var(--shell-accent-light-override, oklch(96% 0.004 250));
+  --surface-warm: var(--shell-accent-light-override, oklch(93% 0.006 250));
+  --editor-bg: var(--shell-accent-light-override, oklch(98% 0.003 250));
   --active-row: oklch(90% 0.04 var(--accent-hue, 145));
   --fg: oklch(20% 0.006 250);
   --muted: oklch(46% 0.012 250);
