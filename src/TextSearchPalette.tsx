@@ -449,13 +449,15 @@ export default function TextSearchPalette({
         >
           {busy && "Searching…"}
 
-          {!busy && searchError && searchError}
+          {!busy && searchError && (
+            <span data-testid="text-search-error">{searchError}</span>
+          )}
 
           {!busy && !searchError && truncated && (
-            <>
+            <span data-testid="text-search-truncated">
               Showing the first {textMatches.length} matches — narrow the search
               to see the rest.
-            </>
+            </span>
           )}
         </div>
       )}
