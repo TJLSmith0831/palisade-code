@@ -105,6 +105,25 @@ describe("FileEditorPane", () => {
     expect(screen.getByText("src/foo.ts")).toBeDefined();
   });
 
+  it("wires --code-text and syntax token CSS variables into the CodeMirror theme", async () => {
+    render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain(
+        "line one"
+      )
+    );
+    // CodeMirror injects its theme styles as <style> tags in the document
+    // head. Assert the CSS variables appear in the generated styles — both
+    // the base text color and the per-token-type syntax highlighting vars.
+    const styleText = [...document.querySelectorAll("style")]
+      .map((s) => s.textContent ?? "")
+      .join("\n");
+    expect(styleText).toContain("var(--code-text)");
+    expect(styleText).toContain("var(--code-comment)");
+    expect(styleText).toContain("var(--code-keyword)");
+    expect(styleText).toContain("var(--code-string)");
+  });
+
   it("shows a plain-text editor for an unrecognized file extension without erroring", async () => {
     render(<FileEditorPane projectHash="abc" path="data/file.xyz" />);
     await waitFor(() =>

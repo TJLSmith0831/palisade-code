@@ -3,7 +3,7 @@
   /* Overridden inline (documentElement.style) by the accent-color picker. */
   --accent-hue: 145;
   --backdrop: oklch(11% 0.015 var(--accent-hue, 145));
-  --chrome-bg: oklch(15% 0.004 250);
+  --chrome-bg: var(--chrome-bg-dark-override, oklch(15% 0.004 250));
   --bg: oklch(18% 0.005 250);
   --surface: oklch(22% 0.006 250);
   --surface-warm: oklch(26% 0.008 250);
@@ -18,6 +18,29 @@
   --success: oklch(72% 0.15 160);
   --warn: oklch(76% 0.15 65);
   --danger: oklch(64% 0.22 25);
+  /* Code editor colors — overridable by the Settings panel's appearance
+     pickers (project-scoped, via .project-settings.json). Defaults match
+     the original --fg/--muted so the editor looks unchanged until a
+     project picks a non-default shell/comment/text color. */
+  --code-comment: var(--code-comment-dark-override, oklch(66% 0.012 250));
+  --code-text: var(--code-text-dark-override, oklch(96% 0.003 250));
+  /* Syntax highlighting token colors — theme-aware, not user-customizable.
+     Each token type gets its own hue so keywords, strings, types, functions,
+     etc. are visually distinct, matching how VS Code / One Dark / Jupyter
+     differentiate code. Lightness/chroma are locked per token bucket so
+     the palette stays perceptually balanced. */
+  --code-keyword: oklch(73% 0.17 280);
+  --code-atom: oklch(72% 0.15 160);
+  --code-number: oklch(78% 0.12 95);
+  --code-string: oklch(72% 0.11 50);
+  --code-regexp: oklch(72% 0.15 25);
+  --code-variable: oklch(82% 0.04 240);
+  --code-variable-def: oklch(82% 0.08 240);
+  --code-type: oklch(75% 0.1 180);
+  --code-property: oklch(82% 0.04 240);
+  --code-function: oklch(82% 0.11 95);
+  --code-meta: oklch(66% 0.01 250);
+  --code-invalid: oklch(64% 0.22 25);
 
   color-scheme: dark;
 }
@@ -26,7 +49,7 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     --backdrop: oklch(92% 0.015 var(--accent-hue, 145));
-    --chrome-bg: oklch(97% 0.004 250);
+    --chrome-bg: var(--chrome-bg-light-override, oklch(97% 0.004 250));
     --bg: oklch(99% 0.003 250);
     --surface: oklch(96% 0.004 250);
     --surface-warm: oklch(93% 0.006 250);
@@ -41,13 +64,27 @@
     --success: oklch(42% 0.13 160);
     --warn: oklch(48% 0.13 65);
     --danger: oklch(46% 0.19 25);
+    --code-comment: var(--code-comment-light-override, oklch(46% 0.012 250));
+    --code-text: var(--code-text-light-override, oklch(20% 0.006 250));
+    --code-keyword: oklch(48% 0.17 280);
+    --code-atom: oklch(42% 0.15 160);
+    --code-number: oklch(42% 0.12 95);
+    --code-string: oklch(50% 0.11 50);
+    --code-regexp: oklch(50% 0.15 25);
+    --code-variable: oklch(35% 0.06 240);
+    --code-variable-def: oklch(35% 0.1 240);
+    --code-type: oklch(40% 0.1 180);
+    --code-property: oklch(35% 0.06 240);
+    --code-function: oklch(45% 0.11 95);
+    --code-meta: oklch(46% 0.01 250);
+    --code-invalid: oklch(46% 0.22 25);
     color-scheme: light;
   }
 }
 
 :root[data-theme="light"] {
   --backdrop: oklch(92% 0.015 var(--accent-hue, 145));
-  --chrome-bg: oklch(97% 0.004 250);
+  --chrome-bg: var(--chrome-bg-light-override, oklch(97% 0.004 250));
   --bg: oklch(99% 0.003 250);
   --surface: oklch(96% 0.004 250);
   --surface-warm: oklch(93% 0.006 250);
@@ -62,6 +99,20 @@
   --success: oklch(42% 0.13 160);
   --warn: oklch(48% 0.13 65);
   --danger: oklch(46% 0.19 25);
+  --code-comment: var(--code-comment-light-override, oklch(46% 0.012 250));
+  --code-text: var(--code-text-light-override, oklch(20% 0.006 250));
+  --code-keyword: oklch(48% 0.17 280);
+  --code-atom: oklch(42% 0.15 160);
+  --code-number: oklch(42% 0.12 95);
+  --code-string: oklch(50% 0.11 50);
+  --code-regexp: oklch(50% 0.15 25);
+  --code-variable: oklch(35% 0.06 240);
+  --code-variable-def: oklch(35% 0.1 240);
+  --code-type: oklch(40% 0.1 180);
+  --code-property: oklch(35% 0.06 240);
+  --code-function: oklch(45% 0.11 95);
+  --code-meta: oklch(46% 0.01 250);
+  --code-invalid: oklch(46% 0.22 25);
   color-scheme: light;
 }
 
@@ -1221,8 +1272,8 @@ input[type="checkbox"] {
 /* --- Vibe shell columns --------------------------------------------------- */
 
 .ds-vibe-chat {
-  flex: 1.6;
-  min-width: 380px;
+  width: var(--vibe-chat-w, 520px);
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--editor-bg);
@@ -2262,6 +2313,22 @@ details.graph-report-wrap > summary {
 
 .accent-swatch.active {
   border-color: var(--fg);
+}
+
+/* Light/Dark sub-row inside an appearance picker section. */
+.appearance-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.appearance-row-label {
+  font-size: 11px;
+  color: var(--muted);
+  width: 40px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .settings-row {

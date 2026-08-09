@@ -29,12 +29,13 @@ import {
 } from "@codemirror/autocomplete";
 import {
   syntaxHighlighting,
-  defaultHighlightStyle,
+  HighlightStyle,
   bracketMatching,
   foldGutter,
   codeFolding,
   foldKeymap,
 } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import {
   search,
   searchKeymap,
@@ -162,6 +163,72 @@ const editorFontTheme = () =>
     "&": { height: "100%", fontSize: `${loadEditorFontSize()}px` },
     ".cm-scroller": { fontFamily: loadEditorFont(), lineHeight: "1.55" },
   });
+
+// Base text color for the CodeMirror editor, driven by the project-scoped
+// --code-text CSS variable. The CSS variable indirection means this updates
+// live when applyAppearance() sets the override property — no compartment or
+// reconfigure needed.
+const codeColorTheme = EditorView.theme({
+  ".cm-content": { color: "var(--code-text)" },
+});
+
+// Full syntax highlighting theme — replaces defaultHighlightStyle with a
+// custom HighlightStyle that uses CSS variables for every token type, so
+// colors adapt to light/dark theme automatically. The comment color uses
+// --code-comment (user-customizable via Settings panel); all other token
+// types use fixed theme-aware CSS variables defined in App.css.
+//
+// This MUST be a single non-fallback syntaxHighlighting extension —
+// CodeMirror's getHighlighters() skips all fallback highlighters the moment
+// any non-fallback highlighter exists, so adding a second
+// syntaxHighlighting() alongside defaultHighlightStyle({fallback:true})
+// silently disables every token type the fallback covered.
+const codeHighlightStyle = syntaxHighlighting(
+  HighlightStyle.define([
+    { tag: tags.keyword, color: "var(--code-keyword)" },
+    {
+      tag: [
+        tags.atom,
+        tags.bool,
+        tags.url,
+        tags.contentSeparator,
+        tags.labelName,
+      ],
+      color: "var(--code-atom)",
+    },
+    {
+      tag: [tags.literal, tags.number, tags.inserted],
+      color: "var(--code-number)",
+    },
+    { tag: [tags.string, tags.deleted], color: "var(--code-string)" },
+    {
+      tag: [tags.regexp, tags.escape, tags.special(tags.string)],
+      color: "var(--code-regexp)",
+    },
+    {
+      tag: tags.definition(tags.variableName),
+      color: "var(--code-variable-def)",
+    },
+    { tag: tags.local(tags.variableName), color: "var(--code-variable-def)" },
+    {
+      tag: [tags.variableName, tags.special(tags.variableName), tags.macroName],
+      color: "var(--code-variable)",
+    },
+    { tag: [tags.typeName, tags.namespace], color: "var(--code-type)" },
+    { tag: tags.className, color: "var(--code-type)" },
+    { tag: tags.definition(tags.propertyName), color: "var(--code-property)" },
+    { tag: tags.propertyName, color: "var(--code-property)" },
+    { tag: tags.function(tags.variableName), color: "var(--code-function)" },
+    { tag: tags.comment, color: "var(--code-comment)", fontStyle: "italic" },
+    { tag: tags.invalid, color: "var(--code-invalid)" },
+    { tag: tags.meta, color: "var(--code-meta)" },
+    { tag: tags.link, textDecoration: "underline" },
+    { tag: tags.heading, textDecoration: "underline", fontWeight: "bold" },
+    { tag: tags.emphasis, fontStyle: "italic" },
+    { tag: tags.strong, fontWeight: "bold" },
+    { tag: tags.strikethrough, textDecoration: "line-through" },
+  ])
+);
 
 export default function FileEditorPane({
   projectHash,
@@ -316,7 +383,8 @@ export default function FileEditorPane({
       crosshairCursor(),
       highlightSelectionMatches(),
       search({ top: true }),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      codeHighlightStyle,
+      codeColorTheme,
       autocompletion({ override: [completeAnyWord] }),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },

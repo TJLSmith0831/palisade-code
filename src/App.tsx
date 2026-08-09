@@ -64,7 +64,12 @@ import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
-import SettingsPanel, { applyAccentHue, loadAccentHue } from "./SettingsPanel";
+import SettingsPanel, {
+  applyAccentHue,
+  loadAccentHue,
+  applyAppearance,
+  loadAppearance,
+} from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
 import { enableModernWindowStyle } from "./macRoundedCorners";
 import { useResizable, type UseResizableResult } from "./useResizable";
@@ -732,6 +737,13 @@ export default function App() {
     reverse: true,
     defaultCollapsed: true,
   });
+  const vibeChat = useResizable({
+    storageKey: `floo:layout:${layoutHash}:vibe-chat`,
+    defaultSize: 520,
+    min: 380,
+    max: 900,
+    axis: "horizontal",
+  });
   const toggleTerminalPlacement = useCallback(() => {
     setTerminalPlacement((prev) => {
       const next = prev === "bottom" ? "sidebar" : "bottom";
@@ -827,6 +839,23 @@ export default function App() {
   useEffect(() => {
     applyAccentHue(loadAccentHue());
   }, []);
+
+  // Restore project-scoped appearance (shell/comment/text colors) whenever a
+  // project loads or switches. SettingsPanel only loads while open, so this
+  // effect keeps the CSS overrides in sync when the panel is closed.
+  useEffect(() => {
+    if (!project) {
+      applyAppearance({});
+      return;
+    }
+    let cancelled = false;
+    loadAppearance(project.hash).then((a) => {
+      if (!cancelled) applyAppearance(a);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.hash]);
 
   // macOS rounded corners + native traffic light repositioning (macOS only
   // — a no-op on other platforms). Must run once after the window is ready.
@@ -2254,7 +2283,15 @@ export default function App() {
             </div>
           ) : (
             <div className="ds-shell-contents" data-testid="vibe-shell">
-              <section className="ds-vibe-chat" data-testid="vibe-chat-column">
+              <section
+                className="ds-vibe-chat"
+                data-testid="vibe-chat-column"
+                style={
+                  {
+                    "--vibe-chat-w": `${vibeChat.size}px`,
+                  } as CSSProperties
+                }
+              >
                 <ChatSurface
                   project={project}
                   thread={thread}
@@ -2275,6 +2312,12 @@ export default function App() {
                   onPickMode={onPickMode}
                 />
               </section>
+
+              <div
+                className="ds-resize-handle ds-resize-handle-x"
+                data-testid="resize-vibe-chat"
+                onPointerDown={bindDrag(vibeChat.handleProps, "col-resize")}
+              />
 
               <section className="ds-vibe-files" data-testid="col-files">
                 {/* Vibe is chat-first and shares its width with the
@@ -2612,6 +2655,7 @@ export default function App() {
 
         {settingsOpen && (
           <SettingsPanel
+            projectHash={project?.hash ?? ""}
             onOpenProjectSettings={onOpenSettings}
             onClose={() => setSettingsOpen(false)}
           />
