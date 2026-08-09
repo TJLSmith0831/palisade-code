@@ -2,7 +2,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { MantineProvider, createTheme, localStorageColorSchemeManager, type CSSVariablesResolver } from "@mantine/core";
 import "@mantine/core/styles.css";
-import "@mantine/spotlight/styles.css";
 import App, { THEME_KEY } from "./App";
 
 // Radius/font tokens mirror DESIGN.md's documented scale (rounded, typography).

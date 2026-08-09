@@ -1,7 +1,11 @@
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
 
 import FilePalette from "../FilePalette";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 const files = ["src/App.tsx", "src/api.ts", "src-tauri/src/lib.rs", "README.md"];
 
@@ -12,9 +16,11 @@ const noopHandlers = {
 };
 
 describe("FilePalette", () => {
-  it("opens focused and lists all files with no query", () => {
+  // Mantine's focus trap focuses [data-autofocus] from a setTimeout, so the
+  // focus lands a tick after render rather than synchronously.
+  it("opens focused and lists all files with no query", async () => {
     render(<FilePalette files={files} onSelect={vi.fn()} onClose={vi.fn()} {...noopHandlers} />);
-    expect(screen.getByTestId("file-palette-input")).toHaveFocus();
+    await waitFor(() => expect(screen.getByTestId("file-palette-input")).toHaveFocus());
     expect(screen.getAllByTestId("file-palette-result")).toHaveLength(files.length);
   });
 

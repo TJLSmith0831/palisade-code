@@ -116,7 +116,6 @@ pre,
 .graph-hint,
 .community,
 .hint,
-.commandbar label,
 .working,
 .message .meta,
 .thread-meta {
@@ -2011,42 +2010,6 @@ details.graph-report-wrap > summary {
   padding: 0;
 }
 
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(10, 11, 13, 0.55);
-  backdrop-filter: blur(4px);
-  display: flex;
-  justify-content: center;
-  padding-top: 18vh;
-  z-index: 100;
-}
-
-.commandbar {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
-  width: min(480px, 90vw);
-  height: fit-content;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
-}
-
-.commandbar label {
-  font-size: 12px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.commandbar input {
-  font-size: 16px;
-  padding: 10px 12px;
-}
-
 .hint {
   font-size: 12px;
   color: var(--muted);
@@ -2090,12 +2053,14 @@ details.graph-report-wrap > summary {
   align-items: stretch;
 }
 
+/* Absorbs the font-size/padding the deleted `.commandbar input` used to
+   supply, with its own left/right override already folded in. */
 .file-palette input {
   background: var(--bg);
   border: none;
   border-radius: 0;
-  padding-left: 0;
-  padding-right: 0;
+  font-size: 16px;
+  padding: 10px 0;
 }
 
 .file-palette-results {

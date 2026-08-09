@@ -1,17 +1,23 @@
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
 
 import TextSearchPalette from "../TextSearchPalette";
 import type { TextMatch } from "../api";
 
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
+
 const files = ["src/App.tsx", "src/api.ts", "README.md"];
 
 describe("TextSearchPalette", () => {
-  it("opens focused with no results for an empty query", () => {
+  // Mantine's focus trap focuses [data-autofocus] from a setTimeout, so the
+  // focus lands a tick after render rather than synchronously.
+  it("opens focused with no results for an empty query", async () => {
     render(
       <TextSearchPalette files={files} onSearchText={vi.fn()} onSelect={vi.fn()} onClose={vi.fn()} />,
     );
-    expect(screen.getByTestId("text-search-input")).toHaveFocus();
+    await waitFor(() => expect(screen.getByTestId("text-search-input")).toHaveFocus());
     expect(screen.queryAllByTestId("text-search-file-result")).toHaveLength(0);
     expect(screen.queryAllByTestId("text-search-text-result")).toHaveLength(0);
   });

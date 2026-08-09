@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Modal as MantineModal } from "@mantine/core";
 import { fuzzyMatch } from "./fuzzyMatch";
 import type { TextMatch } from "./api";
-import Modal from "./Modal";
 
 const MAX_FILE_RESULTS = 20;
 
@@ -21,11 +21,6 @@ export default function TextSearchPalette({ files, onSearchText, onSelect, onClo
   const [textMatches, setTextMatches] = useState<TextMatch[]>([]);
   const [busy, setBusy] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
 
   const fileResults = useMemo(() => {
     const trimmed = query.trim();
@@ -79,9 +74,15 @@ export default function TextSearchPalette({ files, onSearchText, onSelect, onClo
   };
 
   return (
-    <Modal onClose={onClose} label="Find in files">
+    <MantineModal
+      opened
+      onClose={onClose}
+      title="Find in files"
+      classNames={{ content: "file-palette" }}
+      transitionProps={{ duration: 0 }}
+    >
       <input
-        ref={inputRef}
+        data-autofocus
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder="Search files and file contents…"
@@ -151,6 +152,6 @@ export default function TextSearchPalette({ files, onSearchText, onSelect, onClo
         </ul>
       )}
       <span className="hint">↑↓ to navigate · Enter to open · Esc to cancel</span>
-    </Modal>
+    </MantineModal>
   );
 }

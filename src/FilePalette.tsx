@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Modal as MantineModal } from "@mantine/core";
 import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
 import { RenameIcon, DeleteIcon } from "./icons";
-import Modal from "./Modal";
 
 const MAX_RESULTS = 50;
 
@@ -22,12 +22,7 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     renameInputRef.current?.focus();
@@ -102,9 +97,15 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
   };
 
   return (
-    <Modal onClose={onClose} label="File palette" className="file-palette">
+    <MantineModal
+      opened
+      onClose={onClose}
+      title="File palette"
+      classNames={{ content: "file-palette" }}
+      transitionProps={{ duration: 0 }}
+    >
       <input
-          ref={inputRef}
+          data-autofocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search files, or type a new path to create one…"
@@ -235,6 +236,6 @@ export default function FilePalette({ files, onSelect, onClose, onCreate, onRena
       <span className="hint">
         ↑↓ to navigate · Enter to open{canCreate ? " or create" : ""} · ✎ to rename/move · Esc to cancel
       </span>
-    </Modal>
+    </MantineModal>
   );
 }
