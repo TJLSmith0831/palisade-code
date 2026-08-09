@@ -40,7 +40,12 @@ export default function TabBar({
       >
         <Tabs.List style={{ flexWrap: "nowrap", overflowX: "auto" }}>
           {tabs.map((tab) => (
-            <Tooltip key={tab.path} label={tab.path} openDelay={600} withinPortal>
+            <Tooltip
+              key={tab.path}
+              label={tab.path}
+              openDelay={600}
+              withinPortal
+            >
               <Tabs.Tab
                 value={tab.path}
                 className="ds-tab"
@@ -70,7 +75,11 @@ export default function TabBar({
                 }
               >
                 {tab.dirty && (
-                  <span className="ds-tab-dirty" data-testid="file-tab-dirty" aria-label="Unsaved changes">
+                  <span
+                    className="ds-tab-dirty"
+                    data-testid="file-tab-dirty"
+                    aria-label="Unsaved changes"
+                  >
                     ●
                   </span>
                 )}
@@ -81,7 +90,10 @@ export default function TabBar({
         </Tabs.List>
       </Tabs>
 
-      <Tooltip label={diffOpen ? "Back to editor" : "Review changes"} withinPortal>
+      <Tooltip
+        label={diffOpen ? "Back to editor" : "Review changes"}
+        withinPortal
+      >
         <ActionIcon
           variant={diffOpen ? "filled" : "subtle"}
           aria-label={diffOpen ? "Back to editor" : "Review changes"}
@@ -89,6 +101,7 @@ export default function TabBar({
           onClick={onToggleDiff}
           data-testid="toggle-diff"
           ml="auto"
+          style={{ marginBottom: "0.25rem" }}
         >
           <IconGitCompare size={16} />
         </ActionIcon>

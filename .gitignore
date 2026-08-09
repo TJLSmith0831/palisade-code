@@ -28,6 +28,8 @@ graphify-out/
 
 .agents/
 .claude/
+.vscode/
+.impeccable/
 
 .mcp.json
 .project-settings.json
