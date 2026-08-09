@@ -23,6 +23,7 @@ import {
   Loader,
   Badge,
   Alert,
+  Group,
 } from "@mantine/core";
 import { IconGitCompare, IconMarkdown } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
@@ -32,6 +33,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import * as api from "./api";
 import type {
+  Envelope,
   ExecutorEvent,
   Message,
   Preflight,
@@ -64,6 +66,8 @@ import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
+import SpecPane from "./SpecPane";
+import VerifyPane from "./VerifyPane";
 import SettingsPanel, {
   applyAccentHue,
   loadAccentHue,
@@ -526,6 +530,23 @@ function ChatSurface({
   );
 }
 
+/**
+ * An agent's brand glyph, if it has one. Keyed by id because artwork can't
+ * come from a backend table — but nothing else in the UI names an agent: the
+ * label, the path and the status all come off `Preflight.agents`.
+ */
+function AgentMark({ id }: { id: string }) {
+  if (id !== "claude") return null;
+  return (
+    <svg viewBox="0 0 256 257" width="12" height="12" aria-hidden="true">
+      <path
+        fill="#D97757"
+        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
+      />
+    </svg>
+  );
+}
+
 // Keeps a resize drag alive after the pointer leaves the handle element.
 const bindDrag =
   (
@@ -642,8 +663,30 @@ export default function App() {
   // which one broke.
   const [errors, setErrors] = useState<{ id: string; message: string }[]>([]);
   const [flight, setFlight] = useState<Preflight | null>(null);
-  const [live, setLive] = useState<ExecutorEvent[]>([]);
-  const [busy, setBusy] = useState(false);
+  // Live executor output keyed by the session that produced it. One flat array
+  // can't survive concurrent sessions: two agents streaming at once would
+  // interleave into one another's transcript, and switching threads mid-turn
+  // would fold the session you left into the thread you arrived at.
+  const [liveBySession, setLiveBySession] = useState<
+    Map<string, { threadId: string; events: ExecutorEvent[] }>
+  >(new Map());
+  // Busy is per thread, not global: with sessions concurrent, another thread's
+  // turn finishing must not unlock this thread's composer, and switching
+  // threads must not carry the old thread's spinner across.
+  const [busyThreads, setBusyThreads] = useState<Set<string>>(new Set());
+  // Set when a propose turn produced more than one change; cleared when the
+  // user picks one or dismisses.
+  const [specLinkChoice, setSpecLinkChoice] =
+    useState<api.SpecLinkAmbiguous | null>(null);
+  const setBusyFor = useCallback((threadId: string, value: boolean) => {
+    setBusyThreads((previous) => {
+      if (previous.has(threadId) === value) return previous;
+      const next = new Set(previous);
+      if (value) next.add(threadId);
+      else next.delete(threadId);
+      return next;
+    });
+  }, []);
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   // The open files. Shared by both shells, so switching between Vibe and
   // Editor never closes anything or loses where you were in a file.
@@ -710,7 +753,7 @@ export default function App() {
     shellChosenRef.current = true;
     setCenterShellState(shell);
   }, []);
-  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">(
+  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "specs" | "verify" | "terminal">(
     "threads"
   );
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
@@ -880,6 +923,10 @@ export default function App() {
 
   const selectThread = useCallback(
     async (projectHash: string, next: ThreadMeta | null) => {
+      // Leaving a thread releases its idle sessions (closed `done`, D20);
+      // anything mid-turn keeps running and keeps streaming into its own key.
+      const leaving = current.current.thread?.id;
+      if (leaving && leaving !== next?.id) api.leaveThread(leaving).catch(fail);
       setThread(next);
       setNewThreadPicker(false);
       if (!next) {
@@ -887,7 +934,7 @@ export default function App() {
         return;
       }
       localStorage.setItem(lastThreadKey(projectHash), next.id);
-      setLive([]);
+      clearLiveFor(next.id);
       setMessages(await api.readThread(projectHash, next.id));
     },
     []
@@ -1204,6 +1251,40 @@ export default function App() {
   const current = useRef({ project, thread });
   current.current = { project, thread };
 
+  const busy = thread ? busyThreads.has(thread.id) : false;
+  /** Busy for whichever thread is on screen — what the composer's callers mean. */
+  const setBusy = useCallback(
+    (value: boolean) => {
+      const id = current.current.thread?.id;
+      if (id) setBusyFor(id, value);
+    },
+    [setBusyFor]
+  );
+
+  // What the chat surface renders: only the sessions belonging to the thread
+  // on screen. Sessions on other threads keep streaming into their own keys.
+  const live = useMemo(
+    () =>
+      [...liveBySession.values()]
+        .filter((entry) => entry.threadId === thread?.id)
+        .flatMap((entry) => entry.events),
+    [liveBySession, thread?.id]
+  );
+
+  // A thread's live buffer is dropped once its history is re-read from disk —
+  // every event was already persisted as it arrived, so keeping it would
+  // render each one twice. Scoped to one thread so another thread's in-flight
+  // session isn't wiped along with it.
+  const clearLiveFor = useCallback((threadId: string) => {
+    setLiveBySession((previous) => {
+      const next = new Map(previous);
+      for (const [id, entry] of next) {
+        if (entry.threadId === threadId) next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
   // OS-level drag-drop gives real absolute paths (unlike HTML5 File objects
   // in WKWebView, which often lack them). Dropped images get appended to the
   // draft as paths — the executor already has file-read tools of its own.
@@ -1236,7 +1317,7 @@ export default function App() {
     setThreads(found);
     setThread(found.find((t) => t.id === thread.id) ?? thread);
     setMessages(history);
-    setLive([]);
+    clearLiveFor(thread.id);
   }, []);
 
   useEffect(() => {
@@ -1246,21 +1327,44 @@ export default function App() {
   // Executor output streams in live; once the turn ends, the persisted log
   // becomes the source of truth again so both paths can't drift.
   useEffect(() => {
-    const streaming = listen<ExecutorEvent>(
+    const streaming = listen<Envelope>(
       "executor-event",
-      async ({ payload }) => {
-        if (payload.kind === "done" || payload.kind === "crashed") {
-          setBusy(false);
+      async ({ payload: { sessionId, threadId, event } }) => {
+        if (event.kind === "done" || event.kind === "crashed") {
+          setLiveBySession((previous) => {
+            const next = new Map(previous);
+            next.delete(sessionId);
+            return next;
+          });
+          // Each thread's own composer unlocks when its own turn ends.
+          setBusyFor(threadId, false);
+          // But a session finishing on some other thread must not drag the
+          // thread on screen back to its own log.
+          if (threadId !== current.current.thread?.id) return;
           setDiffRefreshToken((t) => t + 1);
           await refresh().catch(fail);
           return;
         }
-        setLive((previous) => [...previous, payload]);
+        setLiveBySession((previous) => {
+          const next = new Map(previous);
+          const entry = next.get(sessionId);
+          next.set(sessionId, {
+            threadId,
+            events: [...(entry?.events ?? []), event],
+          });
+          return next;
+        });
       }
     );
     const updated = listen<string>("thread-updated", () => {
       refresh().catch(fail);
     });
+    // A propose turn that produced more than one change can't be guessed at;
+    // the thread's spec link is durable, so the user picks (D12).
+    const ambiguous = listen<api.SpecLinkAmbiguous>(
+      "spec-link-ambiguous",
+      ({ payload }) => setSpecLinkChoice(payload)
+    );
     // A graphify watch spawn failure or crash — the routine "not on PATH"
     // case is already covered by the persistent preflight warning banner.
     const warned = listen<string>("harness-warning", ({ payload }) =>
@@ -1269,9 +1373,10 @@ export default function App() {
     return () => {
       streaming.then((un) => un());
       updated.then((un) => un());
+      ambiguous.then((un) => un());
       warned.then((un) => un());
     };
-  }, [refresh]);
+  }, [refresh, setBusyFor]);
 
   // Files changing for a reason that wasn't us — an agent turn writing
   // directly to disk, a branch switch, another editor. Kept as its own
@@ -1837,23 +1942,14 @@ export default function App() {
                 data-tauri-drag-region-exclude
                 data-testid="preflight-status"
               >
-                {flight?.selected === "claude" ? (
+                {flight?.selected ? (
                   <span className="ds-preflight-label">
-                    <svg
-                      viewBox="0 0 256 257"
-                      width="12"
-                      height="12"
-                      aria-hidden="true"
-                    >
-                      <path
-                        fill="#D97757"
-                        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
-                      />
-                    </svg>
-                    claude
+                    <AgentMark id={flight.selected} />
+                    {flight.agents.find((a) => a.id === flight.selected)?.label ??
+                      flight.selected}
                   </span>
                 ) : (
-                  (flight?.selected ?? "—")
+                  "—"
                 )}
               </button>
             </Tooltip>
@@ -1869,6 +1965,42 @@ export default function App() {
             {flight.warnings.map((warning) => (
               <div key={warning}>⚠ {warning}</div>
             ))}
+          </Alert>
+        )}
+
+        {specLinkChoice && (
+          <Alert
+            color="var(--warn)"
+            variant="light"
+            radius={0}
+            withCloseButton
+            onClose={() => setSpecLinkChoice(null)}
+            title="Which change is this thread working on?"
+            data-testid="spec-link-ambiguous"
+          >
+            That propose turn created more than one change, so the link can't
+            be inferred. Pick one, or dismiss to leave the thread unlinked.
+            <Group gap="xs" mt="xs">
+              {specLinkChoice.names.map((name) => (
+                <Button
+                  key={name}
+                  size="compact-xs"
+                  variant="light"
+                  onClick={() => {
+                    if (!project) return;
+                    api
+                      .setSpecChange(project.hash, specLinkChoice.threadId, name)
+                      .then(() => {
+                        setSpecLinkChoice(null);
+                        return refresh();
+                      })
+                      .catch(fail);
+                  }}
+                >
+                  {name}
+                </Button>
+              ))}
+            </Group>
           </Alert>
         )}
 
@@ -2160,7 +2292,9 @@ export default function App() {
                             value={rightTab}
                             onChange={(value) =>
                               value &&
-                              setRightTab(value as "threads" | "codemap")
+                              setRightTab(
+                                value as "threads" | "codemap" | "specs" | "verify"
+                              )
                             }
                           >
                             <Tabs.List className="ds-right-tabs">
@@ -2175,6 +2309,12 @@ export default function App() {
                                 data-testid="tab-codemap"
                               >
                                 Codebase Map
+                              </Tabs.Tab>
+                              <Tabs.Tab value="specs" data-testid="tab-specs">
+                                Specs
+                              </Tabs.Tab>
+                              <Tabs.Tab value="verify" data-testid="tab-verify">
+                                Verify
                               </Tabs.Tab>
                             </Tabs.List>
                           </Tabs>
@@ -2256,6 +2396,18 @@ export default function App() {
                           )}
                           {rightTab === "codemap" && project && (
                             <GraphPane projectHash={project.hash} />
+                          )}
+                          {rightTab === "specs" && project && (
+                            <SpecPane
+                              projectHash={project.hash}
+                              linkedChange={thread?.openSpecChangeName}
+                            />
+                          )}
+                          {rightTab === "verify" && project && (
+                            <VerifyPane
+                              projectHash={project.hash}
+                              threadId={thread?.id}
+                            />
                           )}
                         </Accordion.Panel>
                       </Accordion.Item>

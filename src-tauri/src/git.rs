@@ -33,6 +33,36 @@ fn run(bin: &Path, root: &Path, args: &[&str]) -> Res<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// The commit HEAD points at. Recorded at session open and close so "what did
+/// this session change?" has an exact answer for anything committed (D13).
+/// `None` when there is no HEAD to read — a project need not be a git repo,
+/// and a repo with no commits yet has none.
+pub fn rev_parse_head(bin: &Path, root: &Path) -> Option<String> {
+    run(bin, root, &["rev-parse", "HEAD"]).ok().map(|out| out.trim().to_string())
+}
+
+/// The set of paths git reports as dirty, as a sorted list. Compared between
+/// session open and close, its delta is "what this session left uncommitted" —
+/// exact only while no other session shares the root (D13).
+pub fn porcelain_snapshot(bin: &Path, root: &Path) -> Vec<String> {
+    let mut paths: Vec<String> = run(bin, root, &["status", "--porcelain=v1"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.len() > 3)
+        .map(|line| line[3..].to_string())
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Paths that changed between two commits. This is the *exact* half of
+/// attribution: whatever a session committed is recoverable from its HEAD
+/// pair, with no inference involved.
+pub fn changed_between(bin: &Path, root: &Path, before: &str, after: &str) -> Res<Vec<String>> {
+    let raw = run(bin, root, &["diff", "--name-only", before, after])?;
+    Ok(raw.lines().map(str::to_string).filter(|line| !line.is_empty()).collect())
+}
+
 /// One entry per changed path, tracked or not — `git diff` alone never lists
 /// untracked files, so this is the only way the pane learns about new files.
 pub fn status(bin: &Path, root: &Path) -> Res<Vec<FileStatus>> {
@@ -247,6 +277,55 @@ mod tests {
         run(git(), root, &["add", "-A"]).unwrap();
         run(git(), root, &["commit", "-q", "-m", "initial"]).unwrap();
         (dir, "tracked.txt".to_string())
+    }
+
+    /// Task 5.9: a session that commits has a distinct HEAD pair, and what it
+    /// committed is recoverable exactly — no inference, no heuristic.
+    #[test]
+    fn a_session_that_commits_moves_head_and_one_that_does_not_leaves_it_alone() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+
+        // A session that commits nothing: identical before/after.
+        let before = rev_parse_head(git(), root).unwrap();
+        fs::write(root.join(&tracked), "line one\nedited but not committed\n").unwrap();
+        assert_eq!(rev_parse_head(git(), root).as_deref(), Some(before.as_str()));
+
+        // A session that commits: distinct heads, and the exact file list.
+        run(git(), root, &["add", "-A"]).unwrap();
+        run(git(), root, &["commit", "-q", "-m", "session work"]).unwrap();
+        let after = rev_parse_head(git(), root).unwrap();
+        assert_ne!(before, after);
+        assert_eq!(changed_between(git(), root, &before, &after).unwrap(), vec![tracked.clone()]);
+
+        // And with no commits between them, the diff is empty rather than a guess.
+        assert!(changed_between(git(), root, &after, &after).unwrap().is_empty());
+    }
+
+    /// The uncommitted half: the delta between two porcelain snapshots is what
+    /// appeared while the session ran.
+    #[test]
+    fn the_porcelain_delta_is_what_appeared_since_the_snapshot() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "already dirty before the session\n").unwrap();
+
+        let opened = porcelain_snapshot(git(), root);
+        assert_eq!(opened, vec![tracked.clone()]);
+
+        fs::write(root.join("session-made-this.txt"), "new\n").unwrap();
+        let closed = porcelain_snapshot(git(), root);
+        let delta: Vec<&String> = closed.iter().filter(|p| !opened.contains(p)).collect();
+        assert_eq!(delta, vec!["session-made-this.txt"], "the pre-existing edit is not attributed");
+    }
+
+    /// A project need not be a git repo — that's a normal state, and the
+    /// attribution layer has to degrade rather than error.
+    #[test]
+    fn a_non_repo_has_no_head_and_an_empty_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(rev_parse_head(git(), dir.path()), None);
+        assert!(porcelain_snapshot(git(), dir.path()).is_empty());
     }
 
     #[test]

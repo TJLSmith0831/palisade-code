@@ -1,0 +1,165 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  Alert,
+  Badge,
+  Button,
+  Code,
+  Group,
+  Loader,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
+import { IconPlayerPlay } from "@tabler/icons-react";
+import { listen } from "@tauri-apps/api/event";
+
+import * as api from "./api";
+import type { VerificationRun } from "./api";
+import { describeError } from "./errors";
+
+type Props = {
+  projectHash: string;
+  threadId?: string | null;
+};
+
+const shortCommit = (head: string | null) => head?.slice(0, 7) ?? "no commit";
+
+/**
+ * What has actually been verified, and nothing more.
+ *
+ * Every row is one command, its exit code, and the commit it ran at. There is
+ * deliberately no aggregate here — no "3/3 passing", no green tick for the
+ * project, no "spec complete". A set of exit codes is not a claim that the
+ * work is done, and rolling them into one would manufacture exactly the
+ * certainty this pane exists to avoid.
+ */
+export default function VerifyPane({ projectHash, threadId }: Props) {
+  const [commands, setCommands] = useState<[string, string][]>([]);
+  const [runs, setRuns] = useState<VerificationRun[]>([]);
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [configured, history] = await Promise.all([
+        api.verifyCommands(projectHash),
+        api.listVerifications(projectHash),
+      ]);
+      setCommands(configured);
+      setRuns(history);
+      setError(null);
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [projectHash]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // A verify command runs detached — a real suite takes minutes — so its
+  // result arrives as an event rather than as the call's return value.
+  useEffect(() => {
+    const finished = listen<VerificationRun>(
+      "verification-finished",
+      ({ payload }) => {
+        if (payload.projectHash !== projectHash) return;
+        setRuns((previous) => [...previous, payload]);
+        setRunning((previous) => {
+          const next = new Set(previous);
+          next.delete(payload.name);
+          return next;
+        });
+      }
+    );
+    return () => {
+      finished.then((un) => un());
+    };
+  }, [projectHash]);
+
+  const run = (name: string) => {
+    setRunning((previous) => new Set(previous).add(name));
+    api.runVerify(projectHash, name, threadId).catch((err) => {
+      setError(describeError(err));
+      setRunning((previous) => {
+        const next = new Set(previous);
+        next.delete(name);
+        return next;
+      });
+    });
+  };
+
+  // Newest first — the last run of a command is the one that still means
+  // something; the earlier ones are history, not a score.
+  const latest = [...runs].reverse();
+
+  return (
+    <Stack gap="xs" p="xs">
+      <Group justify="space-between">
+        <Text size="sm" fw={600}>
+          Verification
+        </Text>
+        {loading && <Loader size="xs" />}
+      </Group>
+
+      {error && (
+        <Alert color="red" variant="light">
+          {error}
+        </Alert>
+      )}
+
+      {!loading && commands.length === 0 && (
+        <Text size="xs" c="dimmed">
+          No verify commands configured. Add a <Code>verify</Code> map to{" "}
+          <Code>.project-settings.json</Code>.
+        </Text>
+      )}
+
+      <Group gap="xs">
+        {commands.map(([name, command]) => (
+          <Tooltip key={name} label={command}>
+            <Button
+              size="compact-xs"
+              variant="light"
+              leftSection={<IconPlayerPlay size={12} />}
+              loading={running.has(name)}
+              onClick={() => run(name)}
+              data-testid={`verify-run-${name}`}
+            >
+              {name}
+            </Button>
+          </Tooltip>
+        ))}
+      </Group>
+
+      {latest.map((entry) => (
+        <Stack key={entry.id} gap={2} data-testid="verification-run">
+          <Group gap="xs" wrap="nowrap">
+            <Badge
+              size="xs"
+              color={entry.exitCode === 0 ? "green" : "red"}
+              variant="light"
+            >
+              exit {entry.exitCode}
+            </Badge>
+            <Text size="xs" truncate>
+              {entry.name}
+            </Text>
+            <Tooltip label={entry.gitHead ?? "not a git repository"}>
+              <Code fz="10px">{shortCommit(entry.gitHead)}</Code>
+            </Tooltip>
+          </Group>
+          <Code block fz="10px" style={{ maxHeight: 120, overflow: "auto" }}>
+            {entry.command}
+            {"\n"}
+            {entry.outputTail.trim() || "(no output)"}
+          </Code>
+        </Stack>
+      ))}
+    </Stack>
+  );
+}

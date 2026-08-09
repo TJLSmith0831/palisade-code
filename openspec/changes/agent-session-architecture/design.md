@@ -112,7 +112,7 @@ This design covers the seven capabilities in `proposal.md`; see `decisions.md` f
 | Mode enforcement | **Session** | the actual `--permission-mode`/`--sandbox` flag |
 | Spec reference | **Thread** | the durable link |
 
-**Lifecycle:** create → `start_session` writes an open `SessionRecord`. Resume with the same agent may pass the previous session's `provider_handle` (Claude `--resume`; unchanged from today's `/go` behavior). Resume with a *different* agent is impossible via provider handles — Claude's `--resume` and Codex's `resume --last` are private to their own CLIs — so an agent switch mid-thread starts a fresh session with, optionally, a bounded transcript replay as the first prompt. End: `Done`→`done`, `Crashed`→`crashed` (existing recovery unchanged), `terminate()`→`cancelled`. Restart: any record with no `ended_at` closes as `interrupted`; no process survives an app restart.
+**Lifecycle:** create → `start_session` writes an open `SessionRecord`. Resume with the same agent may pass the previous session's `provider_handle` (Claude `--resume`; unchanged from today's `/go` behavior). Resume with a *different* agent is impossible via provider handles — Claude's `--resume` and Codex's `resume --last` are private to their own CLIs — so an agent switch mid-thread starts a fresh session with, optionally, a bounded transcript replay as the first prompt. End (amended by D20): `Done` ends a *turn*, not the session — it only clears `busy`. A session closes `done` when Floo releases it idle (app shutdown, or leaving a thread whose session has no work outstanding); `Crashed`→`crashed` (existing recovery unchanged), `terminate()`→`cancelled`. Restart: any record with no `ended_at` closes as `interrupted`; no process survives an app restart.
 
 ### 3. Event model: one envelope, no new event types
 
@@ -239,4 +239,4 @@ Carried from evaluation — none block starting Phase 0/1, but should be resolve
 2. When two concurrent sessions edit the same file: warn only (this design), block the second session, or offer a worktree? Only real use will tell — revisit after Phase 2 ships.
 3. How much transcript to replay when a thread switches agents — a product judgment, not a code question.
 4. Should manual editor saves (currently invisible to the domain) become first-class `FileEdit` records? Makes attribution complete but persists the user's own keystroke-level edits into thread history — a privacy/volume call.
-5. Is `current_mode` still a thread-level concept once sessions are concurrent? A thread could have a live spec session and a live go session at once. Worth deciding before Phase 2 (`concurrent-sessions`) lands.
+5. ~~Is `current_mode` still a thread-level concept once sessions are concurrent?~~ **Resolved (D19):** yes, as *intent* only — enforcement is per session, and a thread may hold a live spec session and a live go session at once.

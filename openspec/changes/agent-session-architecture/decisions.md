@@ -88,3 +88,20 @@ Carried forward from the architecture evaluation session (`~/.claude/plans/you-a
 - **Decision**: Store-integrity fixes (Phase 0) land before the event envelope (Phase 1), which lands before concurrent sessions (Phase 2), before the agent table (Phase 3). Spec-reference (Phase 4) is independent and lower priority; verification + attribution (Phase 5) depends on Phase 2 (`SessionRecord` must exist for `VerificationRun`/git-HEAD-pair to attach to).
 - **Why**: Phase 0 fixes confirmed live data-integrity defects (leaking test writes into the real store) that would otherwise corrupt data written by every later phase. Phase 1 (routing) is a prerequisite for Phase 2 (concurrency) — you cannot tell two sessions' events apart without it.
 - **Source**: evaluation finding
+
+## D18: Next-seq cache lives in `store.rs`, not on `Harness`
+- **Decision**: The append-sequence cache is a private `static SEQ_CACHE: Mutex<Option<HashMap<PathBuf, (len, next_seq)>>>` inside `store.rs`, keyed on the resolved log path and validated against the file's length. `tasks.md` 0.3 originally said "add a next-seq cache to `Harness`".
+- **Why**: `append_message`'s hottest caller is `executor::persist`, reached from `pump()` — a detached `std::thread` that holds no `Harness` handle and never could without threading one through `Spawn`, `start`, `send`, and `pump`. Keying on the absolute log path gives identical isolation (each test's tempdir is a distinct key) for none of that plumbing. The recorded file length is the validity check: any write this process didn't make invalidates the entry and the seq is recomputed from disk, so the torn-line and external-writer paths behave exactly as before.
+- **Source**: recommended-accepted (Phase 0 implementation)
+
+## D19: Mode is enforced per session; the thread keeps it only as intent
+- **Decision**: `ThreadMeta.current_mode` survives as the thread's *default* — what a new session starts as and what the UI preselects. A thread MAY hold a live spec session and a live go session simultaneously; `find_live_session(thread, mode)` keys by mode. `/go` no longer terminates the spec session, it starts a go session alongside it. `spec_mode` stops meaning "kill the executor" and becomes "set the thread's default back to spec"; killing is an explicit per-session stop.
+- **Why**: Resolves Open Question 5 in `design.md`, which the design flagged as needing an answer before Phase 2 lands. It is the reading design.md §2's Intent/Enforcement ownership table already implies, and the only one under which task 2.12 ("two sessions on one thread with different agents both run") is buildable. The alternatives either contradict D1 (one live session per thread) or delete mode intent's ability to survive a restart.
+- **Cost accepted**: today's "switching back to spec terminates the executor" behavior goes away, and `stop_executor` becomes session-scoped.
+- **Source**: user
+
+## D20: `Done` ends a turn, not a session — `done` is written when an idle session is released
+- **Decision**: Amends `design.md` §2's lifecycle line (`Done`→`done`). `ExecutorEvent::Done` only clears `busy`; the session record stays open and the session keeps accepting turns. A session closes `done` when Floo releases it with no work outstanding: on app shutdown, and when the user leaves a thread whose session is idle. `crashed` / `cancelled` / `interrupted` are unchanged.
+- **Why**: Discovered building Phase 2. `Done` is a turn boundary in both transports — Claude's process is persistent across turns, and Codex carries the conversation forward with `resume --last` — so closing on `Done` would mark a live, resumable session ended and leave the next turn appending under a closed id. The alternative readings either collapse a session into a single turn (which contradicts D19 and task 2.5's `find_live_session`: there would be no live session between turns to find) or delete the `done` outcome the `concurrent-sessions` spec requires.
+- **Source**: user (recommended, accepted)
+

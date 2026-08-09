@@ -11,7 +11,6 @@ use std::process::Command;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::executor::Kind;
 use crate::store::Res;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -21,14 +20,24 @@ pub struct ProjectSettings {
     /// path) → shell command run after a save matches it (D14). E.g.
     /// `{ "\\.rs$": "cargo fmt", "\\.tsx?$": "prettier --write" }`.
     pub format_on_save: HashMap<String, String>,
-    /// Force a specific executor for this project instead of PATH
-    /// auto-detection (D15).
-    pub executor_override: Option<Kind>,
+    /// Force a specific agent for this project instead of PATH
+    /// auto-detection (D15). Held as a free string and resolved against
+    /// `KNOWN_AGENTS` by id: an unrecognized name warns and falls back, where
+    /// a typed enum would fail to parse and silently drop *every* setting in
+    /// this file back to defaults.
+    pub executor_override: Option<String>,
+    /// Name → shell command that proves something works, e.g.
+    /// `{ "test": "cargo test", "typecheck": "pnpm build" }`. Floo runs these
+    /// itself and persists the exit code: a spec is never "complete" because a
+    /// model said so — it is green because a named command exited 0 at a named
+    /// commit (D3).
+    pub verify: HashMap<String, String>,
 }
 
 const FILE_NAME: &str = ".project-settings.json";
 
-const DEFAULT_CONTENTS: &str = "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null\n}\n";
+const DEFAULT_CONTENTS: &str =
+    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {}\n}\n";
 
 /// Loads `.project-settings.json` from `project_root`. A missing file isn't
 /// an error — it's the common case (e.g. before `ensure_file` has run, or
@@ -101,6 +110,53 @@ pub fn run_format_on_save(settings: &ProjectSettings, project_root: &Path, relat
     })
 }
 
+/// One verification command's result, straight from the process.
+pub struct VerifyOutcome {
+    pub command: String,
+    pub exit_code: i32,
+    pub output_tail: String,
+}
+
+/// Run one named verify command the same way `run_format_on_save` runs a
+/// formatter: `sh -c`, cwd = project root, stdout and stderr captured with the
+/// exit status. Floo runs it and reports what happened — it never decides that
+/// a non-zero exit "doesn't count".
+pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -> Res<VerifyOutcome> {
+    let command = settings
+        .verify
+        .get(name)
+        .ok_or_else(|| format!("no verify command named `{name}` in {FILE_NAME}"))?
+        .clone();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(project_root)
+        .output()
+        .map_err(|err| format!("{command} failed to start: {err}"))?;
+
+    let mut body = String::from_utf8_lossy(&output.stdout).into_owned();
+    body.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(VerifyOutcome {
+        command,
+        // A signal-killed process has no code; -1 records "died without one"
+        // rather than pretending it passed.
+        exit_code: output.status.code().unwrap_or(-1),
+        output_tail: tail(&body, 8 * 1024),
+    })
+}
+
+/// The last `limit` bytes, on a char boundary, marked when anything was cut.
+fn tail(body: &str, limit: usize) -> String {
+    if body.len() <= limit {
+        return body.to_string();
+    }
+    let mut start = body.len() - limit;
+    while start < body.len() && !body.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("… [{start} earlier bytes omitted]\n{}", &body[start..])
+}
+
 /// POSIX single-quoting — safe against any filename, including ones with
 /// spaces or shell metacharacters.
 fn shell_quote(s: &str) -> String {
@@ -151,7 +207,7 @@ mod tests {
         ensure_file(root.path()).unwrap();
 
         let (settings, _) = load(root.path());
-        assert_eq!(settings.executor_override, Some(Kind::Codex), "must not clobber real settings");
+        assert_eq!(settings.executor_override, Some("codex".to_string()), "must not clobber real settings");
     }
 
     #[test]
@@ -174,7 +230,7 @@ mod tests {
         let (settings, warning) = load(root.path());
         assert!(warning.is_none());
         assert_eq!(settings.format_on_save.get(r"\.rs$"), Some(&"cargo fmt".to_string()));
-        assert_eq!(settings.executor_override, Some(Kind::Codex));
+        assert_eq!(settings.executor_override, Some("codex".to_string()));
     }
 
     #[test]
@@ -182,7 +238,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut format_on_save = HashMap::new();
         format_on_save.insert(r"\.txt$".to_string(), "echo formatted".to_string());
-        let settings = ProjectSettings { format_on_save, executor_override: None };
+        let settings = ProjectSettings { format_on_save, executor_override: None, ..Default::default() };
 
         let result = run_format_on_save(&settings, root.path(), "notes/todo.txt").unwrap();
         assert!(result.contains("formatted"), "got {result}");
@@ -193,7 +249,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut format_on_save = HashMap::new();
         format_on_save.insert(r"\.rs$".to_string(), "cargo fmt".to_string());
-        let settings = ProjectSettings { format_on_save, executor_override: None };
+        let settings = ProjectSettings { format_on_save, executor_override: None, ..Default::default() };
 
         assert!(run_format_on_save(&settings, root.path(), "notes/todo.txt").is_none());
     }
@@ -203,7 +259,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut format_on_save = HashMap::new();
         format_on_save.insert(r"\.rs$".to_string(), "false".to_string());
-        let settings = ProjectSettings { format_on_save, executor_override: None };
+        let settings = ProjectSettings { format_on_save, executor_override: None, ..Default::default() };
 
         let result = run_format_on_save(&settings, root.path(), "lib.rs").unwrap();
         assert!(result.contains("failed"), "got {result}");
@@ -214,12 +270,93 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut format_on_save = HashMap::new();
         format_on_save.insert(r"\.rs$".to_string(), "echo".to_string());
-        let settings = ProjectSettings { format_on_save, executor_override: None };
+        let settings = ProjectSettings { format_on_save, executor_override: None, ..Default::default() };
 
         // A naive unquoted interpolation would let `; rm -rf /` execute as a
         // second command — this only proves it's treated as one literal arg.
         let result = run_format_on_save(&settings, root.path(), "a'; touch pwned.rs").unwrap();
         assert!(!root.path().join("pwned.rs").exists());
         assert!(result.contains("a'; touch pwned.rs"), "got {result}");
+    }
+
+    fn with_verify(pairs: &[(&str, &str)]) -> ProjectSettings {
+        ProjectSettings {
+            verify: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Task 5.7: the exit code is the whole point — a failure that gets
+    /// swallowed or rounded to "ok" would make verification a lie.
+    #[test]
+    fn verify_records_the_exit_code_and_keeps_the_failing_output() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = with_verify(&[
+            ("green", "echo all good"),
+            ("red", "echo to-stdout; echo the-reason >&2; exit 3"),
+        ]);
+
+        let pass = run_verify(&settings, root.path(), "green").unwrap();
+        assert_eq!(pass.exit_code, 0);
+        assert!(pass.output_tail.contains("all good"));
+
+        let fail = run_verify(&settings, root.path(), "red").unwrap();
+        assert_eq!(fail.exit_code, 3, "the real code, not a boolean");
+        assert!(fail.output_tail.contains("the-reason"), "stderr must survive");
+        assert!(fail.output_tail.contains("to-stdout"), "and so must stdout");
+        assert_eq!(fail.command, "echo to-stdout; echo the-reason >&2; exit 3");
+
+        // An unconfigured name is an error, not a silent pass.
+        assert!(run_verify(&settings, root.path(), "nope").is_err());
+    }
+
+    /// Task 5.8: the verify command is the user's own shell line, run whole.
+    /// What must not happen is a *filename* smuggling a second command in —
+    /// the failure `shell_quote` exists to prevent.
+    #[test]
+    fn a_verify_command_runs_in_the_project_root_and_cannot_be_extended_by_a_path() {
+        let root = tempfile::tempdir().unwrap();
+        // cwd is the project root, which is how the command finds the project.
+        let settings = with_verify(&[("where", "pwd")]);
+        let outcome = run_verify(&settings, root.path(), "where").unwrap();
+        assert_eq!(outcome.exit_code, 0);
+
+        // The same quoting guard `run_format_on_save` relies on: a filename
+        // carrying `'; touch pwned` is one literal argument, not two commands.
+        let mut format_on_save = HashMap::new();
+        format_on_save.insert(r"\.rs$".to_string(), "true".to_string());
+        let formatting = ProjectSettings { format_on_save, ..Default::default() };
+        run_format_on_save(&formatting, root.path(), "x'; touch pwned.rs").unwrap();
+        assert!(!root.path().join("pwned.rs").exists());
+    }
+
+    #[test]
+    fn a_huge_verify_output_is_tailed_with_a_marker() {
+        let root = tempfile::tempdir().unwrap();
+        // 200k of output — a real test suite's log, not a pathological case.
+        let settings = with_verify(&[("noisy", "for i in $(seq 1 20000); do echo 0123456789; done")]);
+        let outcome = run_verify(&settings, root.path(), "noisy").unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.output_tail.len() < 20 * 1024);
+        assert!(outcome.output_tail.contains("earlier bytes omitted"));
+        // The *tail* is what's kept — a failure's last words are its reason.
+        assert!(outcome.output_tail.trim_end().ends_with("0123456789"));
+    }
+
+    /// `verify` is additive: a settings file written before it existed still
+    /// loads, and everything else in the file survives.
+    #[test]
+    fn a_settings_file_without_verify_still_loads() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(FILE_NAME),
+            r#"{"formatOnSave": {"\\.rs$": "cargo fmt"}, "executorOverride": "codex"}"#,
+        )
+        .unwrap();
+        let (settings, warning) = load(root.path());
+        assert!(warning.is_none());
+        assert!(settings.verify.is_empty());
+        assert_eq!(settings.executor_override.as_deref(), Some("codex"));
+        assert_eq!(settings.format_on_save.len(), 1);
     }
 }

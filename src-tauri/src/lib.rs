@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
-use executor::{ExecutorEvent, Harness, Kind, Preflight, Sink, Spawn};
+use executor::{Envelope, ExecutorEvent, Harness, Preflight, Sink, Spawn};
 use serde::{Deserialize, Serialize};
 use store::{floo_home, Message, Project, Res, ThreadMeta};
 
@@ -80,17 +80,21 @@ fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harnes
     let Some(bin) = executor::find_on_path("graphify-mcp") else {
         return;
     };
-    let Ok((kind, _)) = selected_executor(app, harness, &project.hash) else {
+    let Ok((agent, _)) = selected_executor(app, harness, &project.hash) else {
         return;
     };
 
     let root = PathBuf::from(&project.root);
     let graph_path = integrations::default_out_dir(&root).join("graph.json");
-    let result = match kind {
-        Kind::Claude => integrations::ensure_claude_mcp(&root, &bin, &graph_path),
-        Kind::Codex => {
+    // Kept as an explicit per-agent match (task 3.6): each agent's MCP config
+    // file has its own real format, which is not BYOA friction to abstract
+    // away. An agent with no MCP story is simply skipped.
+    let result = match agent.id {
+        "claude" => integrations::ensure_claude_mcp(&root, &bin, &graph_path),
+        "codex" => {
             integrations::ensure_codex_mcp(&root, &bin, &graph_path, &executor::home().join(".codex"))
         }
+        _ => return,
     };
     if let Err(message) = result {
         let _ = app.emit("harness-warning", format!("Graphify MCP registration failed: {message}"));
@@ -193,13 +197,7 @@ fn set_thread_mode(project_hash: String, thread_id: String, mode: String) -> Res
 /// files a live turn is about to append to would corrupt or orphan state.
 #[tauri::command]
 fn delete_thread(harness: tauri::State<'_, Harness>, project_hash: String, thread_id: String) -> Res<()> {
-    let busy = harness
-        .session
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|s| s.thread_id == thread_id && s.is_busy());
-    if busy {
+    if harness.thread_is_busy(&thread_id) {
         return Err("This thread has a turn in progress — wait for it to finish before deleting.".into());
     }
     store::delete_thread(&floo_home(), &project_hash, &thread_id)
@@ -213,7 +211,9 @@ fn append_message(
     mode: String,
     content: String,
 ) -> Res<Message> {
-    store::append_message(&floo_home(), &project_hash, &thread_id, &role, &mode, &content)
+    // A direct append is a harness/user write, not a session's output — it has
+    // no producing session to name.
+    store::append_message(&floo_home(), &project_hash, &thread_id, &role, &mode, &content, None)
 }
 
 #[tauri::command]
@@ -223,37 +223,62 @@ fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
 
 // ------------------------------------------------------- executor handoff
 
+/// Payload for `spec-link-ambiguous`: a propose turn produced more than one
+/// change, so the user picks which one this thread is working on.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecLinkAmbiguous {
+    thread_id: String,
+    names: Vec<String>,
+}
+
 /// Forwards parsed executor events to the webview, and owns the two reactions
 /// that must happen no matter which adapter produced them: a crash reverts the
 /// thread to spec-mode, and a finished `/propose` turn records its new change.
 struct AppSink {
     app: tauri::AppHandle,
     project_hash: String,
-    thread_id: String,
 }
 
 impl Sink for AppSink {
-    fn emit(&self, event: &ExecutorEvent) {
-        let _ = self.app.emit("executor-event", event);
+    fn emit(&self, envelope: &Envelope) {
+        let _ = self.app.emit("executor-event", envelope);
 
-        match event {
+        // The thread these side effects belong to is the one the event came
+        // from, not whichever thread the sink happened to be built for — with
+        // concurrent sessions those stop being the same thing.
+        let thread_id = &envelope.thread_id;
+        match &envelope.event {
             ExecutorEvent::Crashed { .. } => {
-                let _ = executor::on_crash(&floo_home(), &self.project_hash, &self.thread_id);
-                let _ = self.app.emit("thread-updated", &self.thread_id);
+                end_session(&self.app.state::<Harness>(), thread_id, &envelope.session_id, "crashed");
+                let _ = executor::on_crash(&floo_home(), &self.project_hash, thread_id);
+                let _ = self.app.emit("thread-updated", thread_id);
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
                 let watch = harness.pending_propose.lock().unwrap().take();
                 if let Some(watch) = watch {
                     let after = executor::openspec_changes(&watch.project_root);
-                    if let Some(name) = executor::newly_added_change(&watch.before, &after) {
-                        let _ = store::set_open_spec_change(
-                            &floo_home(),
-                            &watch.project_hash,
-                            &watch.thread_id,
-                            Some(&name),
-                        );
-                        let _ = self.app.emit("thread-updated", &watch.thread_id);
+                    match executor::newly_added_change(&watch.before, &after) {
+                        executor::ProposeOutcome::One(name) => {
+                            let _ = store::set_open_spec_change(
+                                &floo_home(),
+                                &watch.project_hash,
+                                &watch.thread_id,
+                                Some(&name),
+                            );
+                            let _ = self.app.emit("thread-updated", &watch.thread_id);
+                        }
+                        // Two changes from one turn used to return `None` and
+                        // record nothing — silent loss of a durable reference.
+                        // Ask instead (D12).
+                        executor::ProposeOutcome::Ambiguous(names) => {
+                            let _ = self.app.emit(
+                                "spec-link-ambiguous",
+                                SpecLinkAmbiguous { thread_id: thread_id.clone(), names },
+                            );
+                        }
+                        executor::ProposeOutcome::None => {}
                     }
                 }
             }
@@ -262,12 +287,8 @@ impl Sink for AppSink {
     }
 }
 
-fn sink_for(app: &tauri::AppHandle, project_hash: &str, thread_id: &str) -> Arc<dyn Sink> {
-    Arc::new(AppSink {
-        app: app.clone(),
-        project_hash: project_hash.to_string(),
-        thread_id: thread_id.to_string(),
-    })
+fn sink_for(app: &tauri::AppHandle, project_hash: &str) -> Arc<dyn Sink> {
+    Arc::new(AppSink { app: app.clone(), project_hash: project_hash.to_string() })
 }
 
 /// Cached at startup; re-checked when the caller says the cache may be stale
@@ -288,34 +309,50 @@ fn preflight(harness: tauri::State<'_, Harness>, refresh: bool) -> Preflight {
 /// installed doesn't error; it falls back to auto-detection and returns a
 /// warning for the caller to surface, rather than leaving the project in
 /// chat-only mode.
-fn resolve_executor(flight: &Preflight, override_kind: Option<Kind>) -> Res<(Kind, Option<String>)> {
-    let auto = || flight.selected.ok_or("No executor found on PATH — chat-only mode.".to_string());
-    match override_kind {
-        Some(wanted) => {
-            let installed = match wanted {
-                Kind::Claude => flight.claude.is_some(),
-                Kind::Codex => flight.codex.is_some(),
-            };
-            if installed {
-                Ok((wanted, None))
-            } else {
-                let warning = format!(
-                    "project-settings.json requests {wanted:?}, but it's not on PATH — falling back to auto-detection."
-                );
-                Ok((auto()?, Some(warning)))
-            }
+fn resolve_executor(
+    flight: &Preflight,
+    override_id: Option<String>,
+) -> Res<(&'static executor::Agent, Option<String>)> {
+    let auto = || {
+        flight
+            .selected
+            .as_deref()
+            .and_then(executor::agent_by_id)
+            .ok_or("No executor found on PATH — chat-only mode.".to_string())
+    };
+    let Some(wanted) = override_id else {
+        return Ok((auto()?, None));
+    };
+    // An unknown *name* and a known-but-uninstalled agent are different
+    // failures, and the user needs to be told which one they hit.
+    match executor::agent_by_id(&wanted) {
+        Some(agent) if flight.agent(&wanted).is_some_and(|s| s.path.is_some()) => Ok((agent, None)),
+        Some(_) => Ok((
+            auto()?,
+            Some(format!(
+                "project-settings.json requests `{wanted}`, but it's not on PATH — falling back to auto-detection."
+            )),
+        )),
+        None => {
+            let known: Vec<&str> = executor::KNOWN_AGENTS.iter().map(|a| a.id).collect();
+            Ok((
+                auto()?,
+                Some(format!(
+                    "project-settings.json requests unknown executor `{wanted}` (known: {}) — falling back to auto-detection.",
+                    known.join(", ")
+                )),
+            ))
         }
-        None => Ok((auto()?, None)),
     }
 }
 
-/// Resolves which executor a project uses and its binary path, applying
+/// Resolves which agent a project uses and its binary path, applying
 /// `resolve_executor`'s decision against the live preflight cache.
 fn selected_executor(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
     project_hash: &str,
-) -> Res<(Kind, PathBuf)> {
+) -> Res<(&'static executor::Agent, PathBuf)> {
     let flight = {
         let mut cached = harness.preflight.lock().unwrap();
         if cached.is_none() {
@@ -323,74 +360,163 @@ fn selected_executor(
         }
         cached.clone().expect("preflight just populated")
     };
-    let override_kind = project_root(project_hash)
+    let override_id = project_root(project_hash)
         .ok()
         .and_then(|root| settings::load(&root).0.executor_override);
-    let (kind, warning) = resolve_executor(&flight, override_kind)?;
+    let (agent, warning) = resolve_executor(&flight, override_id)?;
     if let Some(message) = warning {
         let _ = app.emit("harness-warning", message);
     }
-    let path = match kind {
-        Kind::Claude => flight.claude,
-        Kind::Codex => flight.codex,
-    };
-    Ok((kind, PathBuf::from(path.ok_or("detected executor has no path")?)))
+    let path = flight.agent(agent.id).and_then(|s| s.path.clone());
+    Ok((agent, PathBuf::from(path.ok_or("detected executor has no path")?)))
 }
 
-/// Start (or restart) the executor for a thread. `carry_forward` resumes the
-/// existing conversation instead of beginning a new one.
-fn ensure_session(
+/// The id of a live session on this thread running under `mode`, if any.
+/// Sessions are keyed independently, so a thread can hold a live spec session
+/// and a live go session at once (D19) — hence the mode in the lookup.
+fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode: &str) -> Option<String> {
+    harness
+        .sessions
+        .lock()
+        .unwrap()
+        .values()
+        .find(|s| s.thread_id == thread_id && s.mode == mode)
+        .map(|s| s.id.clone())
+}
+
+/// Start a new session on a thread and record it open. Nothing else is
+/// terminated — that is the whole point of the map (D1).
+///
+/// `carry_forward` resumes the newest closed session of the *same agent* on
+/// this thread. A handle from a different agent is never reused: Claude's
+/// `--resume` and Codex's `resume --last` are private to their own CLIs (D14).
+fn start_session(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
     project_hash: &str,
     thread_id: &str,
     mode: &str,
     carry_forward: bool,
-) -> Res<()> {
-    let (kind, bin) = selected_executor(app, harness, project_hash)?;
-    let mut slot = harness.session.lock().unwrap();
+) -> Res<String> {
+    let (agent, bin) = selected_executor(app, harness, project_hash)?;
+    let agent_id = agent.id;
+    let home = floo_home();
 
-    let matches_thread = slot
-        .as_ref()
-        .is_some_and(|s| s.thread_id == thread_id && s.mode == mode && s.kind == kind);
-    if matches_thread && !carry_forward {
-        return Ok(());
-    }
-
-    // The live process is the first source of a session id, but it only
-    // exists while the app has been running — after a restart the thread's
-    // own sidecar is what lets /go still carry the conversation forward.
-    let resume = if carry_forward {
-        slot.as_ref().map(|s| s.session_id.clone()).or_else(|| {
-            store::list_threads(&floo_home(), project_hash)
+    let resume = carry_forward
+        .then(|| {
+            store::read_sessions(&home, project_hash, thread_id)
                 .ok()?
                 .into_iter()
-                .find(|t| t.id == thread_id)?
-                .executor_session_id
+                .filter(|r| r.agent_id == agent_id && r.outcome.as_deref() != Some("crashed"))
+                .next_back()?
+                .provider_handle
         })
-    } else {
-        None
+        .flatten();
+
+    // Floo cannot stop two agents writing the same file — the executor owns
+    // its own tool loop. Naming the collision is the honest mitigation; a lock
+    // would be a promise the harness can't keep (D6). Git remains the arbiter.
+    let collision = {
+        let sessions = harness.sessions.lock().unwrap();
+        sessions
+            .values()
+            .find(|s| s.project_hash == project_hash)
+            .map(|s| format!("{} session {} is already live in this project — concurrent edits are not coordinated; git is the arbiter.", s.agent.id, s.id))
     };
-    if let Some(mut previous) = slot.take() {
-        previous.terminate();
+    if let Some(message) = collision {
+        let _ = app.emit("harness-warning", message);
     }
 
     let session = executor::start(
         Spawn {
-            kind,
+            agent,
             bin,
             project_root: project_root(project_hash)?,
             project_hash,
             thread_id,
             mode,
             resume,
-            floo_home: floo_home(),
+            floo_home: home.clone(),
         },
-        sink_for(app, project_hash, thread_id),
+        sink_for(app, project_hash),
     )?;
-    let _ = store::set_executor_session(&floo_home(), project_hash, thread_id, Some(&session.session_id));
-    *slot = Some(session);
-    Ok(())
+    // The evidence layer for "what did this session change?" (D13): the commit
+    // it started from, and what was already dirty before it touched anything.
+    let git = git_bin().ok();
+    let root = project_root(project_hash)?;
+    let id = session.id.clone();
+    store::open_session(
+        &home,
+        project_hash,
+        thread_id,
+        &id,
+        agent_id,
+        mode,
+        Some(&session.provider_handle),
+        git.as_ref().and_then(|bin| git::rev_parse_head(bin, &root)).as_deref(),
+        git.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)),
+    )?;
+    harness.sessions.lock().unwrap().insert(id.clone(), session);
+    Ok(id)
+}
+
+/// Reuse this thread's live session for `mode`, or start one.
+fn ensure_session(
+    app: &tauri::AppHandle,
+    harness: &tauri::State<'_, Harness>,
+    project_hash: &str,
+    thread_id: &str,
+    mode: &str,
+) -> Res<String> {
+    match find_live_session(harness, thread_id, mode) {
+        Some(id) => Ok(id),
+        None => start_session(app, harness, project_hash, thread_id, mode, true),
+    }
+}
+
+/// Drop a session from the live map and close its record. Idempotent.
+fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
+    if let Some(mut session) = harness.sessions.lock().unwrap().remove(session_id) {
+        session.terminate();
+        // The closing half of the HEAD pair — with the opening one, everything
+        // this session committed is recoverable exactly (D13).
+        let head_after = git_bin()
+            .ok()
+            .and_then(|bin| git::rev_parse_head(&bin, &session.project_root));
+        let _ = store::close_session(
+            &floo_home(),
+            &session.project_hash,
+            thread_id,
+            session_id,
+            outcome,
+            head_after.as_deref(),
+        );
+    }
+}
+
+/// Release every idle session on a thread, closing each `done` (D20). `Done`
+/// only ends a *turn* — both transports keep the session alive and resumable
+/// across turns — so `done` is written when Floo lets an idle session go: on
+/// leaving its thread, and on shutdown. A busy session is left alone.
+fn release_idle_sessions(harness: &Harness, thread_id: Option<&str>) {
+    let idle: Vec<(String, String)> = harness
+        .sessions
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|s| !s.is_busy() && thread_id.is_none_or(|t| s.thread_id == t))
+        .map(|s| (s.id.clone(), s.thread_id.clone()))
+        .collect();
+    for (id, thread) in idle {
+        end_session(harness, &thread, &id, "done");
+    }
+}
+
+/// Called when the user leaves a thread. Sessions mid-turn keep running — that
+/// is the whole point of concurrency; only idle ones are released.
+#[tauri::command]
+fn leave_thread(harness: tauri::State<'_, Harness>, thread_id: String) {
+    release_idle_sessions(&harness, Some(&thread_id));
 }
 
 /// Record the user's turn, then forward it to the executor if one is live.
@@ -403,22 +529,35 @@ fn send_message(
     content: String,
     mode: String,
 ) -> Res<Message> {
-    let message = store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content)?;
+    // Recorded before the executor is resolved, deliberately: a chat-only
+    // project still keeps the user's turn. There is no session to name yet.
+    let message = store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
     if selected_executor(&app, &harness, &project_hash).is_err() {
         // Chat-only mode: the turn is still recorded, nothing answers it.
         return Ok(message);
     }
-    ensure_session(&app, &harness, &project_hash, &thread_id, &mode, false)?;
-
-    let sink = sink_for(&app, &project_hash, &thread_id);
-    let mut slot = harness.session.lock().unwrap();
-    let session = slot.as_mut().ok_or("executor session is not running")?;
-    executor::send(session, sink, &content)?;
+    let id = ensure_session(&app, &harness, &project_hash, &thread_id, &mode)?;
+    send_to(&app, &harness, &project_hash, &id, &content)?;
     Ok(message)
 }
 
-/// `/go`: terminate the spec-mode executor and bring the same conversation
-/// back up write-enabled. Rejected while a turn is in flight.
+/// Send one turn to a named live session.
+fn send_to(
+    app: &tauri::AppHandle,
+    harness: &tauri::State<'_, Harness>,
+    project_hash: &str,
+    session_id: &str,
+    content: &str,
+) -> Res<()> {
+    let sink = sink_for(app, project_hash);
+    let mut sessions = harness.sessions.lock().unwrap();
+    let session = sessions.get_mut(session_id).ok_or("executor session is not running")?;
+    executor::send(session, sink, content)
+}
+
+/// `/go`: bring up a write-enabled session on this thread. Under D19 this no
+/// longer terminates the spec session — the two run side by side, each under
+/// its own permission flag — and it only sets the thread's default mode.
 #[tauri::command]
 fn go_mode(
     app: tauri::AppHandle,
@@ -426,9 +565,6 @@ fn go_mode(
     project_hash: String,
     thread_id: String,
 ) -> Res<ThreadMeta> {
-    if harness.session.lock().unwrap().as_ref().is_some_and(|s| s.is_busy()) {
-        return Err("The executor is mid-turn — wait for it to finish before switching modes.".into());
-    }
     // A mid-session uninstall would otherwise only surface as a spawn failure.
     let flight = preflight(harness.clone(), true);
     if flight.selected.is_none() {
@@ -436,33 +572,26 @@ fn go_mode(
     }
 
     let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "go")?;
-    ensure_session(&app, &harness, &project_hash, &thread_id, "go", true)?;
+    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go")?;
 
     // A thread that already has a proposal starts go-mode by applying it.
     if let Some(change) = meta.open_spec_change_name.clone() {
-        let sink = sink_for(&app, &project_hash, &thread_id);
-        let mut slot = harness.session.lock().unwrap();
-        let session = slot.as_mut().ok_or("executor session is not running")?;
-        let prompt = format!("{}grill-apply {}", session.kind.skill_prefix(), change);
-        store::append_message(&floo_home(), &project_hash, &thread_id, "user", "go", &prompt)?;
-        executor::send(session, sink, &prompt)?;
+        let prefix = {
+            let sessions = harness.sessions.lock().unwrap();
+            sessions.get(&id).ok_or("executor session is not running")?.agent.skill_prefix
+        };
+        let prompt = format!("{prefix}grill-apply {change}");
+        store::append_message(&floo_home(), &project_hash, &thread_id, "user", "go", &prompt, Some(&id))?;
+        send_to(&app, &harness, &project_hash, &id, &prompt)?;
     }
     Ok(meta)
 }
 
-/// Switching back terminates the executor outright — never backgrounds it.
+/// Sets the thread's default mode back to spec. Under D19 this kills nothing:
+/// mode is intent on the thread and enforcement on the session, so stopping a
+/// live session is an explicit, session-scoped action (`stop_executor`).
 #[tauri::command]
-fn spec_mode(
-    harness: tauri::State<'_, Harness>,
-    project_hash: String,
-    thread_id: String,
-) -> Res<ThreadMeta> {
-    if harness.session.lock().unwrap().as_ref().is_some_and(|s| s.is_busy()) {
-        return Err("The executor is mid-turn — wait for it to finish before switching modes.".into());
-    }
-    if let Some(mut session) = harness.session.lock().unwrap().take() {
-        session.terminate();
-    }
+fn spec_mode(project_hash: String, thread_id: String) -> Res<ThreadMeta> {
     store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")
 }
 
@@ -476,12 +605,12 @@ fn propose(
     thread_id: String,
 ) -> Res<()> {
     let root = project_root(&project_hash)?;
-    ensure_session(&app, &harness, &project_hash, &thread_id, "spec", false)?;
-
-    let sink = sink_for(&app, &project_hash, &thread_id);
-    let mut slot = harness.session.lock().unwrap();
-    let session = slot.as_mut().ok_or("executor session is not running")?;
-    let prompt = format!("{}grill-propose", session.kind.skill_prefix());
+    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "spec")?;
+    let prefix = {
+        let sessions = harness.sessions.lock().unwrap();
+        sessions.get(&id).ok_or("executor session is not running")?.agent.skill_prefix
+    };
+    let prompt = format!("{prefix}grill-propose");
 
     *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
         project_hash: project_hash.clone(),
@@ -490,25 +619,231 @@ fn propose(
         project_root: root,
     });
 
-    store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt)?;
-    executor::send(session, sink, &prompt)
+    store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt, Some(&id))?;
+    send_to(&app, &harness, &project_hash, &id, &prompt)
 }
 
+/// Stop one session by id, or every live session when none is named. Each is
+/// closed `cancelled` — an explicit stop is not a crash.
 #[tauri::command]
-fn stop_executor(harness: tauri::State<'_, Harness>) {
-    if let Some(mut session) = harness.session.lock().unwrap().take() {
-        session.terminate();
+fn stop_executor(harness: tauri::State<'_, Harness>, session_id: Option<String>) {
+    let targets: Vec<(String, String)> = harness
+        .sessions
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|s| session_id.as_ref().is_none_or(|wanted| *wanted == s.id))
+        .map(|s| (s.id.clone(), s.thread_id.clone()))
+        .collect();
+    for (id, thread_id) in targets {
+        end_session(&harness, &thread_id, &id, "cancelled");
     }
 }
 
+/// What each live session is doing. A list, not one global flag: with sessions
+/// concurrent there is no single "the executor is busy" to report.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionStatus {
+    id: String,
+    thread_id: String,
+    agent_id: String,
+    mode: String,
+    busy: bool,
+}
+
 #[tauri::command]
-fn executor_status(harness: tauri::State<'_, Harness>) -> Option<(String, bool)> {
-    harness
-        .session
+fn executor_status(harness: tauri::State<'_, Harness>) -> Vec<SessionStatus> {
+    let mut statuses: Vec<SessionStatus> = harness
+        .sessions
         .lock()
         .unwrap()
-        .as_ref()
-        .map(|s| (s.thread_id.clone(), s.is_busy()))
+        .values()
+        .map(|s| SessionStatus {
+            id: s.id.clone(),
+            thread_id: s.thread_id.clone(),
+            agent_id: s.agent.id.to_string(),
+            mode: s.mode.clone(),
+            busy: s.is_busy(),
+        })
+        .collect();
+    statuses.sort_by(|a, b| a.id.cmp(&b.id));
+    statuses
+}
+
+/// Every session ever run against a thread. Records left open by a process
+/// that no longer exists (an app restart) are closed `interrupted` on the way
+/// out, using the live map as the authority on what is actually running.
+#[tauri::command]
+fn list_sessions(
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    thread_id: String,
+) -> Res<Vec<store::SessionRecord>> {
+    let live: Vec<String> = harness.sessions.lock().unwrap().keys().cloned().collect();
+    store::close_stale_sessions(&floo_home(), &project_hash, &thread_id, &live)
+}
+
+// ------------------------------------------------------------ verification
+
+/// Run one of the project's `verify` commands and persist what happened.
+///
+/// Detached on its own thread: a real test suite takes minutes, and blocking
+/// the command thread would freeze the UI. The result arrives as a
+/// `verification-finished` event, the same shape `pump` already uses.
+#[tauri::command]
+fn run_verify(
+    app: tauri::AppHandle,
+    project_hash: String,
+    name: String,
+    thread_id: Option<String>,
+    session_id: Option<String>,
+) -> Res<()> {
+    let root = project_root(&project_hash)?;
+    let (settings, _) = settings::load(&root);
+    // Fail fast on an unknown name, before spawning a thread that can only
+    // report the same error later and less visibly.
+    if !settings.verify.contains_key(&name) {
+        return Err(format!("no verify command named `{name}` in .project-settings.json"));
+    }
+
+    std::thread::spawn(move || {
+        let head = git_bin().ok().and_then(|bin| git::rev_parse_head(&bin, &root));
+        let outcome = settings::run_verify(&settings, &root, &name);
+        let run = match outcome {
+            Ok(outcome) => store::VerificationRun {
+                id: ulid::Ulid::new().to_string(),
+                project_hash: project_hash.clone(),
+                thread_id,
+                session_id,
+                name,
+                command: outcome.command,
+                exit_code: outcome.exit_code,
+                output_tail: outcome.output_tail,
+                git_head: head,
+                at: chrono::Utc::now().to_rfc3339(),
+            },
+            // A command that couldn't start is a failed verification, not a
+            // missing one — recording nothing would leave it looking untested.
+            Err(message) => store::VerificationRun {
+                id: ulid::Ulid::new().to_string(),
+                project_hash: project_hash.clone(),
+                thread_id,
+                session_id,
+                name,
+                command: String::new(),
+                exit_code: -1,
+                output_tail: message,
+                git_head: head,
+                at: chrono::Utc::now().to_rfc3339(),
+            },
+        };
+        let _ = store::append_verification(&floo_home(), &run);
+        let _ = app.emit("verification-finished", &run);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn list_verifications(project_hash: String) -> Res<Vec<store::VerificationRun>> {
+    store::read_verifications(&floo_home(), &project_hash)
+}
+
+/// The names a project has configured, so the UI can offer them.
+#[tauri::command]
+fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
+    let root = project_root(&project_hash)?;
+    let mut commands: Vec<(String, String)> =
+        settings::load(&root).0.verify.into_iter().collect();
+    commands.sort();
+    Ok(commands)
+}
+
+// ------------------------------------------------------------ attribution
+
+/// What a session changed, with its own uncertainty attached.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Attribution {
+    session_id: String,
+    /// Exact: everything between the session's opening and closing HEAD.
+    committed: Vec<String>,
+    /// Paths dirty at close that weren't dirty at open.
+    uncommitted: Vec<String>,
+    /// How many sessions shared this project root while this one was live.
+    concurrent_sessions: usize,
+    /// Set whenever `concurrent_sessions > 1`: with two agents writing the
+    /// same tree, the dirty set cannot honestly be split between them, and a
+    /// heuristic guess presented as fact is worse than saying so (D13).
+    ambiguous: bool,
+}
+
+#[tauri::command]
+fn session_attribution(
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    thread_id: String,
+    session_id: String,
+) -> Res<Attribution> {
+    let home = floo_home();
+    let record = store::read_sessions(&home, &project_hash, &thread_id)?
+        .into_iter()
+        .find(|r| r.id == session_id)
+        .ok_or_else(|| format!("unknown session: {session_id}"))?;
+
+    let root = project_root(&project_hash)?;
+    let bin = git_bin().ok();
+    let committed = match (&bin, &record.git_head_before, &record.git_head_after) {
+        (Some(bin), Some(before), Some(after)) if before != after => {
+            git::changed_between(bin, &root, before, after).unwrap_or_default()
+        }
+        _ => vec![],
+    };
+    let uncommitted = {
+        let now = bin.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)).unwrap_or_default();
+        let before = record.dirty_before.clone().unwrap_or_default();
+        now.into_iter().filter(|path| !before.contains(path)).collect()
+    };
+
+    let concurrent = harness.sessions_in_project(&project_hash).max(1);
+
+    Ok(Attribution {
+        session_id,
+        committed,
+        uncommitted,
+        concurrent_sessions: concurrent,
+        ambiguous: concurrent > 1,
+    })
+}
+
+// ---------------------------------------------------------- spec reference
+
+/// Read-only. Every one of these asks the `openspec` CLI and renders what it
+/// says; nothing here writes a spec file, and nothing here writes to
+/// `~/.floo-network` (task 4.5). Floo's only durable spec state stays the one
+/// reference string on `ThreadMeta`.
+#[tauri::command]
+fn list_spec_changes(project_hash: String) -> Res<Vec<executor::SpecChange>> {
+    Ok(executor::openspec_list(&project_root(&project_hash)?))
+}
+
+#[tauri::command]
+fn show_spec_change(project_hash: String, name: String) -> Res<Option<serde_json::Value>> {
+    Ok(executor::openspec_show(&project_root(&project_hash)?, &name))
+}
+
+/// `None` when `openspec` isn't installed — "we can't tell", which is a
+/// different answer from "invalid" and must not be rendered as one.
+#[tauri::command]
+fn validate_spec_changes(project_hash: String) -> Res<Option<bool>> {
+    Ok(executor::openspec_validate(&project_root(&project_hash)?))
+}
+
+/// Set the thread's spec link by hand — how the user resolves the ambiguity
+/// `spec-link-ambiguous` reports.
+#[tauri::command]
+fn set_spec_change(project_hash: String, thread_id: String, name: Option<String>) -> Res<ThreadMeta> {
+    store::set_open_spec_change(&floo_home(), &project_hash, &thread_id, name.as_deref())
 }
 
 // ------------------------------------------------------------- graphify
@@ -1219,6 +1554,16 @@ pub fn run() {
             propose,
             stop_executor,
             executor_status,
+            list_sessions,
+            leave_thread,
+            run_verify,
+            list_verifications,
+            verify_commands,
+            session_attribution,
+            list_spec_changes,
+            show_spec_change,
+            validate_spec_changes,
+            set_spec_change,
             run_graphify,
             load_graphify,
             query_graphify,
@@ -1257,19 +1602,39 @@ pub fn run() {
             mac_rounded_corners::enable_modern_window_style,
             mac_rounded_corners::reposition_traffic_lights,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // No process survives the app, so leaving records open would make
+            // every clean quit look like an interrupt on next launch (D20).
+            if matches!(event, tauri::RunEvent::Exit) {
+                release_idle_sessions(&app.state::<Harness>(), None);
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn flight(claude: Option<&str>, codex: Option<&str>, selected: Option<Kind>) -> Preflight {
+    /// Builds a preflight snapshot from whichever agents are "installed",
+    /// straight off the table — no test knows the field names of any agent.
+    fn flight(installed: &[&str]) -> Preflight {
+        let agents: Vec<executor::AgentStatus> = executor::KNOWN_AGENTS
+            .iter()
+            .map(|agent| executor::AgentStatus {
+                id: agent.id.to_string(),
+                label: agent.label.to_string(),
+                path: installed
+                    .contains(&agent.id)
+                    .then(|| format!("/usr/bin/{}", agent.bin)),
+                skills_ok: true,
+                plugin_ok: true,
+            })
+            .collect();
         Preflight {
-            claude: claude.map(str::to_string),
-            codex: codex.map(str::to_string),
-            selected,
+            selected: agents.iter().find(|a| a.path.is_some()).map(|a| a.id.clone()),
+            agents,
             openspec: true,
             grill_apply: true,
             ponytail: true,
@@ -1282,9 +1647,8 @@ mod tests {
 
     #[test]
     fn no_override_uses_auto_detection() {
-        let flight = flight(Some("/usr/bin/claude"), Some("/usr/bin/codex"), Some(Kind::Claude));
-        let (kind, warning) = resolve_executor(&flight, None).unwrap();
-        assert_eq!(kind, Kind::Claude);
+        let (agent, warning) = resolve_executor(&flight(&["claude", "codex"]), None).unwrap();
+        assert_eq!(agent.id, "claude");
         assert!(warning.is_none());
     }
 
@@ -1292,30 +1656,44 @@ mod tests {
     fn an_installed_override_wins_over_auto_detection() {
         // Claude wins auto-detection when both are present, but the override
         // must still be able to force Codex.
-        let flight = flight(Some("/usr/bin/claude"), Some("/usr/bin/codex"), Some(Kind::Claude));
-        let (kind, warning) = resolve_executor(&flight, Some(Kind::Codex)).unwrap();
-        assert_eq!(kind, Kind::Codex);
+        let (agent, warning) =
+            resolve_executor(&flight(&["claude", "codex"]), Some("codex".into())).unwrap();
+        assert_eq!(agent.id, "codex");
         assert!(warning.is_none());
     }
 
     #[test]
     fn an_override_naming_an_uninstalled_executor_falls_back_and_warns() {
-        let flight = flight(Some("/usr/bin/claude"), None, Some(Kind::Claude));
-        let (kind, warning) = resolve_executor(&flight, Some(Kind::Codex)).unwrap();
-        assert_eq!(kind, Kind::Claude, "must fall back to auto-detection, not error");
-        assert!(warning.unwrap().contains("Codex"));
+        let (agent, warning) = resolve_executor(&flight(&["claude"]), Some("codex".into())).unwrap();
+        assert_eq!(agent.id, "claude", "must fall back to auto-detection, not error");
+        let warning = warning.unwrap();
+        assert!(warning.contains("codex") && warning.contains("not on PATH"));
+    }
+
+    /// Task 3.9: an unrecognized *name* is a different failure from a known
+    /// agent that isn't installed, and it must not be silently swallowed. The
+    /// old `Option<Kind>` typing made this case drop the whole settings file
+    /// back to defaults, taking `formatOnSave` with it.
+    #[test]
+    fn an_override_naming_an_unknown_agent_falls_back_and_names_the_known_ones() {
+        let (agent, warning) =
+            resolve_executor(&flight(&["claude", "codex"]), Some("gpt-9".into())).unwrap();
+        assert_eq!(agent.id, "claude");
+        let warning = warning.unwrap();
+        assert!(warning.contains("gpt-9"), "the warning must name what was asked for");
+        for known in executor::KNOWN_AGENTS {
+            assert!(warning.contains(known.id), "and what it could have been: {}", known.id);
+        }
     }
 
     #[test]
     fn an_override_with_no_executors_installed_at_all_still_errors() {
-        let flight = flight(None, None, None);
-        assert!(resolve_executor(&flight, Some(Kind::Claude)).is_err());
+        assert!(resolve_executor(&flight(&[]), Some("claude".into())).is_err());
     }
 
     #[test]
     fn no_override_and_nothing_installed_errors() {
-        let flight = flight(None, None, None);
-        let error = resolve_executor(&flight, None).unwrap_err();
+        let error = resolve_executor(&flight(&[]), None).unwrap_err();
         assert!(error.contains("chat-only"));
     }
 

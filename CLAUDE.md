@@ -1,14 +1,14 @@
 # Floo Network — CLAUDE.md
 
-Cross-machine IDE shell that drives one coding agent (Claude Code or Codex) through a spec-then-build cycle. Rust + Tauri 2 backend, React 19 + TS frontend (Vite), pnpm.
+Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through a spec-then-build cycle. Sessions are concurrent: a thread can hold more than one, and two threads can run at once. Rust + Tauri 2 backend, React 19 + TS frontend (Vite), pnpm.
 
 ## Commands (verified 2026-08-08)
 
 - `pnpm install` — frontend deps (standalone repo, not a workspace member)
-- `pnpm test` — all frontend tests (vitest, 20 files / 189 tests, ~2s)
+- `pnpm test` — all frontend tests (vitest, 25 files / 277 tests, ~5s)
 - `npx vitest run src/__tests__/errors.test.ts` — one frontend test file
 - `npx tsc --noEmit` — typecheck only; `pnpm build` = `tsc && vite build`
-- `cd src-tauri && cargo test` — all Rust tests (116)
+- `cd src-tauri && cargo test` — all Rust tests (173)
 - `cd src-tauri && cargo test git::` — one Rust module's tests
 - `pnpm start` (= `tauri dev`) — dev window; see run skill below before driving it
 
@@ -26,12 +26,18 @@ Cross-machine IDE shell that drives one coding agent (Claude Code or Codex) thro
 
 - **New IPC command = three edits:** the `#[tauri::command]` fn, its name in `generate_handler!` in `lib.rs`, and a wrapper in `src/api.ts`. Miss the third and the frontend silently can't call it.
 - **No headless mode.** Playwright can't drive this (WKWebView, not Chromium). Use the Tauri MCP against the debug-only bridge on `127.0.0.1:9223`.
-- **Executor resolution:** `.project-settings.json`'s `executorOverride` wins; otherwise PATH detection, preferring `claude` over `codex`. Neither found → chat-only, `/go` disabled.
+- **Agents are a const table.** `KNOWN_AGENTS` in `executor.rs` holds one row per agent (id, bin, transport, permission fn, argv fn, parser fn). Adding one is a row plus a parser — no new `match` in `lib.rs`, no TS change. Never name an agent outside the table except for brand artwork.
+- **Executor resolution:** `.project-settings.json`'s `executorOverride` (a string id, resolved against `KNOWN_AGENTS`) wins; otherwise PATH detection in table order, preferring `claude` over `codex`. An unknown id warns and falls back — it never drops the rest of the settings file. Neither found → chat-only, `/go` disabled.
+- **Thread vs Session.** A Thread owns messages, mode *intent*, and the spec link. A Session owns the process, `busy`, the agent identity, and the provider resume handle. `/go` no longer kills the spec session — a thread may hold a live spec session and a live go session at once, and `spec_mode` only sets the thread's default. Stopping is per session.
+- **`ExecutorEvent::Done` ends a turn, not a session.** A session record closes `done` when Floo releases it idle (thread switch, app quit), `crashed`/`cancelled`/`interrupted` otherwise.
+- **Every emitted event is an `Envelope{session_id, thread_id, event}`.** The frontend keys live state by session id; a bare event has nowhere to go.
 - **Preflight checks user-level installs**, not repo files: `~/.claude/skills/grill-apply` (or `~/.agents/...` for Codex) and the Ponytail plugin. Missing ones surface as warnings, not errors.
 - **Graphify runs against the active project, never this repo**, in its own process; output lands in that project's `graphify-out/`.
 - **Session history is append-only.** Never mutate past messages; truncate by copying forward.
 - **`.agents/` and `.claude/` are gitignored** — in-repo skills exist locally but aren't committed.
-- **Two modes only** (spec / go). They share the detected executor and differ by its permission flag (`--permission-mode` / `--sandbox`) and skill focus — not by model. No third mode.
+- **Two modes only** (spec / go). They differ by permission flag (`--permission-mode` / `--sandbox`) and skill focus — not by model. No third mode.
+- **OpenSpec is authoritative for specs.** Floo shells out to `openspec list/show/validate --json` and never writes a spec file. No Floo-computed "% complete": task checkboxes are agent self-reports and must be labeled as such.
+- **Verification is the only evidence.** A spec is green because a named `verify` command exited 0 at a named commit — never because a model said so. No UI string may claim complete/satisfied/implemented on any other basis.
 
 ## Do not touch
 
