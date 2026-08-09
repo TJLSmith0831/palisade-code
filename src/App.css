@@ -2348,3 +2348,14 @@ details.graph-report-wrap > summary {
     max-width: 420px;
   }
 }
+
+/* Command palette rows: the group reads as a prefix, the chord sits right. */
+.ds-command-group {
+  color: var(--muted);
+}
+
+.ds-command-chord {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -55,6 +56,8 @@ import FileEditorPane, {
 import TabBar, { basename } from "./TabBar";
 import { useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
+import CommandPalette from "./CommandPalette";
+import { matchesChord, type Command } from "./commands";
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
@@ -778,6 +781,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
   const filesCache = useRef<Map<string, string[]>>(new Map());
   const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0);
@@ -1443,58 +1447,149 @@ export default function App() {
     if (project) filesCache.current.delete(project.hash);
   }, [project]);
 
+  // Every action, declared once. The palette lists these and the keyboard
+  // handler below dispatches them, so a shortcut can't be bound in one
+  // place and described differently in another.
+  const commands = useMemo<Command[]>(
+    () => [
+      {
+        id: "file.open",
+        group: "Go",
+        label: "Go to file…",
+        chord: "Mod+P",
+        keywords: "open quick jump",
+        enabled: !!project,
+        run: () => void openFilePalette(),
+      },
+      {
+        id: "file.search",
+        group: "Go",
+        label: "Find in files…",
+        chord: "Mod+Shift+F",
+        keywords: "search grep text",
+        enabled: !!project,
+        run: () => void openTextSearch(),
+      },
+      {
+        id: "tab.close",
+        group: "Tabs",
+        label: "Close tab",
+        chord: "Mod+W",
+        enabled: !!activePathRef.current,
+        run: () => {
+          const path = activePathRef.current;
+          if (path) closeTabRef.current(path);
+        },
+      },
+      {
+        id: "tab.reopen",
+        group: "Tabs",
+        label: "Reopen closed tab",
+        chord: "Mod+Shift+T",
+        run: () => tabsRef.current.reopenLast(),
+      },
+      {
+        id: "tab.next",
+        group: "Tabs",
+        label: "Next tab",
+        chord: "Ctrl+Tab",
+        run: () => tabsRef.current.cycle(1),
+      },
+      {
+        id: "tab.previous",
+        group: "Tabs",
+        label: "Previous tab",
+        chord: "Ctrl+Shift+Tab",
+        run: () => tabsRef.current.cycle(-1),
+      },
+      {
+        id: "view.diff",
+        group: "View",
+        label: "Toggle changes view",
+        keywords: "diff git review",
+        run: () => setDiffOpen((open) => !open),
+      },
+      {
+        id: "view.shell",
+        group: "View",
+        label: "Switch between Vibe and Editor",
+        keywords: "shell layout agent",
+        run: () => setCenterShell(centerShell === "vibe" ? "editor" : "vibe"),
+      },
+      {
+        id: "view.rightPanel",
+        group: "View",
+        label: "Toggle right panel",
+        chord: "Mod+J",
+        run: () => rightPanel.toggleCollapsed(),
+      },
+      {
+        id: "view.leftRail",
+        group: "View",
+        label: "Toggle file tree",
+        chord: "Mod+Backslash",
+        keywords: "explorer sidebar",
+        run: () => leftRail.toggleCollapsed(),
+      },
+      {
+        id: "view.terminal",
+        group: "View",
+        label: "Toggle terminal",
+        chord: "Mod+Backtick",
+        run: () => toggleTerminal(),
+      },
+      {
+        id: "app.settings",
+        group: "App",
+        label: "Open settings",
+        keywords: "preferences font theme wrap",
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: "app.projectSettings",
+        group: "App",
+        label: "Edit .project-settings.json",
+        keywords: "format on save executor",
+        enabled: !!project,
+        run: () => void onOpenSettings(),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      project,
+      centerShell,
+      // Recomputed as tabs come and go: "Close tab" is only offered when
+      // there is one, and a stale memo would keep hiding it.
+      tabs.activePath,
+      openFilePalette,
+      openTextSearch,
+      rightPanel.toggleCollapsed,
+      leftRail.toggleCollapsed,
+      toggleTerminal,
+      setCenterShell,
+    ]
+  );
+  const commandsRef = useRef(commands);
+  commandsRef.current = commands;
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
-        event.preventDefault();
-        openFilePalette();
-      }
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.shiftKey &&
-        event.key.toLowerCase() === "f"
-      ) {
-        event.preventDefault();
-        openTextSearch();
-      }
       if (event.key === "Escape") setBar(null);
-      // Cmd+W closes the active tab rather than the window — the window is
-      // still reachable with Cmd+Q, and losing the whole app because you
-      // meant to close a file is the worse mistake.
-      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "w") {
+      if (matchesChord(event, "Mod+Shift+P")) {
         event.preventDefault();
-        if (activePathRef.current) closeTabRef.current(activePathRef.current);
+        setCommandPaletteOpen(true);
+        return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "t") {
-        event.preventDefault();
-        tabsRef.current.reopenLast();
-      }
-      if (event.ctrlKey && event.key === "Tab") {
-        event.preventDefault();
-        tabsRef.current.cycle(event.shiftKey ? -1 : 1);
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
-        event.preventDefault();
-        rightPanel.toggleCollapsed();
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
-        event.preventDefault();
-        leftRail.toggleCollapsed();
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key === "`") {
-        event.preventDefault();
-        toggleTerminal();
-      }
+      const command = commandsRef.current.find(
+        (candidate) => candidate.chord && matchesChord(event, candidate.chord)
+      );
+      if (!command) return;
+      event.preventDefault();
+      command.run();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [
-    openFilePalette,
-    openTextSearch,
-    rightPanel.toggleCollapsed,
-    leftRail.toggleCollapsed,
-    toggleTerminal,
-  ]);
+  }, []);
 
   // ------------------------------------------------------------------ view
 
@@ -2428,6 +2523,13 @@ export default function App() {
           <SettingsPanel
             onOpenProjectSettings={onOpenSettings}
             onClose={() => setSettingsOpen(false)}
+          />
+        )}
+
+        {commandPaletteOpen && (
+          <CommandPalette
+            commands={commands}
+            onClose={() => setCommandPaletteOpen(false)}
           />
         )}
 

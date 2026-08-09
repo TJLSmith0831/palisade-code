@@ -1326,6 +1326,62 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
   });
 });
 
+describe("Command palette", () => {
+  it("opens on Cmd+Shift+P and lists commands with their shortcuts", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+
+    await waitFor(() => expect(screen.getByTestId("command-palette-input")).toBeDefined());
+    const items = screen.getAllByTestId("command-palette-item");
+    expect(items.length).toBeGreaterThan(0);
+    // The shortcut is shown next to the command, from the same declaration
+    // the keyboard handler dispatches.
+    expect(screen.getByTestId("command-palette-results").textContent).toContain("⌘J");
+  });
+
+  it("filters as you type and runs the chosen command", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId("command-palette-input")).toBeDefined());
+
+    fireEvent.change(screen.getByTestId("command-palette-input"), {
+      target: { value: "terminal" },
+    });
+    const items = screen.getAllByTestId("command-palette-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveAttribute("data-command", "view.terminal");
+
+    fireEvent.click(items[0]);
+    await waitFor(() => expect(screen.queryByTestId("command-palette-input")).toBeNull());
+    await waitFor(() => expect(screen.getByTestId("terminal-pane")).toBeDefined());
+  });
+
+  it("says so when nothing matches", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId("command-palette-input")).toBeDefined());
+
+    fireEvent.change(screen.getByTestId("command-palette-input"), {
+      target: { value: "zzzznope" },
+    });
+    expect(screen.getByTestId("command-palette-empty")).toBeDefined();
+  });
+
+  it("does not also open the file palette, which is one Shift away", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("project-picker")).toHaveValue("proj-1"));
+
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+
+    await waitFor(() => expect(screen.getByTestId("command-palette-input")).toBeDefined());
+    expect(screen.queryByTestId("file-palette-input")).toBeNull();
+  });
+});
+
 describe("Session restore", () => {
   const project = {
     hash: "proj-1", root: "/tmp/p", displayName: "p",
