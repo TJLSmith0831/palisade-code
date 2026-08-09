@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Badge } from "@mantine/core";
+import { Alert, Badge } from "@mantine/core";
 import type { StructuredPatch, StructuredPatchHunk } from "diff";
 
 import * as api from "./api";
@@ -132,9 +132,15 @@ export default function DiffPane({ projectHash }: Props) {
     return (
       <div className="diff-pane" data-testid="diff-pane">
         {error && (
-          <div className="graph-error" data-testid="diff-error">
+          <Alert
+            color="var(--danger)"
+            variant="light"
+            m="12px 16px 0"
+            style={{ whiteSpace: "pre-wrap" }}
+            data-testid="diff-error"
+          >
             {error}
-          </div>
+          </Alert>
         )}
         <p className="empty">This project isn't a git repository yet.</p>
         <button
@@ -156,9 +162,15 @@ export default function DiffPane({ projectHash }: Props) {
   return (
     <div className="diff-pane" data-testid="diff-pane">
       {error && (
-        <div className="graph-error" data-testid="diff-error">
+        <Alert
+          color="var(--danger)"
+          variant="light"
+          m="12px 16px 0"
+          style={{ whiteSpace: "pre-wrap" }}
+          data-testid="diff-error"
+        >
           {error}
-        </div>
+        </Alert>
       )}
 
       <div className="diff-sticky-controls">

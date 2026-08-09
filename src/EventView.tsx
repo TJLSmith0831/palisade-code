@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Alert } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import { IconGhost3Filled } from "@tabler/icons-react";
 
@@ -146,13 +147,14 @@ export function EventList({
             // A crash is persisted as a system turn; it stays a banner on reload.
             if (item.role === "system") {
               return (
-                <div
+                <Alert
                   key={index}
-                  className="crash-banner"
+                  color="var(--danger)"
+                  variant="light"
                   data-testid="crash-banner"
                 >
                   {item.text} Reverted to spec mode.
-                </div>
+                </Alert>
               );
             }
             if (item.role === "assistant") {
@@ -221,15 +223,16 @@ export function EventList({
             );
           case "crashed":
             return (
-              <div
+              <Alert
                 key={index}
-                className="crash-banner"
+                color="var(--danger)"
+                variant="light"
                 data-testid="crash-banner"
               >
                 {item.message}
                 {item.exitCode !== null && ` (exit code ${item.exitCode})`}{" "}
                 Reverted to spec mode.
-              </div>
+              </Alert>
             );
           // Tool output is drawn inside its call; `done` is bookkeeping.
           case "toolResult":

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Alert } from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
@@ -144,9 +145,15 @@ export default function GraphPane({ projectHash }: Props) {
       </div>
 
       {error && (
-        <div className="graph-error" data-testid="graph-error">
+        <Alert
+          color="var(--danger)"
+          variant="light"
+          m="12px 16px 0"
+          style={{ whiteSpace: "pre-wrap" }}
+          data-testid="graph-error"
+        >
           {error}
-        </div>
+        </Alert>
       )}
 
       {run ? (

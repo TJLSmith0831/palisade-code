@@ -20,6 +20,7 @@ import {
   ActionIcon,
   Loader,
   Badge,
+  Alert,
 } from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -1393,11 +1394,16 @@ export default function App() {
           </div>
         </header>
         {flight && flight.warnings.length > 0 && (
-          <div className="warnings" data-testid="preflight-warnings">
+          <Alert
+            color="var(--warn)"
+            variant="light"
+            radius={0}
+            data-testid="preflight-warnings"
+          >
             {flight.warnings.map((warning) => (
               <div key={warning}>⚠ {warning}</div>
             ))}
-          </div>
+          </Alert>
         )}
 
         {errors.map((e) => (

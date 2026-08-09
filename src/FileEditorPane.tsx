@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert } from "@mantine/core";
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -156,9 +157,15 @@ export default function FileEditorPane({ projectHash, path, onSave, onDirtyChang
   }
   if (error) {
     return (
-      <div className="graph-error" data-testid="file-editor-error">
+      <Alert
+        color="var(--danger)"
+        variant="light"
+        m="12px 16px 0"
+        style={{ whiteSpace: "pre-wrap" }}
+        data-testid="file-editor-error"
+      >
         {error}
-      </div>
+      </Alert>
     );
   }
   const mediaKind = mediaKindFor(path);

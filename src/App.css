@@ -119,8 +119,7 @@ pre,
 .commandbar label,
 .working,
 .message .meta,
-.thread-meta,
-.warnings {
+.thread-meta {
   font-family:
     ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
     monospace;
@@ -1368,14 +1367,6 @@ input[type="checkbox"] {
 
 /* --- executor handoff --------------------------------------------------- */
 
-.warnings {
-  padding: 10px 16px;
-  background: color-mix(in oklab, var(--warn), transparent 92%);
-  border-bottom: 1px solid color-mix(in oklab, var(--warn), transparent 80%);
-  font-size: 12px;
-  color: var(--warn);
-}
-
 .working {
   align-self: flex-start;
   display: inline-flex;
@@ -1393,15 +1384,6 @@ input[type="checkbox"] {
   .mantine-Loader-root > * {
     animation: none;
   }
-}
-
-.crash-banner {
-  border: 1px solid color-mix(in oklab, var(--danger), transparent 70%);
-  background: color-mix(in oklab, var(--danger), transparent 90%);
-  border-radius: 6px;
-  padding: 10px 14px;
-  color: var(--danger);
-  font-size: 13px;
 }
 
 .tool-block {
@@ -1712,17 +1694,6 @@ input[type="checkbox"] {
 
 .toggle input {
   accent-color: var(--accent);
-}
-
-.graph-error {
-  margin: 12px 16px 0;
-  border: 1px solid color-mix(in oklab, var(--danger), transparent 70%);
-  background: color-mix(in oklab, var(--danger), transparent 90%);
-  border-radius: 6px;
-  padding: 10px 14px;
-  color: var(--danger);
-  font-size: 13px;
-  white-space: pre-wrap;
 }
 
 .graph-body {
