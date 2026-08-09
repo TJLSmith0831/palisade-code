@@ -27,6 +27,13 @@ use notify::RecommendedWatcher;
 /// enough that an agent edit shows up while you're still watching it happen.
 const DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// Graphify's output directory, which `graphify watch` rewrites every few
+/// seconds while it runs. Filtered here rather than in `should_skip_entry`
+/// so the file tree still *lists* it — it's browsable output, it just isn't
+/// a change the editor or the tree should react to. Without this, a running
+/// watch collapses the tree's expanded folders on a loop.
+const GRAPHIFY_OUT_DIR: &str = "graphify-out";
+
 /// How long after one of our own writes we ignore events for that path.
 /// FSEvents can take a moment to deliver, so this outlives `DEBOUNCE`.
 const SELF_WRITE_WINDOW: Duration = Duration::from_millis(1500);
@@ -146,7 +153,7 @@ fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
     }
     for component in relative.components() {
         let name = component.as_os_str().to_string_lossy();
-        if crate::should_skip_entry(&name, false) {
+        if crate::should_skip_entry(&name, false) || name == GRAPHIFY_OUT_DIR {
             return None;
         }
     }
@@ -247,6 +254,22 @@ mod tests {
 
         let changed = recv_changes(&rx).expect("the real file should report");
         assert_eq!(changed, vec!["real.txt".to_string()], "skip list leaked: {changed:?}");
+    }
+
+    #[test]
+    fn ignores_graphify_output_so_a_running_watch_does_not_thrash_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("graphify-out")).unwrap();
+        let (_watcher, rx) = watcher_on(dir.path());
+
+        // `graphify watch` rewrites this every few seconds for as long as
+        // it's running.
+        std::fs::write(dir.path().join("graphify-out/needs_update"), "1").unwrap();
+        std::fs::write(dir.path().join("graphify-out/graph.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("real.txt"), "signal").unwrap();
+
+        let changed = recv_changes(&rx).expect("the real file should report");
+        assert_eq!(changed, vec!["real.txt".to_string()], "graphify churn leaked: {changed:?}");
     }
 
     #[test]

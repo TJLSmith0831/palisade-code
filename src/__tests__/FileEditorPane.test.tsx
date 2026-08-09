@@ -191,6 +191,50 @@ describe("FileEditorPane", () => {
       expect(document.querySelector(".cm-content")?.textContent).toContain("mine");
     });
 
+    it("shows the new content after 'discard mine, reload', not the version it had before", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <FileEditorPane projectHash="abc" path="src/foo.ts" externalChange={null} />
+      );
+      await waitFor(() =>
+        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
+      );
+
+      const content = document.querySelector(".cm-content") as HTMLElement;
+      content.focus();
+      await user.type(content, "mine");
+      await waitFor(() => expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined());
+
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_content") return Promise.resolve("what the agent wrote\n");
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      });
+      rerender(
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={{ path: "src/foo.ts", at: 1 }}
+        />
+      );
+      await waitFor(() => expect(screen.getByTestId("file-conflict-banner")).toBeDefined());
+
+      await user.click(screen.getByTestId("conflict-reload"));
+
+      // Covers the user-visible behaviour of the reload path. Note it does
+      // not reproduce the commit-ordering race that originally broke this
+      // (the view was rebuilt only when content crossed null, so a read
+      // resolving before that commit left the previous document on screen);
+      // jsdom's flush timing hides it. That one was caught by driving the
+      // real app, and is prevented structurally by rebuilding per load.
+      await waitFor(() =>
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "what the agent wrote"
+        )
+      );
+      expect(document.querySelector(".cm-content")?.textContent).not.toContain("mine");
+      expect(screen.queryByTestId("file-conflict-banner")).toBeNull();
+    });
+
     it("ignores a change to a different file", async () => {
       const { rerender } = render(
         <FileEditorPane projectHash="abc" path="src/foo.ts" externalChange={null} />

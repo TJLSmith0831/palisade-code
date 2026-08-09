@@ -58,9 +58,15 @@ export default function FileEditorPane({
   // The file changed on disk while this buffer was dirty, so neither version
   // can be discarded without asking.
   const [conflict, setConflict] = useState(false);
-  // Bumped to re-read the file and rebuild the view — the reload half of the
-  // conflict banner, and the silent path when the buffer was clean.
+  // Bumped to re-read the file — the reload half of the conflict banner, and
+  // the silent path when the buffer was clean.
   const [reloadToken, setReloadToken] = useState(0);
+  // Incremented once per *load*, and never on save. The view is rebuilt from
+  // this rather than from "content stopped being null", because a reload's
+  // read can resolve before React commits the intervening `setContent(null)`
+  // — the content then changes without ever crossing the null boundary, and
+  // a view keyed on that boundary would keep showing the previous file.
+  const [loadSeq, setLoadSeq] = useState(0);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -145,7 +151,10 @@ export default function FileEditorPane({
     }
     api
       .readFileContent(projectHash, path)
-      .then(setContent)
+      .then((text) => {
+        setContent(text);
+        setLoadSeq((seq) => seq + 1);
+      })
       .catch((err) => setError(describeError(err)));
   }, [projectHash, path, reloadToken]);
 
@@ -189,7 +198,7 @@ export default function FileEditorPane({
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, contentLoaded, reloadToken]);
+  }, [path, contentLoaded, loadSeq]);
 
   // Live-reconfigure the font on a settings change, without waiting for the
   // next file switch to remount the view (mirrors languageCompartment's use
