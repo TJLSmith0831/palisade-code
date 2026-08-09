@@ -220,6 +220,7 @@ type ChatSurfaceProps = {
   onGo: () => void;
   dragActive: boolean;
   newThreadPicker: boolean;
+  showEmptyModePicker?: boolean;
   onPickMode: (mode: api.Mode) => void;
 };
 
@@ -240,15 +241,21 @@ function ChatSurface({
   onGo,
   dragActive,
   newThreadPicker,
+  showEmptyModePicker = false,
   onPickMode,
 }: ChatSurfaceProps) {
-  if (newThreadPicker) {
+  if (newThreadPicker || showEmptyModePicker) {
     return (
       <>
-        <div className="pane-head">
-          <strong>New thread</strong>
-        </div>
-        <div className="ds-new-thread-picker" data-testid="mode-picker">
+        {newThreadPicker && (
+          <div className="pane-head">
+            <strong>New thread</strong>
+          </div>
+        )}
+        <div
+          className={`ds-new-thread-picker${showEmptyModePicker ? " ds-vibe-empty-picker" : ""}`}
+          data-testid="mode-picker"
+        >
           <div className="ds-mode-picker">
             <button
               className="ds-mode-card"
@@ -2309,6 +2316,7 @@ export default function App() {
                   onGo={onGo}
                   dragActive={dragActive}
                   newThreadPicker={newThreadPicker}
+                  showEmptyModePicker={threads.length === 0 && !thread}
                   onPickMode={onPickMode}
                 />
               </section>

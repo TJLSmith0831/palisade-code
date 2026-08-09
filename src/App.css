@@ -1343,6 +1343,10 @@ input[type="checkbox"] {
   padding: 24px;
 }
 
+.ds-vibe-empty-picker {
+  padding: 32px;
+}
+
 .pane-head {
   display: flex;
   align-items: center;

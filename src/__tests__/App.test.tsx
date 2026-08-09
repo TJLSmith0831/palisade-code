@@ -1952,6 +1952,21 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
 });
 
 describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
+  it("shows the Spec/Go picker centered in Vibe when there are no threads", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() =>
+      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+    );
+
+    const picker = screen.getByTestId("mode-picker");
+    expect(picker).toBeDefined();
+    expect(picker.className).toContain("ds-vibe-empty-picker");
+    expect(screen.getByTestId("pick-vibe")).toBeDefined();
+    expect(screen.getByTestId("pick-spec")).toBeDefined();
+    expect(screen.queryByText("Create a thread to get started.")).toBeNull();
+  });
+
   it("renders chat as the main column, not a tab", async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId("shell-vibe"));
