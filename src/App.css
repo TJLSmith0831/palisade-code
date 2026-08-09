@@ -122,7 +122,6 @@ pre,
 .message .meta,
 .thread-meta,
 .badge,
-.status,
 .warnings {
   font-family:
     ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
@@ -238,45 +237,8 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
-/* .ds-mode-selector removed from top chrome — mode toggle now lives in .composer-mode-selector */
-
-.ds-mode-btn {
-  padding: 3px 10px;
-  border-radius: 9999px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  background: transparent;
-  border: none;
-  transition: all 120ms ease-out;
-}
-
-.ds-mode-btn kbd {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 9px;
-  padding: 0 3px;
-  background: var(--bg);
-  border-radius: 3px;
-}
-
-.ds-mode-btn.active {
-  background: var(--bg);
-  color: var(--fg);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-.ds-mode-btn:not(.active):hover {
-  color: var(--fg);
-}
-
-.ds-mode-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
+/* .ds-mode-selector removed from top chrome — mode toggle is now a Mantine
+   SegmentedControl in the composer. */
 
 /* Vibe/Editor workspace-shell toggle — layout switch only, independent of a
    thread's own Spec/Go mode. Sits directly after the (native, non-DOM)
@@ -332,15 +294,6 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.ds-model-group-label {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  padding: 4px 6px 2px;
 }
 
 .ds-model-executor-row {
@@ -1439,21 +1392,6 @@ input[type="checkbox"] {
 
 /* --- executor handoff --------------------------------------------------- */
 
-.status.ok {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.status.warn {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-
-.status.bad {
-  color: var(--muted);
-  border-color: var(--border);
-}
-
 .warnings {
   padding: 10px 16px;
   background: color-mix(in oklab, var(--warn), transparent 92%);
@@ -2083,42 +2021,6 @@ details.graph-report-wrap > summary {
 .composer.drag-active {
   background: color-mix(in oklab, var(--accent), transparent 92%);
   outline-color: var(--accent);
-}
-
-.composer input {
-  flex: 1;
-  background: var(--surface);
-}
-
-.composer .send {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  background: var(--accent);
-  color: var(--accent-on);
-  border: none;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  transition: background 120ms ease-out;
-}
-
-.composer .send svg {
-  width: 12px;
-  height: 12px;
-}
-
-.composer .send:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--accent), white 8%);
-}
-
-.composer .send:active:not(:disabled) {
-  background: color-mix(in oklab, var(--accent), white 15%);
-}
-
-.composer .send:disabled {
-  opacity: 0.4;
 }
 
 .empty {
