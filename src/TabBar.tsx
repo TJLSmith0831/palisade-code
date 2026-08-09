@@ -41,7 +41,13 @@ export default function TabBar({
         value={diffOpen ? null : activePath}
         onChange={(value) => value && onSelect(value)}
         variant="default"
-        style={{ flex: 1, minWidth: 0 }}
+        style={
+          {
+            flex: 1,
+            minWidth: 0,
+            "--tab-border-color": "transparent",
+          } as React.CSSProperties
+        }
       >
         <Tabs.List style={{ flexWrap: "nowrap", overflowX: "auto" }}>
           {tabs.map((tab) => (
