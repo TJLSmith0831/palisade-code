@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { Modal as MantineModal } from "@mantine/core";
+import { Checkbox, Group, Modal as MantineModal } from "@mantine/core";
 import { fuzzyMatch } from "./fuzzyMatch";
-import type { TextMatch } from "./api";
+import type { SearchOptions, TextSearchResult, TextMatch } from "./api";
 
 const MAX_FILE_RESULTS = 20;
+/** Long enough that typing a word doesn't walk the tree once per keystroke,
+ * short enough that results feel like they arrive as you type. */
+const SEARCH_DEBOUNCE_MS = 150;
 
 type ResultItem = { kind: "file"; path: string } | { kind: "text"; match: TextMatch };
 
 type Props = {
   files: string[];
-  onSearchText: (query: string) => Promise<TextMatch[]>;
-  onSelect: (path: string) => void;
+  onSearchText: (query: string, options: SearchOptions) => Promise<TextSearchResult>;
+  /** `line` opens the file scrolled to that match. */
+  onSelect: (path: string, line?: number) => void;
   onClose: () => void;
 };
 
@@ -19,8 +23,15 @@ type Props = {
 export default function TextSearchPalette({ files, onSearchText, onSelect, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [textMatches, setTextMatches] = useState<TextMatch[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [options, setOptions] = useState<SearchOptions>({
+    regex: false,
+    caseSensitive: false,
+    wholeWord: false,
+  });
 
   const fileResults = useMemo(() => {
     const trimmed = query.trim();
@@ -34,27 +45,42 @@ export default function TextSearchPalette({ files, onSearchText, onSelect, onClo
     return scored.slice(0, MAX_FILE_RESULTS).map((r) => r.path);
   }, [files, query]);
 
-  // Debounced only by React's own event batching — the backend already caps
-  // results, and project trees here are small enough that this stays snappy.
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
       setTextMatches([]);
+      setTruncated(false);
+      setSearchError(null);
       return;
     }
     let cancelled = false;
-    setBusy(true);
-    onSearchText(trimmed)
-      .then((matches) => {
-        if (!cancelled) setTextMatches(matches);
-      })
-      .finally(() => {
-        if (!cancelled) setBusy(false);
-      });
+    // Debounced: this walks the whole project, and a half-typed regex is
+    // both expensive and guaranteed to be invalid.
+    const timer = setTimeout(() => {
+      setBusy(true);
+      setSearchError(null);
+      onSearchText(trimmed, options)
+        .then((result) => {
+          if (cancelled) return;
+          setTextMatches(result.matches);
+          setTruncated(result.truncated);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setTextMatches([]);
+          setTruncated(false);
+          // Almost always a regex the user hasn't finished typing.
+          setSearchError(String(err).replace(/^Error:\s*/, ""));
+        })
+        .finally(() => {
+          if (!cancelled) setBusy(false);
+        });
+    }, SEARCH_DEBOUNCE_MS);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [query, onSearchText]);
+  }, [query, options, onSearchText]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -69,7 +95,9 @@ export default function TextSearchPalette({ files, onSearchText, onSelect, onClo
   );
 
   const select = (item: ResultItem) => {
-    onSelect(item.kind === "file" ? item.path : item.match.path);
+    if (item.kind === "file") onSelect(item.path);
+    // The line was already in the result; it just used to be thrown away.
+    else onSelect(item.match.path, item.match.line);
     onClose();
   };
 
@@ -105,12 +133,62 @@ export default function TextSearchPalette({ files, onSearchText, onSelect, onClo
           }
         }}
       />
+      <Group gap="md" mt="xs" mb="xs">
+        <Checkbox
+          size="xs"
+          label="Aa"
+          aria-label="Match case"
+          checked={options.caseSensitive}
+          // Read before the updater runs: React nulls `currentTarget`
+          // once the handler returns, and the updater is called later.
+          onChange={(e) => {
+            const checked = e.currentTarget.checked;
+            setOptions((o) => ({ ...o, caseSensitive: checked }));
+          }}
+          data-testid="search-case-sensitive"
+        />
+        <Checkbox
+          size="xs"
+          label="Whole word"
+          checked={options.wholeWord}
+          // Read before the updater runs: React nulls `currentTarget`
+          // once the handler returns, and the updater is called later.
+          onChange={(e) => {
+            const checked = e.currentTarget.checked;
+            setOptions((o) => ({ ...o, wholeWord: checked }));
+          }}
+          data-testid="search-whole-word"
+        />
+        <Checkbox
+          size="xs"
+          label=".*"
+          aria-label="Regular expression"
+          checked={options.regex}
+          // Read before the updater runs: React nulls `currentTarget`
+          // once the handler returns, and the updater is called later.
+          onChange={(e) => {
+            const checked = e.currentTarget.checked;
+            setOptions((o) => ({ ...o, regex: checked }));
+          }}
+          data-testid="search-regex"
+        />
+      </Group>
+      {searchError && (
+        <div className="file-palette-error" data-testid="text-search-error">
+          {searchError}
+        </div>
+      )}
+      {truncated && (
+        <div className="file-palette-empty" data-testid="text-search-truncated">
+          Showing the first {textMatches.length} matches — narrow the search to see the rest.
+        </div>
+      )}
       {busy && (
         <div className="file-palette-error" data-testid="text-search-busy">
           Searching…
         </div>
       )}
-      {query.trim() !== "" && !busy && results.length === 0 && (
+      {query.trim() !== "" && !busy && !searchError && results.length === 0 && (
         <div className="file-palette-empty" data-testid="text-search-empty">
           No matches
         </div>

@@ -547,7 +547,9 @@ describe("Editor chrome (merged-design v2)", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
-    fireEvent.click(screen.getByText("AGENTS.md"));
+    // The tree container mounts before its root listing resolves, so wait
+    // for the entry rather than for its parent.
+    fireEvent.click(await screen.findByText("AGENTS.md"));
 
     await waitFor(() => expect(screen.getByTestId("file-editor")).toBeDefined());
     await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());

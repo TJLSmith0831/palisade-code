@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 use executor::{ExecutorEvent, Harness, Kind, Preflight, Sink, Spawn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use store::{floo_home, Message, Project, Res, ThreadMeta};
 
 #[derive(Debug, Clone, Serialize)]
@@ -799,17 +799,92 @@ struct TextMatch {
     text: String,
 }
 
-const MAX_TEXT_MATCHES: usize = 200;
+/// Raised from 200: at the old cap a common word stopped the walk a
+/// fraction of the way into a real repo, and silently — the UI had no way
+/// to say the list was cut short.
+const MAX_TEXT_MATCHES: usize = 1000;
+
+/// How the query is interpreted. Defaults match the old behaviour exactly
+/// (case-insensitive substring), so existing callers see no change.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SearchOptions {
+    pub regex: bool,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TextSearchResult {
+    matches: Vec<TextMatch>,
+    /// The walk stopped at the cap — there are more matches than these.
+    truncated: bool,
+}
+
+/// A compiled query. `Substring` keeps the plain path allocation-light for
+/// the common case rather than routing everything through the regex engine.
+enum Matcher {
+    Substring(String),
+    Pattern(regex::Regex),
+}
+
+impl Matcher {
+    fn build(query: &str, options: SearchOptions) -> Res<Self> {
+        if !options.regex && !options.whole_word {
+            return Ok(if options.case_sensitive {
+                Matcher::Substring(query.to_string())
+            } else {
+                Matcher::Substring(query.to_lowercase())
+            });
+        }
+        // Whole-word wraps whatever the user typed in boundaries; a literal
+        // query has to be escaped first or its punctuation becomes syntax.
+        let body = if options.regex {
+            query.to_string()
+        } else {
+            regex::escape(query)
+        };
+        let pattern = if options.whole_word {
+            format!(r"\b(?:{body})\b")
+        } else {
+            body
+        };
+        regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!options.case_sensitive)
+            .build()
+            // The user is mid-typing a regex most of the time this fires,
+            // so it reports as a normal error rather than panicking.
+            .map(Matcher::Pattern)
+            .map_err(|err| format!("invalid search pattern: {err}"))
+    }
+
+    fn is_match(&self, line: &str, case_sensitive: bool) -> bool {
+        match self {
+            Matcher::Substring(needle) => {
+                if case_sensitive {
+                    line.contains(needle.as_str())
+                } else {
+                    line.to_lowercase().contains(needle.as_str())
+                }
+            }
+            Matcher::Pattern(pattern) => pattern.is_match(line),
+        }
+    }
+}
 
 /// Walks `root` with the same skip rules as `list_all_files`, returning every
-/// line containing `query` (case-insensitive), capped at `MAX_TEXT_MATCHES`.
-/// Files that fail UTF-8 decoding (binaries, images) are silently skipped.
-fn search_text_in(root: &Path, query: &str) -> Vec<TextMatch> {
+/// line matching `query`, capped at `MAX_TEXT_MATCHES`. Files that fail UTF-8
+/// decoding (binaries, images) are silently skipped.
+fn search_text_in(root: &Path, query: &str, options: SearchOptions) -> Res<TextSearchResult> {
     let mut matches = Vec::new();
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return matches;
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(TextSearchResult { matches, truncated: false });
     }
+    let matcher = Matcher::build(trimmed, options)?;
+    let mut truncated = false;
+
     let mut stack = vec![root.to_path_buf()];
     'walk: while let Some(dir) = stack.pop() {
         let Ok(read_dir) = std::fs::read_dir(&dir) else {
@@ -834,26 +909,31 @@ fn search_text_in(root: &Path, query: &str) -> Vec<TextMatch> {
                 .to_string_lossy()
                 .to_string();
             for (i, line) in content.lines().enumerate() {
-                if line.to_lowercase().contains(&needle) {
+                if matcher.is_match(line, options.case_sensitive) {
                     matches.push(TextMatch {
                         path: rel.clone(),
                         line: i + 1,
                         text: line.trim().to_string(),
                     });
                     if matches.len() >= MAX_TEXT_MATCHES {
+                        truncated = true;
                         break 'walk;
                     }
                 }
             }
         }
     }
-    matches
+    Ok(TextSearchResult { matches, truncated })
 }
 
 #[tauri::command]
-fn search_text(project_hash: String, query: String) -> Res<Vec<TextMatch>> {
+fn search_text(
+    project_hash: String,
+    query: String,
+    options: Option<SearchOptions>,
+) -> Res<TextSearchResult> {
     let root = project_root(&project_hash)?;
-    Ok(search_text_in(&root, &query))
+    search_text_in(&root, &query, options.unwrap_or_default())
 }
 
 /// Resolves `relative_path` against `root`, requiring it to already exist
@@ -1352,17 +1432,106 @@ mod tests {
         assert!(check_not_project_root(&canonical_root, &resolved).is_ok());
     }
 
+    /// Search with the defaults — case-insensitive substring, what the UI
+    /// sends unless the user turns a toggle on.
+    fn plain(root: &Path, query: &str) -> Vec<TextMatch> {
+        search_text_in(root, query, SearchOptions::default()).unwrap().matches
+    }
+
+    fn with(root: &Path, query: &str, options: SearchOptions) -> Vec<TextMatch> {
+        search_text_in(root, query, options).unwrap().matches
+    }
+
+    #[test]
+    fn a_case_sensitive_search_skips_the_other_casing() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "Needle\nneedle\n").unwrap();
+
+        let found = with(&canonical_root, "needle", SearchOptions { case_sensitive: true, ..Default::default() });
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line, 2);
+    }
+
+    #[test]
+    fn a_whole_word_search_does_not_match_inside_a_longer_word() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "let count = 1;\nrecount()\n").unwrap();
+
+        let found = with(&canonical_root, "count", SearchOptions { whole_word: true, ..Default::default() });
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line, 1);
+    }
+
+    #[test]
+    fn a_regex_search_matches_a_pattern_rather_than_a_literal() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.rs"), "fn alpha() {}\nfn beta() {}\nlet x = 1;\n").unwrap();
+
+        let found = with(&canonical_root, r"fn \w+\(\)", SearchOptions { regex: true, ..Default::default() });
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn a_literal_search_does_not_treat_punctuation_as_a_pattern() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "a.b\naxb\n").unwrap();
+
+        // Whole-word escapes the query, so "." stays a full stop rather
+        // than becoming "any character".
+        let found = with(&canonical_root, "a.b", SearchOptions { whole_word: true, ..Default::default() });
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text, "a.b");
+    }
+
+    #[test]
+    fn a_malformed_regex_reports_an_error_instead_of_panicking() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "anything\n").unwrap();
+
+        // What the user has on screen halfway through typing "(foo)".
+        let error = search_text_in(&canonical_root, "(foo", SearchOptions { regex: true, ..Default::default() })
+            .unwrap_err();
+        assert!(error.contains("invalid search pattern"), "got {error}");
+    }
+
+    #[test]
+    fn hitting_the_match_cap_reports_the_results_as_truncated() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let many = "needle\n".repeat(MAX_TEXT_MATCHES + 50);
+        std::fs::write(canonical_root.join("a.txt"), many).unwrap();
+
+        let result = search_text_in(&canonical_root, "needle", SearchOptions::default()).unwrap();
+        assert_eq!(result.matches.len(), MAX_TEXT_MATCHES);
+        assert!(result.truncated, "the UI needs to know the list was cut short");
+    }
+
+    #[test]
+    fn a_result_set_under_the_cap_is_not_reported_as_truncated() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(canonical_root.join("a.txt"), "needle\n").unwrap();
+
+        let result = search_text_in(&canonical_root, "needle", SearchOptions::default()).unwrap();
+        assert!(!result.truncated);
+    }
+
     #[test]
     fn search_text_in_finds_case_insensitive_matches_with_line_numbers() {
         let root = tempfile::tempdir().unwrap();
         let canonical_root = std::fs::canonicalize(root.path()).unwrap();
         std::fs::write(canonical_root.join("a.txt"), "hello\nWorld\nfoo bar\n").unwrap();
 
-        let matches = search_text_in(&canonical_root, "world");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].path, "a.txt");
-        assert_eq!(matches[0].line, 2);
-        assert_eq!(matches[0].text, "World");
+        let found = plain(&canonical_root, "world");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "a.txt");
+        assert_eq!(found[0].line, 2);
+        assert_eq!(found[0].text, "World");
     }
 
     #[test]
@@ -1373,9 +1542,9 @@ mod tests {
         std::fs::write(canonical_root.join("node_modules/dep.js"), "needle\n").unwrap();
         std::fs::write(canonical_root.join("real.js"), "needle\n").unwrap();
 
-        let matches = search_text_in(&canonical_root, "needle");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].path, "real.js");
+        let found = plain(&canonical_root, "needle");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "real.js");
     }
 
     #[test]
@@ -1383,7 +1552,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let canonical_root = std::fs::canonicalize(root.path()).unwrap();
         std::fs::write(canonical_root.join("a.txt"), "anything\n").unwrap();
-        assert!(search_text_in(&canonical_root, "  ").is_empty());
+        assert!(plain(&canonical_root, "  ").is_empty());
     }
 
     #[test]

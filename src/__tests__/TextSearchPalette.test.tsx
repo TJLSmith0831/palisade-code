@@ -26,7 +26,7 @@ describe("TextSearchPalette", () => {
     render(
       <TextSearchPalette
         files={files}
-        onSearchText={vi.fn().mockResolvedValue([])}
+        onSearchText={vi.fn().mockResolvedValue({ matches: [], truncated: false })}
         onSelect={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -40,7 +40,7 @@ describe("TextSearchPalette", () => {
     render(
       <TextSearchPalette
         files={files}
-        onSearchText={vi.fn().mockResolvedValue(matches)}
+        onSearchText={vi.fn().mockResolvedValue({ matches, truncated: false })}
         onSelect={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -58,7 +58,7 @@ describe("TextSearchPalette", () => {
     render(
       <TextSearchPalette
         files={files}
-        onSearchText={vi.fn().mockResolvedValue([])}
+        onSearchText={vi.fn().mockResolvedValue({ matches: [], truncated: false })}
         onSelect={onSelect}
         onClose={onClose}
       />,
@@ -77,17 +77,105 @@ describe("TextSearchPalette", () => {
     render(
       <TextSearchPalette
         files={files}
-        onSearchText={vi.fn().mockResolvedValue(matches)}
+        onSearchText={vi.fn().mockResolvedValue({ matches, truncated: false })}
         onSelect={onSelect}
         onClose={vi.fn()}
       />,
     );
     fireEvent.change(screen.getByTestId("text-search-input"), { target: { value: "readme" } });
     await waitFor(() => expect(screen.getAllByTestId("text-search-file-result")).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByTestId("text-search-text-result")).toHaveLength(1));
 
     fireEvent.keyDown(screen.getByTestId("text-search-input"), { key: "ArrowDown" });
     fireEvent.keyDown(screen.getByTestId("text-search-input"), { key: "Enter" });
-    expect(onSelect).toHaveBeenCalledWith("src/api.ts");
+    // A content match opens the file *at its line* — that number came back
+    // with the result and used to be dropped on the floor.
+    expect(onSelect).toHaveBeenCalledWith("src/api.ts", 1);
+  });
+
+  it("passes the case/word/regex toggles through to the backend", async () => {
+    const onSearchText = vi.fn().mockResolvedValue({ matches: [], truncated: false });
+    render(
+      <TextSearchPalette
+        files={files}
+        onSearchText={onSearchText}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("text-search-input"), { target: { value: "count" } });
+    await waitFor(() => expect(onSearchText).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("search-whole-word"));
+    await waitFor(() =>
+      expect(onSearchText).toHaveBeenLastCalledWith("count", {
+        regex: false,
+        caseSensitive: false,
+        wholeWord: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByTestId("search-regex"));
+    await waitFor(() =>
+      expect(onSearchText).toHaveBeenLastCalledWith("count", {
+        regex: true,
+        caseSensitive: false,
+        wholeWord: true,
+      }),
+    );
+  });
+
+  it("says so when the backend cut the result list short", async () => {
+    const matches: TextMatch[] = [{ path: "src/api.ts", line: 1, text: "hit" }];
+    render(
+      <TextSearchPalette
+        files={files}
+        onSearchText={vi.fn().mockResolvedValue({ matches, truncated: true })}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("text-search-input"), { target: { value: "hit" } });
+
+    await waitFor(() => expect(screen.getByTestId("text-search-truncated")).toBeDefined());
+  });
+
+  it("shows a half-typed regex as an error rather than 'no matches'", async () => {
+    render(
+      <TextSearchPalette
+        files={[]}
+        onSearchText={vi.fn().mockRejectedValue(new Error("invalid search pattern: unclosed group"))}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("text-search-input"), { target: { value: "(foo" } });
+
+    await waitFor(() => expect(screen.getByTestId("text-search-error")).toBeDefined());
+    expect(screen.getByTestId("text-search-error").textContent).toContain("invalid search pattern");
+    expect(screen.queryByTestId("text-search-empty")).toBeNull();
+  });
+
+  it("waits for a pause in typing instead of searching on every keystroke", async () => {
+    const onSearchText = vi.fn().mockResolvedValue({ matches: [], truncated: false });
+    render(
+      <TextSearchPalette
+        files={[]}
+        onSearchText={onSearchText}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const input = screen.getByTestId("text-search-input");
+    fireEvent.change(input, { target: { value: "n" } });
+    fireEvent.change(input, { target: { value: "ne" } });
+    fireEvent.change(input, { target: { value: "nee" } });
+    fireEvent.change(input, { target: { value: "need" } });
+
+    await waitFor(() => expect(onSearchText).toHaveBeenCalled());
+    // One walk of the project, for the query that was actually settled on.
+    expect(onSearchText).toHaveBeenCalledTimes(1);
+    expect(onSearchText).toHaveBeenCalledWith("need", expect.anything());
   });
 
   it("dismisses on Escape without selecting", () => {

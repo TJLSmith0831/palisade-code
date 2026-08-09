@@ -50,6 +50,8 @@ type Props = {
    * underneath us. A clean buffer reloads silently; a dirty one raises the
    * conflict banner so the user picks which version survives. */
   externalChange?: { path: string; at: number } | null;
+  /** A line to scroll to and select, from a workspace-search result. */
+  revealLine?: { path: string; line: number; at: number } | null;
 };
 
 const MIN_ZOOM = 0.1;
@@ -122,6 +124,7 @@ export default function FileEditorPane({
   onSave,
   onDirtyChange,
   externalChange,
+  revealLine,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -380,6 +383,23 @@ export default function FileEditorPane({
       window.removeEventListener(EDITOR_WRAP_CHANGED_EVENT, onWrapChanged);
     };
   }, []);
+
+  // Scroll a searched-for line into view once the document is actually
+  // there. Keyed on the event rather than the line so jumping to the same
+  // result twice still moves the cursor back to it.
+  useEffect(() => {
+    if (!revealLine || !path || revealLine.path !== path || viewSeq === 0) return;
+    const view = viewRef.current;
+    if (!view) return;
+    const lineCount = view.state.doc.lines;
+    const target = Math.min(Math.max(revealLine.line, 1), lineCount);
+    const line = view.state.doc.line(target);
+    view.dispatch({
+      selection: { anchor: line.from, head: line.to },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+    view.focus();
+  }, [revealLine, path, viewSeq]);
 
   // Highlighting for file types that aren't bundled (HTML, YAML, SQL, shell
   // and the rest) arrives a moment after the view, via the same compartment

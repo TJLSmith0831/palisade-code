@@ -214,8 +214,23 @@ export const listAllFiles = (projectHash: string) =>
 
 export type TextMatch = { path: string; line: number; text: string };
 
-export const searchText = (projectHash: string, query: string) =>
-  invoke<TextMatch[]>("search_text", { projectHash, query });
+export type SearchOptions = {
+  regex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+};
+
+export type TextSearchResult = {
+  matches: TextMatch[];
+  /** The walk stopped at the cap — there are more matches than these. */
+  truncated: boolean;
+};
+
+export const searchText = (
+  projectHash: string,
+  query: string,
+  options?: SearchOptions,
+) => invoke<TextSearchResult>("search_text", { projectHash, query, options: options ?? null });
 
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });

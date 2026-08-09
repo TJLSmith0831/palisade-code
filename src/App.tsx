@@ -638,6 +638,12 @@ export default function App() {
     path: string;
     at: number;
   } | null>(null);
+  // A search result to scroll to once its file is open.
+  const [revealLine, setRevealLine] = useState<{
+    path: string;
+    line: number;
+    at: number;
+  } | null>(null);
   // Mirrors the open paths for the fs-changed listener, which is registered
   // once — same reason `current` exists for project/thread.
   const openPathsRef = useRef<string[]>([]);
@@ -918,9 +924,12 @@ export default function App() {
   // The discard guard moved to closing a tab, which is where work actually
   // gets thrown away.
   const selectFile = useCallback(
-    (path: string) => {
+    (path: string, line?: number) => {
       setDiffOpen(false);
       tabs.open(path);
+      // Consumed once by the editor pane; the timestamp makes a repeat jump
+      // to the same line a new instruction rather than a no-op.
+      if (line !== undefined) setRevealLine({ path, line, at: Date.now() });
     },
     [tabs]
   );
@@ -1269,9 +1278,9 @@ export default function App() {
   }, [project, ensurePaletteFiles]);
 
   const searchProjectText = useCallback(
-    (query: string) => {
-      if (!project) return Promise.resolve([]);
-      return api.searchText(project.hash, query);
+    (query: string, options: api.SearchOptions) => {
+      if (!project) return Promise.resolve({ matches: [], truncated: false });
+      return api.searchText(project.hash, query, options);
     },
     [project]
   );
@@ -1673,6 +1682,7 @@ export default function App() {
                       onSave={handleFileSave}
                       onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
+                      revealLine={revealLine}
                     />
                   ) : (
                     <div
@@ -2062,6 +2072,7 @@ export default function App() {
                       onSave={handleFileSave}
                       onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
+                      revealLine={revealLine}
                     />
                   )
                 ) : (
