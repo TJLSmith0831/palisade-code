@@ -94,19 +94,19 @@ export default function CommandPalette({ commands, onClose }: Props) {
           backdropFilter: "blur(5px)",
         },
         content: {
-          background: "#17191c",
-          border: "1px solid #2d3238",
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
           boxShadow: "0 24px 80px rgba(0,0,0,.55), 0 8px 24px rgba(0,0,0,.35)",
           overflow: "hidden",
         },
         header: {
           minHeight: 58,
           padding: "16px 18px 10px 20px",
-          background: "#17191c",
+          background: "var(--bg)",
           borderBottom: 0,
         },
         title: {
-          color: "#e4e7eb",
+          color: "var(--fg)",
           fontSize: 15,
           fontWeight: 600,
           letterSpacing: "-0.01em",
@@ -114,12 +114,12 @@ export default function CommandPalette({ commands, onClose }: Props) {
         close: {
           width: 30,
           height: 30,
-          color: "#727983",
+          color: "var(--muted)",
           borderRadius: 6,
         },
         body: {
           padding: 0,
-          background: "#17191c",
+          background: "var(--bg)",
         },
       }}
     >
@@ -141,7 +141,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
             width: 18,
             height: 18,
             fill: "none",
-            stroke: "#737b85",
+            stroke: "var(--muted)",
             strokeWidth: 1.8,
             pointerEvents: "none",
           }}
@@ -191,9 +191,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
             width: "100%",
             height: 48,
             padding: "0 74px 0 42px",
-            color: "#e4e7eb",
-            background: "#111315",
-            border: "1px solid #353b42",
+            color: "var(--fg)",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
             borderRadius: 7,
             outline: "none",
             fontFamily: "inherit",
@@ -212,9 +212,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
             justifyContent: "center",
             height: 28,
             padding: "0 8px",
-            color: "#8d959f",
-            background: "#1b1f23",
-            border: "1px solid #343a41",
+            color: "var(--muted)",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
             borderRadius: 5,
             fontFamily: "inherit",
             fontSize: 11,
@@ -237,9 +237,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
             minHeight: 96,
             margin: "0 8px",
             padding: 18,
-            color: "#727983",
-            background: "#111416",
-            border: "1px solid #252a30",
+            color: "var(--muted)",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
             borderRadius: 6,
             boxSizing: "border-box",
           }}
@@ -251,9 +251,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
               justifyContent: "center",
               width: 36,
               height: 36,
-              color: "#6f7781",
-              background: "#1b1f23",
-              border: "1px solid #2e343a",
+              color: "var(--muted)",
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
               borderRadius: 6,
               flexShrink: 0,
             }}
@@ -278,7 +278,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
           <div>
             <div
               style={{
-                color: "#c1c6cd",
+                color: "var(--fg)",
                 fontSize: 13,
                 fontWeight: 500,
               }}
@@ -289,7 +289,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
             <div
               style={{
                 marginTop: 3,
-                color: "#707781",
+                color: "var(--muted)",
                 fontSize: 12,
               }}
             >
@@ -302,9 +302,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
           style={{
             margin: "0 8px",
             overflow: "hidden",
-            border: "1px solid #252a30",
+            border: "1px solid var(--border)",
             borderRadius: 6,
-            background: "#111416",
+            background: "var(--surface)",
           }}
         >
           <ul
@@ -340,10 +340,14 @@ export default function CommandPalette({ commands, onClose }: Props) {
                     alignItems: "center",
                     minHeight: 50,
                     padding: "0 14px 0 12px",
-                    color: isActive ? "#e4e7eb" : "#a5abb4",
-                    background: isActive ? "#252b32" : "transparent",
+                    color: isActive ? "var(--fg)" : "var(--muted)",
+                    background: isActive
+                      ? "var(--surface-warm)"
+                      : "transparent",
                     borderBottom:
-                      i === results.length - 1 ? "none" : "1px solid #252a30",
+                      i === results.length - 1
+                        ? "none"
+                        : "1px solid var(--border)",
                     cursor: "pointer",
                     boxSizing: "border-box",
                   }}
@@ -356,7 +360,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
                         bottom: 0,
                         left: 0,
                         width: 2,
-                        background: "#6ea8ff",
+                        background: "var(--accent)",
                       }}
                     />
                   )}
@@ -371,7 +375,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
                       width: 32,
                       height: 32,
                       marginRight: 8,
-                      color: isActive ? "#b8c0ca" : "#8c949e",
+                      color: isActive ? "var(--fg)" : "var(--muted)",
                     }}
                   >
                     <CommandIcon group={command.group} />
@@ -389,7 +393,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
                   >
                     <span
                       style={{
-                        color: isActive ? "#a9b2bd" : "#858d97",
+                        color: isActive ? "var(--fg)" : "var(--muted)",
                         fontSize: 13,
                         fontWeight: 500,
                       }}
@@ -431,10 +435,10 @@ export default function CommandPalette({ commands, onClose }: Props) {
                           minWidth: 22,
                           height: 24,
                           padding: "0 6px",
-                          color: "#8f97a1",
-                          background: "#191d21",
-                          border: "1px solid #343a41",
-                          borderBottomColor: "#292e34",
+                          color: "var(--muted)",
+                          background: "var(--surface)",
+                          border: "1px solid var(--border)",
+                          borderBottomColor: "var(--border)",
                           borderRadius: 5,
                           boxShadow: "0 1px 0 rgba(0,0,0,.25)",
                           fontFamily: "inherit",
@@ -462,7 +466,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
           alignItems: "center",
           minHeight: 52,
           padding: "10px 16px",
-          color: "#727983",
+          color: "var(--muted)",
           fontSize: 11,
           boxSizing: "border-box",
         }}
@@ -482,9 +486,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
               minWidth: 19,
               height: 19,
               padding: "0 4px",
-              color: "#8d959e",
+              color: "var(--muted)",
               background: "transparent",
-              border: "1px solid #343a40",
+              border: "1px solid var(--border)",
               borderRadius: 4,
               fontFamily: "inherit",
               fontSize: 10,
@@ -502,9 +506,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
               minWidth: 19,
               height: 19,
               padding: "0 4px",
-              color: "#8d959e",
+              color: "var(--muted)",
               background: "transparent",
-              border: "1px solid #343a40",
+              border: "1px solid var(--border)",
               borderRadius: 4,
               fontFamily: "inherit",
               fontSize: 10,
@@ -520,7 +524,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
         <span
           style={{
             margin: "0 9px",
-            color: "#4f565e",
+            color: "var(--muted)",
           }}
         >
           ·
@@ -541,9 +545,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
               minWidth: 19,
               height: 19,
               padding: "0 5px",
-              color: "#8d959e",
+              color: "var(--muted)",
               background: "transparent",
-              border: "1px solid #343a40",
+              border: "1px solid var(--border)",
               borderRadius: 4,
               fontFamily: "inherit",
               fontSize: 10,
@@ -559,7 +563,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
         <span
           style={{
             margin: "0 9px",
-            color: "#4f565e",
+            color: "var(--muted)",
           }}
         >
           ·
@@ -580,9 +584,9 @@ export default function CommandPalette({ commands, onClose }: Props) {
               minWidth: 19,
               height: 19,
               padding: "0 5px",
-              color: "#8d959e",
+              color: "var(--muted)",
               background: "transparent",
-              border: "1px solid #343a40",
+              border: "1px solid var(--border)",
               borderRadius: 4,
               fontFamily: "inherit",
               fontSize: 10,
