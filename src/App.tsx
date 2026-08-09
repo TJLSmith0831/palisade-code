@@ -7,25 +7,48 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import {
+  Accordion,
+  Menu,
+  Modal as MantineModal,
+  Switch,
+  Tabs,
+  Tooltip,
+  useMantineColorScheme,
+  Textarea,
+  SegmentedControl,
+  ActionIcon,
+} from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import * as api from "./api";
-import type { ExecutorEvent, Message, Preflight, Project, ThreadMeta } from "./api";
+import type {
+  ExecutorEvent,
+  Message,
+  Preflight,
+  Project,
+  ThreadMeta,
+} from "./api";
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
 import { RenameIcon, DeleteIcon } from "./icons";
-import { EventList, filterForTab, itemsFromMessages, mergeDeltas, type Item } from "./EventView";
+import {
+  EventList,
+  filterForTab,
+  itemsFromMessages,
+  mergeDeltas,
+  type Item,
+} from "./EventView";
 import FileEditorPane from "./FileEditorPane";
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
-import Modal from "./Modal";
 import SettingsPanel, { applyAccentHue, loadAccentHue } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
 import { enableModernWindowStyle } from "./macRoundedCorners";
@@ -34,9 +57,30 @@ import "./App.css";
 
 // Cursor/VS Code-style panel-toggle glyph: outline + a filled column on the side being toggled.
 const SidebarIcon = ({ side }: { side: "left" | "right" }) => (
-  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-    <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
-    <rect x={side === "left" ? 2.5 : 9.5} y="3.5" width="4" height="9" rx="1" fill="currentColor" />
+  <svg
+    viewBox="0 0 16 16"
+    width="14"
+    height="14"
+    fill="none"
+    aria-hidden="true"
+  >
+    <rect
+      x="1.5"
+      y="2.5"
+      width="13"
+      height="11"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
+    <rect
+      x={side === "left" ? 2.5 : 9.5}
+      y="3.5"
+      width="4"
+      height="9"
+      rx="1"
+      fill="currentColor"
+    />
     <line
       x1={side === "left" ? 6.5 : 9.5}
       y1="2.5"
@@ -51,13 +95,25 @@ const SidebarIcon = ({ side }: { side: "left" | "right" }) => (
 // Standard gear/cog glyph (Heroicons Cog6Tooth outline), stroke-only to
 // match the weight of the sidebar/terminal icons alongside it.
 const SettingsIcon = () => (
-  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+  <svg
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    aria-hidden="true"
+  >
     <path
       strokeLinecap="round"
       strokeLinejoin="round"
       d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"
     />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+    />
   </svg>
 );
 
@@ -65,10 +121,39 @@ const SettingsIcon = () => (
 // a filled column — reads as "terminal" while matching the sidebar toggles'
 // weight and style.
 const TerminalIcon = () => (
-  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-    <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
-    <path d="M4 6.2 6.8 8 4 9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    <line x1="8" y1="9.8" x2="11.2" y2="9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+  <svg
+    viewBox="0 0 16 16"
+    width="14"
+    height="14"
+    fill="none"
+    aria-hidden="true"
+  >
+    <rect
+      x="1.5"
+      y="2.5"
+      width="13"
+      height="11"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
+    <path
+      d="M4 6.2 6.8 8 4 9.8"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
+    <line
+      x1="8"
+      y1="9.8"
+      x2="11.2"
+      y2="9.8"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    />
   </svg>
 );
 
@@ -77,7 +162,15 @@ const TerminalIcon = () => (
 // the 16x16/1.3 panel-toggle family above. RenameIcon/DeleteIcon live in
 // ./icons since FilePalette needs the same two for its own row actions.
 const BranchIcon = () => (
-  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+  <svg
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    aria-hidden="true"
+  >
     <line x1="6" y1="3" x2="6" y2="15" strokeLinecap="round" />
     <circle cx="18" cy="6" r="3" />
     <circle cx="6" cy="18" r="3" />
@@ -137,24 +230,42 @@ function ChatSurface({
         </div>
         <div className="ds-new-thread-picker" data-testid="mode-picker">
           <div className="ds-mode-picker">
-            <button className="ds-mode-card" onClick={() => onPickMode("go")} data-testid="pick-vibe" autoFocus>
+            <button
+              className="ds-mode-card"
+              onClick={() => onPickMode("go")}
+              data-testid="pick-vibe"
+              autoFocus
+            >
               <strong>Vibe</strong>
               <span>Chat first — start building right away.</span>
             </button>
-            <button className="ds-mode-card" onClick={() => onPickMode("spec")} data-testid="pick-spec">
+            <button
+              className="ds-mode-card"
+              onClick={() => onPickMode("spec")}
+              data-testid="pick-spec"
+            >
               <strong>Spec</strong>
-              <span>Plan first — read-only planning before code, via the grill flow.</span>
+              <span>
+                Plan first — read-only planning before code, via the grill flow.
+              </span>
             </button>
           </div>
-          <span className="hint">You can switch modes any time from the composer.</span>
+          <span className="hint">
+            You can switch modes any time from the composer.
+          </span>
         </div>
       </>
     );
   }
 
+  // Entice the user to create a new thread only if threads are focused
   if (!thread) {
     return (
-      <p className="empty">{project ? "Create a thread to get started." : "Add a project to get started."}</p>
+      <p className="empty">
+        {project
+          ? "Create a thread to get started."
+          : "Add a project to get started."}
+      </p>
     );
   }
 
@@ -162,7 +273,10 @@ function ChatSurface({
     <>
       <div className="pane-head">
         <strong data-testid="thread-title">{thread.title}</strong>
-        <button onClick={() => onRenameThread(thread)} data-testid="rename-thread">
+        <button
+          onClick={() => onRenameThread(thread)}
+          data-testid="rename-thread"
+        >
           Rename
         </button>
         {thread.openSpecChangeName && (
@@ -174,7 +288,15 @@ function ChatSurface({
       </div>
       {thread.currentMode === "spec" && (
         <div className="spec-banner" data-testid="spec-banner">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spec-icon">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="spec-icon"
+          >
             <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
           </svg>
           Spec Mode — read-only planning
@@ -182,11 +304,18 @@ function ChatSurface({
       )}
       <div className="messages" data-testid="messages">
         {(() => {
-          const items = filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "chat");
+          const items = filterForTab(
+            [...itemsFromMessages(messages), ...mergeDeltas(live)],
+            "chat"
+          );
           return (
             <>
               {items.length === 0 && <p className="empty">No messages yet.</p>}
-              <EventList items={items} showThinking={showThinking} executor={executor} />
+              <EventList
+                items={items}
+                showThinking={showThinking}
+                executor={executor}
+              />
             </>
           );
         })()}
@@ -208,50 +337,100 @@ function ChatSurface({
           onSend();
         }}
       >
-        <input
+        <Textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder={flightSelected ? "Message, or /propose" : "Chat-only — no executor on PATH"}
+          placeholder={
+            flightSelected
+              ? "Message, or /propose"
+              : "Chat-only — no executor on PATH"
+          }
           aria-label="Message"
           data-testid="composer-input"
+          minRows={1}
+          maxRows={6}
+          style={{ resize: "vertical", width: "80%" }}
         />
-        <div className="composer-mode-selector" data-testid="mode-selector">
-          <button
-            className={`ds-mode-btn ${thread.currentMode === "spec" ? "active" : ""}`}
-            onClick={() => thread.currentMode !== "spec" && onSpec()}
-            disabled={busy || !flightSelected}
-            data-testid="mode-spec"
-          >
-            Spec <kbd>S</kbd>
-          </button>
-          <button
-            className={`ds-mode-btn ${thread.currentMode === "go" ? "active" : ""}`}
-            onClick={() => thread.currentMode !== "go" && onGo()}
-            disabled={busy || !flightSelected}
-            data-testid="mode-go"
-          >
-            Go <kbd>G</kbd>
-          </button>
-        </div>
-        <button
+        <SegmentedControl
+          value={thread.currentMode}
+          onChange={(value) => {
+            if (value === "spec") {
+              onSpec();
+            } else {
+              onGo();
+            }
+          }}
+          disabled={busy || !flightSelected}
+          data={[
+            { label: "Spec  S", value: "spec" },
+            { label: "Go  G", value: "go" },
+          ]}
+          styles={{
+            root: {
+              background: "transparent",
+              padding: 0,
+              gap: 4,
+            },
+            indicator: {
+              background: "var(--mantine-color-dark-8)",
+              boxShadow: "0 2px 8px rgba(0, 0, 0, 0.25)",
+              borderRadius: 8,
+            },
+            label: {
+              fontSize: 12,
+              fontWeight: 500,
+            },
+            control: {
+              border: 0,
+              borderRadius: 8,
+              background: "transparent",
+              padding: "4px 10px",
+            },
+          }}
+        />
+        <ActionIcon
           type="submit"
-          className="send"
           data-testid="composer-send"
           disabled={busy}
           aria-label="Send message"
           title="Send message"
+          size="lg"
+          radius="md"
+          variant="filled"
+          styles={{
+            root: {
+              backgroundColor: "#66F978",
+              color: "#0B1710",
+            },
+          }}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4z" />
+          {/* Send icon */}
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#0B1710"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+            <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
           </svg>
-        </button>
+        </ActionIcon>
       </form>
     </>
   );
 }
 
 // Keeps a resize drag alive after the pointer leaves the handle element.
-const bindDrag = (handle: UseResizableResult["handleProps"], cursor: "col-resize" | "row-resize") =>
+const bindDrag =
+  (
+    handle: UseResizableResult["handleProps"],
+    cursor: "col-resize" | "row-resize"
+  ) =>
   (down: ReactPointerEvent) => {
     down.preventDefault();
     handle.onPointerDown(down);
@@ -285,7 +464,7 @@ const PROJECT_SETTINGS_FILE = ".project-settings.json";
 
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
-const THEME_KEY = "floo:theme";
+export const THEME_KEY = "floo:theme";
 const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
 const MODEL_KEY = "floo:model";
 const BYPASS_KEY = "floo:bypass";
@@ -294,11 +473,13 @@ const BYPASS_KEY = "floo:bypass";
 const MODELS = ["Sonnet 5", "Opus 5", "Haiku 4.5"];
 type TerminalPlacement = "bottom" | "sidebar";
 type Theme = "auto" | "light" | "dark";
-const nextTheme = (t: Theme): Theme => (t === "auto" ? "light" : t === "light" ? "dark" : "auto");
+const nextTheme = (t: Theme): Theme =>
+  t === "auto" ? "light" : t === "light" ? "dark" : "auto";
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 // The executor (Claude Code / Codex) has its own file-read tooling, so we
 // hand it a path rather than threading image bytes through the IPC channel.
-export const imagePathsFrom = (paths: string[]): string[] => paths.filter((p) => IMAGE_PATH.test(p));
+export const imagePathsFrom = (paths: string[]): string[] =>
+  paths.filter((p) => IMAGE_PATH.test(p));
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -313,9 +494,24 @@ export default function App() {
   // so anything that needs a line of text, or a yes/no from the user, has
   // to go through this.
   const [bar, setBar] = useState<
-    | { kind: "input"; label: string; value: string; submit: (value: string) => void }
-    | { kind: "confirm"; label: string; confirmLabel?: string; onConfirm: () => void }
-    | { kind: "select"; label: string; options: string[]; submit: (choice: string) => void }
+    | {
+        kind: "input";
+        label: string;
+        value: string;
+        submit: (value: string) => void;
+      }
+    | {
+        kind: "confirm";
+        label: string;
+        confirmLabel?: string;
+        onConfirm: () => void;
+      }
+    | {
+        kind: "select";
+        label: string;
+        options: string[];
+        submit: (choice: string) => void;
+      }
     | null
   >(null);
   // Shows the inline Vibe/Spec picker in the chat surface in place of the
@@ -356,9 +552,13 @@ export default function App() {
   // Defaults to "editor" (today's layout) so existing users see no change
   // until they opt into "vibe" via the toggle.
   const [centerShell, setCenterShell] = useState<"vibe" | "editor">("editor");
-  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">("threads");
+  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "terminal">(
+    "threads"
+  );
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
-    () => (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) || "bottom",
+    () =>
+      (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) ||
+      "bottom"
   );
   const layoutHash = project?.hash ?? "default";
   const leftRail = useResizable({
@@ -410,10 +610,21 @@ export default function App() {
     } else {
       terminalPanel.toggleCollapsed();
     }
-  }, [terminalPlacement, rightPanel.setCollapsed, terminalPanel.toggleCollapsed]);
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) || "auto");
-  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem(MODEL_KEY) || MODELS[0]);
-  const [bypassEnabled, setBypassEnabled] = useState<boolean>(() => localStorage.getItem(BYPASS_KEY) === "1");
+  }, [
+    terminalPlacement,
+    rightPanel.setCollapsed,
+    terminalPanel.toggleCollapsed,
+  ]);
+  const [theme, setTheme] = useState<Theme>(
+    () => (localStorage.getItem(THEME_KEY) as Theme) || "auto"
+  );
+  const { setColorScheme: setMantineColorScheme } = useMantineColorScheme();
+  const [selectedModel, setSelectedModel] = useState<string>(
+    () => localStorage.getItem(MODEL_KEY) || MODELS[0]
+  );
+  const [bypassEnabled, setBypassEnabled] = useState<boolean>(
+    () => localStorage.getItem(BYPASS_KEY) === "1"
+  );
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const onSelectModel = (model: string) => {
     setSelectedModel(model);
@@ -428,7 +639,9 @@ export default function App() {
     });
   };
   const [dragActive, setDragActive] = useState(false);
-  const [fileEdits, setFileEdits] = useState<{ path: string; before: string; after: string }[]>([]);
+  const [fileEdits, setFileEdits] = useState<
+    { path: string; before: string; after: string }[]
+  >([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -436,9 +649,12 @@ export default function App() {
   const filesCache = useRef<Map<string, string[]>>(new Map());
   const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0);
 
-  const handleFileSave = useCallback((edit: { path: string; before: string; after: string }) => {
-    setFileEdits((prev) => [...prev, edit]);
-  }, []);
+  const handleFileSave = useCallback(
+    (edit: { path: string; before: string; after: string }) => {
+      setFileEdits((prev) => [...prev, edit]);
+    },
+    []
+  );
 
   useEffect(() => {
     if (theme === "auto") delete document.documentElement.dataset.theme;
@@ -458,20 +674,27 @@ export default function App() {
   }, []);
 
   const fail = (err: unknown) =>
-    setErrors((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, message: describeError(err) }]);
-  const dismissError = (id: string) => setErrors((prev) => prev.filter((e) => e.id !== id));
+    setErrors((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, message: describeError(err) },
+    ]);
+  const dismissError = (id: string) =>
+    setErrors((prev) => prev.filter((e) => e.id !== id));
 
-  const selectThread = useCallback(async (projectHash: string, next: ThreadMeta | null) => {
-    setThread(next);
-    setNewThreadPicker(false);
-    if (!next) {
-      setMessages([]);
-      return;
-    }
-    localStorage.setItem(lastThreadKey(projectHash), next.id);
-    setLive([]);
-    setMessages(await api.readThread(projectHash, next.id));
-  }, []);
+  const selectThread = useCallback(
+    async (projectHash: string, next: ThreadMeta | null) => {
+      setThread(next);
+      setNewThreadPicker(false);
+      if (!next) {
+        setMessages([]);
+        return;
+      }
+      localStorage.setItem(lastThreadKey(projectHash), next.id);
+      setLive([]);
+      setMessages(await api.readThread(projectHash, next.id));
+    },
+    []
+  );
 
   // Not every project is a git repo — that's a normal state, not an error,
   // so a failed lookup here just means "no branches to show" rather than
@@ -495,12 +718,15 @@ export default function App() {
         setThreads(found);
         await refreshBranches(refreshed.hash);
         const remembered = localStorage.getItem(lastThreadKey(refreshed.hash));
-        await selectThread(refreshed.hash, found.find((t) => t.id === remembered) ?? found[0] ?? null);
+        await selectThread(
+          refreshed.hash,
+          found.find((t) => t.id === remembered) ?? found[0] ?? null
+        );
       } catch (err) {
         fail(err);
       }
     },
-    [selectThread, refreshBranches],
+    [selectThread, refreshBranches]
   );
 
   // Restore the most recently used project on launch.
@@ -564,7 +790,7 @@ export default function App() {
       }
       setSelectedFile(path);
     },
-    [editorDirty, selectedFile],
+    [editorDirty, selectedFile]
   );
 
   // Opens project-settings.json (D14/D15) in the editor, creating it with a
@@ -575,7 +801,11 @@ export default function App() {
       await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE);
     } catch {
       try {
-        await api.writeFileContent(project.hash, PROJECT_SETTINGS_FILE, DEFAULT_PROJECT_SETTINGS);
+        await api.writeFileContent(
+          project.hash,
+          PROJECT_SETTINGS_FILE,
+          DEFAULT_PROJECT_SETTINGS
+        );
       } catch (err) {
         fail(err);
         return;
@@ -589,7 +819,9 @@ export default function App() {
 
   const onOpenBranchPicker = () => {
     if (!project) return;
-    const local = new Set(branches.filter((b) => !b.isRemote).map((b) => b.name));
+    const local = new Set(
+      branches.filter((b) => !b.isRemote).map((b) => b.name)
+    );
     // Remote branches with no local counterpart yet — offered so switching
     // to one creates a local tracking branch (git's own DWIM checkout
     // behavior), same as VS Code's remote-branch entries.
@@ -597,7 +829,10 @@ export default function App() {
       .filter((b) => b.isRemote)
       .map((b) => b.name.split("/").slice(1).join("/"))
       .filter((name) => name && !local.has(name));
-    const options = [...branches.filter((b) => !b.isRemote).map((b) => b.name), ...new Set(remoteOnly)];
+    const options = [
+      ...branches.filter((b) => !b.isRemote).map((b) => b.name),
+      ...new Set(remoteOnly),
+    ];
     setBar({
       kind: "select",
       label: "Switch branch (or type a new name to create one)",
@@ -652,7 +887,11 @@ export default function App() {
       value: target.title,
       submit: async (title) => {
         try {
-          const renamed = await api.renameThread(project.hash, target.id, title);
+          const renamed = await api.renameThread(
+            project.hash,
+            target.id,
+            title
+          );
           if (thread?.id === target.id) setThread(renamed);
           setThreads(await api.listThreads(project.hash));
         } catch (err) {
@@ -675,7 +914,8 @@ export default function App() {
           setThreads(found);
           // Only reselect if the deleted thread was the one open (D22) —
           // mirrors selectProject's found[0] ?? null fallback.
-          if (thread?.id === target.id) await selectThread(project.hash, found[0] ?? null);
+          if (thread?.id === target.id)
+            await selectThread(project.hash, found[0] ?? null);
         } catch (err) {
           fail(err);
         }
@@ -697,7 +937,9 @@ export default function App() {
         if (!current.current.thread) return;
         const images = imagePathsFrom(event.payload.paths);
         if (!images.length) return;
-        setDraft((prev) => (prev ? `${prev} ${images.join(" ")}` : images.join(" ")));
+        setDraft((prev) =>
+          prev ? `${prev} ${images.join(" ")}` : images.join(" ")
+        );
         return;
       }
       setDragActive(event.payload.type !== "leave");
@@ -727,20 +969,25 @@ export default function App() {
   // Executor output streams in live; once the turn ends, the persisted log
   // becomes the source of truth again so both paths can't drift.
   useEffect(() => {
-    const streaming = listen<ExecutorEvent>("executor-event", async ({ payload }) => {
-      if (payload.kind === "done" || payload.kind === "crashed") {
-        setBusy(false);
-        await refresh().catch(fail);
-        return;
+    const streaming = listen<ExecutorEvent>(
+      "executor-event",
+      async ({ payload }) => {
+        if (payload.kind === "done" || payload.kind === "crashed") {
+          setBusy(false);
+          await refresh().catch(fail);
+          return;
+        }
+        setLive((previous) => [...previous, payload]);
       }
-      setLive((previous) => [...previous, payload]);
-    });
+    );
     const updated = listen<string>("thread-updated", () => {
       refresh().catch(fail);
     });
     // A graphify watch spawn failure or crash — the routine "not on PATH"
     // case is already covered by the persistent preflight warning banner.
-    const warned = listen<string>("harness-warning", ({ payload }) => fail(payload));
+    const warned = listen<string>("harness-warning", ({ payload }) =>
+      fail(payload)
+    );
     return () => {
       streaming.then((un) => un());
       updated.then((un) => un());
@@ -844,7 +1091,7 @@ export default function App() {
       if (!project) return Promise.resolve([]);
       return api.searchText(project.hash, query);
     },
-    [project],
+    [project]
   );
 
   // Bypasses the cache — used after a palette create/rename/delete so the
@@ -863,7 +1110,7 @@ export default function App() {
       await refreshPaletteFiles();
       setFileTreeRefreshToken((t) => t + 1);
     },
-    [project, refreshPaletteFiles],
+    [project, refreshPaletteFiles]
   );
 
   const onRenameFile = useCallback(
@@ -874,7 +1121,7 @@ export default function App() {
       setFileTreeRefreshToken((t) => t + 1);
       setSelectedFile((current) => (current === from ? to : current));
     },
-    [project, refreshPaletteFiles],
+    [project, refreshPaletteFiles]
   );
 
   const onDeleteFile = useCallback(
@@ -885,7 +1132,7 @@ export default function App() {
       setFileTreeRefreshToken((t) => t + 1);
       setSelectedFile((current) => (current === path ? null : current));
     },
-    [project, refreshPaletteFiles],
+    [project, refreshPaletteFiles]
   );
 
   // The file tree performs its own create/rename/delete/move (surgical
@@ -894,13 +1141,16 @@ export default function App() {
   const onTreePathRenamed = useCallback((from: string, to: string) => {
     setSelectedFile((current) => {
       if (current === from) return to;
-      if (current?.startsWith(`${from}/`)) return to + current.slice(from.length);
+      if (current?.startsWith(`${from}/`))
+        return to + current.slice(from.length);
       return current;
     });
   }, []);
 
   const onTreePathDeleted = useCallback((path: string) => {
-    setSelectedFile((current) => (current === path || current?.startsWith(`${path}/`) ? null : current));
+    setSelectedFile((current) =>
+      current === path || current?.startsWith(`${path}/`) ? null : current
+    );
   }, []);
 
   const onTreeFilesChanged = useCallback(() => {
@@ -913,7 +1163,11 @@ export default function App() {
         event.preventDefault();
         openFilePalette();
       }
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "f"
+      ) {
         event.preventDefault();
         openTextSearch();
       }
@@ -933,7 +1187,13 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openFilePalette, openTextSearch, rightPanel.toggleCollapsed, leftRail.toggleCollapsed, toggleTerminal]);
+  }, [
+    openFilePalette,
+    openTextSearch,
+    rightPanel.toggleCollapsed,
+    leftRail.toggleCollapsed,
+    toggleTerminal,
+  ]);
 
   // ------------------------------------------------------------------ view
 
@@ -942,7 +1202,10 @@ export default function App() {
   // per https://v2.tauri.app/learn/window-customization).
   const onTitlebarMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0) return;
-    if ((event.target as HTMLElement).closest("[data-tauri-drag-region-exclude]")) return;
+    if (
+      (event.target as HTMLElement).closest("[data-tauri-drag-region-exclude]")
+    )
+      return;
     if (event.detail === 2) {
       getCurrentWindow().toggleMaximize();
     } else {
@@ -959,7 +1222,11 @@ export default function App() {
           onMouseDown={onTitlebarMouseDown}
         >
           <h1 className="sr-only">Floo Network</h1>
-          <div className="ds-shell-toggle" data-testid="shell-toggle" data-tauri-drag-region-exclude>
+          <div
+            className="ds-shell-toggle"
+            data-testid="shell-toggle"
+            data-tauri-drag-region-exclude
+          >
             <button
               className={centerShell === "vibe" ? "active" : ""}
               onClick={() => setCenterShell("vibe")}
@@ -976,762 +1243,937 @@ export default function App() {
             </button>
           </div>
           <div className="ds-chrome-utils">
-            <button
-              className="ds-icon-btn"
-              onClick={() => leftRail.toggleCollapsed()}
-              title="Toggle left sidebar (Cmd+\)"
-              aria-label="Toggle left sidebar"
-              data-testid="toggle-left-sidebar"
-              data-tauri-drag-region-exclude
-            >
-              <SidebarIcon side="left" />
-            </button>
-            <button
-              className="ds-icon-btn"
-              onClick={() => setTheme(nextTheme(theme))}
-              title={`Theme: ${theme} (click to cycle auto → light → dark)`}
-              data-testid="theme-toggle"
-              data-tauri-drag-region-exclude
-            >
-              {theme === "auto" ? "Auto" : theme === "light" ? "Light" : "Dark"}
-            </button>
-            <button
-              className="ds-icon-btn"
-              onClick={() => rightPanel.toggleCollapsed()}
-              title="Toggle right sidebar (Cmd+J)"
-              aria-label="Toggle right sidebar"
-              data-testid="toggle-right-sidebar"
-              data-tauri-drag-region-exclude
-            >
-              <SidebarIcon side="right" />
-            </button>
-            <button
-              className="ds-icon-btn"
-              onClick={toggleTerminal}
-              title="Toggle terminal (Cmd+`)"
-              aria-label="Toggle terminal"
-              data-testid="toggle-terminal"
-              data-tauri-drag-region-exclude
-            >
-              <TerminalIcon />
-            </button>
-            <button
-              className="ds-icon-btn"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings"
-              aria-label="Settings"
-              data-testid="open-settings"
-              data-tauri-drag-region-exclude
-            >
-              <SettingsIcon />
-            </button>
-            <div className="ds-model-picker" data-tauri-drag-region-exclude>
+            <Tooltip label="Toggle left sidebar (Cmd+\)">
               <button
                 className="ds-icon-btn"
-                onClick={() => setModelMenuOpen((open) => !open)}
-                title={`Model: ${selectedModel}${bypassEnabled ? " · bypass on" : ""}`}
-                data-testid="model-btn"
+                onClick={() => leftRail.toggleCollapsed()}
+                aria-label="Toggle left sidebar"
+                data-testid="toggle-left-sidebar"
+                data-tauri-drag-region-exclude
               >
-                {selectedModel}
+                <SidebarIcon side="left" />
               </button>
-              {modelMenuOpen && (
-                <div className="ds-model-menu" data-testid="model-menu">
-                  <div className="ds-model-group-label">Executor</div>
-                  <div className="ds-model-executor-row" data-testid="executor-row">
-                    {flight?.selected ?? "none detected"}
-                  </div>
-                  <div className="ds-model-group-label">Model</div>
-                  {MODELS.map((m) => (
-                    <button
-                      key={m}
-                      className={`ds-model-opt ${selectedModel === m ? "selected" : ""}`}
-                      onClick={() => onSelectModel(m)}
-                      data-testid={`model-opt-${m.toLowerCase().replace(/\s+/g, "-")}`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                  <span className="hint">Stored preference — not yet wired to the executor.</span>
-                  <div className="ds-bypass-row">
-                    <div>
-                      <div className="ds-bypass-label">Bypass permissions</div>
-                      <div className="ds-bypass-sub">Skip approval prompts</div>
-                    </div>
-                    <button
-                      type="button"
-                      className={`ds-switch ${bypassEnabled ? "on" : ""}`}
-                      onClick={onToggleBypass}
-                      aria-pressed={bypassEnabled}
-                      title="Toggle bypass permissions"
-                      data-testid="bypass-toggle"
-                    >
-                      <span className="knob" />
-                    </button>
-                  </div>
+            </Tooltip>
+            <Tooltip label="Theme: click to cycle auto → light → dark">
+              <button
+                className="ds-icon-btn"
+                onClick={() => {
+                  const next = nextTheme(theme);
+                  setTheme(next);
+                  setMantineColorScheme(next);
+                }}
+                data-testid="theme-toggle"
+                data-tauri-drag-region-exclude
+              >
+                {theme === "auto"
+                  ? "Auto"
+                  : theme === "light"
+                    ? "Light"
+                    : "Dark"}
+              </button>
+            </Tooltip>
+            <Tooltip label="Toggle right sidebar (Cmd+J)">
+              <button
+                className="ds-icon-btn"
+                onClick={() => rightPanel.toggleCollapsed()}
+                aria-label="Toggle right sidebar"
+                data-testid="toggle-right-sidebar"
+                data-tauri-drag-region-exclude
+              >
+                <SidebarIcon side="right" />
+              </button>
+            </Tooltip>
+            <Tooltip label="Toggle terminal (Cmd+`)">
+              <button
+                className="ds-icon-btn"
+                onClick={toggleTerminal}
+                aria-label="Toggle terminal"
+                data-testid="toggle-terminal"
+                data-tauri-drag-region-exclude
+              >
+                <TerminalIcon />
+              </button>
+            </Tooltip>
+            <Tooltip label="Settings">
+              <button
+                className="ds-icon-btn"
+                onClick={() => setSettingsOpen(true)}
+                aria-label="Settings"
+                data-testid="open-settings"
+                data-tauri-drag-region-exclude
+              >
+                <SettingsIcon />
+              </button>
+            </Tooltip>
+            <Menu opened={modelMenuOpen} onChange={setModelMenuOpen}>
+              <Menu.Target>
+                <Tooltip
+                  label={`Model: ${selectedModel}${bypassEnabled ? " · bypass on" : ""}`}
+                >
+                  <button
+                    className="ds-icon-btn"
+                    data-testid="model-btn"
+                    data-tauri-drag-region-exclude
+                  >
+                    {selectedModel}
+                  </button>
+                </Tooltip>
+              </Menu.Target>
+              <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
+                <Menu.Label>Executor</Menu.Label>
+                <div
+                  className="ds-model-executor-row"
+                  data-testid="executor-row"
+                >
+                  {flight?.selected ?? "none detected"}
                 </div>
-              )}
-            </div>
-            <button
-              className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
-              onClick={() => api.preflight(true).then(setFlight, fail)}
-              data-tauri-drag-region-exclude
-              title={
+                <Menu.Label>Model</Menu.Label>
+                {MODELS.map((m) => (
+                  <Menu.Item
+                    key={m}
+                    className={`ds-model-opt ${selectedModel === m ? "selected" : ""}`}
+                    onClick={() => onSelectModel(m)}
+                    data-testid={`model-opt-${m.toLowerCase().replace(/\s+/g, "-")}`}
+                  >
+                    {m}
+                  </Menu.Item>
+                ))}
+                <span className="hint">
+                  Stored preference — not yet wired to the executor.
+                </span>
+                <Switch
+                  className="ds-bypass-row"
+                  label="Bypass permissions"
+                  description="Skip approval prompts"
+                  labelPosition="left"
+                  color="var(--warn)"
+                  checked={bypassEnabled}
+                  onChange={onToggleBypass}
+                  data-testid="bypass-toggle"
+                />
+              </Menu.Dropdown>
+            </Menu>
+            <Tooltip
+              label={
                 flight
-                  ? [`executor: ${flight.selected ?? "none"}`, ...flight.warnings].join("\n")
+                  ? [
+                      `executor: ${flight.selected ?? "none"}`,
+                      ...flight.warnings,
+                    ].join("\n")
                   : "checking…"
               }
-              data-testid="preflight-status"
+              multiline
+              styles={{ tooltip: { whiteSpace: "pre-line" } }}
             >
-              {flight?.selected === "claude" ? (
-                <span className="ds-preflight-label">
-                  <svg viewBox="0 0 256 257" width="12" height="12" aria-hidden="true">
-                    <path
-                      fill="#D97757"
-                      d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
-                    />
-                  </svg>
-                  claude
-                </span>
-              ) : (
-                flight?.selected ?? "—"
-              )}
-            </button>
+              <button
+                className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
+                onClick={() => api.preflight(true).then(setFlight, fail)}
+                data-tauri-drag-region-exclude
+                data-testid="preflight-status"
+              >
+                {flight?.selected === "claude" ? (
+                  <span className="ds-preflight-label">
+                    <svg
+                      viewBox="0 0 256 257"
+                      width="12"
+                      height="12"
+                      aria-hidden="true"
+                    >
+                      <path
+                        fill="#D97757"
+                        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
+                      />
+                    </svg>
+                    claude
+                  </span>
+                ) : (
+                  (flight?.selected ?? "—")
+                )}
+              </button>
+            </Tooltip>
           </div>
         </header>
-      {flight && flight.warnings.length > 0 && (
-        <div className="warnings" data-testid="preflight-warnings">
-          {flight.warnings.map((warning) => (
-            <div key={warning}>⚠ {warning}</div>
-          ))}
-        </div>
-      )}
+        {flight && flight.warnings.length > 0 && (
+          <div className="warnings" data-testid="preflight-warnings">
+            {flight.warnings.map((warning) => (
+              <div key={warning}>⚠ {warning}</div>
+            ))}
+          </div>
+        )}
 
-      {errors.map((e) => (
-        <div key={e.id} className="error" onClick={() => dismissError(e.id)} data-testid="error">
-          {e.message} <span className="dismiss">dismiss</span>
-        </div>
-      ))}
+        {errors.map((e) => (
+          <div
+            key={e.id}
+            className="error"
+            onClick={() => dismissError(e.id)}
+            data-testid="error"
+          >
+            {e.message} <span className="dismiss">dismiss</span>
+          </div>
+        ))}
 
-      <div className="body">
-        {centerShell === "editor" ? (
-          <div className="ds-shell-contents" data-testid="editor-shell">
-            <nav
-              className="ds-nav-rail"
-              data-testid="nav-rail"
-              style={
-                {
-                  "--rail-w": `${leftRail.size}px`,
-                  marginLeft: leftRail.collapsed ? -leftRail.size : 0,
-                } as CSSProperties
-              }
-            >
-              {project && (
-                <FileTree
-                  projectHash={project.hash}
-                  projectName={project.displayName}
-                  onSelectFile={selectFile}
-                  activePath={selectedFile}
-                  refreshToken={fileTreeRefreshToken}
-                  onPathRenamed={onTreePathRenamed}
-                  onPathDeleted={onTreePathDeleted}
-                  onFilesChanged={onTreeFilesChanged}
+        <div className="body">
+          {centerShell === "editor" ? (
+            <div className="ds-shell-contents" data-testid="editor-shell">
+              <nav
+                className="ds-nav-rail"
+                data-testid="nav-rail"
+                style={
+                  {
+                    "--rail-w": `${leftRail.size}px`,
+                    marginLeft: leftRail.collapsed ? -leftRail.size : 0,
+                  } as CSSProperties
+                }
+              >
+                {project && (
+                  <FileTree
+                    projectHash={project.hash}
+                    projectName={project.displayName}
+                    onSelectFile={selectFile}
+                    activePath={selectedFile}
+                    refreshToken={fileTreeRefreshToken}
+                    onPathRenamed={onTreePathRenamed}
+                    onPathDeleted={onTreePathDeleted}
+                    onFilesChanged={onTreeFilesChanged}
+                  />
+                )}
+              </nav>
+
+              {!leftRail.collapsed && (
+                <div
+                  className="ds-resize-handle ds-resize-handle-x"
+                  data-testid="resize-left-rail"
+                  onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
                 />
               )}
-            </nav>
 
-            {!leftRail.collapsed && (
-              <div
-                className="ds-resize-handle ds-resize-handle-x"
-                data-testid="resize-left-rail"
-                onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
-              />
-            )}
+              <main className="main" data-testid="main-pane">
+                <Tabs
+                  value={centerTab}
+                  onChange={(value) =>
+                    value && setCenterTab(value as "editor" | "diff")
+                  }
+                >
+                  <Tabs.List
+                    className="ds-editor-tabs"
+                    data-testid="editor-tabs"
+                  >
+                    <Tabs.Tab
+                      value="editor"
+                      className="ds-tab"
+                      data-testid="tab-editor"
+                    >
+                      Editor
+                    </Tabs.Tab>
+                    <Tabs.Tab
+                      value="diff"
+                      className="ds-tab diff"
+                      data-testid="tab-diff"
+                    >
+                      Code Change Diff
+                    </Tabs.Tab>
+                  </Tabs.List>
+                </Tabs>
+                <div className="ds-breadcrumbs" data-testid="breadcrumbs">
+                  <span>{project?.displayName ?? "—"}</span>
+                  {selectedFile && (
+                    <>
+                      <span className="ds-crumb-sep">/</span>
+                      <span className="ds-crumb-active">{selectedFile}</span>
+                    </>
+                  )}
+                </div>
+                {centerTab === "editor" ? (
+                  project ? (
+                    <FileEditorPane
+                      projectHash={project.hash}
+                      path={selectedFile}
+                      onSave={handleFileSave}
+                      onDirtyChange={setEditorDirty}
+                    />
+                  ) : (
+                    <div
+                      className="ds-onboarding-empty"
+                      data-testid="onboarding-empty"
+                    >
+                      <h2>Floo Network</h2>
+                      <p>
+                        Drive Claude Code or Codex against a real project — file
+                        tree, editor, git diff, and a live codebase map, with
+                        the agent working alongside you in the same files.
+                      </p>
+                      <button onClick={onAddProject}>
+                        + Add a project to get started
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <div className="messages" data-testid="messages">
+                    {project && <DiffPane projectHash={project.hash} />}
+                    {(() => {
+                      const threadEdits = thread
+                        ? filterForTab(
+                            [
+                              ...itemsFromMessages(messages),
+                              ...mergeDeltas(live),
+                            ],
+                            "diff"
+                          )
+                        : [];
+                      const manualEdits: Item[] = fileEdits.map((e, i) => ({
+                        kind: "fileEdit" as const,
+                        id: `manual-${i}`,
+                        path: e.path,
+                        before: e.before,
+                        after: e.after,
+                      }));
+                      const allEdits = [...threadEdits, ...manualEdits];
+                      return (
+                        <section
+                          className="diff-section"
+                          data-testid="turn-history-section"
+                        >
+                          <h2 className="ds-section-heading">Turn History</h2>
+                          {allEdits.length === 0 && (
+                            <p className="empty">No file changes yet.</p>
+                          )}
+                          <EventList
+                            items={allEdits}
+                            showThinking={showThinking}
+                            executor={flight?.selected ?? null}
+                          />
+                        </section>
+                      );
+                    })()}
+                  </div>
+                )}
 
-            <main className="main" data-testid="main-pane">
-              <div className="ds-editor-tabs" data-testid="editor-tabs">
-                <button
-                  className={`ds-tab ${centerTab === "editor" ? "active" : ""}`}
-                  onClick={() => setCenterTab("editor")}
-                  data-testid="tab-editor"
-                >
-                  Editor
-                </button>
-                <button
-                  className={`ds-tab diff ${centerTab === "diff" ? "active" : ""}`}
-                  onClick={() => setCenterTab("diff")}
-                  data-testid="tab-diff"
-                >
-                  Code Change Diff
-                </button>
-              </div>
-              <div className="ds-breadcrumbs" data-testid="breadcrumbs">
-                <span>{project?.displayName ?? "—"}</span>
-                {selectedFile && (
+                {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
                   <>
-                    <span className="ds-crumb-sep">/</span>
-                    <span className="ds-crumb-active">{selectedFile}</span>
+                    <div
+                      className="ds-resize-handle ds-resize-handle-y"
+                      data-testid="resize-terminal-panel"
+                      onPointerDown={bindDrag(
+                        terminalPanel.handleProps,
+                        "row-resize"
+                      )}
+                    />
+                    <div
+                      className="ds-terminal-panel"
+                      data-testid="terminal-panel"
+                      style={
+                        {
+                          "--terminal-h": `${terminalPanel.size}px`,
+                        } as CSSProperties
+                      }
+                    >
+                      {project && (
+                        <TerminalPane
+                          projectHash={project.hash}
+                          placement={terminalPlacement}
+                          onTogglePlacement={toggleTerminalPlacement}
+                        />
+                      )}
+                    </div>
                   </>
                 )}
-              </div>
-              {centerTab === "editor" ? (
-                project ? (
-                  <FileEditorPane
-                    projectHash={project.hash}
-                    path={selectedFile}
-                    onSave={handleFileSave}
-                    onDirtyChange={setEditorDirty}
-                  />
-                ) : (
-                  <div className="ds-onboarding-empty" data-testid="onboarding-empty">
-                    <h2>Floo Network</h2>
-                    <p>
-                      Drive Claude Code or Codex against a real project — file tree, editor, git diff, and a
-                      live codebase map, with the agent working alongside you in the same files.
-                    </p>
-                    <button onClick={onAddProject}>+ Add a project to get started</button>
-                  </div>
-                )
-              ) : (
-                <div className="messages" data-testid="messages">
-                  {project && <DiffPane projectHash={project.hash} />}
-                  {(() => {
-                    const threadEdits = thread
-                      ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
-                      : [];
-                    const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                      kind: "fileEdit" as const,
-                      id: `manual-${i}`,
-                      path: e.path,
-                      before: e.before,
-                      after: e.after,
-                    }));
-                    const allEdits = [...threadEdits, ...manualEdits];
-                    return (
-                      <section className="diff-section" data-testid="turn-history-section">
-                        <h2 className="ds-section-heading">Turn History</h2>
-                        {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
-                        <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
-                      </section>
-                    );
-                  })()}
-                </div>
+              </main>
+
+              {!rightPanel.collapsed && (
+                <div
+                  className="ds-resize-handle ds-resize-handle-x"
+                  data-testid="resize-right-panel"
+                  onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
+                />
               )}
 
-              {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
-                <>
-                  <div
-                    className="ds-resize-handle ds-resize-handle-y"
-                    data-testid="resize-terminal-panel"
-                    onPointerDown={bindDrag(terminalPanel.handleProps, "row-resize")}
-                  />
-                  <div
-                    className="ds-terminal-panel"
-                    data-testid="terminal-panel"
-                    style={{ "--terminal-h": `${terminalPanel.size}px` } as CSSProperties}
-                  >
-                    {project && (
+              <aside
+                className="ds-right-sidebar"
+                data-testid="right-sidebar"
+                style={
+                  {
+                    "--panel-w": `${rightPanel.size}px`,
+                    marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+                  } as CSSProperties
+                }
+              >
+                <div className="ds-workspace-panel">
+                  <div className="ds-rail-section">
+                    <div className="ds-rail-label">Workspace</div>
+                    <select
+                      data-testid="project-picker"
+                      value={project?.hash ?? ""}
+                      onChange={(event) => {
+                        const next = projects.find(
+                          (p) => p.hash === event.target.value
+                        );
+                        if (next) selectProject(next);
+                      }}
+                    >
+                      {projects.length === 0 && (
+                        <option value="">No project</option>
+                      )}
+                      {projects.map((p) => (
+                        <option key={p.hash} value={p.hash}>
+                          {p.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="ds-rail-actions">
+                      <button onClick={onAddProject} data-testid="add-project">
+                        Add
+                      </button>
+                      {project && (
+                        <button
+                          onClick={onRenameProject}
+                          data-testid="rename-project"
+                        >
+                          Rename
+                        </button>
+                      )}
+                    </div>
+                    {project && branches.length > 0 && (
+                      <button
+                        className="ds-branch-btn"
+                        onClick={onOpenBranchPicker}
+                        data-testid="branch-indicator"
+                      >
+                        <BranchIcon />{" "}
+                        {branches.find((b) => b.isCurrent)?.name ?? "…"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="ds-right-panes">
+                  {rightTab === "terminal" &&
+                  terminalPlacement === "sidebar" ? (
+                    project && (
                       <TerminalPane
                         projectHash={project.hash}
                         placement={terminalPlacement}
                         onTogglePlacement={toggleTerminalPlacement}
                       />
-                    )}
-                  </div>
-                </>
-              )}
-            </main>
+                    )
+                  ) : (
+                    <Accordion
+                      value={editorRailOpen ? "threads-map" : null}
+                      onChange={(value) => setEditorRailOpen(value !== null)}
+                      keepMounted={false}
+                      transitionDuration={0}
+                      chevronPosition="left"
+                    >
+                      <Accordion.Item value="threads-map">
+                        <Accordion.Control
+                          className="ds-rail-disclosure"
+                          data-testid="rail-disclosure-toggle"
+                        >
+                          Threads &amp; Codebase Map
+                        </Accordion.Control>
+                        <Accordion.Panel
+                          className="ds-rail-disclosure-body"
+                          data-testid="rail-disclosure-body"
+                        >
+                          <Tabs
+                            value={rightTab}
+                            onChange={(value) =>
+                              value &&
+                              setRightTab(value as "threads" | "codemap")
+                            }
+                          >
+                            <Tabs.List className="ds-right-tabs">
+                              <Tabs.Tab
+                                value="threads"
+                                data-testid="tab-threads"
+                              >
+                                Threads
+                              </Tabs.Tab>
+                              <Tabs.Tab
+                                value="codemap"
+                                data-testid="tab-codemap"
+                              >
+                                Codebase Map
+                              </Tabs.Tab>
+                            </Tabs.List>
+                          </Tabs>
+                          {rightTab === "threads" && (
+                            <div className="ds-threads-panel">
+                              <button
+                                className="ds-new-thread"
+                                onClick={onNewThread}
+                                disabled={!project}
+                                data-testid="new-thread"
+                              >
+                                + New Thread
+                              </button>
+                              <ul data-testid="thread-list">
+                                {threads.map((t) => (
+                                  <li
+                                    key={t.id}
+                                    className={
+                                      t.id === thread?.id ? "active" : ""
+                                    }
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => {
+                                      if (project)
+                                        selectThread(project.hash, t);
+                                      setEditorRailOpen(false);
+                                    }}
+                                    onKeyDown={onActivateKey(() => {
+                                      if (project)
+                                        selectThread(project.hash, t);
+                                      setEditorRailOpen(false);
+                                    })}
+                                  >
+                                    <div className="ds-thread-row">
+                                      <span className="ds-thread-title">
+                                        {t.title}
+                                      </span>
+                                      <div className="ds-thread-actions">
+                                        <button
+                                          className="ds-thread-action"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            onRenameThread(t);
+                                          }}
+                                          title="Rename thread"
+                                          data-testid="rename-thread-item"
+                                        >
+                                          <RenameIcon />
+                                        </button>
+                                        <button
+                                          className="ds-thread-action delete"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            onDeleteThread(t);
+                                          }}
+                                          title="Delete thread"
+                                          data-testid="delete-thread"
+                                        >
+                                          <DeleteIcon />
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <span className="ds-thread-meta">
+                                      <span
+                                        className={`badge ${t.currentMode}`}
+                                      >
+                                        {t.currentMode}
+                                      </span>
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {rightTab === "codemap" && project && (
+                            <GraphPane projectHash={project.hash} />
+                          )}
+                        </Accordion.Panel>
+                      </Accordion.Item>
+                    </Accordion>
+                  )}
 
-            {!rightPanel.collapsed && (
-              <div
-                className="ds-resize-handle ds-resize-handle-x"
-                data-testid="resize-right-panel"
-                onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
-              />
-            )}
-
-            <aside
-              className="ds-right-sidebar"
-              data-testid="right-sidebar"
-              style={
-                {
-                  "--panel-w": `${rightPanel.size}px`,
-                  marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
-                } as CSSProperties
-              }
-            >
-              <div className="ds-workspace-panel">
-                <div className="ds-rail-section">
-                  <div className="ds-rail-label">Workspace</div>
-                  <select
-                    data-testid="project-picker"
-                    value={project?.hash ?? ""}
-                    onChange={(event) => {
-                      const next = projects.find((p) => p.hash === event.target.value);
-                      if (next) selectProject(next);
-                    }}
-                  >
-                    {projects.length === 0 && <option value="">No project</option>}
-                    {projects.map((p) => (
-                      <option key={p.hash} value={p.hash}>
-                        {p.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="ds-rail-actions">
-                    <button onClick={onAddProject} data-testid="add-project">Add</button>
-                    {project && (
-                      <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
-                    )}
-                  </div>
-                  {project && branches.length > 0 && (
-                    <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
-                      <BranchIcon /> {branches.find((b) => b.isCurrent)?.name ?? "…"}
-                    </button>
+                  {!(
+                    rightTab === "terminal" && terminalPlacement === "sidebar"
+                  ) && (
+                    <ChatSurface
+                      project={project}
+                      thread={thread}
+                      messages={messages}
+                      live={live}
+                      busy={busy}
+                      showThinking={showThinking}
+                      executor={flight?.selected ?? null}
+                      flightSelected={!!flight?.selected}
+                      draft={draft}
+                      setDraft={setDraft}
+                      onSend={onSend}
+                      onRenameThread={onRenameThread}
+                      onSpec={onSpec}
+                      onGo={onGo}
+                      dragActive={dragActive}
+                      newThreadPicker={newThreadPicker}
+                      onPickMode={onPickMode}
+                    />
                   )}
                 </div>
-              </div>
-              <div className="ds-right-panes">
-                {rightTab === "terminal" && terminalPlacement === "sidebar" ? (
+              </aside>
+            </div>
+          ) : (
+            <div className="ds-shell-contents" data-testid="vibe-shell">
+              <section className="ds-vibe-chat" data-testid="vibe-chat-column">
+                <ChatSurface
+                  project={project}
+                  thread={thread}
+                  messages={messages}
+                  live={live}
+                  busy={busy}
+                  showThinking={showThinking}
+                  executor={flight?.selected ?? null}
+                  flightSelected={!!flight?.selected}
+                  draft={draft}
+                  setDraft={setDraft}
+                  onSend={onSend}
+                  onRenameThread={onRenameThread}
+                  onSpec={onSpec}
+                  onGo={onGo}
+                  dragActive={dragActive}
+                  newThreadPicker={newThreadPicker}
+                  onPickMode={onPickMode}
+                />
+              </section>
+
+              <section className="ds-vibe-files" data-testid="col-files">
+                <Tabs
+                  value={vibeFileTab}
+                  onChange={(value) =>
+                    value && setVibeFileTab(value as "changes" | "file")
+                  }
+                >
+                  <Tabs.List className="ds-file-tabs">
+                    <Tabs.Tab value="changes" data-testid="vibe-tab-changes">
+                      Changes
+                    </Tabs.Tab>
+                    {selectedFile && (
+                      <Tabs.Tab value="file" data-testid="vibe-tab-file">
+                        {selectedFile}
+                      </Tabs.Tab>
+                    )}
+                  </Tabs.List>
+                </Tabs>
+                {vibeFileTab === "file" && selectedFile ? (
                   project && (
-                    <TerminalPane
+                    <FileEditorPane
                       projectHash={project.hash}
-                      placement={terminalPlacement}
-                      onTogglePlacement={toggleTerminalPlacement}
+                      path={selectedFile}
+                      onSave={handleFileSave}
+                      onDirtyChange={setEditorDirty}
                     />
                   )
                 ) : (
-                  <>
-                    <button
-                      className={`ds-rail-disclosure ${editorRailOpen ? "open" : ""}`}
-                      onClick={() => setEditorRailOpen((open) => !open)}
-                      data-testid="rail-disclosure-toggle"
-                    >
-                      <span className="chev">▸</span> Threads &amp; Codebase Map
-                    </button>
-                    {editorRailOpen && (
-                      <div className="ds-rail-disclosure-body" data-testid="rail-disclosure-body">
-                        <div className="ds-right-tabs">
-                          <button
-                            className={rightTab === "threads" ? "active" : ""}
-                            onClick={() => setRightTab("threads")}
-                            data-testid="tab-threads"
-                          >
-                            Threads
-                          </button>
-                          <button
-                            className={rightTab === "codemap" ? "active" : ""}
-                            onClick={() => setRightTab("codemap")}
-                            data-testid="tab-codemap"
-                          >
-                            Codebase Map
-                          </button>
-                        </div>
-                        {rightTab === "threads" && (
-                          <div className="ds-threads-panel">
-                            <button
-                              className="ds-new-thread"
-                              onClick={onNewThread}
-                              disabled={!project}
-                              data-testid="new-thread"
-                            >
-                              + New Thread
-                            </button>
-                            <ul data-testid="thread-list">
-                              {threads.map((t) => (
-                                <li
-                                  key={t.id}
-                                  className={t.id === thread?.id ? "active" : ""}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => {
-                                    if (project) selectThread(project.hash, t);
-                                    setEditorRailOpen(false);
-                                  }}
-                                  onKeyDown={onActivateKey(() => {
-                                    if (project) selectThread(project.hash, t);
-                                    setEditorRailOpen(false);
-                                  })}
-                                >
-                                  <div className="ds-thread-row">
-                                    <span className="ds-thread-title">{t.title}</span>
-                                    <div className="ds-thread-actions">
-                                      <button
-                                        className="ds-thread-action"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          onRenameThread(t);
-                                        }}
-                                        title="Rename thread"
-                                        data-testid="rename-thread-item"
-                                      >
-                                        <RenameIcon />
-                                      </button>
-                                      <button
-                                        className="ds-thread-action delete"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          onDeleteThread(t);
-                                        }}
-                                        title="Delete thread"
-                                        data-testid="delete-thread"
-                                      >
-                                        <DeleteIcon />
-                                      </button>
-                                    </div>
-                                  </div>
-                                  <span className="ds-thread-meta">
-                                    <span className={`badge ${t.currentMode}`}>{t.currentMode}</span>
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {rightTab === "codemap" && project && <GraphPane projectHash={project.hash} />}
-                      </div>
-                    )}
-                  </>
+                  <div className="messages" data-testid="vibe-files-content">
+                    {project && <DiffPane projectHash={project.hash} />}
+                    {(() => {
+                      const threadEdits = thread
+                        ? filterForTab(
+                            [
+                              ...itemsFromMessages(messages),
+                              ...mergeDeltas(live),
+                            ],
+                            "diff"
+                          )
+                        : [];
+                      const manualEdits: Item[] = fileEdits.map((e, i) => ({
+                        kind: "fileEdit" as const,
+                        id: `manual-${i}`,
+                        path: e.path,
+                        before: e.before,
+                        after: e.after,
+                      }));
+                      const allEdits = [...threadEdits, ...manualEdits];
+                      return (
+                        <section
+                          className="diff-section"
+                          data-testid="turn-history-section"
+                        >
+                          <h2 className="ds-section-heading">Turn History</h2>
+                          {allEdits.length === 0 && (
+                            <p className="empty">No file changes yet.</p>
+                          )}
+                          <EventList
+                            items={allEdits}
+                            showThinking={showThinking}
+                            executor={flight?.selected ?? null}
+                          />
+                        </section>
+                      );
+                    })()}
+                  </div>
                 )}
+              </section>
 
-                {!(rightTab === "terminal" && terminalPlacement === "sidebar") && (
-                  <ChatSurface
-                    project={project}
-                    thread={thread}
-                    messages={messages}
-                    live={live}
-                    busy={busy}
-                    showThinking={showThinking}
-                    executor={flight?.selected ?? null}
-                    flightSelected={!!flight?.selected}
-                    draft={draft}
-                    setDraft={setDraft}
-                    onSend={onSend}
-                    onRenameThread={onRenameThread}
-                    onSpec={onSpec}
-                    onGo={onGo}
-                    dragActive={dragActive}
-                    newThreadPicker={newThreadPicker}
-                    onPickMode={onPickMode}
-                  />
-                )}
-              </div>
-            </aside>
-          </div>
-        ) : (
-          <div className="ds-shell-contents" data-testid="vibe-shell">
-            <section className="ds-vibe-chat" data-testid="vibe-chat-column">
-              <ChatSurface
-                project={project}
-                thread={thread}
-                messages={messages}
-                live={live}
-                busy={busy}
-                showThinking={showThinking}
-                executor={flight?.selected ?? null}
-                flightSelected={!!flight?.selected}
-                draft={draft}
-                setDraft={setDraft}
-                onSend={onSend}
-                onRenameThread={onRenameThread}
-                onSpec={onSpec}
-                onGo={onGo}
-                dragActive={dragActive}
-                newThreadPicker={newThreadPicker}
-                onPickMode={onPickMode}
-              />
-            </section>
-
-            <section className="ds-vibe-files" data-testid="col-files">
-              <div className="ds-file-tabs">
-                <button
-                  className={vibeFileTab === "changes" ? "active" : ""}
-                  onClick={() => setVibeFileTab("changes")}
-                  data-testid="vibe-tab-changes"
-                >
-                  Changes
-                </button>
-                {selectedFile && (
-                  <button
-                    className={vibeFileTab === "file" ? "active" : ""}
-                    onClick={() => setVibeFileTab("file")}
-                    data-testid="vibe-tab-file"
-                  >
-                    {selectedFile}
-                  </button>
-                )}
-              </div>
-              {vibeFileTab === "file" && selectedFile ? (
-                project && (
-                  <FileEditorPane
-                    projectHash={project.hash}
-                    path={selectedFile}
-                    onSave={handleFileSave}
-                    onDirtyChange={setEditorDirty}
-                  />
-                )
-              ) : (
-                <div className="messages" data-testid="vibe-files-content">
-                  {project && <DiffPane projectHash={project.hash} />}
-                  {(() => {
-                    const threadEdits = thread
-                      ? filterForTab([...itemsFromMessages(messages), ...mergeDeltas(live)], "diff")
-                      : [];
-                    const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                      kind: "fileEdit" as const,
-                      id: `manual-${i}`,
-                      path: e.path,
-                      before: e.before,
-                      after: e.after,
-                    }));
-                    const allEdits = [...threadEdits, ...manualEdits];
-                    return (
-                      <section className="diff-section" data-testid="turn-history-section">
-                        <h2 className="ds-section-heading">Turn History</h2>
-                        {allEdits.length === 0 && <p className="empty">No file changes yet.</p>}
-                        <EventList items={allEdits} showThinking={showThinking} executor={flight?.selected ?? null} />
-                      </section>
-                    );
-                  })()}
-                </div>
+              {!rightPanel.collapsed && (
+                <div
+                  className="ds-resize-handle ds-resize-handle-x"
+                  data-testid="resize-right-panel"
+                  onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
+                />
               )}
-            </section>
 
-            {!rightPanel.collapsed && (
-              <div
-                className="ds-resize-handle ds-resize-handle-x"
-                data-testid="resize-right-panel"
-                onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
-              />
-            )}
-
-            <aside
-              className="ds-right-sidebar"
-              data-testid="right-sidebar"
-              style={
-                {
-                  "--panel-w": `${rightPanel.size}px`,
-                  marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
-                } as CSSProperties
-              }
-            >
-              <div className="ds-workspace-panel">
-                <div className="ds-rail-section">
-                  <div className="ds-rail-label">Workspace</div>
-                  <select
-                    data-testid="project-picker"
-                    value={project?.hash ?? ""}
-                    onChange={(event) => {
-                      const next = projects.find((p) => p.hash === event.target.value);
-                      if (next) selectProject(next);
-                    }}
-                  >
-                    {projects.length === 0 && <option value="">No project</option>}
-                    {projects.map((p) => (
-                      <option key={p.hash} value={p.hash}>
-                        {p.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="ds-rail-actions">
-                    <button onClick={onAddProject} data-testid="add-project">Add</button>
-                    {project && (
-                      <button onClick={onRenameProject} data-testid="rename-project">Rename</button>
+              <aside
+                className="ds-right-sidebar"
+                data-testid="right-sidebar"
+                style={
+                  {
+                    "--panel-w": `${rightPanel.size}px`,
+                    marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+                  } as CSSProperties
+                }
+              >
+                <div className="ds-workspace-panel">
+                  <div className="ds-rail-section">
+                    <div className="ds-rail-label">Workspace</div>
+                    <select
+                      data-testid="project-picker"
+                      value={project?.hash ?? ""}
+                      onChange={(event) => {
+                        const next = projects.find(
+                          (p) => p.hash === event.target.value
+                        );
+                        if (next) selectProject(next);
+                      }}
+                    >
+                      {projects.length === 0 && (
+                        <option value="">No project</option>
+                      )}
+                      {projects.map((p) => (
+                        <option key={p.hash} value={p.hash}>
+                          {p.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="ds-rail-actions">
+                      <button onClick={onAddProject} data-testid="add-project">
+                        Add
+                      </button>
+                      {project && (
+                        <button
+                          onClick={onRenameProject}
+                          data-testid="rename-project"
+                        >
+                          Rename
+                        </button>
+                      )}
+                    </div>
+                    {project && branches.length > 0 && (
+                      <button
+                        className="ds-branch-btn"
+                        onClick={onOpenBranchPicker}
+                        data-testid="branch-indicator"
+                      >
+                        <BranchIcon />{" "}
+                        {branches.find((b) => b.isCurrent)?.name ?? "…"}
+                      </button>
                     )}
                   </div>
-                  {project && branches.length > 0 && (
-                    <button className="ds-branch-btn" onClick={onOpenBranchPicker} data-testid="branch-indicator">
-                      <BranchIcon /> {branches.find((b) => b.isCurrent)?.name ?? "…"}
-                    </button>
-                  )}
                 </div>
-              </div>
-              <div className="ds-threads-panel">
-                <button className="ds-new-thread" onClick={onNewThread} disabled={!project} data-testid="new-thread">
-                  + New Thread
-                </button>
-                <ul data-testid="thread-list">
-                  {threads.map((t) => (
-                    <li
-                      key={t.id}
-                      className={t.id === thread?.id ? "active" : ""}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        if (project) selectThread(project.hash, t);
-                      }}
-                      onKeyDown={onActivateKey(() => {
-                        if (project) selectThread(project.hash, t);
-                      })}
-                    >
-                      <div className="ds-thread-row">
-                        <span className="ds-thread-title">{t.title}</span>
-                        <div className="ds-thread-actions">
-                          <button
-                            className="ds-thread-action"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onRenameThread(t);
-                            }}
-                            title="Rename thread"
-                            data-testid="rename-thread-item"
-                          >
-                            <RenameIcon />
-                          </button>
-                          <button
-                            className="ds-thread-action delete"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onDeleteThread(t);
-                            }}
-                            title="Delete thread"
-                            data-testid="delete-thread"
-                          >
-                            <DeleteIcon />
-                          </button>
+                <div className="ds-threads-panel">
+                  <button
+                    className="ds-new-thread"
+                    onClick={onNewThread}
+                    disabled={!project}
+                    data-testid="new-thread"
+                  >
+                    + New Thread
+                  </button>
+                  <ul data-testid="thread-list">
+                    {threads.map((t) => (
+                      <li
+                        key={t.id}
+                        className={t.id === thread?.id ? "active" : ""}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          if (project) selectThread(project.hash, t);
+                        }}
+                        onKeyDown={onActivateKey(() => {
+                          if (project) selectThread(project.hash, t);
+                        })}
+                      >
+                        <div className="ds-thread-row">
+                          <span className="ds-thread-title">{t.title}</span>
+                          <div className="ds-thread-actions">
+                            <button
+                              className="ds-thread-action"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onRenameThread(t);
+                              }}
+                              title="Rename thread"
+                              data-testid="rename-thread-item"
+                            >
+                              <RenameIcon />
+                            </button>
+                            <button
+                              className="ds-thread-action delete"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onDeleteThread(t);
+                              }}
+                              title="Delete thread"
+                              data-testid="delete-thread"
+                            >
+                              <DeleteIcon />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <span className="ds-thread-meta">
-                        <span className={`badge ${t.currentMode}`}>{t.currentMode}</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div className="ds-vibe-explorer">
-                <button
-                  className={`ds-rail-disclosure ${vibeExplorerOpen ? "open" : ""}`}
-                  onClick={() => setVibeExplorerOpen((open) => !open)}
-                  data-testid="vibe-explorer-toggle"
-                >
-                  <span className="chev">▸</span> File Explorer
-                </button>
-                {vibeExplorerOpen && project && (
-                  <div className="ds-rail-disclosure-body" data-testid="vibe-explorer-body">
-                    <FileTree
-                      projectHash={project.hash}
-                      projectName={project.displayName}
-                      onSelectFile={(path) => {
-                        selectFile(path);
-                        setVibeFileTab("file");
-                      }}
-                      activePath={selectedFile}
-                      refreshToken={fileTreeRefreshToken}
-                      onPathRenamed={onTreePathRenamed}
-                      onPathDeleted={onTreePathDeleted}
-                      onFilesChanged={onTreeFilesChanged}
-                    />
-                  </div>
-                )}
-              </div>
-            </aside>
-          </div>
+                        <span className="ds-thread-meta">
+                          <span className={`badge ${t.currentMode}`}>
+                            {t.currentMode}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="ds-vibe-explorer">
+                  <Accordion
+                    value={vibeExplorerOpen ? "file-explorer" : null}
+                    onChange={(value) => setVibeExplorerOpen(value !== null)}
+                    keepMounted={false}
+                    transitionDuration={0}
+                    chevronPosition="left"
+                  >
+                    <Accordion.Item value="file-explorer">
+                      <Accordion.Control
+                        className="ds-rail-disclosure"
+                        data-testid="vibe-explorer-toggle"
+                      >
+                        File Explorer
+                      </Accordion.Control>
+                      <Accordion.Panel
+                        className="ds-rail-disclosure-body"
+                        data-testid="vibe-explorer-body"
+                      >
+                        {project && (
+                          <FileTree
+                            projectHash={project.hash}
+                            projectName={project.displayName}
+                            onSelectFile={(path) => {
+                              selectFile(path);
+                              setVibeFileTab("file");
+                            }}
+                            activePath={selectedFile}
+                            refreshToken={fileTreeRefreshToken}
+                            onPathRenamed={onTreePathRenamed}
+                            onPathDeleted={onTreePathDeleted}
+                            onFilesChanged={onTreeFilesChanged}
+                          />
+                        )}
+                      </Accordion.Panel>
+                    </Accordion.Item>
+                  </Accordion>
+                </div>
+              </aside>
+            </div>
+          )}
+        </div>
+
+        {paletteOpen && (
+          <FilePalette
+            files={paletteFiles}
+            onSelect={selectFile}
+            onClose={() => setPaletteOpen(false)}
+            onCreate={onCreateFile}
+            onRename={onRenameFile}
+            onDelete={onDeleteFile}
+          />
         )}
-      </div>
 
-      {paletteOpen && (
-        <FilePalette
-          files={paletteFiles}
-          onSelect={selectFile}
-          onClose={() => setPaletteOpen(false)}
-          onCreate={onCreateFile}
-          onRename={onRenameFile}
-          onDelete={onDeleteFile}
-        />
-      )}
-
-      {textSearchOpen && (
-        <TextSearchPalette
-          files={paletteFiles}
-          onSearchText={searchProjectText}
-          onSelect={selectFile}
-          onClose={() => setTextSearchOpen(false)}
-        />
-      )}
-
-      {settingsOpen && (
-        <SettingsPanel onOpenProjectSettings={onOpenSettings} onClose={() => setSettingsOpen(false)} />
-      )}
-
-      {bar && bar.kind === "input" && (
-        <Modal onClose={() => setBar(null)} label={bar.label}>
-          <label htmlFor="barInput">{bar.label}</label>
-          <input
-            id="barInput"
-            name="barInput"
-            autoFocus
-            autoComplete="off"
-            defaultValue={bar.value}
-            placeholder={bar.value ? undefined : "filename"}
-            data-testid="note-name-input"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                const value = event.currentTarget.value.trim();
-                if (!value) return;
-                const { submit } = bar;
-                setBar(null);
-                submit(value);
-              }
-            }}
+        {textSearchOpen && (
+          <TextSearchPalette
+            files={paletteFiles}
+            onSearchText={searchProjectText}
+            onSelect={selectFile}
+            onClose={() => setTextSearchOpen(false)}
           />
-          <span className="hint">Enter to confirm · Esc to cancel</span>
-        </Modal>
-      )}
+        )}
 
-      {bar && bar.kind === "confirm" && (
-        <Modal onClose={() => setBar(null)} label={bar.label}>
-          <label>{bar.label}</label>
-          <div className="confirm-actions">
-            <button onClick={bar.onConfirm} className="danger" data-testid="confirm-delete" autoFocus>
-              {bar.confirmLabel ?? "Delete"}
-            </button>
-            <button onClick={() => setBar(null)}>Cancel</button>
-          </div>
-        </Modal>
-      )}
+        {settingsOpen && (
+          <SettingsPanel
+            onOpenProjectSettings={onOpenSettings}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
 
-      {bar && bar.kind === "select" && (
-        <Modal onClose={() => setBar(null)} label={bar.label}>
-          <label htmlFor="barSelect">{bar.label}</label>
-          <ul className="ds-branch-list" data-testid="branch-list">
-            {(selectQuery.trim()
-              ? bar.options.filter((name) => fuzzyMatch(selectQuery, name) !== null)
-              : bar.options
-            ).map((name) => (
-              <li
-                key={name}
-                role="button"
-                tabIndex={0}
-                onClick={() => bar.submit(name)}
-                onKeyDown={onActivateKey(() => bar.submit(name))}
-                data-testid="branch-option"
+        {bar && bar.kind === "input" && (
+          <MantineModal opened onClose={() => setBar(null)} title={bar.label}>
+            <input
+              id="barInput"
+              name="barInput"
+              autoFocus
+              autoComplete="off"
+              defaultValue={bar.value}
+              placeholder={bar.value ? undefined : "filename"}
+              aria-label={bar.label}
+              data-testid="note-name-input"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  const value = event.currentTarget.value.trim();
+                  if (!value) return;
+                  const { submit } = bar;
+                  setBar(null);
+                  submit(value);
+                }
+              }}
+            />
+            <span className="hint">Enter to confirm · Esc to cancel</span>
+          </MantineModal>
+        )}
+
+        {bar && bar.kind === "confirm" && (
+          <MantineModal opened onClose={() => setBar(null)} title={bar.label}>
+            <div className="confirm-actions">
+              <button
+                onClick={bar.onConfirm}
+                className="danger"
+                data-testid="confirm-delete"
+                autoFocus
               >
-                {name}
-              </li>
-            ))}
-          </ul>
-          <input
-            id="barSelect"
-            name="barSelect"
-            autoFocus
-            autoComplete="off"
-            value={selectQuery}
-            onChange={(event) => setSelectQuery(event.target.value)}
-            placeholder="new-branch-name"
-            aria-label="New branch name"
-            data-testid="branch-new-input"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                const value = event.currentTarget.value.trim();
-                if (!value) return;
-                bar.submit(value);
-              }
-            }}
-          />
-          <span className="hint">Click a branch to switch · Enter a name to create · Esc to cancel</span>
-        </Modal>
-      )}
+                {bar.confirmLabel ?? "Delete"}
+              </button>
+              <button onClick={() => setBar(null)}>Cancel</button>
+            </div>
+          </MantineModal>
+        )}
+
+        {bar && bar.kind === "select" && (
+          <MantineModal opened onClose={() => setBar(null)} title={bar.label}>
+            <ul className="ds-branch-list" data-testid="branch-list">
+              {(selectQuery.trim()
+                ? bar.options.filter(
+                    (name) => fuzzyMatch(selectQuery, name) !== null
+                  )
+                : bar.options
+              ).map((name) => (
+                <li
+                  key={name}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => bar.submit(name)}
+                  onKeyDown={onActivateKey(() => bar.submit(name))}
+                  data-testid="branch-option"
+                >
+                  {name}
+                </li>
+              ))}
+            </ul>
+            <input
+              id="barSelect"
+              name="barSelect"
+              autoFocus
+              autoComplete="off"
+              value={selectQuery}
+              onChange={(event) => setSelectQuery(event.target.value)}
+              placeholder="new-branch-name"
+              aria-label="New branch name"
+              data-testid="branch-new-input"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  const value = event.currentTarget.value.trim();
+                  if (!value) return;
+                  bar.submit(value);
+                }
+              }}
+            />
+            <span className="hint">
+              Click a branch to switch · Enter a name to create · Esc to cancel
+            </span>
+          </MantineModal>
+        )}
       </div>
     </div>
   );

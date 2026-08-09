@@ -1,8 +1,15 @@
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MantineProvider } from "@mantine/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import "../App.css";
+
+// App now reads Mantine's color-scheme context (theme-toggle wiring), so every
+// render needs a MantineProvider ancestor — kept minimal here since these tests
+// exercise behavior, not the app's real theme/token bridge (that lives in main.tsx).
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 // Mock Tauri APIs before importing App
 vi.mock("@tauri-apps/api/event", () => ({
@@ -224,6 +231,15 @@ describe("Top chrome (merged-design v2)", () => {
     fireEvent.mouseDown(screen.getByTestId("toggle-left-sidebar"), { button: 0, detail: 1 });
     expect(mockWindow.startDragging).not.toHaveBeenCalled();
   });
+
+  it("shows a hover tooltip on top-chrome icon buttons instead of a native title attribute", async () => {
+    render(<App />);
+    const button = screen.getByTestId("toggle-left-sidebar");
+    expect(button).not.toHaveAttribute("title");
+
+    await userEvent.hover(button);
+    expect(await screen.findByRole("tooltip", { name: /toggle left sidebar/i })).toBeInTheDocument();
+  });
 });
 
 describe("Navigation rail — File Explorer only (D57)", () => {
@@ -287,12 +303,12 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
     expect(screen.queryByTestId("rail-disclosure-body")).toBeNull();
 
     fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    expect(screen.getByTestId("tab-threads").className).toMatch(/active/);
+    expect(screen.getByTestId("tab-threads")).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("thread-list")).toBeDefined();
     expect(screen.getByTestId("new-thread")).toBeDefined();
 
     fireEvent.click(screen.getByTestId("tab-codemap"));
-    expect(screen.getByTestId("tab-codemap").className).toMatch(/active/);
+    expect(screen.getByTestId("tab-codemap")).toHaveAttribute("aria-selected", "true");
     // Workspace stays pinned above the disclosure regardless of which inner tab is active;
     // New Thread lives inside the Threads pane itself, so it hides with it.
     expect(screen.getByTestId("project-picker")).toBeDefined();
@@ -515,7 +531,7 @@ describe("Editor chrome (merged-design v2)", () => {
       el.getAttribute("data-testid"),
     );
     expect(order).toEqual(["tab-editor", "tab-diff"]);
-    expect(screen.getByTestId("tab-editor").className).toMatch(/active/);
+    expect(screen.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true");
     expect(within(tabs).getByText("Editor")).toBeDefined();
   });
 
@@ -1250,7 +1266,7 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
     fireEvent.click(screen.getByText("a.ts"));
 
     await waitFor(() => expect(screen.getByTestId("vibe-tab-file")).toBeDefined());
-    expect(screen.getByTestId("vibe-tab-file").className).toMatch(/active/);
+    expect(screen.getByTestId("vibe-tab-file")).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("content"));
   });
 });
@@ -1444,7 +1460,7 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
     expect(screen.queryByTestId("model-menu")).toBeNull();
 
     fireEvent.click(screen.getByTestId("model-btn"));
-    expect(screen.getByTestId("model-menu")).toBeDefined();
+    expect(await screen.findByTestId("model-menu")).toBeDefined();
   });
 
   it("shows the executor as read-only status in the menu, with no control to switch it", async () => {
@@ -1462,37 +1478,36 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
     await waitFor(() => expect(screen.getByTestId("model-btn")).toBeDefined());
     fireEvent.click(screen.getByTestId("model-btn"));
 
-    const executorRow = screen.getByTestId("executor-row");
+    const executorRow = await screen.findByTestId("executor-row");
     expect(executorRow.tagName).not.toBe("BUTTON");
     expect(executorRow).toHaveTextContent(/claude/i);
   });
 
-  it("lets the user pick a model, persisting the choice across menu close/reopen", () => {
+  it("lets the user pick a model, persisting the choice across menu close/reopen", async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId("model-btn"));
-    fireEvent.click(screen.getByTestId("model-opt-opus-5"));
+    fireEvent.click(await screen.findByTestId("model-opt-opus-5"));
 
     expect(localStorage.getItem("floo:model")).toBe("Opus 5");
     expect(screen.getByTestId("model-btn")).toHaveTextContent("Opus 5");
-    expect(screen.queryByTestId("model-menu")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("model-menu")).toBeNull());
 
     fireEvent.click(screen.getByTestId("model-btn"));
-    expect(screen.getByTestId("model-opt-opus-5").className).toMatch(/selected/);
+    expect((await screen.findByTestId("model-opt-opus-5")).className).toMatch(/selected/);
   });
 
-  it("has a bypass-permissions toggle, default off, that flips on and persists across menu reopen", () => {
+  it("has a bypass-permissions toggle, default off, that flips on and persists across menu reopen", async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId("model-btn"));
-    const toggle = screen.getByTestId("bypass-toggle");
-    expect(toggle.className).not.toMatch(/\bon\b/);
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    const toggle = await screen.findByTestId("bypass-toggle");
+    expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
-    expect(toggle.className).toMatch(/\bon\b/);
+    expect(toggle).toBeChecked();
     expect(localStorage.getItem("floo:bypass")).toBe("1");
 
     fireEvent.click(screen.getByTestId("model-btn")); // close
     fireEvent.click(screen.getByTestId("model-btn")); // reopen
-    expect(screen.getByTestId("bypass-toggle").className).toMatch(/\bon\b/);
+    expect(await screen.findByTestId("bypass-toggle")).toBeChecked();
   });
 });

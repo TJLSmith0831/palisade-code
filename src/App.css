@@ -8,10 +8,10 @@
   --surface: oklch(22% 0.006 250);
   --surface-warm: oklch(26% 0.008 250);
   --editor-bg: oklch(20% 0.005 250);
-  --active-row: oklch(24% 0.020 var(--accent-hue, 145));
+  --active-row: oklch(24% 0.02 var(--accent-hue, 145));
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
-  --border: oklch(30% 0.010 250);
+  --border: oklch(30% 0.01 250);
   --accent: oklch(88% 0.21 var(--accent-hue, 145));
   --accent-on: oklch(20% 0.03 var(--accent-hue, 145));
   --twilight-glow: oklch(18% 0.03 var(--accent-hue, 145));
@@ -34,7 +34,7 @@
     --active-row: oklch(90% 0.04 var(--accent-hue, 145));
     --fg: oklch(20% 0.006 250);
     --muted: oklch(46% 0.012 250);
-    --border: oklch(85% 0.010 250);
+    --border: oklch(85% 0.01 250);
     --accent: oklch(46% 0.16 var(--accent-hue, 145));
     --accent-on: oklch(98% 0.02 var(--accent-hue, 145));
     --twilight-glow: oklch(90% 0.05 var(--accent-hue, 145));
@@ -55,7 +55,7 @@
   --active-row: oklch(90% 0.04 var(--accent-hue, 145));
   --fg: oklch(20% 0.006 250);
   --muted: oklch(46% 0.012 250);
-  --border: oklch(85% 0.010 250);
+  --border: oklch(85% 0.01 250);
   --accent: oklch(46% 0.16 var(--accent-hue, 145));
   --accent-on: oklch(98% 0.02 var(--accent-hue, 145));
   --twilight-glow: oklch(90% 0.05 var(--accent-hue, 145));
@@ -89,7 +89,18 @@ html,
   height: 100%;
   background: transparent;
   color: var(--fg);
-  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  font:
+    13px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    "Fira Sans",
+    "Droid Sans",
+    "Helvetica Neue",
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -113,7 +124,9 @@ pre,
 .badge,
 .status,
 .warnings {
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  font-family:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+    monospace;
 }
 
 button,
@@ -307,15 +320,9 @@ input[type="checkbox"] {
 }
 
 /* Executor/model/bypass menu — executor is display-only (detection, not
-   config, per CLAUDE.md); model and bypass are the user-settable controls. */
-.ds-model-picker {
-  position: relative;
-}
-
+   config, per CLAUDE.md); model and bypass are the user-settable controls.
+   Positioning (fixed/floating-ui, z-index) is now owned by Mantine's Menu. */
 .ds-model-menu {
-  position: absolute;
-  top: 38px;
-  right: 0;
   width: 220px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -325,7 +332,6 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  z-index: 50;
 }
 
 .ds-model-group-label {
@@ -378,48 +384,6 @@ input[type="checkbox"] {
   margin-top: 4px;
 }
 
-.ds-bypass-label {
-  font-size: 12px;
-  color: var(--fg);
-}
-
-.ds-bypass-sub {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.ds-switch {
-  width: 30px;
-  height: 17px;
-  flex-shrink: 0;
-  padding: 0;
-  border-radius: 9999px;
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  position: relative;
-}
-
-.ds-switch .knob {
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 13px;
-  height: 13px;
-  border-radius: 9999px;
-  background: var(--muted);
-  transition: all 120ms ease-out;
-}
-
-.ds-switch.on {
-  background: var(--warn);
-  border-color: var(--warn);
-}
-
-.ds-switch.on .knob {
-  left: 15px;
-  background: var(--fg);
-}
-
 .ds-icon-btn {
   min-width: 32px;
   width: auto;
@@ -443,9 +407,17 @@ input[type="checkbox"] {
   border-color: var(--fg);
 }
 
-.ds-icon-btn.ok { color: var(--accent); border-color: var(--accent); }
-.ds-icon-btn.warn { color: var(--warn); border-color: var(--warn); }
-.ds-icon-btn.bad { color: var(--muted); }
+.ds-icon-btn.ok {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ds-icon-btn.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.ds-icon-btn.bad {
+  color: var(--muted);
+}
 
 .ds-preflight-label {
   display: inline-flex;
@@ -1001,14 +973,14 @@ input[type="checkbox"] {
   color: var(--fg);
 }
 
-.ds-tab.active {
+.ds-tab[data-active] {
   background: var(--editor-bg);
   color: var(--fg);
   border: 1px solid var(--border);
   border-bottom-color: var(--editor-bg);
 }
 
-.ds-tab.diff.active {
+.ds-tab.diff[data-active] {
   color: var(--accent);
 }
 
@@ -1225,7 +1197,7 @@ input[type="checkbox"] {
   transition: color 120ms ease-out;
 }
 
-.ds-right-tabs button.active {
+.ds-right-tabs button[data-active] {
   color: var(--fg);
   border-bottom: 2px solid var(--accent);
 }
@@ -1274,17 +1246,9 @@ input[type="checkbox"] {
   color: var(--fg);
 }
 
-.ds-rail-disclosure .chev {
-  transition: transform 150ms ease-out;
-}
-
-.ds-rail-disclosure.open .chev {
-  transform: rotate(90deg);
-}
-
 .ds-rail-disclosure-body {
   flex-shrink: 0;
-  max-height: 260px;
+  /* max-height: 260px; */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1328,7 +1292,7 @@ input[type="checkbox"] {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-.ds-file-tabs button.active {
+.ds-file-tabs button[data-active] {
   background: var(--editor-bg);
   color: var(--fg);
 }
@@ -1414,23 +1378,10 @@ input[type="checkbox"] {
 .ds-chat-avatar {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
-  background: var(--twilight-glow);
-  color: var(--accent);
-  border: 1px solid var(--twilight-glow);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 11px;
-  font-weight: 700;
   flex-shrink: 0;
-}
-
-.ds-chat-avatar.claude {
-  background: var(--accent);
-  color: var(--accent-on);
-  border-color: var(--accent);
 }
 
 .ds-chat-bubble .message {
@@ -1517,7 +1468,9 @@ input[type="checkbox"] {
   border: 1px solid var(--border);
   border-radius: 9999px;
   padding: 2px 9px;
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  font-family:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+    monospace;
 }
 
 .working {
@@ -2120,7 +2073,9 @@ details.graph-report-wrap > summary {
   gap: 12px;
   padding: 12px 16px;
   border-top: 1px solid var(--border);
-  transition: background 120ms ease-out, outline-color 120ms ease-out;
+  transition:
+    background 120ms ease-out,
+    outline-color 120ms ease-out;
   outline: 2px dashed transparent;
   outline-offset: -2px;
 }
@@ -2208,14 +2163,21 @@ details.graph-report-wrap > summary {
 
 .editor .w-md-editor textarea {
   color: var(--fg);
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  font-family:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+    monospace;
   font-size: 13px;
 }
 
 .wmde-markdown {
   background: var(--surface-warm);
   color: var(--fg);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
   font-size: 13px;
 }
 
@@ -2229,7 +2191,9 @@ details.graph-report-wrap > summary {
 .wmde-markdown code {
   background: var(--bg);
   color: var(--accent);
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  font-family:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+    monospace;
 }
 
 .wmde-markdown pre {
@@ -2382,7 +2346,9 @@ details.graph-report-wrap > summary {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  font-family:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+    monospace;
   font-size: 12px;
 }
 

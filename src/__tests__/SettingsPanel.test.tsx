@@ -1,5 +1,7 @@
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
 
 import SettingsPanel, {
   ACCENT_HUE_KEY,
@@ -7,6 +9,8 @@ import SettingsPanel, {
   EDITOR_FONT_KEY,
   EDITOR_FONT_SIZE_KEY,
 } from "../SettingsPanel";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 afterEach(() => {
   localStorage.clear();
@@ -59,7 +63,7 @@ describe("SettingsPanel", () => {
   it("closes on Escape", () => {
     const onClose = vi.fn();
     render(<SettingsPanel onOpenProjectSettings={vi.fn()} onClose={onClose} />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
   });
 });

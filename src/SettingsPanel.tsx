@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import Modal from "./Modal";
+import { useState } from "react";
+import { Modal } from "@mantine/core";
 
 // Personal display preferences (D24 precedent: layout is personal, not
 // project config) — localStorage, not .project-settings.json.
@@ -66,14 +66,6 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
   const [editorFont, setEditorFontState] = useState(loadEditorFont);
   const [editorFontSize, setEditorFontSizeState] = useState(loadEditorFontSize);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const setAccentHue = (hue: number) => {
     setAccentHueState(hue);
     applyAccentHue(hue);
@@ -93,7 +85,7 @@ export default function SettingsPanel({ onOpenProjectSettings, onClose }: Props)
   };
 
   return (
-    <Modal onClose={onClose} label="Settings" className="settings-panel" testId="settings-panel">
+    <Modal opened onClose={onClose} title="Settings" className="settings-panel" data-testid="settings-panel">
       <div className="settings-section">
           <label>Color scheme</label>
           <div className="accent-swatches" data-testid="accent-swatches">

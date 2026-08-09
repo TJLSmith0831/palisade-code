@@ -5,7 +5,7 @@ Cross-machine agent harness: one executor (Claude Code or Codex) drives both spe
 Rust + Tauri · TypeScript (frontend) · pnpm · Browserbase (web search) · Graphify (code maps) · Claude Code / Codex CLI
 
 ## Commands (verified 2026-08-03)
-- `pnpm install` — install frontend dependencies (run from the repo root; this day is a pnpm workspace member)
+- `pnpm install` — install frontend dependencies (run from the repo root)
 - `cd src-tauri && cargo test` — run Rust backend tests
 - `pnpm start` (= `pnpm tauri dev`) — start the Tauri dev window
 - `pnpm build` — typecheck (`tsc`) and build the frontend bundle

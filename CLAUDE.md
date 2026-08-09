@@ -1,15 +1,45 @@
 # Floo Network — CLAUDE.md
-Cross-machine agent orchestrator: one executor (Claude Code or Codex) drives both spec-mode (read-only/plan, grill-explore/grill-propose) and go-mode (write-enabled, grill-apply). Project threads, session history, and Graphify code maps are first-class.
 
-## Verified facts (as of 2026-08-03)
-- The harness is built with Rust + Tauri for speed and small footprint.
-- The harness must run unchanged on personal (Claude Code) and work (Codex) laptops.
-- The executor (Claude Code or Codex) is the only model in both modes. Spec-mode and go-mode differ by the executor's permission mode/sandbox flag and skill focus, not by model.
-- Graphify maps the active project, not the harness itself.
-- Browserbase provides web search; the key lives in `.env`.
-- Session storage lives outside any target repo.
+Cross-machine IDE shell that drives one coding agent (Claude Code or Codex) through a spec-then-build cycle. Rust + Tauri 2 backend, React 19 + TS frontend (Vite), pnpm.
+
+## Commands (verified 2026-08-08)
+
+- `pnpm install` — frontend deps (standalone repo, not a workspace member)
+- `pnpm test` — all frontend tests (vitest, 20 files / 189 tests, ~2s)
+- `npx vitest run src/__tests__/errors.test.ts` — one frontend test file
+- `npx tsc --noEmit` — typecheck only; `pnpm build` = `tsc && vite build`
+- `cd src-tauri && cargo test` — all Rust tests (116)
+- `cd src-tauri && cargo test git::` — one Rust module's tests
+- `pnpm start` (= `tauri dev`) — dev window; see run skill below before driving it
+
+## Map
+
+- `src/App.tsx` (~1.7k lines) — the entire IDE shell: panes, threads, chat, routing
+- `src/api.ts` — typed wrapper over every Tauri IPC command
+- `src-tauri/src/lib.rs` — IPC command layer; the `generate_handler!` registry is at the bottom
+- `src-tauri/src/executor.rs` — executor detect/spawn, stdout JSON-line parsing for both CLIs
+- `src-tauri/src/store.rs` — append-only session store under `~/.floo-network`
+- `src-tauri/src/{git,terminal,integrations,settings}.rs` — git ops, PTY, Graphify+MCP wiring, `.project-settings.json`
+- `src/__tests__/*` — frontend tests, one per source file; Rust tests are inline `mod tests`
+
+## Gotchas
+
+- **New IPC command = three edits:** the `#[tauri::command]` fn, its name in `generate_handler!` in `lib.rs`, and a wrapper in `src/api.ts`. Miss the third and the frontend silently can't call it.
+- **No headless mode.** Playwright can't drive this (WKWebView, not Chromium). Use the Tauri MCP against the debug-only bridge on `127.0.0.1:9223`.
+- **Executor resolution:** `.project-settings.json`'s `executorOverride` wins; otherwise PATH detection, preferring `claude` over `codex`. Neither found → chat-only, `/go` disabled.
+- **Preflight checks user-level installs**, not repo files: `~/.claude/skills/grill-apply` (or `~/.agents/...` for Codex) and the Ponytail plugin. Missing ones surface as warnings, not errors.
+- **Graphify runs against the active project, never this repo**, in its own process; output lands in that project's `graphify-out/`.
+- **Session history is append-only.** Never mutate past messages; truncate by copying forward.
+- **`.agents/` and `.claude/` are gitignored** — in-repo skills exist locally but aren't committed.
+- **Two modes only** (spec / go). They share the detected executor and differ by its permission flag (`--permission-mode` / `--sandbox`) and skill focus — not by model. No third mode.
+
+## Do not touch
+
+- Generated: `node_modules/`, `dist/`, `src-tauri/target/`, `src-tauri/gen/schemas`, `graphify-out/`
+- Machine-local and gitignored: `.mcp.json`, `.project-settings.json` (the app rewrites these)
 
 ## Operating rules
+
 - Read before writing: trace the real flow before editing; grep callers before changing a shared function.
 - Reuse before writing: search for an existing helper/pattern in this repo before adding one. Match local idiom over general best practice.
 - Shortest working diff: no speculative abstractions, no unrequested refactors, no drive-by cleanups. One concern per change.
@@ -17,21 +47,11 @@ Cross-machine agent orchestrator: one executor (Claude Code or Codex) drives bot
 - Scoped verification: run the narrowest check that proves the change (single test file > full suite) — then the full gate only before done.
 - Claim only what you ran: "done" means executed and observed. If not run, say "not run".
 - When a task is ambiguous, state your assumption in one line and proceed; don't build both interpretations.
-
-## Project-specific constraints
-- **Two modes only:** spec-mode (default) and go-mode. No third mode in v1. Both modes use the same detected executor; they differ by the executor's permission mode/sandbox flag and skill focus, not by model.
-- **Executor selection is by detection, not config.** Detect `claude` or `codex` on PATH; prefer `claude` if both are present. If neither, warn and operate in chat-only mode.
-- **Project root is detected from cwd** unless overridden by `--project` or a UI picker. All notes, Graphify runs, and executor handoffs are scoped to that root.
-- **Session history is append-only.** Never mutate past messages; truncate by copying forward if needed.
-- **Graphify runs in its own process.** Shell out and parse output; do not embed it.
-- **Tool permissions are enforced by the executor's built-in permission system** (`--permission-mode` for Claude, `--sandbox` for Codex), not a harness-side tool dispatcher. The harness can't easily intercept individual tool calls inside the executor's own loop.
-- **Web search results are citations, not answers.** Pass them to the executor as context; don't render raw HTML.
-
-## Do not touch
-- `.env` files (gitignored, contain secrets)
-- `node_modules/`, `dist/`, `target/`, and `src-tauri/target/` (generated)
-- Session store path (configured at first run; don't hardcode)
+- **UI components only:** Use Mantine components and Tabler icons exclusively. No custom CSS components or inline SVGs unless absolutely necessary.
 
 ## Pointers
-- Day-level stack and gotchas: `AGENTS.md`
-- Grill-spec skills and handoff protocol: `.agents/skills/grill-apply/SKILL.md` and siblings
+
+- Running/screenshotting/driving the app: `.agents/skills/run-floo-network/SKILL.md`
+- Packaging + per-machine codesigning: `AGENTS.md`
+- Product intent and positioning: `PRODUCT.md`
+- Changes in flight and their decision logs: `openspec/changes/`

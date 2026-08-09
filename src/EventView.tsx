@@ -1,5 +1,6 @@
 import { useState } from "react";
 import MDEditor from "@uiw/react-md-editor";
+import { IconGhost3Filled } from "@tabler/icons-react";
 
 import type { ExecutorEvent, Message, Preflight } from "./api";
 import { rowsFromChange } from "./diffLines";
@@ -7,13 +8,21 @@ import DiffRows from "./DiffRows";
 
 /** The "Code Change Diff" tab shows only applied patches; "Console Chat" shows everything. */
 export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
-  return tab === "diff" ? items.filter((item) => item.kind === "fileEdit") : items;
+  return tab === "diff"
+    ? items.filter((item) => item.kind === "fileEdit")
+    : items;
 }
 
 function ChatAvatar({ executor }: { executor: Preflight["selected"] }) {
   return (
-    <div className={`ds-chat-avatar ${executor === "claude" ? "claude" : ""}`}>
-      {executor === "claude" ? "C" : executor === "codex" ? "X" : "A"}
+    <div className="ds-chat-avatar">
+      {executor === "claude" ? (
+        <IconGhost3Filled size={24} style={{ color: "var(--accent)" }} />
+      ) : executor === "codex" ? (
+        "X"
+      ) : (
+        "A"
+      )}
     </div>
   );
 }
@@ -46,7 +55,10 @@ export function mergeDeltas(events: ExecutorEvent[]): ExecutorEvent[] {
       continue;
     }
     const last = merged[merged.length - 1];
-    if ((event.kind === "text" || event.kind === "reasoning") && last?.kind === event.kind) {
+    if (
+      (event.kind === "text" || event.kind === "reasoning") &&
+      last?.kind === event.kind
+    ) {
       merged[merged.length - 1] = event; // authoritative replace of the accumulation
       continue;
     }
@@ -70,14 +82,28 @@ export function itemsFromMessages(messages: Message[]): Item[] {
         // Not a structured event — fall through to plain rendering.
       }
     }
-    return { kind: "plain", role: message.role, mode: message.mode, text: message.content };
+    return {
+      kind: "plain",
+      role: message.role,
+      mode: message.mode,
+      text: message.content,
+    };
   });
 }
 
-function ToolBlock({ event, output }: { event: Extract<ExecutorEvent, { kind: "toolCall" }>; output?: Extract<ExecutorEvent, { kind: "toolResult" }> }) {
+function ToolBlock({
+  event,
+  output,
+}: {
+  event: Extract<ExecutorEvent, { kind: "toolCall" }>;
+  output?: Extract<ExecutorEvent, { kind: "toolResult" }>;
+}) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={`tool-block ${output?.isError ? "failed" : ""}`} data-testid="tool-block">
+    <div
+      className={`tool-block ${output?.isError ? "failed" : ""}`}
+      data-testid="tool-block"
+    >
       <button className="tool-head" onClick={() => setOpen(!open)}>
         <span className="chev">{open ? "▾" : "▸"}</span>
         <span className="tool-name">{event.name}</span>
@@ -104,7 +130,10 @@ export function EventList({
   executor: Preflight["selected"];
 }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
-  const results = new Map<string, Extract<ExecutorEvent, { kind: "toolResult" }>>();
+  const results = new Map<
+    string,
+    Extract<ExecutorEvent, { kind: "toolResult" }>
+  >();
   for (const item of items) {
     if (item.kind === "toolResult") results.set(item.id, item);
   }
@@ -117,7 +146,11 @@ export function EventList({
             // A crash is persisted as a system turn; it stays a banner on reload.
             if (item.role === "system") {
               return (
-                <div key={index} className="crash-banner" data-testid="crash-banner">
+                <div
+                  key={index}
+                  className="crash-banner"
+                  data-testid="crash-banner"
+                >
                   {item.text} Reverted to spec mode.
                 </div>
               );
@@ -157,7 +190,11 @@ export function EventList({
             // Global toggle (D19), not a per-message disclosure — off means
             // not rendered at all.
             return showThinking ? (
-              <div key={index} className="reasoning-inline" data-testid="reasoning">
+              <div
+                key={index}
+                className="reasoning-inline"
+                data-testid="reasoning"
+              >
                 {item.text}
               </div>
             ) : null;
@@ -175,12 +212,23 @@ export function EventList({
               </div>
             );
           case "toolCall":
-            return <ToolBlock key={index} event={item} output={results.get(item.id)} />;
+            return (
+              <ToolBlock
+                key={index}
+                event={item}
+                output={results.get(item.id)}
+              />
+            );
           case "crashed":
             return (
-              <div key={index} className="crash-banner" data-testid="crash-banner">
+              <div
+                key={index}
+                className="crash-banner"
+                data-testid="crash-banner"
+              >
                 {item.message}
-                {item.exitCode !== null && ` (exit code ${item.exitCode})`} Reverted to spec mode.
+                {item.exitCode !== null && ` (exit code ${item.exitCode})`}{" "}
+                Reverted to spec mode.
               </div>
             );
           // Tool output is drawn inside its call; `done` is bookkeeping.
