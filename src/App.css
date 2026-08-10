@@ -2441,3 +2441,12 @@ details.graph-report-wrap > summary {
   color: var(--muted);
   font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }
+
+/* Mode selector labels inherit control color so the active pill is legible. */
+.mode-selector-control {
+  color: var(--fg);
+}
+
+.mode-selector-control[data-active] {
+  color: var(--accent-on);
+}

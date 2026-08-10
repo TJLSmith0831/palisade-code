@@ -443,38 +443,72 @@ function ChatSurface({
             }}
             disabled={busy || !flightSelected}
             data={[
-              { label: "Spec  S", value: "spec" },
-              { label: "Go  G", value: "go" },
+              { label: "Spec", value: "spec" },
+              { label: "Go", value: "go" },
             ]}
             size="xs"
             styles={{
               root: {
+                width: 190,
+                height: 36,
+
+                padding: 2,
+                gap: 0,
+
                 background: "transparent",
-                padding: 2.08,
-                gap: 2,
-                height: 31.2,
+                border:
+                  "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
+                borderRadius: 999,
+
+                boxSizing: "border-box",
+                overflow: "hidden",
               },
+
               indicator: {
-                background: "var(--active-row)",
-                boxShadow: "0 1px 4px rgba(0, 0, 0, 0.25)",
-                borderRadius: 7,
+                background: "var(--accent)",
+
+                borderRadius: 999,
+
+                boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
               },
-              label: {
-                fontSize: 11,
-                fontWeight: 500,
-                lineHeight: 1,
-              },
+
               control: {
-                height: 27.04,
-                minHeight: 27.04,
+                flex: "1 1 0",
+                width: "50%",
+                minWidth: 0,
+
+                height: 32,
+                minHeight: 32,
+
+                padding: 0,
                 border: 0,
-                borderRadius: 7,
-                background: "transparent",
-                padding: "0 12px",
+                borderRadius: 999,
+
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+
+                background: "transparent",
               },
+
+              label: {
+                fontSize: 13,
+                fontWeight: 500,
+                lineHeight: 1,
+
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+
+                width: "100%",
+                height: "100%",
+
+                color: "inherit",
+              },
+            }}
+            classNames={{
+              control: "mode-selector-control",
+              label: "mode-selector-label",
             }}
           />
 
@@ -753,9 +787,9 @@ export default function App() {
     shellChosenRef.current = true;
     setCenterShellState(shell);
   }, []);
-  const [rightTab, setRightTab] = useState<"threads" | "codemap" | "specs" | "verify" | "terminal">(
-    "threads"
-  );
+  const [rightTab, setRightTab] = useState<
+    "threads" | "codemap" | "specs" | "verify" | "terminal"
+  >("threads");
   const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
     () =>
       (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) ||
@@ -1945,8 +1979,8 @@ export default function App() {
                 {flight?.selected ? (
                   <span className="ds-preflight-label">
                     <AgentMark id={flight.selected} />
-                    {flight.agents.find((a) => a.id === flight.selected)?.label ??
-                      flight.selected}
+                    {flight.agents.find((a) => a.id === flight.selected)
+                      ?.label ?? flight.selected}
                   </span>
                 ) : (
                   "—"
@@ -1978,8 +2012,8 @@ export default function App() {
             title="Which change is this thread working on?"
             data-testid="spec-link-ambiguous"
           >
-            That propose turn created more than one change, so the link can't
-            be inferred. Pick one, or dismiss to leave the thread unlinked.
+            That propose turn created more than one change, so the link can't be
+            inferred. Pick one, or dismiss to leave the thread unlinked.
             <Group gap="xs" mt="xs">
               {specLinkChoice.names.map((name) => (
                 <Button
@@ -1989,7 +2023,11 @@ export default function App() {
                   onClick={() => {
                     if (!project) return;
                     api
-                      .setSpecChange(project.hash, specLinkChoice.threadId, name)
+                      .setSpecChange(
+                        project.hash,
+                        specLinkChoice.threadId,
+                        name
+                      )
                       .then(() => {
                         setSpecLinkChoice(null);
                         return refresh();
@@ -2293,7 +2331,8 @@ export default function App() {
                             onChange={(value) =>
                               value &&
                               setRightTab(
-                                value as "threads" | "codemap" | "specs" | "verify"
+                                value as
+                                  "threads" | "codemap" | "specs" | "verify"
                               )
                             }
                           >
