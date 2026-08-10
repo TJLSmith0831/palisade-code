@@ -1,7 +1,14 @@
 import { useState } from "react";
-import { Alert } from "@mantine/core";
+import { Alert, Badge, Code, Group, Paper, Stack, Text } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
-import { IconGhost3Filled } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconCircleCheck,
+  IconCircleX,
+  IconGhost3Filled,
+  IconLoader2,
+} from "@tabler/icons-react";
 
 import type { ExecutorEvent, Message, Preflight } from "./api";
 import { rowsFromChange } from "./diffLines";
@@ -100,24 +107,116 @@ function ToolBlock({
   output?: Extract<ExecutorEvent, { kind: "toolResult" }>;
 }) {
   const [open, setOpen] = useState(false);
+  const failed = output?.isError === true;
+  const running = !output;
+  const badgeColor = running ? "gray" : failed ? "red" : "green";
+  const preview = event.command.split("\n")[0].slice(0, 120);
+
   return (
-    <div
-      className={`tool-block ${output?.isError ? "failed" : ""}`}
+    <Paper
+      withBorder
+      radius="sm"
+      p={0}
       data-testid="tool-block"
+      style={
+        failed
+          ? {
+              borderColor: "var(--danger)",
+              maxWidth: "100%",
+              overflow: "hidden",
+            }
+          : { maxWidth: "100%", overflow: "hidden" }
+      }
     >
-      <button className="tool-head" onClick={() => setOpen(!open)}>
-        <span className="chev">{open ? "▾" : "▸"}</span>
-        <span className="tool-name">{event.name}</span>
-        <code>{event.command.split("\n")[0].slice(0, 120)}</code>
-        {!output && <span className="running">running…</span>}
-      </button>
+      <Group
+        gap="xs"
+        wrap="nowrap"
+        align="center"
+        px="sm"
+        py={6}
+        style={{ cursor: "pointer", userSelect: "none" }}
+        onClick={() => setOpen(!open)}
+        data-testid="tool-block-header"
+      >
+        {open ? (
+          <IconChevronDown
+            size={14}
+            style={{ flexShrink: 0 }}
+            data-testid="tool-block-open-chev"
+          />
+        ) : (
+          <IconChevronRight
+            size={14}
+            style={{ flexShrink: 0 }}
+            data-testid="tool-block-closed-chev"
+          />
+        )}
+        <Badge
+          size="xs"
+          variant="light"
+          color={badgeColor}
+          style={{ flexShrink: 0 }}
+        >
+          {event.name}
+        </Badge>
+        <Text
+          size="xs"
+          ff="monospace"
+          truncate
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {preview}
+        </Text>
+        {running && (
+          <IconLoader2
+            size={14}
+            style={{ flexShrink: 0, color: "var(--muted)" }}
+            className="ds-spin"
+            data-testid="tool-status-running"
+          />
+        )}
+        {!running && !failed && (
+          <IconCircleCheck
+            size={14}
+            style={{ flexShrink: 0, color: "var(--success)" }}
+            data-testid="tool-status-success"
+          />
+        )}
+        {failed && (
+          <IconCircleX
+            size={14}
+            style={{ flexShrink: 0, color: "var(--danger)" }}
+            data-testid="tool-status-failed"
+          />
+        )}
+      </Group>
       {open && (
-        <pre className="tool-body">
-          {event.command}
-          {output ? `\n\n${output.output}` : ""}
-        </pre>
+        <Stack gap="xs" p="sm" style={{ borderTop: "1px solid var(--border)" }}>
+          <Code
+            block
+            fz="xs"
+            data-testid="tool-block-command"
+            style={{ maxHeight: 200, overflow: "auto" }}
+          >
+            {event.command}
+          </Code>
+          {output && (
+            <Code
+              block
+              fz="xs"
+              data-testid="tool-block-output"
+              style={{
+                maxHeight: 320,
+                overflow: "auto",
+                color: failed ? "var(--danger)" : "var(--fg)",
+              }}
+            >
+              {output.output}
+            </Code>
+          )}
+        </Stack>
       )}
-    </div>
+    </Paper>
   );
 }
 
