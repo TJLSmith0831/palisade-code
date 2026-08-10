@@ -39,6 +39,11 @@ pub struct SpawnCtx<'a> {
     pub project_root: &'a Path,
     /// The turn text — only per-turn transports put it in argv.
     pub message: &'a str,
+    /// The model alias to pass to `--model`, if the thread overrode the default.
+    /// None means the executor's own default model is used.
+    pub model: Option<&'a str>,
+    /// Whether to spawn with the executor's approval-skipping flag.
+    pub bypass: bool,
 }
 
 /// One known agent, as data. Adding a third is one row here plus its parser:
@@ -109,6 +114,13 @@ const CLAUDE: Agent = Agent {
         // --session-id sets the id up front; --resume reuses it after a handoff.
         args.push(if ctx.resume { "--resume".into() } else { "--session-id".into() });
         args.push(ctx.handle.to_string());
+        if let Some(model) = ctx.model {
+            args.push("--model".into());
+            args.push(model.to_string());
+        }
+        if ctx.bypass {
+            args.push("--dangerously-skip-permissions".into());
+        }
         args
     },
     parse: parse_claude_line,
@@ -140,6 +152,13 @@ const CODEX: Agent = Agent {
         args.push("--skip-git-repo-check".into());
         args.push("-C".into());
         args.push(ctx.project_root.to_string_lossy().to_string());
+        if let Some(model) = ctx.model {
+            args.push("--model".into());
+            args.push(model.to_string());
+        }
+        if ctx.bypass {
+            args.push("--dangerously-bypass-approvals-and-sandbox".into());
+        }
         args
     },
     // Codex's parser takes no `read_before`: its `file_change` items already
@@ -648,6 +667,14 @@ pub struct Session {
     /// The agent's own conversation handle — Claude's UUID for `--resume`.
     /// Provider-private: it means nothing to any other agent (D14).
     pub provider_handle: String,
+    /// The model alias passed to `--model` when this session was spawned. A
+    /// per-turn agent (Codex) rebuilds argv every turn, so the choice has to
+    /// live on the session, not just the initial SpawnCtx.
+    pub model: Option<String>,
+    /// Whether this session was spawned with the executor's approval-skipping
+    /// flag. Carried on the session for the same per-turn rebuild reason as
+    /// `model`.
+    pub bypass: bool,
     live: Option<Live>,
     /// Codex spawns a fresh child per turn. Shared with the pump thread rather
     /// than moved into it, so `terminate()` can actually kill the turn in
@@ -717,6 +744,10 @@ pub struct Spawn<'a> {
     /// Reuse an existing conversation instead of starting one.
     pub resume: Option<String>,
     pub floo_home: PathBuf,
+    /// The model alias to pass to the executor's `--model` flag, if any.
+    pub model: Option<String>,
+    /// Whether to spawn with the executor's approval-skipping flag.
+    pub bypass: bool,
 }
 
 pub fn start(spawn: Spawn, sink: Arc<dyn Sink>) -> Res<Session> {
@@ -737,6 +768,8 @@ pub fn start(spawn: Spawn, sink: Arc<dyn Sink>) -> Res<Session> {
                 resume: spawn.resume.is_some(),
                 project_root: &spawn.project_root,
                 message: "",
+                model: spawn.model.as_deref(),
+                bypass: spawn.bypass,
             });
             let mut child = Command::new(&spawn.bin)
                 .args(args)
@@ -779,6 +812,8 @@ pub fn start(spawn: Spawn, sink: Arc<dyn Sink>) -> Res<Session> {
         mode: spawn.mode.to_string(),
         floo_home: spawn.floo_home,
         provider_handle: session_id,
+        model: spawn.model,
+        bypass: spawn.bypass,
         live,
         // A per-turn agent carries a conversation forward on its *next* turn
         // (Codex: `resume --last`) rather than via a handle, so for it this is
@@ -822,6 +857,8 @@ pub fn send(session: &mut Session, sink: Arc<dyn Sink>, message: &str) -> Res<()
                 resume: session.started,
                 project_root: &session.project_root,
                 message,
+                model: session.model.as_deref(),
+                bypass: session.bypass,
             });
             let mut child = Command::new(&session.bin)
                 .args(args)
@@ -1324,6 +1361,8 @@ mod tests {
             resume,
             project_root: Path::new("/proj"),
             message,
+            model: None,
+            bypass: false,
         })
     }
 
@@ -1373,6 +1412,64 @@ mod tests {
                 "/proj",
             ]
         );
+    }
+
+    /// `args_of` with explicit model/bypass — both agents append their own
+    /// `--model` and bypass flags, so the per-agent mapping lives in the table
+    /// rather than branching in `lib.rs`.
+    fn args_of_prefs(
+        id: &str,
+        mode: &str,
+        resume: bool,
+        message: &str,
+        model: Option<&str>,
+        bypass: bool,
+    ) -> Vec<String> {
+        let agent = agent_by_id(id).unwrap();
+        (agent.args)(&SpawnCtx {
+            mode,
+            handle: "abc",
+            resume,
+            project_root: Path::new("/proj"),
+            message,
+            model,
+            bypass,
+        })
+    }
+
+    #[test]
+    fn claude_appends_model_and_bypass_flags_when_set() {
+        let base = args_of("claude", "spec", false, "");
+        let with = args_of_prefs("claude", "spec", false, "", Some("opus"), true);
+        assert_eq!(
+            with,
+            [
+                base.as_slice(),
+                &["--model".to_string(), "opus".to_string(), "--dangerously-skip-permissions".to_string()],
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn codex_appends_model_and_bypass_flags_when_set() {
+        let base = args_of("codex", "spec", false, "hello");
+        let with = args_of_prefs("codex", "spec", false, "hello", Some("gpt-5"), true);
+        assert_eq!(
+            with,
+            [
+                base.as_slice(),
+                &["--model".to_string(), "gpt-5".to_string(), "--dangerously-bypass-approvals-and-sandbox".to_string()],
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn no_model_and_no_bypass_produces_the_same_argv_as_before() {
+        // None / false is the default path — it must not add any flags.
+        assert_eq!(args_of_prefs("claude", "spec", false, "", None, false), args_of("claude", "spec", false, ""));
+        assert_eq!(args_of_prefs("codex", "go", true, "hi", None, false), args_of("codex", "go", true, "hi"));
     }
 
     /// Task 3.5: the one deliberate exception to "unchanged" — Codex's tool
@@ -1440,6 +1537,8 @@ mod tests {
                 resume: false,
                 project_root: Path::new("/proj"),
                 message: "hi",
+                model: None,
+                bypass: false,
             }),
             ["run", "hi", "--mode", "write"]
         );
@@ -1885,6 +1984,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -1927,6 +2028,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -1959,6 +2062,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink,
         )
@@ -1995,6 +2100,8 @@ mod tests {
                 mode: "go",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -2060,6 +2167,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink,
         )
@@ -2093,6 +2202,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -2139,6 +2250,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -2215,6 +2328,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -2253,6 +2368,8 @@ mod tests {
             mode,
             resume: None,
             floo_home: home.path().to_path_buf(),
+            model: None,
+            bypass: false,
         };
         let mut a = start(spawn("spec"), sink.clone()).unwrap();
         let mut b = start(spawn("go"), sink.clone()).unwrap();
@@ -2315,6 +2432,8 @@ mod tests {
             mode: "spec",
             resume: None,
             floo_home: home.path().to_path_buf(),
+            model: None,
+            bypass: false,
         };
         let mut claude = start(spawn(claude()), sink.clone()).unwrap();
         let mut codex = start(spawn(codex()), sink.clone()).unwrap();
@@ -2357,6 +2476,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.to_path_buf(),
+                model: None,
+                bypass: false,
             }
         }
         let mut a = start(spawn(repo.path(), home.path(), &hash, &thread_a), sink.clone()).unwrap();
@@ -2404,6 +2525,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -2448,6 +2571,8 @@ mod tests {
                     mode: "spec",
                     resume: None,
                     floo_home: home.path().to_path_buf(),
+                    model: None,
+                    bypass: false,
                 },
                 sink.clone(),
             )
@@ -2507,6 +2632,8 @@ mod tests {
                 mode: "spec",
                 resume: None,
                 floo_home: home.path().to_path_buf(),
+                model: None,
+                bypass: false,
             },
             sink.clone(),
         )
@@ -2564,6 +2691,8 @@ mod tests {
                     mode: "spec",
                     resume: None,
                     floo_home: home.path().to_path_buf(),
+                    model: None,
+                    bypass: false,
                 },
                 sink.clone(),
             )

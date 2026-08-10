@@ -793,6 +793,8 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
       expect(invokeMock).toHaveBeenCalledWith("propose", {
         projectHash: "proj-1",
         threadId: "t1",
+        model: "sonnet",
+        bypass: false,
       })
     );
   });
@@ -2967,34 +2969,62 @@ describe("Project switching", () => {
   });
 });
 
-describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
-  afterEach(() => {
-    localStorage.removeItem("floo:model");
-    localStorage.removeItem("floo:bypass");
-  });
-
-  it("shows the current model in the top chrome and opens a menu on click", async () => {
+describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
+  // The model/bypass control now lives in the composer, so every test needs
+  // a project + thread + detected executor to reach it.
+  const setupWithThread = (selected: string = "claude") => {
     invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "list_projects") return Promise.resolve([]);
-      if (cmd === "preflight") {
+      if (cmd === "list_projects")
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/floo-network",
+            displayName: "floo-network",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      if (cmd === "switch_project")
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/floo-network",
+          displayName: "floo-network",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread A",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "read_thread") return Promise.resolve([]);
+      if (cmd === "executor_status") return Promise.resolve([]);
+      if (cmd === "preflight")
         return Promise.resolve({
           agents: [
             {
               id: "claude",
               label: "Claude Code",
-              path: "/usr/local/bin/claude",
+              path: selected === "claude" ? "/usr/local/bin/claude" : null,
               skillsOk: true,
               pluginOk: true,
             },
             {
               id: "codex",
               label: "Codex",
-              path: null,
+              path: selected === "codex" ? "/usr/local/bin/codex" : null,
               skillsOk: true,
               pluginOk: true,
             },
           ],
-          selected: "claude",
+          selected,
           openspec: true,
           grillApply: false,
           ponytail: true,
@@ -3003,10 +3033,22 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
-      }
       return Promise.resolve([]);
     });
+  };
+
+  afterEach(() => {
+    localStorage.removeItem("floo:default-model");
+    localStorage.removeItem("floo:default-bypass");
+    localStorage.removeItem("floo:thread-prefs:proj-1:t1");
+  });
+
+  it("shows the current model in the composer and opens a menu on click", async () => {
+    setupWithThread("claude");
     render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
     await waitFor(() =>
       expect(screen.getByTestId("model-btn")).toHaveTextContent("Sonnet 5")
     );
@@ -3017,40 +3059,11 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
   });
 
   it("shows the executor as read-only status in the menu, with no control to switch it", async () => {
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "list_projects") return Promise.resolve([]);
-      if (cmd === "preflight") {
-        return Promise.resolve({
-          agents: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              path: "/usr/local/bin/claude",
-              skillsOk: true,
-              pluginOk: true,
-            },
-            {
-              id: "codex",
-              label: "Codex",
-              path: null,
-              skillsOk: true,
-              pluginOk: true,
-            },
-          ],
-          selected: "claude",
-          openspec: true,
-          grillApply: false,
-          ponytail: true,
-          graphify: true,
-          ready: true,
-          warnings: [],
-          checkedAt: "2026-08-06T00:00:00Z",
-        });
-      }
-      return Promise.resolve([]);
-    });
+    setupWithThread("claude");
     render(<App />);
-    await waitFor(() => expect(screen.getByTestId("model-btn")).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
     fireEvent.click(screen.getByTestId("model-btn"));
 
     const executorRow = await screen.findByTestId("executor-row");
@@ -3059,11 +3072,16 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
   });
 
   it("lets the user pick a model, persisting the choice across menu close/reopen", async () => {
+    setupWithThread("claude");
     render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
     fireEvent.click(screen.getByTestId("model-btn"));
     fireEvent.click(await screen.findByTestId("model-opt-opus-5"));
 
-    expect(localStorage.getItem("floo:model")).toBe("Opus 5");
+    // First selection writes the global default (no per-thread override yet).
+    expect(localStorage.getItem("floo:default-model")).toBe("Opus 5");
     expect(screen.getByTestId("model-btn")).toHaveTextContent("Opus 5");
     await waitFor(() => expect(screen.queryByTestId("model-menu")).toBeNull());
 
@@ -3074,18 +3092,89 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
   });
 
   it("has a bypass-permissions toggle, default off, that flips on and persists across menu reopen", async () => {
+    setupWithThread("claude");
     render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
     fireEvent.click(screen.getByTestId("model-btn"));
     const toggle = await screen.findByTestId("bypass-toggle");
     expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
     expect(toggle).toBeChecked();
-    expect(localStorage.getItem("floo:bypass")).toBe("1");
+    expect(localStorage.getItem("floo:default-bypass")).toBe("1");
 
     fireEvent.click(screen.getByTestId("model-btn")); // close
     fireEvent.click(screen.getByTestId("model-btn")); // reopen
     expect(await screen.findByTestId("bypass-toggle")).toBeChecked();
+  });
+
+  it("disables the model picker when the detected executor is Codex", async () => {
+    setupWithThread("codex");
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    fireEvent.click(screen.getByTestId("model-btn"));
+    expect(await screen.findByTestId("model-disabled-hint")).toBeDefined();
+    expect(screen.queryByTestId("model-opt-opus-5")).toBeNull();
+  });
+
+  it("shows a 'next session' hint when a live session exists for the thread", async () => {
+    setupWithThread("claude");
+    // Override executor_status to report a live session on this thread
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "executor_status")
+        return Promise.resolve([
+          {
+            id: "s1",
+            threadId: "t1",
+            agentId: "claude",
+            mode: "spec",
+            busy: false,
+          },
+        ]);
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    fireEvent.click(screen.getByTestId("model-btn"));
+    expect(await screen.findByTestId("next-session-hint")).toBeDefined();
+  });
+
+  it("passes the model alias and bypass to sendMessage", async () => {
+    setupWithThread("claude");
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    // Select Opus 5 and enable bypass
+    fireEvent.click(screen.getByTestId("model-btn"));
+    fireEvent.click(await screen.findByTestId("model-opt-opus-5"));
+    fireEvent.click(screen.getByTestId("model-btn"));
+    const toggle = await screen.findByTestId("bypass-toggle");
+    fireEvent.click(toggle);
+
+    // Send a message
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "hello" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        projectHash: "proj-1",
+        threadId: "t1",
+        content: "hello",
+        mode: "spec",
+        model: "opus",
+        bypass: true,
+      })
+    );
   });
 });
 

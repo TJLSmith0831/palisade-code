@@ -133,14 +133,32 @@ export const sendMessage = (
   projectHash: string,
   threadId: string,
   content: string,
-  mode: Mode
-) => invoke<Message>("send_message", { projectHash, threadId, content, mode });
-export const goMode = (projectHash: string, threadId: string) =>
-  invoke<ThreadMeta>("go_mode", { projectHash, threadId });
+  mode: Mode,
+  model: string | null,
+  bypass: boolean
+) =>
+  invoke<Message>("send_message", {
+    projectHash,
+    threadId,
+    content,
+    mode,
+    model,
+    bypass,
+  });
+export const goMode = (
+  projectHash: string,
+  threadId: string,
+  model: string | null,
+  bypass: boolean
+) => invoke<ThreadMeta>("go_mode", { projectHash, threadId, model, bypass });
 export const specMode = (projectHash: string, threadId: string) =>
   invoke<ThreadMeta>("spec_mode", { projectHash, threadId });
-export const propose = (projectHash: string, threadId: string) =>
-  invoke<void>("propose", { projectHash, threadId });
+export const propose = (
+  projectHash: string,
+  threadId: string,
+  model: string | null,
+  bypass: boolean
+) => invoke<void>("propose", { projectHash, threadId, model, bypass });
 /** Stop one session, or every live session when no id is given. */
 export const stopExecutor = (sessionId?: string) =>
   invoke<void>("stop_executor", { sessionId: sessionId ?? null });

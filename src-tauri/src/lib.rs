@@ -397,6 +397,8 @@ fn start_session(
     thread_id: &str,
     mode: &str,
     carry_forward: bool,
+    model: Option<String>,
+    bypass: bool,
 ) -> Res<String> {
     let (agent, bin) = selected_executor(app, harness, project_hash)?;
     let agent_id = agent.id;
@@ -437,6 +439,8 @@ fn start_session(
             mode,
             resume,
             floo_home: home.clone(),
+            model,
+            bypass,
         },
         sink_for(app, project_hash),
     )?;
@@ -460,17 +464,22 @@ fn start_session(
     Ok(id)
 }
 
-/// Reuse this thread's live session for `mode`, or start one.
+/// Reuse this thread's live session for `mode`, or start one. `model` and
+/// `bypass` are only applied when a new session is started — a reused live
+/// session keeps its original flags so an in-flight turn is not handed off to
+/// a different model or permission level.
 fn ensure_session(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
     project_hash: &str,
     thread_id: &str,
     mode: &str,
+    model: Option<String>,
+    bypass: bool,
 ) -> Res<String> {
     match find_live_session(harness, thread_id, mode) {
         Some(id) => Ok(id),
-        None => start_session(app, harness, project_hash, thread_id, mode, true),
+        None => start_session(app, harness, project_hash, thread_id, mode, true, model, bypass),
     }
 }
 
@@ -528,6 +537,8 @@ fn send_message(
     thread_id: String,
     content: String,
     mode: String,
+    model: Option<String>,
+    bypass: bool,
 ) -> Res<Message> {
     // Recorded before the executor is resolved, deliberately: a chat-only
     // project still keeps the user's turn. There is no session to name yet.
@@ -536,7 +547,7 @@ fn send_message(
         // Chat-only mode: the turn is still recorded, nothing answers it.
         return Ok(message);
     }
-    let id = ensure_session(&app, &harness, &project_hash, &thread_id, &mode)?;
+    let id = ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
     send_to(&app, &harness, &project_hash, &id, &content)?;
     Ok(message)
 }
@@ -564,6 +575,8 @@ fn go_mode(
     harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
+    model: Option<String>,
+    bypass: bool,
 ) -> Res<ThreadMeta> {
     // A mid-session uninstall would otherwise only surface as a spawn failure.
     let flight = preflight(harness.clone(), true);
@@ -572,7 +585,7 @@ fn go_mode(
     }
 
     let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "go")?;
-    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go")?;
+    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
 
     // A thread that already has a proposal starts go-mode by applying it.
     if let Some(change) = meta.open_spec_change_name.clone() {
@@ -603,9 +616,11 @@ fn propose(
     harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
+    model: Option<String>,
+    bypass: bool,
 ) -> Res<()> {
     let root = project_root(&project_hash)?;
-    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "spec")?;
+    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
     let prefix = {
         let sessions = harness.sessions.lock().unwrap();
         sessions.get(&id).ok_or("executor session is not running")?.agent.skill_prefix

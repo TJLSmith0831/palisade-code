@@ -216,6 +216,7 @@ type ChatSurfaceProps = {
   busy: boolean;
   showThinking: boolean;
   executor: Preflight["selected"] | null;
+  executorLabel: string | null;
   flightSelected: boolean;
   draft: string;
   setDraft: (value: string) => void;
@@ -228,6 +229,13 @@ type ChatSurfaceProps = {
   showEmptyModePicker?: boolean;
   onPickMode: (mode: api.Mode) => void;
   onOpenSpec?: (specName: string) => void;
+  threadModel: string;
+  threadBypass: boolean;
+  onSelectModel: (model: string) => void;
+  onToggleBypass: () => void;
+  prefsMenuOpen: boolean;
+  setPrefsMenuOpen: (open: boolean) => void;
+  hasLiveSession: boolean;
 };
 
 function ChatSurface({
@@ -238,6 +246,7 @@ function ChatSurface({
   busy,
   showThinking,
   executor,
+  executorLabel,
   flightSelected,
   draft,
   setDraft,
@@ -250,6 +259,13 @@ function ChatSurface({
   showEmptyModePicker = false,
   onPickMode,
   onOpenSpec,
+  threadModel,
+  threadBypass,
+  onSelectModel,
+  onToggleBypass,
+  prefsMenuOpen,
+  setPrefsMenuOpen,
+  hasLiveSession,
 }: ChatSurfaceProps) {
   if (newThreadPicker || showEmptyModePicker) {
     return (
@@ -430,139 +446,193 @@ function ChatSurface({
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "flex-end",
+            justifyContent: "space-between",
             gap: 6,
             width: "100%",
             minHeight: 32,
           }}
         >
-          <SegmentedControl
-            data-testid="mode-selector"
-            value={thread.currentMode}
-            onChange={(value) => {
-              if (value === "spec") {
-                onSpec();
-              } else {
-                onGo();
-              }
-            }}
-            disabled={busy || !flightSelected}
-            data={[
-              { label: "Spec", value: "spec" },
-              { label: "Go", value: "go" },
-            ]}
-            size="xs"
-            styles={{
-              root: {
-                width: 190,
-                height: 36,
+          <Menu opened={prefsMenuOpen} onChange={setPrefsMenuOpen}>
+            <Menu.Target>
+              <button
+                className="ds-icon-btn"
+                data-testid="model-btn"
+                data-tauri-drag-region-exclude
+                style={{ fontSize: 12, padding: "4px 8px" }}
+              >
+                {threadModel}
+                {threadBypass ? " · bypass" : ""}
+              </button>
+            </Menu.Target>
+            <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
+              <Menu.Label>Executor</Menu.Label>
+              <div className="ds-model-executor-row" data-testid="executor-row">
+                {executorLabel ?? executor ?? "none detected"}
+              </div>
+              <Menu.Label>Model</Menu.Label>
+              {executor === "codex" ? (
+                <span className="hint" data-testid="model-disabled-hint">
+                  Model selection is not available for Codex.
+                </span>
+              ) : (
+                MODELS.map((m) => (
+                  <Menu.Item
+                    key={m}
+                    className={`ds-model-opt ${threadModel === m ? "selected" : ""}`}
+                    onClick={() => onSelectModel(m)}
+                    data-testid={`model-opt-${m.toLowerCase().replace(/\s+/g, "-")}`}
+                  >
+                    {m}
+                  </Menu.Item>
+                ))
+              )}
+              {hasLiveSession && (
+                <span className="hint" data-testid="next-session-hint">
+                  Next session will use {threadModel}
+                  {threadBypass ? " · bypass on" : ""}.
+                </span>
+              )}
+              <Switch
+                className="ds-bypass-row"
+                label="Bypass permissions"
+                description="Skip approval prompts"
+                labelPosition="left"
+                color="var(--warn)"
+                checked={threadBypass}
+                onChange={onToggleBypass}
+                data-testid="bypass-toggle"
+              />
+            </Menu.Dropdown>
+          </Menu>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <SegmentedControl
+              data-testid="mode-selector"
+              value={thread.currentMode}
+              onChange={(value) => {
+                if (value === "spec") {
+                  onSpec();
+                } else {
+                  onGo();
+                }
+              }}
+              disabled={busy || !flightSelected}
+              data={[
+                { label: "Spec", value: "spec" },
+                { label: "Go", value: "go" },
+              ]}
+              size="xs"
+              styles={{
+                root: {
+                  width: 190,
+                  height: 36,
 
-                padding: 2,
-                gap: 0,
+                  padding: 2,
+                  gap: 0,
 
-                background: "transparent",
-                border:
-                  "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
-                borderRadius: 999,
+                  background: "transparent",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
+                  borderRadius: 999,
 
-                boxSizing: "border-box",
-                overflow: "hidden",
-              },
+                  boxSizing: "border-box",
+                  overflow: "hidden",
+                },
 
-              indicator: {
-                background: "var(--accent)",
+                indicator: {
+                  background: "var(--accent)",
 
-                borderRadius: 999,
+                  borderRadius: 999,
 
-                boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
-              },
+                  boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
+                },
 
-              control: {
-                flex: "1 1 0",
-                width: "50%",
-                minWidth: 0,
+                control: {
+                  flex: "1 1 0",
+                  width: "50%",
+                  minWidth: 0,
 
-                height: 32,
-                minHeight: 32,
+                  height: 32,
+                  minHeight: 32,
 
-                padding: 0,
-                border: 0,
-                borderRadius: 999,
+                  padding: 0,
+                  border: 0,
+                  borderRadius: 999,
 
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
 
-                background: "transparent",
-              },
+                  background: "transparent",
+                },
 
-              label: {
-                fontSize: 13,
-                fontWeight: 500,
-                lineHeight: 1,
+                label: {
+                  fontSize: 13,
+                  fontWeight: 500,
+                  lineHeight: 1,
 
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
 
-                width: "100%",
-                height: "100%",
+                  width: "100%",
+                  height: "100%",
 
-                color: "inherit",
-              },
-            }}
-            classNames={{
-              control: "mode-selector-control",
-              label: "mode-selector-label",
-            }}
-          />
+                  color: "inherit",
+                },
+              }}
+              classNames={{
+                control: "mode-selector-control",
+                label: "mode-selector-label",
+              }}
+            />
 
-          <ActionIcon
-            type="submit"
-            data-testid="composer-send"
-            disabled={busy || !draft.trim()}
-            aria-label="Send message"
-            title="Send message"
-            size={30}
-            radius="md"
-            variant="filled"
-            styles={{
-              root: {
-                flexShrink: 0,
-                backgroundColor: "var(--accent)",
-                color: "var(--accent-on)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "transform 100ms ease, opacity 100ms ease",
-                "&:hover": {
+            <ActionIcon
+              type="submit"
+              data-testid="composer-send"
+              disabled={busy || !draft.trim()}
+              aria-label="Send message"
+              title="Send message"
+              size={30}
+              radius="md"
+              variant="filled"
+              styles={{
+                root: {
+                  flexShrink: 0,
                   backgroundColor: "var(--accent)",
-                  opacity: 0.9,
+                  color: "var(--accent-on)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "transform 100ms ease, opacity 100ms ease",
+                  "&:hover": {
+                    backgroundColor: "var(--accent)",
+                    opacity: 0.9,
+                  },
+                  "&:active": {
+                    transform: "scale(0.94)",
+                  },
+                  "&:disabled": {
+                    opacity: 0.4,
+                  },
                 },
-                "&:active": {
-                  transform: "scale(0.94)",
-                },
-                "&:disabled": {
-                  opacity: 0.4,
-                },
-              },
-            }}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+              }}
             >
-              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-              <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
-            </svg>
-          </ActionIcon>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
+              </svg>
+            </ActionIcon>
+          </div>
         </div>
       </form>
     </>
@@ -627,11 +697,68 @@ const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
 export const THEME_KEY = "floo:theme";
 const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
-const MODEL_KEY = "floo:model";
-const BYPASS_KEY = "floo:bypass";
-// A stored preference only — not yet threaded into the executor invocation
-// (see openspec/changes/vibe-editor-shell-redesign design.md Non-Goals).
+const DEFAULT_MODEL_KEY = "floo:default-model";
+const DEFAULT_BYPASS_KEY = "floo:default-bypass";
 const MODELS = ["Sonnet 5", "Opus 5", "Haiku 4.5"];
+// Claude CLI aliases — the UI shows friendly names, the backend receives the
+// alias that `claude --model` accepts. Codex model selection is deferred.
+const MODEL_ALIASES: Record<string, string> = {
+  "Sonnet 5": "sonnet",
+  "Opus 5": "opus",
+  "Haiku 4.5": "haiku",
+};
+const threadPrefsKey = (hash: string, threadId: string) =>
+  `floo:thread-prefs:${hash}:${threadId}`;
+
+type ThreadPrefs = { model: string; bypass: boolean };
+
+const getThreadPrefs = (hash: string, threadId: string): ThreadPrefs | null => {
+  const raw = localStorage.getItem(threadPrefsKey(hash, threadId));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ThreadPrefs>;
+    if (
+      typeof parsed.model === "string" &&
+      typeof parsed.bypass === "boolean"
+    ) {
+      return { model: parsed.model, bypass: parsed.bypass };
+    }
+  } catch {
+    // fall through to default
+  }
+  return null;
+};
+
+const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
+  localStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
+};
+
+const getDefaultModel = () =>
+  localStorage.getItem(DEFAULT_MODEL_KEY) || MODELS[0];
+const setDefaultModel = (model: string) =>
+  localStorage.setItem(DEFAULT_MODEL_KEY, model);
+const getDefaultBypass = () => localStorage.getItem(DEFAULT_BYPASS_KEY) === "1";
+const setDefaultBypass = (bypass: boolean) =>
+  localStorage.setItem(DEFAULT_BYPASS_KEY, bypass ? "1" : "0");
+
+/** The effective model/bypass for a thread: per-thread override, or global
+ * default. The frontend resolves this before each session-starting call so
+ * the backend never needs to know the storage scheme. */
+const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
+  getThreadPrefs(hash, threadId) ?? {
+    model: getDefaultModel(),
+    bypass: getDefaultBypass(),
+  };
+
+/** Maps a display model name to the CLI alias the backend passes to `--model`.
+ * Returns null when the executor doesn't support model selection (Codex). */
+const modelAlias = (
+  model: string,
+  executorId: string | null
+): string | null => {
+  if (executorId === "codex") return null;
+  return MODEL_ALIASES[model] ?? null;
+};
 type TerminalPlacement = "bottom" | "sidebar";
 type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme =>
@@ -866,24 +993,57 @@ export default function App() {
     () => (localStorage.getItem(THEME_KEY) as Theme) || "auto"
   );
   const { setColorScheme: setMantineColorScheme } = useMantineColorScheme();
-  const [selectedModel, setSelectedModel] = useState<string>(
-    () => localStorage.getItem(MODEL_KEY) || MODELS[0]
-  );
-  const [bypassEnabled, setBypassEnabled] = useState<boolean>(
-    () => localStorage.getItem(BYPASS_KEY) === "1"
-  );
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  // Thread-level model/bypass preferences. The composer control reads and
+  // writes these; the effective values are resolved before each session-starting
+  // call so a live session keeps its original flags (design.md Decision 2).
+  const [threadPrefs, setThreadPrefsState] = useState<ThreadPrefs>(() => ({
+    model: getDefaultModel(),
+    bypass: getDefaultBypass(),
+  }));
+  const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
+  const [hasLiveSession, setHasLiveSession] = useState(false);
   const onSelectModel = (model: string) => {
-    setSelectedModel(model);
-    localStorage.setItem(MODEL_KEY, model);
-    setModelMenuOpen(false);
+    if (!project || !thread) return;
+    const prefs = { model, bypass: threadPrefs.bypass };
+    setThreadPrefs(project.hash, thread.id, prefs);
+    setThreadPrefsState(prefs);
+    setPrefsMenuOpen(false);
   };
   const onToggleBypass = () => {
-    setBypassEnabled((prev) => {
-      const next = !prev;
-      localStorage.setItem(BYPASS_KEY, next ? "1" : "0");
-      return next;
-    });
+    if (!project || !thread) return;
+    const prefs = { model: threadPrefs.model, bypass: !threadPrefs.bypass };
+    setThreadPrefs(project.hash, thread.id, prefs);
+    setThreadPrefsState(prefs);
+  };
+  // When no per-thread override has been set yet, changing the model or bypass
+  // also updates the global default so new threads inherit it.
+  const onSelectModelDefault = (model: string) => {
+    if (!project || !thread) return;
+    if (!getThreadPrefs(project.hash, thread.id)) {
+      setDefaultModel(model);
+    }
+    onSelectModel(model);
+  };
+  const onToggleBypassDefault = () => {
+    if (!project || !thread) return;
+    if (!getThreadPrefs(project.hash, thread.id)) {
+      setDefaultBypass(!threadPrefs.bypass);
+    }
+    onToggleBypass();
+  };
+  // Check whether a live session exists for this thread when the prefs menu
+  // opens, so the "Next session will use X" hint can show. A live session
+  // keeps its original flags; only the next new session picks up the change.
+  const openPrefsMenu = (open: boolean) => {
+    setPrefsMenuOpen(open);
+    if (open && project && thread) {
+      api
+        .executorStatus()
+        .then((statuses) => {
+          setHasLiveSession(statuses.some((s) => s.threadId === thread.id));
+        })
+        .catch(() => setHasLiveSession(false));
+    }
   };
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<
@@ -1047,6 +1207,10 @@ export default function App() {
       localStorage.setItem(lastThreadKey(projectHash), next.id);
       clearLiveFor(next.id);
       setMessages(await api.readThread(projectHash, next.id));
+      // Load this thread's model/bypass preferences (per-thread override or
+      // global default) so the composer control shows the right values.
+      setThreadPrefsState(resolvePrefs(projectHash, next.id));
+      setPrefsMenuOpen(false);
     },
     []
   );
@@ -1593,7 +1757,13 @@ export default function App() {
     if (!project || !thread) return;
     try {
       setBusy(true);
-      const meta = await api.goMode(project.hash, thread.id);
+      const prefs = resolvePrefs(project.hash, thread.id);
+      const meta = await api.goMode(
+        project.hash,
+        thread.id,
+        modelAlias(prefs.model, flight?.selected ?? null),
+        prefs.bypass
+      );
       await refresh();
       // A linked change means /grill-apply was just sent; otherwise we're idle.
       if (!meta.openSpecChangeName) setBusy(false);
@@ -1620,7 +1790,13 @@ export default function App() {
     if (!project || !thread) return;
     try {
       setBusy(true);
-      await api.propose(project.hash, thread.id);
+      const prefs = resolvePrefs(project.hash, thread.id);
+      await api.propose(
+        project.hash,
+        thread.id,
+        modelAlias(prefs.model, flight?.selected ?? null),
+        prefs.bypass
+      );
       await refresh();
     } catch (err) {
       setBusy(false);
@@ -1638,7 +1814,15 @@ export default function App() {
     if (text === "/propose") return onPropose();
     try {
       setBusy(true);
-      await api.sendMessage(project.hash, thread.id, text, thread.currentMode);
+      const prefs = resolvePrefs(project.hash, thread.id);
+      await api.sendMessage(
+        project.hash,
+        thread.id,
+        text,
+        thread.currentMode,
+        modelAlias(prefs.model, flight?.selected ?? null),
+        prefs.bypass
+      );
       setMessages(await api.readThread(project.hash, thread.id));
       // Chat-only mode never answers, so never leave the composer locked.
       if (!flight?.selected) setBusy(false);
@@ -2002,54 +2186,6 @@ export default function App() {
                 <SettingsIcon />
               </button>
             </Tooltip>
-            <Menu opened={modelMenuOpen} onChange={setModelMenuOpen}>
-              <Menu.Target>
-                <Tooltip
-                  label={`Model: ${selectedModel}${bypassEnabled ? " · bypass on" : ""}`}
-                >
-                  <button
-                    className="ds-icon-btn"
-                    data-testid="model-btn"
-                    data-tauri-drag-region-exclude
-                  >
-                    {selectedModel}
-                  </button>
-                </Tooltip>
-              </Menu.Target>
-              <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
-                <Menu.Label>Executor</Menu.Label>
-                <div
-                  className="ds-model-executor-row"
-                  data-testid="executor-row"
-                >
-                  {flight?.selected ?? "none detected"}
-                </div>
-                <Menu.Label>Model</Menu.Label>
-                {MODELS.map((m) => (
-                  <Menu.Item
-                    key={m}
-                    className={`ds-model-opt ${selectedModel === m ? "selected" : ""}`}
-                    onClick={() => onSelectModel(m)}
-                    data-testid={`model-opt-${m.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
-                    {m}
-                  </Menu.Item>
-                ))}
-                <span className="hint">
-                  Stored preference — not yet wired to the executor.
-                </span>
-                <Switch
-                  className="ds-bypass-row"
-                  label="Bypass permissions"
-                  description="Skip approval prompts"
-                  labelPosition="left"
-                  color="var(--warn)"
-                  checked={bypassEnabled}
-                  onChange={onToggleBypass}
-                  data-testid="bypass-toggle"
-                />
-              </Menu.Dropdown>
-            </Menu>
             <Tooltip
               label={
                 flight
@@ -2548,6 +2684,12 @@ export default function App() {
                       busy={busy}
                       showThinking={showThinking}
                       executor={flight?.selected ?? null}
+                      executorLabel={
+                        flight?.agents.find((a) => a.id === flight.selected)
+                          ?.label ??
+                        flight?.selected ??
+                        null
+                      }
                       flightSelected={!!flight?.selected}
                       draft={draft}
                       setDraft={setDraft}
@@ -2558,6 +2700,13 @@ export default function App() {
                       dragActive={dragActive}
                       newThreadPicker={newThreadPicker}
                       onPickMode={onPickMode}
+                      threadModel={threadPrefs.model}
+                      threadBypass={threadPrefs.bypass}
+                      onSelectModel={onSelectModelDefault}
+                      onToggleBypass={onToggleBypassDefault}
+                      prefsMenuOpen={prefsMenuOpen}
+                      setPrefsMenuOpen={openPrefsMenu}
+                      hasLiveSession={hasLiveSession}
                     />
                   )}
                 </div>
@@ -2582,6 +2731,12 @@ export default function App() {
                   busy={busy}
                   showThinking={showThinking}
                   executor={flight?.selected ?? null}
+                  executorLabel={
+                    flight?.agents.find((a) => a.id === flight.selected)
+                      ?.label ??
+                    flight?.selected ??
+                    null
+                  }
                   flightSelected={!!flight?.selected}
                   draft={draft}
                   setDraft={setDraft}
@@ -2594,6 +2749,13 @@ export default function App() {
                   showEmptyModePicker={threads.length === 0 && !thread}
                   onPickMode={onPickMode}
                   onOpenSpec={(name) => tabs.openSpec(name)}
+                  threadModel={threadPrefs.model}
+                  threadBypass={threadPrefs.bypass}
+                  onSelectModel={onSelectModelDefault}
+                  onToggleBypass={onToggleBypassDefault}
+                  prefsMenuOpen={prefsMenuOpen}
+                  setPrefsMenuOpen={openPrefsMenu}
+                  hasLiveSession={hasLiveSession}
                 />
               </section>
 
