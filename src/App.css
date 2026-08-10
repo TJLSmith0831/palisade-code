@@ -1403,6 +1403,13 @@ input[type="checkbox"] {
   background: var(--editor-bg);
 }
 
+/* A child with `overflow: hidden` (the tool block, the diff card) loses the
+   `min-height: auto` that keeps flex items at content height, so this column
+   squashes it into a bare border line. Nothing in a scrolling log shrinks. */
+.messages > * {
+  flex-shrink: 0;
+}
+
 /* --- agent chat bubble (v2) ---------------------------------------------- */
 
 .ds-chat-bubble {

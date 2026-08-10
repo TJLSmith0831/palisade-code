@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Badge, Code, Group, Paper, Stack, Text } from "@mantine/core";
+import { Alert, Badge, Box, Code, Paper, Stack } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import {
   IconChevronDown,
@@ -128,26 +128,30 @@ function ToolBlock({
           : { maxWidth: "100%", overflow: "hidden" }
       }
     >
-      <Group
-        gap="xs"
-        wrap="nowrap"
-        align="center"
-        px="sm"
-        py={6}
-        style={{ cursor: "pointer", userSelect: "none" }}
+      <Box
         onClick={() => setOpen(!open)}
         data-testid="tool-block-header"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          padding: "6px 12px",
+          cursor: "pointer",
+          userSelect: "none",
+          boxSizing: "border-box",
+        }}
       >
         {open ? (
           <IconChevronDown
             size={14}
-            style={{ flexShrink: 0 }}
+            style={{ flex: "0 0 auto" }}
             data-testid="tool-block-open-chev"
           />
         ) : (
           <IconChevronRight
             size={14}
-            style={{ flexShrink: 0 }}
+            style={{ flex: "0 0 auto" }}
             data-testid="tool-block-closed-chev"
           />
         )}
@@ -155,22 +159,29 @@ function ToolBlock({
           size="xs"
           variant="light"
           color={badgeColor}
-          style={{ flexShrink: 0 }}
+          style={{ flex: "0 0 auto" }}
         >
           {event.name}
         </Badge>
-        <Text
-          size="xs"
-          ff="monospace"
-          truncate
-          style={{ flex: 1, minWidth: 0 }}
+        <Box
+          style={{
+            flex: "1 1 0",
+            minWidth: 0,
+            fontFamily:
+              '"Geist Mono", "SF Mono", ui-monospace, Menlo, monospace',
+            fontSize: 12,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            color: "var(--muted)",
+          }}
         >
           {preview}
-        </Text>
+        </Box>
         {running && (
           <IconLoader2
             size={14}
-            style={{ flexShrink: 0, color: "var(--muted)" }}
+            style={{ flex: "0 0 auto", color: "var(--muted)" }}
             className="ds-spin"
             data-testid="tool-status-running"
           />
@@ -178,18 +189,18 @@ function ToolBlock({
         {!running && !failed && (
           <IconCircleCheck
             size={14}
-            style={{ flexShrink: 0, color: "var(--success)" }}
+            style={{ flex: "0 0 auto", color: "var(--success)" }}
             data-testid="tool-status-success"
           />
         )}
         {failed && (
           <IconCircleX
             size={14}
-            style={{ flexShrink: 0, color: "var(--danger)" }}
+            style={{ flex: "0 0 auto", color: "var(--danger)" }}
             data-testid="tool-status-failed"
           />
         )}
-      </Group>
+      </Box>
       {open && (
         <Stack gap="xs" p="sm" style={{ borderTop: "1px solid var(--border)" }}>
           <Code
