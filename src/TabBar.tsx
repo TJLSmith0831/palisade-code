@@ -1,6 +1,10 @@
 import { ActionIcon, CloseButton, Tabs, Tooltip } from "@mantine/core";
-import { IconGitCompare, IconMarkdown } from "@tabler/icons-react";
-import { isMarkdownPath, type OpenTab } from "./openTabs";
+import {
+  IconGitCompare,
+  IconMarkdown,
+  IconNotebook,
+} from "@tabler/icons-react";
+import { isMarkdownPath, tabKey, type OpenTab } from "./openTabs";
 
 type Props = {
   tabs: OpenTab[];
@@ -50,54 +54,64 @@ export default function TabBar({
         }
       >
         <Tabs.List style={{ flexWrap: "nowrap", overflowX: "auto" }}>
-          {tabs.map((tab) => (
-            <Tooltip
-              key={tab.path}
-              label={tab.path}
-              openDelay={600}
-              withinPortal
-            >
-              <Tabs.Tab
-                value={tab.path}
-                className="ds-tab"
-                data-testid="file-tab"
-                data-path={tab.path}
-                data-dirty={tab.dirty || undefined}
-                // Middle-click closes, the same as every browser and editor.
-                onAuxClick={(event) => {
-                  if (event.button !== 1) return;
-                  event.preventDefault();
-                  onClose(tab.path);
-                }}
-                rightSection={
-                  <CloseButton
-                    component="span"
-                    size={14}
-                    aria-label={`Close ${tab.path}`}
-                    data-testid="file-tab-close"
-                    // The tab is a button; a nested button would be invalid
-                    // markup, so this is a span that stops the click from
-                    // also selecting the tab it's closing.
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onClose(tab.path);
-                    }}
-                  />
-                }
-              >
-                {tab.dirty && (
-                  <span
-                    className="ds-tab-dirty"
-                    data-testid="file-tab-dirty"
-                    aria-label="Unsaved changes"
-                  >
-                    ●
-                  </span>
-                )}
-                {basename(tab.path)}
-              </Tabs.Tab>
-            </Tooltip>
-          ))}
+          {tabs.map((tab) => {
+            const key = tabKey(tab);
+            const label =
+              tab.type === "spec" ? tab.specName : basename(tab.path);
+            const tooltip =
+              tab.type === "spec"
+                ? `OpenSpec change: ${tab.specName}`
+                : tab.path;
+            return (
+              <Tooltip key={key} label={tooltip} openDelay={600} withinPortal>
+                <Tabs.Tab
+                  value={key}
+                  className="ds-tab"
+                  data-testid="file-tab"
+                  data-path={key}
+                  data-dirty={tab.dirty || undefined}
+                  data-tab-type={tab.type}
+                  // Middle-click closes, the same as every browser and editor.
+                  onAuxClick={(event) => {
+                    if (event.button !== 1) return;
+                    event.preventDefault();
+                    onClose(key);
+                  }}
+                  leftSection={
+                    tab.type === "spec" ? (
+                      <IconNotebook size={14} style={{ flexShrink: 0 }} />
+                    ) : undefined
+                  }
+                  rightSection={
+                    <CloseButton
+                      component="span"
+                      size={14}
+                      aria-label={`Close ${label}`}
+                      data-testid="file-tab-close"
+                      // The tab is a button; a nested button would be invalid
+                      // markup, so this is a span that stops the click from
+                      // also selecting the tab it's closing.
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onClose(key);
+                      }}
+                    />
+                  }
+                >
+                  {tab.dirty && (
+                    <span
+                      className="ds-tab-dirty"
+                      data-testid="file-tab-dirty"
+                      aria-label="Unsaved changes"
+                    >
+                      ●
+                    </span>
+                  )}
+                  {label}
+                </Tabs.Tab>
+              </Tooltip>
+            );
+          })}
         </Tabs.List>
       </Tabs>
 

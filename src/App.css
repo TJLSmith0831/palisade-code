@@ -1183,6 +1183,18 @@ input[type="checkbox"] {
   opacity: 0.5;
 }
 
+/* Breadcrumbs nested in the editor toolbar drop their row styling so they
+ * sit inline with the Save button on a single line. */
+.ds-editor-toolbar .ds-breadcrumbs {
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .ds-crumb-active {
   color: var(--accent);
   font-weight: 600;

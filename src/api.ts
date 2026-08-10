@@ -45,12 +45,12 @@ export const listThreads = (projectHash: string) =>
 export const renameThread = (
   projectHash: string,
   threadId: string,
-  title: string,
+  title: string
 ) => invoke<ThreadMeta>("rename_thread", { projectHash, threadId, title });
 export const setThreadMode = (
   projectHash: string,
   threadId: string,
-  mode: Mode,
+  mode: Mode
 ) => invoke<ThreadMeta>("set_thread_mode", { projectHash, threadId, mode });
 export const deleteThread = (projectHash: string, threadId: string) =>
   invoke<void>("delete_thread", { projectHash, threadId });
@@ -60,7 +60,7 @@ export const appendMessage = (
   threadId: string,
   role: Message["role"],
   mode: Mode,
-  content: string,
+  content: string
 ) =>
   invoke<Message>("append_message", {
     projectHash,
@@ -133,7 +133,7 @@ export const sendMessage = (
   projectHash: string,
   threadId: string,
   content: string,
-  mode: Mode,
+  mode: Mode
 ) => invoke<Message>("send_message", { projectHash, threadId, content, mode });
 export const goMode = (projectHash: string, threadId: string) =>
   invoke<ThreadMeta>("go_mode", { projectHash, threadId });
@@ -213,7 +213,7 @@ export const runVerify = (
   projectHash: string,
   name: string,
   threadId?: string | null,
-  sessionId?: string | null,
+  sessionId?: string | null
 ) =>
   invoke<void>("run_verify", {
     projectHash,
@@ -229,7 +229,7 @@ export const verifyCommands = (projectHash: string) =>
 export const sessionAttribution = (
   projectHash: string,
   threadId: string,
-  sessionId: string,
+  sessionId: string
 ) =>
   invoke<Attribution>("session_attribution", {
     projectHash,
@@ -262,10 +262,12 @@ export const showSpecChange = (projectHash: string, name: string) =>
 /** `null` means "openspec isn't installed, so we can't tell" — not "invalid". */
 export const validateSpecChanges = (projectHash: string) =>
   invoke<boolean | null>("validate_spec_changes", { projectHash });
+export const archiveSpecChange = (projectHash: string, name: string) =>
+  invoke<string>("archive_spec_change", { projectHash, name });
 export const setSpecChange = (
   projectHash: string,
   threadId: string,
-  name: string | null,
+  name: string | null
 ) => invoke<ThreadMeta>("set_spec_change", { projectHash, threadId, name });
 
 // ----------------------------------------------------------------- graphify
@@ -283,7 +285,11 @@ export type GraphifyRun = {
   summary: string;
 };
 
-export const runGraphify = (projectHash: string, subpath: string, options: GraphifyOptions) =>
+export const runGraphify = (
+  projectHash: string,
+  subpath: string,
+  options: GraphifyOptions
+) =>
   invoke<GraphifyRun>("run_graphify", {
     projectHash,
     subpath,
@@ -294,7 +300,7 @@ export const loadGraphify = (projectHash: string) =>
 export const queryGraphify = (
   projectHash: string,
   subcommand: string,
-  args: string[],
+  args: string[]
 ) => invoke<string>("query_graphify", { projectHash, subcommand, args });
 
 // ---------------------------------------------------------------- terminal
@@ -328,7 +334,11 @@ export const gitStageFile = (projectHash: string, path: string) =>
 export const gitCommit = (projectHash: string, message: string) =>
   invoke<void>("git_commit", { projectHash, message });
 
-export type BranchInfo = { name: string; isCurrent: boolean; isRemote: boolean };
+export type BranchInfo = {
+  name: string;
+  isCurrent: boolean;
+  isRemote: boolean;
+};
 
 export const gitBranches = (projectHash: string) =>
   invoke<BranchInfo[]>("git_branches", { projectHash });
@@ -338,15 +348,23 @@ export const gitCreateBranch = (projectHash: string, name: string) =>
   invoke<void>("git_create_branch", { projectHash, name });
 export const gitDeleteBranch = (projectHash: string, name: string) =>
   invoke<void>("git_delete_branch", { projectHash, name });
-export const gitFetch = (projectHash: string) => invoke<void>("git_fetch", { projectHash });
-export const gitPull = (projectHash: string) => invoke<string>("git_pull", { projectHash });
-export const gitPush = (projectHash: string) => invoke<string>("git_push", { projectHash });
+export const gitFetch = (projectHash: string) =>
+  invoke<void>("git_fetch", { projectHash });
+export const gitPull = (projectHash: string) =>
+  invoke<string>("git_pull", { projectHash });
+export const gitPush = (projectHash: string) =>
+  invoke<string>("git_push", { projectHash });
 export const gitAheadBehind = (projectHash: string) =>
   invoke<[number, number] | null>("git_ahead_behind", { projectHash });
-export const gitDiscardFile = (projectHash: string, path: string, untracked: boolean) =>
-  invoke<void>("git_discard_file", { projectHash, path, untracked });
-export const gitIsRepo = (projectHash: string) => invoke<boolean>("git_is_repo", { projectHash });
-export const gitInit = (projectHash: string) => invoke<void>("git_init", { projectHash });
+export const gitDiscardFile = (
+  projectHash: string,
+  path: string,
+  untracked: boolean
+) => invoke<void>("git_discard_file", { projectHash, path, untracked });
+export const gitIsRepo = (projectHash: string) =>
+  invoke<boolean>("git_is_repo", { projectHash });
+export const gitInit = (projectHash: string) =>
+  invoke<void>("git_init", { projectHash });
 
 // --------------------------------------------------------------- file tree
 
@@ -356,8 +374,16 @@ export type DirEntry = {
   path: string;
 };
 
-export const listDirectory = (projectHash: string, relativePath: string, includeHidden = false) =>
-  invoke<DirEntry[]>("list_directory", { projectHash, relativePath, includeHidden });
+export const listDirectory = (
+  projectHash: string,
+  relativePath: string,
+  includeHidden = false
+) =>
+  invoke<DirEntry[]>("list_directory", {
+    projectHash,
+    relativePath,
+    includeHidden,
+  });
 
 export const listAllFiles = (projectHash: string) =>
   invoke<string[]>("list_all_files", { projectHash });
@@ -379,8 +405,13 @@ export type TextSearchResult = {
 export const searchText = (
   projectHash: string,
   query: string,
-  options?: SearchOptions,
-) => invoke<TextSearchResult>("search_text", { projectHash, query, options: options ?? null });
+  options?: SearchOptions
+) =>
+  invoke<TextSearchResult>("search_text", {
+    projectHash,
+    query,
+    options: options ?? null,
+  });
 
 export const readFileContent = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_content", { projectHash, relativePath });
@@ -406,7 +437,8 @@ export const isConflictError = (err: unknown) =>
 export const TOO_LARGE_PREFIX = "TOO_LARGE:";
 export const BINARY_PREFIX = "BINARY:";
 
-export const isBinaryError = (err: unknown) => String(err).includes(BINARY_PREFIX);
+export const isBinaryError = (err: unknown) =>
+  String(err).includes(BINARY_PREFIX);
 
 /** Size in bytes of a file refused for being too large, or `null`. */
 export function tooLargeBytes(err: unknown): number | null {
@@ -424,7 +456,7 @@ export const writeFileContent = (
   projectHash: string,
   relativePath: string,
   content: string,
-  expectedPrevious: string | null = null,
+  expectedPrevious: string | null = null
 ) =>
   invoke<string | null>("write_file_content", {
     projectHash,

@@ -61,6 +61,8 @@ import {
 type Props = {
   projectHash: string;
   path: string | null;
+  /** Shown as the leading breadcrumb segment in the toolbar. */
+  projectName?: string;
   onSave?: (edit: { path: string; before: string; after: string }) => void;
   /** Tagged with the path because the tab list, not this pane, owns which
    * files have unsaved edits. */
@@ -233,6 +235,7 @@ const codeHighlightStyle = syntaxHighlighting(
 export default function FileEditorPane({
   projectHash,
   path,
+  projectName,
   onSave,
   onDirtyChange,
   externalChange,
@@ -734,7 +737,11 @@ export default function FileEditorPane({
   return (
     <div className="ds-code-editor" data-testid="file-editor">
       <div className="ds-editor-toolbar">
-        <span className="ds-editor-path">{path}</span>
+        <span className="ds-breadcrumbs" data-testid="breadcrumbs">
+          <span>{projectName ?? "—"}</span>
+          <span className="ds-crumb-sep">/</span>
+          <span className="ds-crumb-active ds-editor-path">{path}</span>
+        </span>
         <span className="ds-editor-spacer" />
         {formatResult && (
           <span

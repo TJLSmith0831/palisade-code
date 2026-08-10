@@ -51,13 +51,21 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 // Mock the markdown editor (heavy dependency)
-vi.mock("@uiw/react-md-editor", () => ({
-  default: ({ value }: { value: string }) => (
+const { mdEditorMock, mdMarkdownMock } = vi.hoisted(() => {
+  const mdMarkdownMock = ({ source }: { source: string }) => (
+    <div>{source}</div>
+  );
+  const mdEditorMock = ({ value }: { value: string }) => (
     <div data-testid="md-editor">{value}</div>
-  ),
-  MDEditor: {
-    Markdown: ({ source }: { source: string }) => <div>{source}</div>,
-  },
+  );
+  // The real default export has `MDEditor.Markdown` as a property.
+  (mdEditorMock as unknown as { Markdown: typeof mdMarkdownMock }).Markdown =
+    mdMarkdownMock;
+  return { mdEditorMock, mdMarkdownMock };
+});
+vi.mock("@uiw/react-md-editor", () => ({
+  default: mdEditorMock,
+  MDEditor: { Markdown: mdMarkdownMock },
 }));
 
 vi.mock("../GraphPane", () => ({
@@ -94,9 +102,21 @@ beforeEach(() => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -206,9 +226,21 @@ describe("Top chrome (merged-design v2)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: "/usr/local/bin/claude",
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: "claude",
             openspec: true,
             grillApply: false,
@@ -260,9 +292,21 @@ describe("Top chrome (merged-design v2)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: "/usr/local/bin/claude",
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: "claude",
           openspec: true,
           grillApply: false,
@@ -468,9 +512,21 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -584,9 +640,21 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -672,9 +740,21 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: "/usr/local/bin/claude",
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: "claude",
             openspec: true,
             grillApply: false,
@@ -742,9 +822,17 @@ describe("Editor chrome (merged-design v2)", () => {
     expect(screen.queryAllByTestId("file-tab")).toHaveLength(0);
   });
 
-  it("renders breadcrumbs", () => {
+  it("renders breadcrumbs", async () => {
     render(<App />);
-    expect(screen.getByTestId("breadcrumbs")).toBeDefined();
+    // Breadcrumbs live in the editor toolbar, so they appear once a file is
+    // open — the leading segment is the project name.
+    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    fireEvent.click(await screen.findByText("AGENTS.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("breadcrumbs").textContent).toContain(
+        "AGENTS.md"
+      )
+    );
   });
 
   it("has no leftover status bar", () => {
@@ -834,9 +922,21 @@ describe("Settings panel (D14/D15)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: "/usr/local/bin/claude",
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: "claude",
             openspec: true,
             grillApply: false,
@@ -896,9 +996,21 @@ describe("Settings panel (D14/D15)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: "/usr/local/bin/claude",
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: "claude",
             openspec: true,
             grillApply: false,
@@ -1092,9 +1204,21 @@ describe("Keyboard navigation (accessibility)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -1164,9 +1288,21 @@ describe("Keyboard navigation (accessibility)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1239,9 +1375,21 @@ describe("Keyboard navigation (accessibility)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1321,9 +1469,21 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -1423,9 +1583,21 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -1512,9 +1684,21 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -1607,9 +1791,21 @@ describe("Labeled inputs (accessibility)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1669,9 +1865,21 @@ describe("Labeled inputs (accessibility)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1736,9 +1944,21 @@ describe("Error banner provenance", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1843,9 +2063,21 @@ describe("First-run onboarding", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -1943,9 +2175,21 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -2070,9 +2314,21 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -2267,9 +2523,21 @@ describe("Session restore", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -2425,9 +2693,21 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -2507,9 +2787,21 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: null,
           openspec: false,
           grillApply: false,
@@ -2603,9 +2895,21 @@ describe("Project switching", () => {
         if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-          { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+              {
+                id: "claude",
+                label: "Claude Code",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+              {
+                id: "codex",
+                label: "Codex",
+                path: null,
+                skillsOk: true,
+                pluginOk: true,
+              },
+            ],
             selected: null,
             openspec: false,
             grillApply: false,
@@ -2675,9 +2979,21 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: "/usr/local/bin/claude",
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: "claude",
           openspec: true,
           grillApply: false,
@@ -2706,9 +3022,21 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
       if (cmd === "preflight") {
         return Promise.resolve({
           agents: [
-          { id: "claude", label: "Claude Code", path: "/usr/local/bin/claude", skillsOk: true, pluginOk: true },
-          { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
-        ],
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: "/usr/local/bin/claude",
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
           selected: "claude",
           openspec: true,
           grillApply: false,
@@ -2758,5 +3086,296 @@ describe("Executor/model/bypass menu (vibe-editor-shell-redesign)", () => {
     fireEvent.click(screen.getByTestId("model-btn")); // close
     fireEvent.click(screen.getByTestId("model-btn")); // reopen
     expect(await screen.findByTestId("bypass-toggle")).toBeChecked();
+  });
+});
+
+describe("Vibe spec tabs (vibe-spec-tabs)", () => {
+  it("opens a spec tab when a spec row in the launcher is clicked", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects")
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/floo-network",
+            displayName: "floo-network",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      if (cmd === "switch_project")
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/floo-network",
+          displayName: "floo-network",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread 1",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+            executorSessionId: null,
+          },
+        ]);
+      if (cmd === "list_spec_changes")
+        return Promise.resolve([
+          {
+            name: "vibe-spec-tabs",
+            completedTasks: 3,
+            totalTasks: 10,
+            lastModified: "2026-08-09T00:00:00Z",
+            status: "in-progress",
+          },
+        ]);
+      if (cmd === "validate_spec_changes") return Promise.resolve(true);
+      if (cmd === "show_spec_change")
+        return Promise.resolve({
+          id: "vibe-spec-tabs",
+          title: "vibe-spec-tabs",
+          deltaCount: 0,
+          deltas: [],
+        });
+      if (cmd === "verify_commands") return Promise.resolve([]);
+      if (cmd === "list_verifications") return Promise.resolve([]);
+      if (cmd === "read_file_content") return Promise.resolve("# content\n");
+      if (cmd === "preflight")
+        return Promise.resolve({
+          agents: [],
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      if (cmd === "load_graphify")
+        return Promise.resolve({
+          outDir: "",
+          report: "",
+          graph: null,
+          summary: "",
+        });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "read_thread") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() =>
+      expect(screen.getByTestId("vibe-spec-launcher")).toBeInTheDocument()
+    );
+
+    // Click the spec row in the launcher
+    const row = await screen.findByTestId("vibe-spec-row");
+    fireEvent.click(row);
+
+    // The spec tab should now be active in the files column
+    await waitFor(() => {
+      expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
+    });
+  });
+
+  it("opens a spec tab when the linked-change chip is clicked", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects")
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/floo-network",
+            displayName: "floo-network",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      if (cmd === "switch_project")
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/floo-network",
+          displayName: "floo-network",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread 1",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: "vibe-spec-tabs",
+            executorSessionId: null,
+          },
+        ]);
+      if (cmd === "list_spec_changes")
+        return Promise.resolve([
+          {
+            name: "vibe-spec-tabs",
+            completedTasks: 3,
+            totalTasks: 10,
+            lastModified: "2026-08-09T00:00:00Z",
+            status: "in-progress",
+          },
+        ]);
+      if (cmd === "validate_spec_changes") return Promise.resolve(true);
+      if (cmd === "show_spec_change")
+        return Promise.resolve({
+          id: "vibe-spec-tabs",
+          title: "vibe-spec-tabs",
+          deltaCount: 0,
+          deltas: [],
+        });
+      if (cmd === "verify_commands") return Promise.resolve([]);
+      if (cmd === "list_verifications") return Promise.resolve([]);
+      if (cmd === "read_file_content") return Promise.resolve("# content\n");
+      if (cmd === "preflight")
+        return Promise.resolve({
+          agents: [],
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      if (cmd === "load_graphify")
+        return Promise.resolve({
+          outDir: "",
+          report: "",
+          graph: null,
+          summary: "",
+        });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "read_thread") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() =>
+      expect(screen.getByTestId("change-chip")).toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByTestId("change-chip"));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
+    });
+  });
+
+  it("keeps a spec tab open when switching from Vibe to Editor mode", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_projects")
+          return Promise.resolve([
+            {
+              hash: "proj-1",
+              root: "/tmp/floo-network",
+              displayName: "floo-network",
+              createdAt: "2026-08-06T00:00:00Z",
+              lastAccessedAt: "2026-08-06T00:00:00Z",
+            },
+          ]);
+        if (cmd === "switch_project")
+          return Promise.resolve({
+            hash: "proj-1",
+            root: "/tmp/floo-network",
+            displayName: "floo-network",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          });
+        if (cmd === "list_threads")
+          return Promise.resolve([
+            {
+              id: "t1",
+              projectHash: "proj-1",
+              title: "Thread 1",
+              createdAt: "2026-08-06T00:00:00Z",
+              updatedAt: "2026-08-06T00:00:00Z",
+              currentMode: "spec",
+              openSpecChangeName: null,
+              executorSessionId: null,
+            },
+          ]);
+        if (cmd === "list_spec_changes")
+          return Promise.resolve([
+            {
+              name: "vibe-spec-tabs",
+              completedTasks: 3,
+              totalTasks: 10,
+              lastModified: "2026-08-09T00:00:00Z",
+              status: "in-progress",
+            },
+          ]);
+        if (cmd === "validate_spec_changes") return Promise.resolve(true);
+        if (cmd === "show_spec_change")
+          return Promise.resolve({
+            id: "vibe-spec-tabs",
+            title: "vibe-spec-tabs",
+            deltaCount: 0,
+            deltas: [],
+          });
+        if (cmd === "verify_commands") return Promise.resolve([]);
+        if (cmd === "list_verifications") return Promise.resolve([]);
+        if (cmd === "read_file_content") {
+          const relativePath = String(args?.relativePath ?? "");
+          if (relativePath.startsWith("spec:"))
+            return Promise.reject(new Error(`no such file: ${relativePath}`));
+          return Promise.resolve("# content\n");
+        }
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [],
+            selected: null,
+            openspec: false,
+            grillApply: false,
+            ponytail: false,
+            graphify: false,
+            ready: false,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        if (cmd === "load_graphify")
+          return Promise.resolve({
+            outDir: "",
+            report: "",
+            graph: null,
+            summary: "",
+          });
+        if (cmd === "list_directory") return Promise.resolve([]);
+        if (cmd === "read_thread") return Promise.resolve([]);
+        return Promise.resolve([]);
+      }
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() =>
+      expect(screen.getByTestId("vibe-spec-launcher")).toBeInTheDocument()
+    );
+
+    const row = await screen.findByTestId("vibe-spec-row");
+    fireEvent.click(row);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
+    });
+
+    fireEvent.click(screen.getByTestId("shell-editor"));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
+    });
   });
 });

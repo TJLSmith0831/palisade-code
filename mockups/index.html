@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Floo Network — Vibe Shell: Specs as Editor Tabs</title>
+<style>
+  :root {
+    --accent-hue: 145;
+    --backdrop: oklch(11% 0.015 var(--accent-hue));
+    --chrome-bg: oklch(15% 0.004 250);
+    --bg: oklch(18% 0.005 250);
+    --surface: oklch(22% 0.006 250);
+    --surface-warm: oklch(26% 0.008 250);
+    --editor-bg: oklch(20% 0.005 250);
+    --active-row: oklch(24% 0.02 var(--accent-hue));
+    --fg: oklch(96% 0.003 250);
+    --muted: oklch(66% 0.012 250);
+    --border: oklch(30% 0.01 250);
+    --accent: oklch(88% 0.21 var(--accent-hue));
+    --accent-on: oklch(20% 0.03 var(--accent-hue));
+    --twilight-glow: oklch(18% 0.03 var(--accent-hue));
+    --success: oklch(72% 0.15 160);
+    --warn: oklch(76% 0.15 65);
+    --danger: oklch(64% 0.22 25);
+    --radius: 6px;
+    --radius-sm: 4px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 13px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font);
+    background: var(--backdrop);
+    color: var(--fg);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  /* ── Top Chrome ── */
+  .top-chrome {
+    height: 38px;
+    background: var(--chrome-bg);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 10px;
+    -webkit-app-region: drag;
+  }
+  .traffic-lights { display: flex; gap: 8px; margin-right: 4px; }
+  .light { width: 12px; height: 12px; border-radius: 50%; }
+  .light.red { background: oklch(62% 0.22 25); }
+  .light.yellow { background: oklch(75% 0.16 85); }
+  .light.green { background: oklch(72% 0.17 145); }
+
+  .shell-toggle {
+    display: flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    -webkit-app-region: no-drag;
+  }
+  .shell-toggle button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 4px 12px;
+    font-size: 12px;
+    font-family: var(--font);
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .shell-toggle button.active {
+    background: var(--accent);
+    color: var(--accent-on);
+    font-weight: 600;
+  }
+
+  .chrome-spacer { flex: 1; }
+
+  .executor-menu {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    -webkit-app-region: no-drag;
+  }
+  .executor-menu .exec-name { color: var(--fg); font-weight: 500; }
+  .exec-badge {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 10px;
+  }
+
+  /* ── Shell Layout ── */
+  .shell { display: flex; height: calc(100vh - 38px); }
+  .ds-shell-contents { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Vibe Chat Column ── */
+  .ds-vibe-chat {
+    width: 480px;
+    min-width: 320px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+  }
+  .pane-head {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--chrome-bg);
+    min-height: 36px;
+  }
+  .pane-head strong { font-size: 13px; }
+  .change-chip {
+    background: var(--surface-warm);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 1px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--accent);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .change-chip:hover { border-color: var(--accent); }
+  .change-chip svg { width: 10px; height: 10px; }
+  .spacer { flex: 1; }
+
+  .spec-banner {
+    padding: 6px 12px;
+    background: var(--twilight-glow);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .spec-banner svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .msg {
+    max-width: 90%;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .msg.user {
+    background: var(--surface-warm);
+    align-self: flex-end;
+  }
+  .msg.assistant {
+    background: var(--surface);
+    align-self: flex-start;
+  }
+  .msg .role {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Composer ── */
+  .composer {
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--chrome-bg);
+  }
+  .composer textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 8px;
+    resize: none;
+    height: 60px;
+    width: 100%;
+  }
+  .composer-bar { display: flex; align-items: center; gap: 8px; }
+  .mode-toggle {
+    display: flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .mode-toggle button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 3px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: var(--font);
+  }
+  .mode-toggle button.active {
+    background: var(--accent);
+    color: var(--accent-on);
+    font-weight: 600;
+  }
+  .send-btn {
+    margin-left: auto;
+    background: var(--accent);
+    color: var(--accent-on);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 4px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  /* ── Resize Handle ── */
+  .ds-resize-handle-x {
+    width: 4px;
+    background: var(--border);
+    cursor: col-resize;
+    flex-shrink: 0;
+  }
+
+  /* ── Vibe Files Column (tabbed workspace) ── */
+  .ds-vibe-files {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--editor-bg);
+    min-width: 0;
+  }
+
+  /* Rounded pill tabs, Devin-style */
+  .ds-file-tabs {
+    min-height: 38px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--chrome-bg);
+    overflow-x: auto;
+  }
+  .ds-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .ds-tab:hover { background: var(--surface); color: var(--fg); }
+  .ds-tab.active {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .ds-tab .tab-icon { width: 12px; height: 12px; }
+  .ds-tab .tab-icon.codemap { color: oklch(70% 0.18 280); }
+  .ds-tab .tab-icon.spec { color: var(--accent); }
+  .ds-tab .tab-icon.diff { color: var(--warn); }
+  .ds-tab .tab-close {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted);
+    margin-left: 2px;
+  }
+  .ds-tab .tab-close:hover { background: var(--border); color: var(--fg); }
+  .ds-tab-dirty { color: var(--accent); }
+  .tab-add {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    padding: 4px; border-radius: 4px; display: flex;
+  }
+  .tab-add:hover { background: var(--surface); color: var(--fg); }
+
+  /* Editor / Spec tab content area */
+  .file-content {
+    flex: 1;
+    overflow: auto;
+    padding: 16px 20px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--fg);
+  }
+
+  /* Code editor view */
+  .code-editor {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--code-text, var(--fg));
+    white-space: pre;
+  }
+  .code-editor .kw { color: oklch(73% 0.17 280); }
+  .code-editor .str { color: oklch(72% 0.11 50); }
+  .code-editor .cmt { color: var(--muted); font-style: italic; }
+  .code-editor .fn { color: oklch(82% 0.11 95); }
+  .code-editor .ty { color: oklch(75% 0.1 180); }
+
+  /* Spec tab view */
+  .spec-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .spec-view-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--chrome-bg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .spec-view-title {
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .spec-view-title .icon { color: var(--accent); }
+  .spec-view-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* Inner spec artifact tabs (Proposal / Design / Specs / Tasks / Verify) */
+  .spec-inner-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .spec-inner-tab {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-family: var(--font);
+  }
+  .spec-inner-tab:hover { color: var(--fg); background: var(--surface); }
+  .spec-inner-tab.active { color: var(--fg); background: var(--surface); font-weight: 500; }
+
+  .spec-inner-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  /* Markdown-ish spec content */
+  .spec-doc h1 { font-size: 18px; margin-bottom: 12px; font-weight: 600; }
+  .spec-doc h2 { font-size: 14px; margin: 18px 0 8px; font-weight: 600; color: var(--accent); }
+  .spec-doc p { margin-bottom: 10px; color: var(--fg); }
+  .spec-doc ul { margin-left: 18px; margin-bottom: 12px; color: var(--fg); }
+  .spec-doc li { margin-bottom: 4px; }
+  .spec-doc code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--surface);
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+
+  /* Tasks view */
+  .task-list { display: flex; flex-direction: column; gap: 6px; }
+  .task-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .task-item:hover { border-color: var(--muted); }
+  .task-check {
+    width: 16px; height: 16px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    color: var(--success);
+  }
+  .task-check.checked { background: var(--success); border-color: var(--success); color: var(--accent-on); }
+  .task-check svg { width: 11px; height: 11px; }
+  .task-text { flex: 1; font-size: 12px; }
+  .task-text.done { text-decoration: line-through; color: var(--muted); }
+  .task-actions { display: flex; gap: 4px; }
+  .task-run-btn {
+    background: var(--surface-warm);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--fg);
+    font-size: 10px;
+    padding: 2px 8px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 3px;
+  }
+  .task-run-btn:hover { border-color: var(--accent); }
+  .task-run-btn svg { width: 9px; height: 9px; }
+
+  .task-disclaimer {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    font-style: italic;
+  }
+
+  /* Verify view */
+  .verify-list { display: flex; flex-direction: column; gap: 6px; }
+  .verify-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .verify-row .cmd { font-family: var(--font-mono); font-size: 11px; }
+  .verify-row .commit { font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-left: auto; }
+
+  /* Diff view */
+  .diff-view {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .diff-hunk { margin-bottom: 12px; }
+  .diff-hunk-header {
+    background: var(--surface);
+    padding: 4px 8px;
+    color: var(--muted);
+    font-size: 11px;
+    border-radius: 3px;
+  }
+  .diff-line { padding: 2px 8px; display: flex; }
+  .diff-line.add { background: oklch(20% 0.04 160); color: var(--success); }
+  .diff-line.del { background: oklch(20% 0.05 25); color: var(--danger); }
+  .diff-line .ln { width: 36px; color: var(--muted); text-align: right; margin-right: 12px; }
+
+  /* ── Right Sidebar ── */
+  .ds-right-sidebar {
+    width: 260px;
+    display: flex;
+    flex-direction: column;
+    background: var(--chrome-bg);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .ds-workspace-panel {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ds-rail-section {
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ds-rail-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .ds-rail-section select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-size: 12px;
+    padding: 4px 6px;
+    font-family: var(--font);
+  }
+  .ds-rail-actions { display: flex; gap: 4px; margin-top: 4px; }
+  .ds-rail-actions button {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .ds-branch-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+    margin-top: 4px;
+    width: 100%;
+  }
+  .ds-branch-btn svg { width: 12px; height: 12px; }
+
+  /* ── Threads Panel ── */
+  .ds-threads-panel {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ds-new-thread {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-size: 12px;
+    padding: 4px;
+    cursor: pointer;
+    margin-bottom: 6px;
+  }
+  .ds-threads-panel ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ds-threads-panel li {
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ds-threads-panel li.active { background: var(--active-row); }
+  .ds-threads-panel li:hover:not(.active) { background: var(--surface); }
+  .ds-thread-row { display: flex; align-items: center; justify-content: space-between; }
+  .ds-thread-title { font-size: 12px; }
+  .ds-thread-meta { display: flex; }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .badge-light { background: oklch(30% 0.02 250); color: var(--muted); }
+  .badge-default { background: var(--surface-warm); color: var(--fg); }
+  .badge-green { background: oklch(25% 0.05 160); color: var(--success); }
+  .badge-orange { background: oklch(25% 0.05 65); color: var(--warn); }
+  .badge-gray { background: var(--surface); color: var(--muted); }
+  .badge-accent { background: oklch(25% 0.05 var(--accent-hue)); color: var(--accent); }
+  .badge-red { background: oklch(20% 0.05 25); color: var(--danger); }
+
+  /* ── Specs Launcher (right sidebar) ── */
+  .ds-specs-launcher {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .launcher-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  .launcher-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
+  .launcher-refresh {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    padding: 2px; border-radius: 3px; display: flex;
+  }
+  .launcher-refresh:hover { color: var(--fg); }
+  .launcher-refresh svg { width: 12px; height: 12px; }
+
+  .spec-list { display: flex; flex-direction: column; gap: 3px; }
+  .spec-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .spec-item:hover { background: var(--surface); border-color: var(--border); }
+  .spec-item .spec-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .spec-item.linked .spec-dot { background: var(--accent); }
+  .spec-item .spec-name {
+    flex: 1;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .spec-item .spec-name:hover { color: var(--accent); }
+  .spec-item .mini-progress {
+    width: 32px; height: 3px;
+    background: var(--bg);
+    border-radius: 2px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .spec-item .mini-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+  .spec-item .spec-status {
+    flex-shrink: 0;
+    font-size: 9px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .specs-empty {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 8px 4px;
+    text-align: center;
+  }
+
+  /* ── File Explorer ── */
+  .ds-vibe-explorer { border-bottom: 1px solid var(--border); }
+  .disclosure { display: flex; flex-direction: column; }
+  .disclosure-control {
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg);
+    user-select: none;
+    background: none;
+    border: none;
+    width: 100%;
+    text-align: left;
+    font-family: var(--font);
+  }
+  .disclosure-control:hover { background: var(--surface); }
+  .disclosure-control .chevron { width: 14px; height: 14px; transition: transform 0.15s; flex-shrink: 0; color: var(--muted); }
+  .disclosure.open .chevron { transform: rotate(90deg); }
+  .disclosure-panel { display: none; padding: 6px 10px 10px; }
+  .disclosure.open .disclosure-panel { display: block; }
+  .file-tree-demo {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    padding: 4px 0;
+  }
+  .file-tree-demo div { padding: 1px 0; }
+  .file-tree-demo .dir { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<!-- ── Top Chrome ── -->
+<div class="top-chrome">
+  <div class="traffic-lights">
+    <div class="light red"></div>
+    <div class="light yellow"></div>
+    <div class="light green"></div>
+  </div>
+  <div class="shell-toggle">
+    <button class="active">Vibe</button>
+    <button>Editor</button>
+  </div>
+  <div class="chrome-spacer"></div>
+  <div class="executor-menu">
+    <span class="exec-badge">executor</span>
+    <span class="exec-name">claude</span>
+    <span>·</span>
+    <span class="exec-badge">model</span>
+    <span>sonnet-4.5</span>
+  </div>
+</div>
+
+<!-- ── Vibe Shell ── -->
+<div class="shell">
+  <div class="ds-shell-contents" style="display:flex; flex:1;">
+
+    <!-- Chat Column -->
+    <div class="ds-vibe-chat">
+      <div class="pane-head">
+        <strong>Spec surface as tab</strong>
+        <span class="change-chip" id="chip-linked" title="Open this spec in a tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          add-vibe-spec-surface
+        </span>
+        <div class="spacer"></div>
+      </div>
+      <div class="spec-banner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+        Spec Mode — read-only planning
+      </div>
+      <div class="messages">
+        <div class="msg user">
+          <div class="role">user</div>
+          I want specs to pull up as a tab, like edited files in Devin Desktop's Agent mode.
+        </div>
+        <div class="msg assistant">
+          <div class="role">assistant</div>
+          Done. In this version, the Vibe shell's right sidebar is a compact spec <em>launcher</em>. Clicking any spec (or the linked-change chip above) opens it as a rounded-pill tab in the files column. Each spec tab has its own inner tabs for Proposal, Design, Spec, Tasks, and Verify — same OpenSpec artifacts, same API calls, no sidebar card.
+        </div>
+      </div>
+      <div class="composer">
+        <textarea placeholder="Ask, or /spec to plan, /go to build…"></textarea>
+        <div class="composer-bar">
+          <div class="mode-toggle">
+            <button class="active">Spec  S</button>
+            <button>Go  ⏎</button>
+          </div>
+          <button class="send-btn">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ds-resize-handle-x"></div>
+
+    <!-- Files Column — tabbed workspace -->
+    <div class="ds-vibe-files">
+      <div class="ds-file-tabs" id="file-tabs">
+        <div class="ds-tab" data-tab="code">
+          <span class="ds-tab-dirty">●</span>
+          App.tsx
+          <span class="tab-close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div class="ds-tab active" data-tab="spec">
+          <svg class="tab-icon spec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Spec: add-vibe-spec-surface
+          <span class="tab-close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div class="ds-tab" data-tab="diff">
+          <svg class="tab-icon diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 9v6M6 15c0-3 12-3 12-6"/></svg>
+          Diff
+          <span class="tab-close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
+        </div>
+        <button class="tab-add" title="Open file / spec palette">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+
+      <div class="file-content" id="tab-content">
+        <!-- Spec Tab -->
+        <div class="spec-view" id="view-spec">
+          <div class="spec-view-header">
+            <div class="spec-view-title">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              add-vibe-spec-surface
+            </div>
+            <div class="spec-view-meta">
+              <span class="badge badge-green">validates</span>
+              <span class="badge badge-orange">openspec: in-progress</span>
+              <button class="launcher-refresh" title="Re-read from openspec CLI">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="spec-inner-tabs">
+            <button class="spec-inner-tab" data-inner="proposal">Proposal</button>
+            <button class="spec-inner-tab" data-inner="design">Design</button>
+            <button class="spec-inner-tab" data-inner="specs">Spec</button>
+            <button class="spec-inner-tab active" data-inner="tasks">Tasks</button>
+            <button class="spec-inner-tab" data-inner="verify">Verify</button>
+          </div>
+
+          <div class="spec-inner-content" id="inner-content">
+            <!-- Tasks (default) -->
+            <div class="spec-doc" id="inner-tasks">
+              <p class="task-disclaimer">Task checkboxes are agent-reported. Only verify commands prove anything runs.</p>
+              <div class="task-list">
+                <div class="task-item">
+                  <span class="task-check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>
+                  <span class="task-text done">Add Specs launcher section to right sidebar</span>
+                </div>
+                <div class="task-item">
+                  <span class="task-check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>
+                  <span class="task-text done">Render rounded-pill spec tabs in file column</span>
+                </div>
+                <div class="task-item">
+                  <span class="task-check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>
+                  <span class="task-text done">Wire change chip + sidebar clicks to open spec tab</span>
+                </div>
+                <div class="task-item">
+                  <span class="task-check"></span>
+                  <span class="task-text">Update FileEditorPane to open spec artifacts (read-only)</span>
+                  <div class="task-actions">
+                    <button class="task-run-btn">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
+                      Run verify
+                    </button>
+                  </div>
+                </div>
+                <div class="task-item">
+                  <span class="task-check"></span>
+                  <span class="task-text">Cache spec content per project, invalidate on openspec/ fs-changed</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ds-resize-handle-x"></div>
+
+    <!-- Right Sidebar — Specs Launcher + Explorer -->
+    <aside class="ds-right-sidebar">
+      <!-- Workspace -->
+      <div class="ds-workspace-panel">
+        <div class="ds-rail-section">
+          <div class="ds-rail-label">Workspace</div>
+          <select>
+            <option>floo-network</option>
+            <option>graphify</option>
+          </select>
+          <div class="ds-rail-actions">
+            <button>Add</button>
+            <button>Rename</button>
+          </div>
+          <button class="ds-branch-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 9v6M6 15c0-3 12-3 12-6"/></svg>
+            main
+          </button>
+        </div>
+      </div>
+
+      <!-- Threads -->
+      <div class="ds-threads-panel">
+        <button class="ds-new-thread">+ New Thread</button>
+        <ul>
+          <li class="active">
+            <div class="ds-thread-row"><span class="ds-thread-title">Spec surface as tab</span></div>
+            <div class="ds-thread-meta"><span class="badge badge-light">spec</span></div>
+          </li>
+          <li>
+            <div class="ds-thread-row"><span class="ds-thread-title">FIM model benchmark</span></div>
+            <div class="ds-thread-meta"><span class="badge badge-default">go</span></div>
+          </li>
+          <li>
+            <div class="ds-thread-row"><span class="ds-thread-title">Fix terminal resize bug</span></div>
+            <div class="ds-thread-meta"><span class="badge badge-default">go</span></div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Specs Launcher -->
+      <div class="ds-specs-launcher">
+        <div class="launcher-head">
+          <span class="launcher-title">Specs</span>
+          <button class="launcher-refresh" title="Re-read from openspec CLI">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
+          </button>
+        </div>
+        <div class="spec-list">
+          <div class="spec-item linked" data-spec="add-vibe-spec-surface" title="Click to open in tab">
+            <span class="spec-dot"></span>
+            <span class="spec-name">add-vibe-spec-surface</span>
+            <div class="mini-progress"><div class="mini-fill" style="width:60%;"></div></div>
+            <span class="spec-status">in-prog</span>
+          </div>
+          <div class="spec-item" data-spec="fim-sidecar-process" title="Click to open in tab">
+            <span class="spec-dot"></span>
+            <span class="spec-name">fim-sidecar-process</span>
+            <div class="mini-progress"><div class="mini-fill" style="width:20%;"></div></div>
+            <span class="spec-status">drafting</span>
+          </div>
+          <div class="spec-item" data-spec="codemirror-ghost-text" title="Click to open in tab">
+            <span class="spec-dot"></span>
+            <span class="spec-name">codemirror-ghost-text</span>
+            <div class="mini-progress"><div class="mini-fill" style="width:0%;"></div></div>
+            <span class="spec-status">proposed</span>
+          </div>
+          <div class="spec-item" data-spec="git-hunk-staging" title="Click to open in tab">
+            <span class="spec-dot"></span>
+            <span class="spec-name">git-hunk-staging</span>
+            <div class="mini-progress"><div class="mini-fill" style="width:75%;"></div></div>
+            <span class="spec-status">in-prog</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- File Explorer -->
+      <div class="ds-vibe-explorer">
+        <div class="disclosure">
+          <button class="disclosure-control">
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+            File Explorer
+          </button>
+          <div class="disclosure-panel">
+            <div class="file-tree-demo">
+              <div class="dir">src/</div>
+              <div>&nbsp;&nbsp;App.tsx</div>
+              <div>&nbsp;&nbsp;SpecPane.tsx</div>
+              <div class="dir">openspec/</div>
+              <div class="dir">&nbsp;&nbsp;changes/</div>
+              <div class="dir">&nbsp;&nbsp;&nbsp;&nbsp;add-vibe-spec-surface/</div>
+              <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;proposal.md</div>
+              <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;design.md</div>
+              <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;spec.md</div>
+              <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tasks.md</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+</div>
+
+<script>
+  const specContent = {
+    proposal: `
+      <div class="spec-doc" id="inner-proposal">
+        <h1>add-vibe-spec-surface</h1>
+        <h2>Why</h2>
+        <p>Vibe shell has no way to browse or read a linked OpenSpec change. Users must switch to Editor to see a change's artifacts. This splits the spec→build loop across shells even when the user is in a chat-first mindset.</p>
+        <h2>What changes</h2>
+        <ul>
+          <li>Turn the right sidebar into a compact <strong>Specs launcher</strong> listing all project changes.</li>
+          <li>Clicking any spec (or the thread's linked-change chip) opens it as a rounded-pill tab in the Vibe file column, mirroring how files already open as tabs.</li>
+          <li>Each spec tab provides inner tabs for Proposal, Design, Spec, Tasks, and Verify.</li>
+        </ul>
+      </div>`,
+    design: `
+      <div class="spec-doc" id="inner-design">
+        <h2>Design Decisions</h2>
+        <p><strong>1. Spec tabs live in the file column's tab strip.</strong> This matches Devin Desktop's Agent mode pattern where codemaps, PRs, and files all open as editor tabs. It also keeps the chat column untouched.</p>
+        <p><strong>2. Inner tabs per artifact, not separate top-level tabs.</strong> A change is one tab; its proposal/design/specs/tasks/verify are secondary. This avoids tab explosion.</p>
+        <p><strong>3. Right sidebar remains a launcher, not a reader.</strong> The sidebar shows name, status, and a 32px progress bar. The editor is where reading and action happen.</p>
+      </div>`,
+    specs: `
+      <div class="spec-doc" id="inner-specs">
+        <h2>Requirements</h2>
+        <p><strong>R1</strong> — The right sidebar SHALL list all <code>openspec list</code> changes for the active project.</p>
+        <p><strong>R2</strong> — Clicking a change in the list or the linked-change chip SHALL open that change as a tab in the file column.</p>
+        <p><strong>R3</strong> — A spec tab SHALL render the change's artifacts without the user leaving the Vibe shell.</p>
+        <p><strong>R4</strong> — Task checkboxes SHALL be labeled as agent-reported, and verification rows SHALL be the only evidence shown as passing/failing.</p>
+      </div>`,
+    tasks: `
+      <div class="spec-doc" id="inner-tasks">
+        <p class="task-disclaimer">Task checkboxes are agent-reported. Only verify commands prove anything runs.</p>
+        <div class="task-list">
+          <div class="task-item"><span class="task-check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span><span class="task-text done">Add Specs launcher section to right sidebar</span></div>
+          <div class="task-item"><span class="task-check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span><span class="task-text done">Render rounded-pill spec tabs in file column</span></div>
+          <div class="task-item"><span class="task-check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span><span class="task-text done">Wire change chip + sidebar clicks to open spec tab</span></div>
+          <div class="task-item"><span class="task-check"></span><span class="task-text">Update FileEditorPane to open spec artifacts (read-only)</span><div class="task-actions"><button class="task-run-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>Run verify</button></div></div>
+          <div class="task-item"><span class="task-check"></span><span class="task-text">Cache spec content per project, invalidate on openspec/ fs-changed</span></div>
+        </div>
+      </div>`,
+    verify: `
+      <div class="spec-doc" id="inner-verify">
+        <h2>Verification runs</h2>
+        <p class="task-disclaimer">Every row is one command, its exit code, and the commit it ran at. No aggregate score is shown — a set of exit codes is not a claim that the work is done.</p>
+        <div class="verify-list">
+          <div class="verify-row"><span class="badge badge-green">exit 0</span><span class="cmd">pnpm typecheck</span><span class="commit">a3f1024</span></div>
+          <div class="verify-row"><span class="badge badge-red">exit 1</span><span class="cmd">pnpm test</span><span class="commit">a3f1024</span></div>
+        </div>
+      </div>`
+  };
+
+  const codeView = `
+    <div class="code-editor"><span class="cmt">// SpecPane renders inside the Editor shell's right-rail disclosure.</span>
+<span class="cmt">// Vibe shell now opens specs as tabs in the file column.</span>
+
+<span class="kw">export default function</span> <span class="fn">SpecPane</span>({ projectHash, linkedChange }: Props) {
+  <span class="kw">const</span> [changes, setChanges] = <span class="fn">useState</span>&lt;<span class="ty">SpecChange</span>[] | <span class="kw">null</span>&gt;(<span class="kw">null</span>);
+  <span class="kw">const</span> [valid, setValid] = <span class="fn">useState</span>&lt;<span class="ty">boolean</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>);
+
+  <span class="cmt">// Results cached per project — CLI is a process spawn, not cheap.</span>
+  <span class="kw">const</span> cache = <span class="fn">useRef</span>(<span class="kw">new</span> <span class="ty">Map</span>());
+
+  <span class="kw">const</span> load = <span class="fn">useCallback</span>(<span class="kw">async</span> (force: <span class="ty">boolean</span>) => {
+    <span class="kw">const</span> cached = cache.current.<span class="fn">get</span>(projectHash);
+    <span class="kw">if</span> (cached &amp;&amp; !force) { <span class="fn">setChanges</span>(cached.changes); <span class="kw">return</span>; }
+    <span class="fn">setLoading</span>(<span class="kw">true</span>);
+    <span class="kw">const</span> [listed, isValid] = <span class="kw">await</span> <span class="ty">Promise</span>.<span class="fn">all</span>([
+      api.<span class="fn">listSpecChanges</span>(projectHash),
+      api.<span class="fn">validateSpecChanges</span>(projectHash),
+    ]);</div>`;
+
+  const diffView = `
+    <div class="diff-view">
+      <div class="diff-hunk">
+        <div class="diff-hunk-header">@@ src/App.tsx</div>
+        <div class="diff-line add"><span class="ln">+12</span><span>  {rightTab === "specs" && project && (</span></div>
+        <div class="diff-line del"><span class="ln">-13</span><span>    &lt;SpecPane projectHash={project.hash} ... /&gt;</span></div>
+      </div>
+    </div>`;
+
+  // Top-level tab switching
+  document.querySelectorAll('.ds-tab[data-tab]').forEach(tab => {
+    tab.addEventListener('click', (e) => {
+      if (e.target.closest('.tab-close')) return;
+      document.querySelectorAll('.ds-tab[data-tab]').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const type = tab.dataset.tab;
+      document.getElementById('tab-content').innerHTML =
+        type === 'code' ? codeView :
+        type === 'diff' ? diffView :
+        document.getElementById('view-spec').outerHTML;
+      if (type === 'spec') bindInnerTabs();
+    });
+  });
+
+  // Inner spec tab switching
+  function bindInnerTabs() {
+    document.querySelectorAll('.spec-inner-tab').forEach(t => {
+      t.addEventListener('click', () => {
+        document.querySelectorAll('.spec-inner-tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        document.getElementById('inner-content').innerHTML = specContent[t.dataset.inner];
+      });
+    });
+  }
+
+  // Sidebar / chip click opens spec tab
+  function openSpecTab(name) {
+    document.querySelectorAll('.ds-tab[data-tab]').forEach(t => t.classList.remove('active'));
+    const tab = document.querySelector('.ds-tab[data-tab="spec"]');
+    tab.querySelector('span:last-of-type').textContent = 'Spec: ' + name;
+    tab.classList.add('active');
+    document.getElementById('tab-content').innerHTML = document.getElementById('view-spec').outerHTML;
+    bindInnerTabs();
+  }
+
+  document.querySelectorAll('.spec-item').forEach(item => {
+    item.addEventListener('click', () => openSpecTab(item.dataset.spec));
+  });
+  document.getElementById('chip-linked').addEventListener('click', () => openSpecTab('add-vibe-spec-surface'));
+
+  // Disclosures
+  document.querySelectorAll('.disclosure-control').forEach(ctrl => {
+    ctrl.addEventListener('click', () => ctrl.parentElement.classList.toggle('open'));
+  });
+
+  // Shell/mode toggles (visual)
+  document.querySelectorAll('.shell-toggle button, .mode-toggle button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  bindInnerTabs();
+</script>
+
+</body>
+</html>

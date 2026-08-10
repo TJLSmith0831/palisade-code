@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -11,10 +11,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import SpecPane from "../SpecPane";
 
-const renderPane = (linkedChange?: string | null) =>
+const renderPane = (props?: {
+  linkedChange?: string | null;
+  onOpenSpec?: (name: string) => void;
+}) =>
   render(
     <MantineProvider>
-      <SpecPane projectHash="proj-1" linkedChange={linkedChange} />
+      <SpecPane projectHash="proj-1" {...props} />
     </MantineProvider>
   );
 
@@ -70,7 +73,7 @@ describe("SpecPane", () => {
 
     await waitFor(() => expect(screen.getByText("unknown")).toBeDefined());
     expect(screen.queryByText("validation failed")).toBeNull();
-    expect(screen.getByText(/No OpenSpec changes/)).toBeDefined();
+    expect(screen.getByText(/No changes/)).toBeDefined();
   });
 
   it("writes nothing — every command it issues is a read", async () => {
@@ -93,15 +96,27 @@ describe("SpecPane", () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "list_spec_changes") {
         return Promise.resolve([
-          { name: "linked", completedTasks: 0, totalTasks: 0, lastModified: null, status: null },
-          { name: "other", completedTasks: 0, totalTasks: 0, lastModified: null, status: null },
+          {
+            name: "linked",
+            completedTasks: 0,
+            totalTasks: 0,
+            lastModified: null,
+            status: null,
+          },
+          {
+            name: "other",
+            completedTasks: 0,
+            totalTasks: 0,
+            lastModified: null,
+            status: null,
+          },
         ]);
       }
       if (cmd === "validate_spec_changes") return Promise.resolve(true);
       return Promise.reject(new Error(`unexpected command ${cmd}`));
     });
 
-    renderPane("linked");
+    renderPane({ linkedChange: "linked" });
 
     await waitFor(() => expect(screen.getByText("linked")).toBeDefined());
     const marked = screen
@@ -109,5 +124,78 @@ describe("SpecPane", () => {
       .filter((node) => node.dataset.linked === "true");
     expect(marked).toHaveLength(1);
     expect(marked[0]).toHaveTextContent("linked");
+  });
+
+  it("calls onOpenSpec when a change name is clicked", async () => {
+    const onOpenSpec = vi.fn();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_spec_changes") {
+        return Promise.resolve([
+          {
+            name: "agent-session-architecture",
+            completedTasks: 0,
+            totalTasks: 0,
+            lastModified: null,
+            status: null,
+          },
+        ]);
+      }
+      if (cmd === "validate_spec_changes") return Promise.resolve(true);
+      return Promise.reject(new Error(`unexpected command ${cmd}`));
+    });
+
+    renderPane({ onOpenSpec });
+
+    await waitFor(() =>
+      expect(screen.getByText("agent-session-architecture")).toBeDefined()
+    );
+    fireEvent.click(screen.getByText("agent-session-architecture"));
+    expect(onOpenSpec).toHaveBeenCalledWith("agent-session-architecture");
+  });
+
+  it("archives a change and refreshes the list when the archive button is clicked", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_spec_changes") {
+          return Promise.resolve([
+            {
+              name: "agent-session-architecture",
+              completedTasks: 0,
+              totalTasks: 0,
+              lastModified: null,
+              status: null,
+            },
+          ]);
+        }
+        if (cmd === "validate_spec_changes") return Promise.resolve(true);
+        if (cmd === "archive_spec_change") {
+          expect(args?.projectHash).toBe("proj-1");
+          expect(args?.name).toBe("agent-session-architecture");
+          return Promise.resolve("");
+        }
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      }
+    );
+
+    renderPane();
+
+    await waitFor(() =>
+      expect(screen.getByText("agent-session-architecture")).toBeDefined()
+    );
+    fireEvent.click(screen.getAllByTestId("spec-archive")[0]);
+
+    // The blue dots loader replaces the archive button while archiving.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("archive-loader").length).toBeGreaterThan(0)
+    );
+
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter(([cmd]) => cmd === "archive_spec_change")
+      ).toHaveLength(1)
+    );
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "list_spec_changes")
+    ).toHaveLength(2);
   });
 });

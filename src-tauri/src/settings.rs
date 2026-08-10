@@ -32,12 +32,17 @@ pub struct ProjectSettings {
     /// model said so — it is green because a named command exited 0 at a named
     /// commit (D3).
     pub verify: HashMap<String, String>,
+    /// Spec change name → list of verify command names pinned to that change's
+    /// Tasks tab (D8). The first pinned command becomes the Tasks tab's
+    /// primary "Run verify" action (D9). Machine-local UI state, not project
+    /// config — same as the rest of this file.
+    pub verify_pins: HashMap<String, Vec<String>>,
 }
 
 const FILE_NAME: &str = ".project-settings.json";
 
 const DEFAULT_CONTENTS: &str =
-    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {}\n}\n";
+    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {},\n  \"verifyPins\": {}\n}\n";
 
 /// Loads `.project-settings.json` from `project_root`. A missing file isn't
 /// an error — it's the common case (e.g. before `ensure_file` has run, or
@@ -231,6 +236,33 @@ mod tests {
         assert!(warning.is_none());
         assert_eq!(settings.format_on_save.get(r"\.rs$"), Some(&"cargo fmt".to_string()));
         assert_eq!(settings.executor_override, Some("codex".to_string()));
+    }
+
+    #[test]
+    fn verify_pins_load_and_default_to_empty_when_missing() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(FILE_NAME),
+            r#"{"verifyPins":{"vibe-spec-tabs":["test","typecheck"]}}"#,
+        )
+        .unwrap();
+        let (settings, _) = load(root.path());
+        assert_eq!(
+            settings.verify_pins.get("vibe-spec-tabs"),
+            Some(&vec!["test".to_string(), "typecheck".to_string()])
+        );
+    }
+
+    #[test]
+    fn verify_pins_default_to_empty_for_an_old_settings_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(FILE_NAME),
+            r#"{"verify":{}}"#,
+        )
+        .unwrap();
+        let (settings, _) = load(root.path());
+        assert!(settings.verify_pins.is_empty());
     }
 
     #[test]

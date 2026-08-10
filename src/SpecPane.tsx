@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ActionIcon,
   Alert,
@@ -10,7 +11,7 @@ import {
   Text,
   Tooltip,
 } from "@mantine/core";
-import { IconRefresh } from "@tabler/icons-react";
+import { IconArchive, IconRefresh } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
 
 import * as api from "./api";
@@ -21,6 +22,8 @@ type Props = {
   projectHash: string;
   /** The change the active thread is linked to, highlighted in the list. */
   linkedChange?: string | null;
+  /** Called when the user clicks a change name — opens it as a spec tab. */
+  onOpenSpec?: (name: string) => void;
 };
 
 /**
@@ -31,16 +34,28 @@ type Props = {
  * Task counts are shown as what they are: checkboxes an agent ticked about its
  * own work. Nothing here calls a change complete, satisfied, or implemented.
  */
-export default function SpecPane({ projectHash, linkedChange }: Props) {
+export default function SpecPane({
+  projectHash,
+  linkedChange,
+  onOpenSpec,
+}: Props) {
   const [changes, setChanges] = useState<SpecChange[] | null>(null);
   const [valid, setValid] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Tracks `validate_spec_changes` independently so the lime dots show in the
+  // badge slot while validation is in flight, separate from a list refresh.
+  const [validating, setValidating] = useState(false);
+  // One change name per in-flight archive call — the blue dots replace that
+  // row's archive button until the CLI returns.
+  const [archiving, setArchiving] = useState<Set<string>>(new Set());
 
   // Results are cached per project — the CLI is a process spawn, not a cheap
   // read, so it is asked on project switch, on the filesystem event, or when
   // the user asks. Never on every render.
-  const cache = useRef(new Map<string, { changes: SpecChange[]; valid: boolean | null }>());
+  const cache = useRef(
+    new Map<string, { changes: SpecChange[]; valid: boolean | null }>()
+  );
 
   const load = useCallback(
     async (force: boolean) => {
@@ -50,21 +65,49 @@ export default function SpecPane({ projectHash, linkedChange }: Props) {
         setValid(cached.valid);
         return;
       }
-      setLoading(true);
-      setError(null);
-      try {
-        const [listed, isValid] = await Promise.all([
-          api.listSpecChanges(projectHash),
-          api.validateSpecChanges(projectHash),
-        ]);
-        cache.current.set(projectHash, { changes: listed, valid: isValid });
-        setChanges(listed);
-        setValid(isValid);
-      } catch (err) {
-        setError(describeError(err));
-      } finally {
-        setLoading(false);
-      }
+      // The list and validation run independently — `openspec validate` spawns
+      // a process and is slower than `openspec list`, so waiting on both via
+      // Promise.all made the list feel sluggish. The list updates as soon as
+      // it's ready; the lime dots stay up until validation finishes on its own.
+      const startLoading = () => {
+        setLoading(true);
+        setValidating(true);
+        setError(null);
+      };
+      if (force) flushSync(startLoading);
+      else startLoading();
+
+      // List — fast, updates the moment it's back.
+      api
+        .listSpecChanges(projectHash)
+        .then((listed) => {
+          setChanges(listed);
+          cache.current.set(projectHash, {
+            changes: listed,
+            valid: cache.current.get(projectHash)?.valid ?? null,
+          });
+          setLoading(false);
+        })
+        .catch((err) => {
+          setError(describeError(err));
+          setLoading(false);
+        });
+
+      // Validation — slower, runs in the background. The lime dots stay up
+      // until this resolves, but the list above is already updated.
+      api
+        .validateSpecChanges(projectHash)
+        .then((isValid) => {
+          setValid(isValid);
+          const existing = cache.current.get(projectHash);
+          if (existing) {
+            cache.current.set(projectHash, { ...existing, valid: isValid });
+          }
+        })
+        .catch(() => {
+          setValid(null);
+        })
+        .finally(() => setValidating(false));
     },
     [projectHash]
   );
@@ -91,6 +134,27 @@ export default function SpecPane({ projectHash, linkedChange }: Props) {
     };
   }, [projectHash, load]);
 
+  const archiveChange = useCallback(
+    async (name: string) => {
+      flushSync(() => {
+        setArchiving((prev) => new Set(prev).add(name));
+      });
+      try {
+        await api.archiveSpecChange(projectHash, name);
+        load(true);
+      } catch (err) {
+        setError(describeError(err));
+      } finally {
+        setArchiving((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+      }
+    },
+    [projectHash, load]
+  );
+
   const sorted = useMemo(
     () =>
       [...(changes ?? [])].sort((a, b) =>
@@ -104,39 +168,50 @@ export default function SpecPane({ projectHash, linkedChange }: Props) {
       <Group justify="space-between" wrap="nowrap">
         <Group gap="xs">
           <Text size="sm" fw={600}>
-            OpenSpec changes
+            Changes
           </Text>
           {loading && <Loader size="xs" />}
         </Group>
         <Group gap="xs">
-          {valid === true && (
-            <Badge size="xs" color="green" variant="light">
-              validates
-            </Badge>
+          {validating ? (
+            <Loader
+              color="lime"
+              type="dots"
+              size="xs"
+              data-testid="validates-loader"
+            />
+          ) : (
+            <>
+              {valid === true && (
+                <Badge size="xs" color="green" variant="light">
+                  validates
+                </Badge>
+              )}
+              {valid === false && (
+                <Badge size="xs" color="orange" variant="light">
+                  validation failed
+                </Badge>
+              )}
+              {valid === null && !loading && (
+                <Tooltip label="`openspec` is not on PATH, so validity is unknown — not invalid.">
+                  <Badge size="xs" color="gray" variant="light">
+                    unknown
+                  </Badge>
+                </Tooltip>
+              )}
+              <Tooltip label="Re-read from the openspec CLI">
+                <ActionIcon
+                  size="sm"
+                  variant="subtle"
+                  onClick={() => load(true)}
+                  aria-label="Refresh spec changes"
+                  data-testid="spec-refresh"
+                >
+                  <IconRefresh size={14} />
+                </ActionIcon>
+              </Tooltip>
+            </>
           )}
-          {valid === false && (
-            <Badge size="xs" color="orange" variant="light">
-              validation failed
-            </Badge>
-          )}
-          {valid === null && !loading && (
-            <Tooltip label="`openspec` is not on PATH, so validity is unknown — not invalid.">
-              <Badge size="xs" color="gray" variant="light">
-                unknown
-              </Badge>
-            </Tooltip>
-          )}
-          <Tooltip label="Re-read from the openspec CLI">
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              onClick={() => load(true)}
-              aria-label="Refresh spec changes"
-              data-testid="spec-refresh"
-            >
-              <IconRefresh size={14} />
-            </ActionIcon>
-          </Tooltip>
         </Group>
       </Group>
 
@@ -148,7 +223,7 @@ export default function SpecPane({ projectHash, linkedChange }: Props) {
 
       {changes !== null && sorted.length === 0 && !error && (
         <Text size="xs" c="dimmed">
-          No OpenSpec changes in this project.
+          No changes in this project.
         </Text>
       )}
 
@@ -160,22 +235,64 @@ export default function SpecPane({ projectHash, linkedChange }: Props) {
           data-linked={change.name === linkedChange ? "true" : undefined}
         >
           <Group justify="space-between" wrap="nowrap" gap="xs">
-            <Text size="xs" fw={change.name === linkedChange ? 700 : 400} truncate>
+            <Text
+              size="xs"
+              fw={change.name === linkedChange ? 700 : 400}
+              truncate
+              onClick={() => onOpenSpec?.(change.name)}
+              style={{ cursor: onOpenSpec ? "pointer" : undefined }}
+              role={onOpenSpec ? "button" : undefined}
+              tabIndex={onOpenSpec ? 0 : undefined}
+              onKeyDown={(event) => {
+                if (
+                  onOpenSpec &&
+                  (event.key === "Enter" || event.key === " ")
+                ) {
+                  event.preventDefault();
+                  onOpenSpec(change.name);
+                }
+              }}
+            >
               {change.name}
             </Text>
-            {change.status && (
-              // Rendered as openspec's own word, attributed. `complete` here
-              // means every task checkbox is ticked — an agent's self-report
-              // about its own work, not evidence that anything runs.
-              <Tooltip
-                label={`openspec reports this change as "${change.status}", derived from task checkboxes. Only a verify command's exit code shows whether the work runs.`}
-                multiline
-              >
-                <Badge size="xs" variant="light">
-                  openspec: {change.status}
-                </Badge>
-              </Tooltip>
-            )}
+            <Group gap="xs" wrap="nowrap">
+              {change.status && (
+                // Rendered as openspec's own word, attributed. `complete` here
+                // means every task checkbox is ticked — an agent's self-report
+                // about its own work, not evidence that anything runs.
+                <Tooltip
+                  label={`openspec reports this change as "${change.status}", derived from task checkboxes. Only a verify command's exit code shows whether the work runs.`}
+                  multiline
+                >
+                  <Badge size="xs" variant="light">
+                    openspec: {change.status}
+                  </Badge>
+                </Tooltip>
+              )}
+              {archiving.has(change.name) ? (
+                <Loader
+                  color="blue"
+                  type="dots"
+                  size="xs"
+                  data-testid="archive-loader"
+                />
+              ) : (
+                <Tooltip label="Archive change">
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      archiveChange(change.name);
+                    }}
+                    aria-label={`Archive ${change.name}`}
+                    data-testid="spec-archive"
+                  >
+                    <IconArchive size={14} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
+            </Group>
           </Group>
           {change.totalTasks > 0 && (
             <Tooltip

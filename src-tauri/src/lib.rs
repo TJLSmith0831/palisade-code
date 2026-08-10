@@ -839,6 +839,11 @@ fn validate_spec_changes(project_hash: String) -> Res<Option<bool>> {
     Ok(executor::openspec_validate(&project_root(&project_hash)?))
 }
 
+#[tauri::command]
+fn archive_spec_change(project_hash: String, name: String) -> Res<String> {
+    executor::openspec_archive(&project_root(&project_hash)?, &name)
+}
+
 /// Set the thread's spec link by hand — how the user resolves the ambiguity
 /// `spec-link-ambiguous` reports.
 #[tauri::command]
@@ -1563,6 +1568,7 @@ pub fn run() {
             list_spec_changes,
             show_spec_change,
             validate_spec_changes,
+            archive_spec_change,
             set_spec_change,
             run_graphify,
             load_graphify,

@@ -56,8 +56,7 @@ import FileEditorPane, {
   evictProjectSessions,
 } from "./FileEditorPane";
 import TabBar, { basename } from "./TabBar";
-import { isMarkdownPath } from "./openTabs";
-import { useOpenTabs } from "./openTabs";
+import { isMarkdownPath, tabKey, useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
 import { matchesChord, type Command } from "./commands";
@@ -67,6 +66,8 @@ import FileTree from "./FileTree";
 import DiffPane from "./DiffPane";
 import GraphPane from "./GraphPane";
 import SpecPane from "./SpecPane";
+import SpecChangeTab from "./SpecChangeTab";
+import VibeSpecLauncher from "./VibeSpecLauncher";
 import VerifyPane from "./VerifyPane";
 import SettingsPanel, {
   applyAccentHue,
@@ -226,6 +227,7 @@ type ChatSurfaceProps = {
   newThreadPicker: boolean;
   showEmptyModePicker?: boolean;
   onPickMode: (mode: api.Mode) => void;
+  onOpenSpec?: (specName: string) => void;
 };
 
 function ChatSurface({
@@ -247,6 +249,7 @@ function ChatSurface({
   newThreadPicker,
   showEmptyModePicker = false,
   onPickMode,
+  onOpenSpec,
 }: ChatSurfaceProps) {
   if (newThreadPicker || showEmptyModePicker) {
     return (
@@ -316,6 +319,8 @@ function ChatSurface({
             variant="default"
             tt="none"
             data-testid="change-chip"
+            onClick={() => onOpenSpec?.(thread.openSpecChangeName!)}
+            style={onOpenSpec ? { cursor: "pointer" } : undefined}
           >
             {thread.openSpecChangeName}
           </Badge>
@@ -756,7 +761,7 @@ export default function App() {
   // Mirrors the open paths for the fs-changed listener, which is registered
   // once — same reason `current` exists for project/thread.
   const openPathsRef = useRef<string[]>([]);
-  openPathsRef.current = tabs.tabs.map((tab) => tab.path);
+  openPathsRef.current = tabs.tabs.map((tab) => tabKey(tab));
   // Read through a ref by `selectProject`, whose identity has to stay stable
   // — the launch-restore effect depends on it, and re-running that would
   // re-select the first project on every render.
@@ -898,6 +903,78 @@ export default function App() {
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
   const filesCache = useRef<Map<string, string[]>>(new Map());
   const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0);
+  // Verify pins from `.project-settings.json` (D8): spec change name → list
+  // of pinned verify command names. Machine-local UI state, loaded on project
+  // switch and after a pin is added/removed.
+  const [verifyPins, setVerifyPins] = useState<Record<string, string[]>>({});
+
+  const reloadVerifyPins = useCallback(async (hash: string) => {
+    try {
+      const raw = JSON.parse(
+        await api.readFileContent(hash, PROJECT_SETTINGS_FILE)
+      );
+      setVerifyPins(raw.verifyPins ?? {});
+    } catch {
+      setVerifyPins({});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (project) reloadVerifyPins(project.hash);
+  }, [project?.hash, reloadVerifyPins]);
+
+  const addVerifyPin = useCallback(
+    async (specName: string, commandName: string) => {
+      if (!project) return;
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(
+          await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE)
+        );
+      } catch {
+        // File missing or malformed — start fresh.
+      }
+      const pins = (parsed.verifyPins ?? {}) as Record<string, string[]>;
+      const current = pins[specName] ?? [];
+      if (!current.includes(commandName)) {
+        pins[specName] = [...current, commandName];
+      }
+      parsed.verifyPins = pins;
+      await api.writeFileContent(
+        project.hash,
+        PROJECT_SETTINGS_FILE,
+        JSON.stringify(parsed, null, 2) + "\n"
+      );
+      setVerifyPins(pins);
+    },
+    [project]
+  );
+
+  const removeVerifyPin = useCallback(
+    async (specName: string, commandName: string) => {
+      if (!project) return;
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(
+          await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE)
+        );
+      } catch {
+        return;
+      }
+      const pins = (parsed.verifyPins ?? {}) as Record<string, string[]>;
+      const current = pins[specName] ?? [];
+      pins[specName] = current.filter((c) => c !== commandName);
+      if (pins[specName].length === 0) delete pins[specName];
+      parsed.verifyPins = pins;
+      await api.writeFileContent(
+        project.hash,
+        PROJECT_SETTINGS_FILE,
+        JSON.stringify(parsed, null, 2) + "\n"
+      );
+      setVerifyPins(pins);
+    },
+    [project]
+  );
   // Bumped when the working tree changes under the diff — an agent turn
   // ending, or a save. The pane used to fetch once on mount and then show
   // that forever.
@@ -1010,9 +1087,13 @@ export default function App() {
 
         // Reopen what was on screen last time. Files that have since gone
         // are dropped silently — an agent deleting one between sessions is
-        // routine here.
+        // routine here. Spec tabs (keyed `spec:<name>`) are reopened without
+        // a filesystem check — they're read from `openspec/changes/` on
+        // render, and a missing change directory just renders an error
+        // inside the tab rather than blocking restore.
         const alive = await Promise.all(
           saved.openPaths.map(async (path) => {
+            if (path.startsWith("spec:")) return path;
             try {
               await api.readFileContent(refreshed.hash, path);
               return path;
@@ -1025,9 +1106,20 @@ export default function App() {
             }
           })
         );
-        for (const path of alive) if (path) tabsRef.current.open(path);
+        for (const path of alive) {
+          if (!path) continue;
+          if (path.startsWith("spec:")) {
+            tabsRef.current.openSpec(path.slice("spec:".length));
+          } else {
+            tabsRef.current.open(path);
+          }
+        }
         if (saved.activePath && alive.includes(saved.activePath)) {
-          tabsRef.current.open(saved.activePath);
+          if (saved.activePath.startsWith("spec:")) {
+            tabsRef.current.openSpec(saved.activePath.slice("spec:".length));
+          } else {
+            tabsRef.current.open(saved.activePath);
+          }
         }
         const found = await api.listThreads(refreshed.hash);
         setThreads(found);
@@ -1059,7 +1151,7 @@ export default function App() {
         kind: "confirm",
         label:
           dirty.length === 1
-            ? `Discard unsaved changes to "${dirty[0].path}"?`
+            ? `Discard unsaved changes to "${tabKey(dirty[0])}"?`
             : `Discard unsaved changes to ${dirty.length} files?`,
         confirmLabel: "Discard",
         onConfirm: () => {
@@ -1129,7 +1221,7 @@ export default function App() {
 
   const closeTab = useCallback(
     (path: string) => {
-      const tab = tabs.tabs.find((t) => t.path === path);
+      const tab = tabs.tabs.find((t) => tabKey(t) === path);
       const forget = () => {
         if (project) evictEditorSession(project.hash, path);
         tabs.close(path);
@@ -1446,7 +1538,7 @@ export default function App() {
     if (!hash || !sessionRef.current) return;
     const next: EditorSession = {
       ...sessionRef.current,
-      openPaths: tabs.tabs.map((tab) => tab.path),
+      openPaths: tabs.tabs.map((tab) => tabKey(tab)),
       activePath: tabs.activePath,
       centerShell,
       diffOpen,
@@ -1847,18 +1939,18 @@ export default function App() {
               Editor
             </button>
           </div>
+          <Tooltip label="Toggle left sidebar (Cmd+\)">
+            <button
+              className="ds-icon-btn"
+              onClick={() => leftRail.toggleCollapsed()}
+              aria-label="Toggle left sidebar"
+              data-testid="toggle-left-sidebar"
+              data-tauri-drag-region-exclude
+            >
+              <SidebarIcon side="left" />
+            </button>
+          </Tooltip>
           <div className="ds-chrome-utils">
-            <Tooltip label="Toggle left sidebar (Cmd+\)">
-              <button
-                className="ds-icon-btn"
-                onClick={() => leftRail.toggleCollapsed()}
-                aria-label="Toggle left sidebar"
-                data-testid="toggle-left-sidebar"
-                data-tauri-drag-region-exclude
-              >
-                <SidebarIcon side="left" />
-              </button>
-            </Tooltip>
             <Tooltip label="Theme: click to cycle auto → light → dark">
               <button
                 className="ds-icon-btn"
@@ -2106,20 +2198,12 @@ export default function App() {
                   activeMdPreview={tabs.activeMdPreview}
                   onToggleMdPreview={toggleMdPreview}
                 />
-                <div className="ds-breadcrumbs" data-testid="breadcrumbs">
-                  <span>{project?.displayName ?? "—"}</span>
-                  {selectedFile && (
-                    <>
-                      <span className="ds-crumb-sep">/</span>
-                      <span className="ds-crumb-active">{selectedFile}</span>
-                    </>
-                  )}
-                </div>
                 {!diffOpen ? (
                   project ? (
                     <FileEditorPane
                       projectHash={project.hash}
                       path={selectedFile}
+                      projectName={project.displayName}
                       onSave={handleFileSave}
                       onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
@@ -2509,6 +2593,7 @@ export default function App() {
                   newThreadPicker={newThreadPicker}
                   showEmptyModePicker={threads.length === 0 && !thread}
                   onPickMode={onPickMode}
+                  onOpenSpec={(name) => tabs.openSpec(name)}
                 />
               </section>
 
@@ -2532,7 +2617,9 @@ export default function App() {
                       {tabs.activeIsDirty && (
                         <span className="ds-tab-dirty">●</span>
                       )}
-                      {basename(selectedFile)}
+                      {tabs.activeTab?.type === "spec"
+                        ? tabs.activeTab.specName
+                        : basename(selectedFile)}
                     </span>
                   ) : (
                     <span className="hint">No file open</span>
@@ -2591,11 +2678,27 @@ export default function App() {
                     </ActionIcon>
                   </Tooltip>
                 </div>
-                {!diffOpen && selectedFile ? (
+                {!diffOpen && tabs.activeTab?.type === "spec" ? (
+                  project &&
+                  tabs.activeTab.type === "spec" &&
+                  (() => {
+                    const specName = tabs.activeTab!.specName;
+                    return (
+                      <SpecChangeTab
+                        projectHash={project.hash}
+                        specName={specName}
+                        verifyPins={verifyPins[specName]}
+                        onAddPin={(cmd) => addVerifyPin(specName, cmd)}
+                        onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}
+                      />
+                    );
+                  })()
+                ) : !diffOpen && selectedFile ? (
                   project && (
                     <FileEditorPane
                       projectHash={project.hash}
                       path={selectedFile}
+                      projectName={project.displayName}
                       onSave={handleFileSave}
                       onDirtyChange={tabs.setDirty}
                       externalChange={externalChange}
@@ -2786,6 +2889,13 @@ export default function App() {
                     ))}
                   </ul>
                 </div>
+                {project && (
+                  <VibeSpecLauncher
+                    projectHash={project.hash}
+                    linkedChange={thread?.openSpecChangeName}
+                    onOpenSpec={(name) => tabs.openSpec(name)}
+                  />
+                )}
                 <div className="ds-vibe-explorer">
                   <Accordion
                     value={vibeExplorerOpen ? "file-explorer" : null}

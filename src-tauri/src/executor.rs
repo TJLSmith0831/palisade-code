@@ -1059,6 +1059,16 @@ pub fn openspec_validate(project_root: &Path) -> Option<bool> {
     Some(openspec_json(project_root, &["validate", "--changes"]).is_some())
 }
 
+/// Archive one change via the openspec CLI. `--yes` skips the interactive
+/// confirmation prompt (the subprocess has no stdin to answer it); `--json`
+/// gives a stable machine-readable stdout. Returns that stdout on success;
+/// `openspec` missing or a non-zero exit becomes an error string.
+pub fn openspec_archive(project_root: &Path, name: &str) -> crate::store::Res<String> {
+    openspec_json(project_root, &["archive", name, "--yes", "--json"]).ok_or_else(|| {
+        format!("`openspec archive {name}` failed — check that `openspec` is on PATH and the change exists")
+    })
+}
+
 /// Names of the OpenSpec change directories in a project — the fallback when
 /// the CLI isn't there to ask.
 pub fn openspec_change_dirs(project_root: &Path) -> Vec<String> {
