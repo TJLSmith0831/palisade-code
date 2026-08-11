@@ -46,35 +46,44 @@ fn project_root(hash: &str) -> Res<PathBuf> {
 }
 
 #[tauri::command]
-fn list_projects() -> Res<Vec<Project>> {
-    store::list_projects(&floo_home())
+async fn list_projects() -> Res<Vec<Project>> {
+    tokio::task::spawn_blocking(|| store::list_projects(&floo_home()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn add_project(path: String) -> Res<Project> {
-    store::add_project(&floo_home(), Path::new(&path))
+async fn add_project(path: String) -> Res<Project> {
+    tokio::task::spawn_blocking(move || store::add_project(&floo_home(), Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn switch_project(app: tauri::AppHandle, harness: tauri::State<'_, Harness>, hash: String) -> Res<Project> {
-    let project = store::touch_project(&floo_home(), &hash)?;
-    start_watcher(&app, &harness, &project);
-    start_fs_watcher(&app, &harness, &project);
-    ensure_graphify_mcp(&app, &harness, &project);
+async fn switch_project(app: tauri::AppHandle, hash: String) -> Res<Project> {
+    tokio::task::spawn_blocking(move || {
+        let project = store::touch_project(&floo_home(), &hash)?;
+        let harness: tauri::State<'_, Harness> = app.state();
+        start_watcher(&app, &harness, &project);
+        start_fs_watcher(&app, &harness, &project);
+        ensure_graphify_mcp(&app, &harness, &project);
 
-    let root = Path::new(&project.root);
-    // Auto-create .project-settings.json (D14/D15) so there's always a real
-    // file to open from the settings button — a no-op once it exists.
-    if let Err(message) = settings::ensure_file(root) {
-        let _ = app.emit("harness-warning", message);
-    }
-    // Surface malformed settings immediately on load, rather than only when
-    // a save or an executor-override lookup happens to re-read them.
-    let (_, warning) = settings::load(root);
-    if let Some(message) = warning {
-        let _ = app.emit("harness-warning", message);
-    }
-    Ok(project)
+        let root = Path::new(&project.root);
+        // Auto-create .project-settings.json (D14/D15) so there's always a real
+        // file to open from the settings button — a no-op once it exists.
+        if let Err(message) = settings::ensure_file(root) {
+            let _ = app.emit("harness-warning", message);
+        }
+        // Surface malformed settings immediately on load, rather than only when
+        // a save or an executor-override lookup happens to re-read them.
+        let (_, warning) = settings::load(root);
+        if let Some(message) = warning {
+            let _ = app.emit("harness-warning", message);
+        }
+        Ok(project)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Idempotently registers Graphify's MCP server (D9/D21) with whichever
@@ -177,56 +186,99 @@ fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>,
 }
 
 #[tauri::command]
-fn rename_project(hash: String, display_name: String) -> Res<Project> {
-    store::rename_project(&floo_home(), &hash, &display_name)
+async fn rename_project(hash: String, display_name: String) -> Res<Project> {
+    tokio::task::spawn_blocking(move || store::rename_project(&floo_home(), &hash, &display_name))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn create_thread(project_hash: String, title: String) -> Res<ThreadMeta> {
-    store::create_thread(&floo_home(), &project_hash, &title)
+async fn create_thread(project_hash: String, title: String) -> Res<ThreadMeta> {
+    tokio::task::spawn_blocking(move || store::create_thread(&floo_home(), &project_hash, &title))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_threads(project_hash: String) -> Res<Vec<ThreadMeta>> {
-    store::list_threads(&floo_home(), &project_hash)
+async fn list_threads(project_hash: String) -> Res<Vec<ThreadMeta>> {
+    tokio::task::spawn_blocking(move || store::list_threads(&floo_home(), &project_hash))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn rename_thread(project_hash: String, thread_id: String, title: String) -> Res<ThreadMeta> {
-    store::rename_thread(&floo_home(), &project_hash, &thread_id, &title)
+async fn rename_thread(
+    project_hash: String,
+    thread_id: String,
+    title: String,
+) -> Res<ThreadMeta> {
+    tokio::task::spawn_blocking(move || {
+        store::rename_thread(&floo_home(), &project_hash, &thread_id, &title)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn set_thread_mode(project_hash: String, thread_id: String, mode: String) -> Res<ThreadMeta> {
-    store::set_thread_mode(&floo_home(), &project_hash, &thread_id, &mode)
+async fn set_thread_mode(
+    project_hash: String,
+    thread_id: String,
+    mode: String,
+) -> Res<ThreadMeta> {
+    tokio::task::spawn_blocking(move || {
+        store::set_thread_mode(&floo_home(), &project_hash, &thread_id, &mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Refused while this thread has an executor turn in flight — deleting the
 /// files a live turn is about to append to would corrupt or orphan state.
 #[tauri::command]
-fn delete_thread(harness: tauri::State<'_, Harness>, project_hash: String, thread_id: String) -> Res<()> {
-    if harness.thread_is_busy(&thread_id) {
-        return Err("This thread has a turn in progress — wait for it to finish before deleting.".into());
-    }
-    store::delete_thread(&floo_home(), &project_hash, &thread_id)
+async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        if harness.thread_is_busy(&thread_id) {
+            return Err(
+                "This thread has a turn in progress — wait for it to finish before deleting.".into(),
+            );
+        }
+        store::delete_thread(&floo_home(), &project_hash, &thread_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn append_message(
+async fn append_message(
     project_hash: String,
     thread_id: String,
     role: String,
     mode: String,
     content: String,
 ) -> Res<Message> {
-    // A direct append is a harness/user write, not a session's output — it has
-    // no producing session to name.
-    store::append_message(&floo_home(), &project_hash, &thread_id, &role, &mode, &content, None)
+    tokio::task::spawn_blocking(move || {
+        // A direct append is a harness/user write, not a session's output — it has
+        // no producing session to name.
+        store::append_message(
+            &floo_home(),
+            &project_hash,
+            &thread_id,
+            &role,
+            &mode,
+            &content,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
-    store::read_thread(&floo_home(), &project_hash, &thread_id)
+async fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
+    tokio::task::spawn_blocking(move || store::read_thread(&floo_home(), &project_hash, &thread_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------- executor handoff
@@ -321,10 +373,7 @@ fn sink_for(app: &tauri::AppHandle, project_hash: &str) -> Arc<dyn Sink> {
     Arc::new(AppSink { app: app.clone(), project_hash: project_hash.to_string() })
 }
 
-/// Cached at startup; re-checked when the caller says the cache may be stale
-/// (the `/go` path does exactly that before committing to a handoff).
-#[tauri::command]
-fn preflight(harness: tauri::State<'_, Harness>, refresh: bool) -> Preflight {
+fn preflight_for_harness(harness: &Harness, refresh: bool) -> Preflight {
     let mut cached = harness.preflight.lock().unwrap();
     if refresh || cached.is_none() {
         *cached = Some(acp_preflight::preflight(
@@ -333,6 +382,18 @@ fn preflight(harness: tauri::State<'_, Harness>, refresh: bool) -> Preflight {
         ));
     }
     cached.clone().expect("preflight just populated")
+}
+
+/// Cached at startup; re-checked when the caller says the cache may be stale
+/// (the `/go` path does exactly that before committing to a handoff).
+#[tauri::command]
+async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
+    Ok(tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        preflight_for_harness(&*harness, refresh)
+    })
+    .await
+    .map_err(|e| e.to_string())?)
 }
 
 /// Pure decision: which executor a project should use, given a preflight
@@ -557,15 +618,20 @@ fn release_idle_sessions(harness: &Harness, thread_id: Option<&str>) {
 /// Called when the user leaves a thread. Sessions mid-turn keep running — that
 /// is the whole point of concurrency; only idle ones are released.
 #[tauri::command]
-fn leave_thread(harness: tauri::State<'_, Harness>, thread_id: String) {
-    release_idle_sessions(&harness, Some(&thread_id));
+async fn leave_thread(app: tauri::AppHandle, thread_id: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        release_idle_sessions(&harness, Some(&thread_id));
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Record the user's turn, then forward it to the executor if one is live.
-#[tauri::command(async)]
-fn send_message(
+#[tauri::command]
+async fn send_message(
     app: tauri::AppHandle,
-    harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
     content: String,
@@ -573,20 +639,27 @@ fn send_message(
     model: Option<String>,
     bypass: bool,
 ) -> Res<Message> {
-    // Recorded before the executor is resolved, deliberately: a chat-only
-    // project still keeps the user's turn. There is no session to name yet.
-    let message = store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
-    if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
-        // Chat-only mode: the turn is still recorded, nothing answers it.
-        return Ok(message);
-    }
-    let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
-    let content = match handoff {
-        Some(prefix) => format!("{prefix}\n\n{content}"),
-        None => content,
-    };
-    send_to(&app, &harness, &project_hash, &id, &content)?;
-    Ok(message)
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        // Recorded before the executor is resolved, deliberately: a chat-only
+        // project still keeps the user's turn. There is no session to name yet.
+        let message =
+            store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
+        if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
+            // Chat-only mode: the turn is still recorded, nothing answers it.
+            return Ok(message);
+        }
+        let (id, handoff) =
+            ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
+        let content = match handoff {
+            Some(prefix) => format!("{prefix}\n\n{content}"),
+            None => content,
+        };
+        send_to(&app, &harness, &project_hash, &id, &content)?;
+        Ok(message)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Send one turn to a named live session.
@@ -603,26 +676,30 @@ fn send_to(
 }
 
 /// `/go`: bring up a write-enabled session on this thread.
-#[tauri::command(async)]
-fn go_mode(
+#[tauri::command]
+async fn go_mode(
     app: tauri::AppHandle,
-    harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
     model: Option<String>,
     bypass: bool,
 ) -> Res<ThreadMeta> {
-    let flight = preflight(harness.clone(), true);
-    if flight.selected.is_none() {
-        return Err("No executor found on PATH — chat-only mode.".into());
-    }
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let flight = preflight_for_harness(&*harness, true);
+        if flight.selected.is_none() {
+            return Err("No executor found on PATH — chat-only mode.".into());
+        }
 
-    let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "go")?;
-    let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
-    // Per amended D19: go-mode has no skill injection. The user toggles
-    // go-mode to let the agent write code; grill-apply is a separate
-    // UI-triggered one-shot in spec-mode.
-    Ok(meta)
+        let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "go")?;
+        let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
+        // Per amended D19: go-mode has no skill injection. The user toggles
+        // go-mode to let the agent write code; grill-apply is a separate
+        // UI-triggered one-shot in spec-mode.
+        Ok(meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Decide what initial prompt (if any) to send when entering spec-mode.
@@ -641,26 +718,39 @@ fn spec_mode_initial_prompt(meta: &store::ThreadMeta) -> Option<String> {
 /// of the explore → propose → apply progression. With an existing change,
 /// it just sets the mode (the user is past explore).
 #[tauri::command]
-fn spec_mode(
+async fn spec_mode(
     app: tauri::AppHandle,
-    harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
     bypass: bool,
 ) -> Res<ThreadMeta> {
-    let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")?;
-    if let Some(prompt) = spec_mode_initial_prompt(&meta) {
-        if preflight(harness.clone(), true).selected.is_some() {
-            let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
-            let prompt = match handoff {
-                Some(prefix) => format!("{prefix}\n\n{prompt}"),
-                None => prompt,
-            };
-            store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt, Some(&id))?;
-            send_to(&app, &harness, &project_hash, &id, &prompt)?;
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")?;
+        if let Some(prompt) = spec_mode_initial_prompt(&meta) {
+            if preflight_for_harness(&*harness, true).selected.is_some() {
+                let (id, handoff) =
+                    ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
+                let prompt = match handoff {
+                    Some(prefix) => format!("{prefix}\n\n{prompt}"),
+                    None => prompt,
+                };
+                store::append_message(
+                    &floo_home(),
+                    &project_hash,
+                    &thread_id,
+                    "user",
+                    "spec",
+                    &prompt,
+                    Some(&id),
+                )?;
+                send_to(&app, &harness, &project_hash, &id, &prompt)?;
+            }
         }
-    }
-    Ok(meta)
+        Ok(meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The thread's executor picker choice (D9/D18). `None` reverts to the
@@ -668,75 +758,88 @@ fn spec_mode(
 /// the next `ensure_session` restarts a live session whose agent no longer
 /// matches.
 #[tauri::command]
-fn set_thread_executor(
+async fn set_thread_executor(
     project_hash: String,
     thread_id: String,
     executor: Option<String>,
     model: Option<String>,
 ) -> Res<ThreadMeta> {
-    store::set_thread_executor(
-        &floo_home(),
-        &project_hash,
-        &thread_id,
-        executor.as_deref(),
-        model.as_deref(),
-    )
+    tokio::task::spawn_blocking(move || {
+        store::set_thread_executor(
+            &floo_home(),
+            &project_hash,
+            &thread_id,
+            executor.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The models an installed agent actually offers, learned by spawning it for
 /// a throwaway `session/new` and reading its `model` config option (D11
 /// reversal — the picker needs a real list, not a hardcoded one).
-#[tauri::command(async)]
-fn list_models(
-    harness: tauri::State<'_, Harness>,
+#[tauri::command]
+async fn list_models(
+    app: tauri::AppHandle,
     project_hash: String,
     agent_id: String,
 ) -> Res<acp_client::ModelState> {
-    let flight = {
-        let mut cached = harness.preflight.lock().unwrap();
-        if cached.is_none() {
-            *cached = Some(acp_preflight::preflight(
-                &store::floo_home(),
-                &|bin| executor::find_on_path(bin),
-            ));
-        }
-        cached.clone().expect("preflight just populated")
-    };
-    let agent = flight
-        .agent(&agent_id)
-        .ok_or_else(|| format!("unknown or unavailable agent `{agent_id}`"))?;
-    let path = agent.path.clone().ok_or("agent has no path")?;
-    let root = project_root(&project_hash)?;
-    acp_client::probe_models(PathBuf::from(path), agent.args.clone(), root)
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let flight = preflight_for_harness(&*harness, false);
+        let agent = flight
+            .agent(&agent_id)
+            .ok_or_else(|| format!("unknown or unavailable agent `{agent_id}`"))?;
+        let path = agent.path.clone().ok_or("agent has no path")?;
+        let root = project_root(&project_hash)?;
+        acp_client::probe_models(PathBuf::from(path), agent.args.clone(), root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// `/propose`: run `grill-propose` in the live spec-mode executor.
-#[tauri::command(async)]
-fn propose(
+#[tauri::command]
+async fn propose(
     app: tauri::AppHandle,
-    harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
     model: Option<String>,
     bypass: bool,
 ) -> Res<()> {
-    let root = project_root(&project_hash)?;
-    let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
-    let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
-    let prompt = match handoff {
-        Some(prefix) => format!("{prefix}\n\n{prompt}"),
-        None => prompt,
-    };
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let root = project_root(&project_hash)?;
+        let (id, handoff) =
+            ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
+        let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
+        let prompt = match handoff {
+            Some(prefix) => format!("{prefix}\n\n{prompt}"),
+            None => prompt,
+        };
 
-    *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
-        project_hash: project_hash.clone(),
-        thread_id: thread_id.clone(),
-        before: executor::openspec_changes(&root),
-        project_root: root,
-    });
+        *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
+            project_hash: project_hash.clone(),
+            thread_id: thread_id.clone(),
+            before: executor::openspec_changes(&root),
+            project_root: root,
+        });
 
-    store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt, Some(&id))?;
-    send_to(&app, &harness, &project_hash, &id, &prompt)
+        store::append_message(
+            &floo_home(),
+            &project_hash,
+            &thread_id,
+            "user",
+            "spec",
+            &prompt,
+            Some(&id),
+        )?;
+        send_to(&app, &harness, &project_hash, &id, &prompt)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Build the grill-apply prompt for a one-shot injection in spec-mode.
@@ -751,55 +854,79 @@ fn apply_skill_prompt(change: &str) -> String {
 /// The user clicks "Apply" after the proposal artifacts are complete; this
 /// starts (or reuses) a spec-mode session and sends the grill-apply prompt.
 #[tauri::command]
-fn apply_skill(
+async fn apply_skill(
     app: tauri::AppHandle,
-    harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
     bypass: bool,
 ) -> Res<()> {
-    let meta = store::list_threads(&floo_home(), &project_hash)?
-        .into_iter()
-        .find(|t| t.id == thread_id)
-        .ok_or("thread not found")?;
-    let change = meta.open_spec_change_name.ok_or("no open spec change — apply requires a proposal")?;
-    let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
-    let prompt = apply_skill_prompt(&change);
-    let prompt = match handoff {
-        Some(prefix) => format!("{prefix}\n\n{prompt}"),
-        None => prompt,
-    };
-    store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt, Some(&id))?;
-    send_to(&app, &harness, &project_hash, &id, &prompt)
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let meta = store::list_threads(&floo_home(), &project_hash)?
+            .into_iter()
+            .find(|t| t.id == thread_id)
+            .ok_or("thread not found")?;
+        let change = meta
+            .open_spec_change_name
+            .ok_or("no open spec change — apply requires a proposal")?;
+        let (id, handoff) =
+            ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
+        let prompt = apply_skill_prompt(&change);
+        let prompt = match handoff {
+            Some(prefix) => format!("{prefix}\n\n{prompt}"),
+            None => prompt,
+        };
+        store::append_message(
+            &floo_home(),
+            &project_hash,
+            &thread_id,
+            "user",
+            "spec",
+            &prompt,
+            Some(&id),
+        )?;
+        send_to(&app, &harness, &project_hash, &id, &prompt)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// `change_status`: whether a change's planning artifacts are all complete.
 /// Returns `true` when `openspec status` reports `isComplete: true`, `false`
 /// when it reports `false`, and `null` when `openspec` or the change is missing.
 #[tauri::command]
-fn change_status(
-    harness: tauri::State<'_, Harness>,
+async fn change_status(
     project_hash: String,
     change_name: String,
 ) -> Res<Option<bool>> {
-    let root = project_root(&project_hash)?;
-    Ok(executor::openspec_change_status(&root, &change_name))
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        Ok(executor::openspec_change_status(&root, &change_name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Stop one session by id, or every live session when none is named.
 #[tauri::command]
-fn stop_executor(harness: tauri::State<'_, Harness>, session_id: Option<String>) {
-    let targets: Vec<(String, String)> = harness
-        .acp_sessions
-        .lock()
-        .unwrap()
-        .values()
-        .filter(|s| session_id.as_ref().is_none_or(|wanted| *wanted == s.id))
-        .map(|s| (s.id.clone(), s.thread_id.clone()))
-        .collect();
-    for (id, thread_id) in targets {
-        end_session(&harness, &thread_id, &id, "cancelled");
-    }
+async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let targets: Vec<(String, String)> = harness
+            .acp_sessions
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| session_id.as_ref().is_none_or(|wanted| *wanted == s.id))
+            .map(|s| (s.id.clone(), s.thread_id.clone()))
+            .collect();
+        for (id, thread_id) in targets {
+            end_session(&harness, &thread_id, &id, "cancelled");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// What each live session is doing.
@@ -814,33 +941,43 @@ struct SessionStatus {
 }
 
 #[tauri::command]
-fn executor_status(harness: tauri::State<'_, Harness>) -> Vec<SessionStatus> {
-    let mut statuses: Vec<SessionStatus> = harness
-        .acp_sessions
-        .lock()
-        .unwrap()
-        .values()
-        .map(|s| SessionStatus {
-            id: s.id.clone(),
-            thread_id: s.thread_id.clone(),
-            agent_id: s.agent_id.clone(),
-            mode: s.mode.clone(),
-            busy: s.is_busy(),
-        })
-        .collect();
-    statuses.sort_by(|a, b| a.id.cmp(&b.id));
-    statuses
+async fn executor_status(app: tauri::AppHandle) -> Res<Vec<SessionStatus>> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let mut statuses: Vec<SessionStatus> = harness
+            .acp_sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|s| SessionStatus {
+                id: s.id.clone(),
+                thread_id: s.thread_id.clone(),
+                agent_id: s.agent_id.clone(),
+                mode: s.mode.clone(),
+                busy: s.is_busy(),
+            })
+            .collect();
+        statuses.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(statuses)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Every session ever run against a thread.
 #[tauri::command]
-fn list_sessions(
-    harness: tauri::State<'_, Harness>,
+async fn list_sessions(
+    app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
 ) -> Res<Vec<store::SessionRecord>> {
-    let live: Vec<String> = harness.acp_sessions.lock().unwrap().keys().cloned().collect();
-    store::close_stale_sessions(&floo_home(), &project_hash, &thread_id, &live)
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let live: Vec<String> = harness.acp_sessions.lock().unwrap().keys().cloned().collect();
+        store::close_stale_sessions(&floo_home(), &project_hash, &thread_id, &live)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------------ verification
@@ -851,71 +988,81 @@ fn list_sessions(
 /// the command thread would freeze the UI. The result arrives as a
 /// `verification-finished` event, the same shape `pump` already uses.
 #[tauri::command]
-fn run_verify(
+async fn run_verify(
     app: tauri::AppHandle,
     project_hash: String,
     name: String,
     thread_id: Option<String>,
     session_id: Option<String>,
 ) -> Res<()> {
-    let root = project_root(&project_hash)?;
-    let (settings, _) = settings::load(&root);
-    // Fail fast on an unknown name, before spawning a thread that can only
-    // report the same error later and less visibly.
-    if !settings.verify.contains_key(&name) {
-        return Err(format!("no verify command named `{name}` in .project-settings.json"));
-    }
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let (settings, _) = settings::load(&root);
+        // Fail fast on an unknown name, before spawning a thread that can only
+        // report the same error later and less visibly.
+        if !settings.verify.contains_key(&name) {
+            return Err(format!("no verify command named `{name}` in .project-settings.json"));
+        }
 
-    std::thread::spawn(move || {
-        let head = git_bin().ok().and_then(|bin| git::rev_parse_head(&bin, &root));
-        let outcome = settings::run_verify(&settings, &root, &name);
-        let run = match outcome {
-            Ok(outcome) => store::VerificationRun {
-                id: ulid::Ulid::new().to_string(),
-                project_hash: project_hash.clone(),
-                thread_id,
-                session_id,
-                name,
-                command: outcome.command,
-                exit_code: outcome.exit_code,
-                output_tail: outcome.output_tail,
-                git_head: head,
-                at: chrono::Utc::now().to_rfc3339(),
-            },
-            // A command that couldn't start is a failed verification, not a
-            // missing one — recording nothing would leave it looking untested.
-            Err(message) => store::VerificationRun {
-                id: ulid::Ulid::new().to_string(),
-                project_hash: project_hash.clone(),
-                thread_id,
-                session_id,
-                name,
-                command: String::new(),
-                exit_code: -1,
-                output_tail: message,
-                git_head: head,
-                at: chrono::Utc::now().to_rfc3339(),
-            },
-        };
-        let _ = store::append_verification(&floo_home(), &run);
-        let _ = app.emit("verification-finished", &run);
-    });
-    Ok(())
+        std::thread::spawn(move || {
+            let head = git_bin().ok().and_then(|bin| git::rev_parse_head(&bin, &root));
+            let outcome = settings::run_verify(&settings, &root, &name);
+            let run = match outcome {
+                Ok(outcome) => store::VerificationRun {
+                    id: ulid::Ulid::new().to_string(),
+                    project_hash: project_hash.clone(),
+                    thread_id,
+                    session_id,
+                    name,
+                    command: outcome.command,
+                    exit_code: outcome.exit_code,
+                    output_tail: outcome.output_tail,
+                    git_head: head,
+                    at: chrono::Utc::now().to_rfc3339(),
+                },
+                // A command that couldn't start is a failed verification, not a
+                // missing one — recording nothing would leave it looking untested.
+                Err(message) => store::VerificationRun {
+                    id: ulid::Ulid::new().to_string(),
+                    project_hash: project_hash.clone(),
+                    thread_id,
+                    session_id,
+                    name,
+                    command: String::new(),
+                    exit_code: -1,
+                    output_tail: message,
+                    git_head: head,
+                    at: chrono::Utc::now().to_rfc3339(),
+                },
+            };
+            let _ = store::append_verification(&floo_home(), &run);
+            let _ = app.emit("verification-finished", &run);
+        });
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_verifications(project_hash: String) -> Res<Vec<store::VerificationRun>> {
-    store::read_verifications(&floo_home(), &project_hash)
+async fn list_verifications(project_hash: String) -> Res<Vec<store::VerificationRun>> {
+    tokio::task::spawn_blocking(move || store::read_verifications(&floo_home(), &project_hash))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// The names a project has configured, so the UI can offer them.
 #[tauri::command]
-fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
-    let root = project_root(&project_hash)?;
-    let mut commands: Vec<(String, String)> =
-        settings::load(&root).0.verify.into_iter().collect();
-    commands.sort();
-    Ok(commands)
+async fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let mut commands: Vec<(String, String)> =
+            settings::load(&root).0.verify.into_iter().collect();
+        commands.sort();
+        Ok(commands)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------------ attribution
@@ -938,41 +1085,46 @@ struct Attribution {
 }
 
 #[tauri::command]
-fn session_attribution(
-    harness: tauri::State<'_, Harness>,
+async fn session_attribution(
+    app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
     session_id: String,
 ) -> Res<Attribution> {
-    let home = floo_home();
-    let record = store::read_sessions(&home, &project_hash, &thread_id)?
-        .into_iter()
-        .find(|r| r.id == session_id)
-        .ok_or_else(|| format!("unknown session: {session_id}"))?;
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let home = floo_home();
+        let record = store::read_sessions(&home, &project_hash, &thread_id)?
+            .into_iter()
+            .find(|r| r.id == session_id)
+            .ok_or_else(|| format!("unknown session: {session_id}"))?;
 
-    let root = project_root(&project_hash)?;
-    let bin = git_bin().ok();
-    let committed = match (&bin, &record.git_head_before, &record.git_head_after) {
-        (Some(bin), Some(before), Some(after)) if before != after => {
-            git::changed_between(bin, &root, before, after).unwrap_or_default()
-        }
-        _ => vec![],
-    };
-    let uncommitted = {
-        let now = bin.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)).unwrap_or_default();
-        let before = record.dirty_before.clone().unwrap_or_default();
-        now.into_iter().filter(|path| !before.contains(path)).collect()
-    };
+        let root = project_root(&project_hash)?;
+        let bin = git_bin().ok();
+        let committed = match (&bin, &record.git_head_before, &record.git_head_after) {
+            (Some(bin), Some(before), Some(after)) if before != after => {
+                git::changed_between(bin, &root, before, after).unwrap_or_default()
+            }
+            _ => vec![],
+        };
+        let uncommitted = {
+            let now = bin.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)).unwrap_or_default();
+            let before = record.dirty_before.clone().unwrap_or_default();
+            now.into_iter().filter(|path| !before.contains(path)).collect()
+        };
 
-    let concurrent = harness.sessions_in_project(&project_hash).max(1);
+        let concurrent = harness.sessions_in_project(&project_hash).max(1);
 
-    Ok(Attribution {
-        session_id,
-        committed,
-        uncommitted,
-        concurrent_sessions: concurrent,
-        ambiguous: concurrent > 1,
+        Ok(Attribution {
+            session_id,
+            committed,
+            uncommitted,
+            concurrent_sessions: concurrent,
+            ambiguous: concurrent > 1,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---------------------------------------------------------- spec reference
@@ -982,32 +1134,57 @@ fn session_attribution(
 /// `~/.floo-network` (task 4.5). Floo's only durable spec state stays the one
 /// reference string on `ThreadMeta`.
 #[tauri::command]
-fn list_spec_changes(project_hash: String) -> Res<Vec<executor::SpecChange>> {
-    Ok(executor::openspec_list(&project_root(&project_hash)?))
+async fn list_spec_changes(project_hash: String) -> Res<Vec<executor::SpecChange>> {
+    tokio::task::spawn_blocking(move || Ok(executor::openspec_list(&project_root(&project_hash)?)))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn show_spec_change(project_hash: String, name: String) -> Res<Option<serde_json::Value>> {
-    Ok(executor::openspec_show(&project_root(&project_hash)?, &name))
+async fn show_spec_change(
+    project_hash: String,
+    name: String,
+) -> Res<Option<serde_json::Value>> {
+    tokio::task::spawn_blocking(move || {
+        Ok(executor::openspec_show(&project_root(&project_hash)?, &name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// `None` when `openspec` isn't installed — "we can't tell", which is a
 /// different answer from "invalid" and must not be rendered as one.
 #[tauri::command]
-fn validate_spec_changes(project_hash: String) -> Res<Option<bool>> {
-    Ok(executor::openspec_validate(&project_root(&project_hash)?))
+async fn validate_spec_changes(project_hash: String) -> Res<Option<bool>> {
+    tokio::task::spawn_blocking(move || {
+        Ok(executor::openspec_validate(&project_root(&project_hash)?))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn archive_spec_change(project_hash: String, name: String) -> Res<String> {
-    executor::openspec_archive(&project_root(&project_hash)?, &name)
+async fn archive_spec_change(project_hash: String, name: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        executor::openspec_archive(&project_root(&project_hash)?, &name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Set the thread's spec link by hand — how the user resolves the ambiguity
 /// `spec-link-ambiguous` reports.
 #[tauri::command]
-fn set_spec_change(project_hash: String, thread_id: String, name: Option<String>) -> Res<ThreadMeta> {
-    store::set_open_spec_change(&floo_home(), &project_hash, &thread_id, name.as_deref())
+async fn set_spec_change(
+    project_hash: String,
+    thread_id: String,
+    name: Option<String>,
+) -> Res<ThreadMeta> {
+    tokio::task::spawn_blocking(move || {
+        store::set_open_spec_change(&floo_home(), &project_hash, &thread_id, name.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------------- graphify
@@ -1023,45 +1200,61 @@ fn graphify_bin() -> Res<PathBuf> {
 /// command only serves the human-facing GraphPane, so its output is just
 /// written to disk and returned, never injected into a thread.
 #[tauri::command]
-fn run_graphify(
+async fn run_graphify(
     project_hash: String,
     subpath: String,
     options: integrations::GraphifyOptions,
 ) -> Res<integrations::GraphifyRun> {
-    let root = project_root(&project_hash)?;
-    // Graphify maps the active project, never the harness — and never
-    // anywhere outside the project the user selected.
-    let target = if subpath.trim().is_empty() {
-        root.clone()
-    } else {
-        let joined = root.join(subpath.trim());
-        let resolved = std::fs::canonicalize(&joined)
-            .map_err(|err| format!("no such directory in this project: {} ({err})", joined.display()))?;
-        if !resolved.starts_with(std::fs::canonicalize(&root).unwrap_or(root.clone())) {
-            return Err("Graphify target must stay inside the active project.".into());
-        }
-        resolved
-    };
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        // Graphify maps the active project, never the harness — and never
+        // anywhere outside the project the user selected.
+        let target = if subpath.trim().is_empty() {
+            root.clone()
+        } else {
+            let joined = root.join(subpath.trim());
+            let resolved = std::fs::canonicalize(&joined)
+                .map_err(|err| format!("no such directory in this project: {} ({err})", joined.display()))?;
+            if !resolved.starts_with(std::fs::canonicalize(&root).unwrap_or(root.clone())) {
+                return Err("Graphify target must stay inside the active project.".into());
+            }
+            resolved
+        };
 
-    let out_dir = integrations::default_out_dir(&root);
-    integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)
+        let out_dir = integrations::default_out_dir(&root);
+        integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Load a previous run's output without re-running the extract.
 #[tauri::command]
-fn load_graphify(project_hash: String) -> Res<integrations::GraphifyRun> {
-    integrations::read_run(&integrations::default_out_dir(&project_root(&project_hash)?))
+async fn load_graphify(project_hash: String) -> Res<integrations::GraphifyRun> {
+    tokio::task::spawn_blocking(move || {
+        integrations::read_run(&integrations::default_out_dir(&project_root(&project_hash)?))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn query_graphify(project_hash: String, subcommand: String, args: Vec<String>) -> Res<String> {
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    integrations::graphify_query(
-        &graphify_bin()?,
-        &subcommand,
-        &refs,
-        &integrations::default_out_dir(&project_root(&project_hash)?),
-    )
+async fn query_graphify(
+    project_hash: String,
+    subcommand: String,
+    args: Vec<String>,
+) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        integrations::graphify_query(
+            &graphify_bin()?,
+            &subcommand,
+            &refs,
+            &integrations::default_out_dir(&project_root(&project_hash)?),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------------- terminal
@@ -1072,60 +1265,80 @@ fn query_graphify(project_hash: String, subcommand: String, args: Vec<String>) -
 /// panel re-attaches to the same session (spec: "single terminal instance")
 /// instead of spawning a second one.
 #[tauri::command]
-fn terminal_spawn(
+async fn terminal_spawn(
     app: tauri::AppHandle,
-    harness: tauri::State<'_, Harness>,
     project_hash: String,
 ) -> Res<Option<String>> {
-    // The display name of a project whose shell this call is about to kill.
-    // Single terminal instance is deliberate (D-spec), but it used to happen
-    // silently: a build or dev server running in another project's shell
-    // died on project switch with nothing said about it.
-    let replaced = {
-        let existing = harness.terminal.lock().unwrap();
-        match existing.as_ref() {
-            Some((hash, _)) if hash == &project_hash => return Ok(None),
-            Some((hash, _)) => store::list_projects(&floo_home())
-                .ok()
-                .and_then(|projects| {
-                    projects
-                        .into_iter()
-                        .find(|p| &p.hash == hash)
-                        .map(|p| p.display_name)
-                }),
-            None => None,
-        }
-    };
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        // The display name of a project whose shell this call is about to kill.
+        // Single terminal instance is deliberate (D-spec), but it used to happen
+        // silently: a build or dev server running in another project's shell
+        // died on project switch with nothing said about it.
+        let replaced = {
+            let existing = harness.terminal.lock().unwrap();
+            match existing.as_ref() {
+                Some((hash, _)) if hash == &project_hash => return Ok(None),
+                Some((hash, _)) => store::list_projects(&floo_home())
+                    .ok()
+                    .and_then(|projects| {
+                        projects
+                            .into_iter()
+                            .find(|p| &p.hash == hash)
+                            .map(|p| p.display_name)
+                    }),
+                None => None,
+            }
+        };
 
-    let root = project_root(&project_hash)?;
-    let app_output = app.clone();
-    let term = terminal::Terminal::spawn(&root, move |bytes| {
-        use base64::prelude::*;
-        let _ = app_output.emit("terminal-output", BASE64_STANDARD.encode(&bytes));
+        let root = project_root(&project_hash)?;
+        let app_output = app.clone();
+        let term = terminal::Terminal::spawn(&root, move |bytes| {
+            use base64::prelude::*;
+            let _ = app_output.emit("terminal-output", BASE64_STANDARD.encode(&bytes));
+        })
+        .map_err(|err| format!("start terminal: {err}"))?;
+        // Assigning here drops the previous Terminal, whose Drop kills its shell.
+        *harness.terminal.lock().unwrap() = Some((project_hash, term));
+        Ok(replaced)
     })
-    .map_err(|err| format!("start terminal: {err}"))?;
-    // Assigning here drops the previous Terminal, whose Drop kills its shell.
-    *harness.terminal.lock().unwrap() = Some((project_hash, term));
-    Ok(replaced)
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn terminal_input(harness: tauri::State<'_, Harness>, data: String) -> Res<()> {
-    let guard = harness.terminal.lock().unwrap();
-    let (_, term) = guard.as_ref().ok_or("no terminal running")?;
-    term.write(data.as_bytes())
+async fn terminal_input(app: tauri::AppHandle, data: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let guard = harness.terminal.lock().unwrap();
+        let (_, term) = guard.as_ref().ok_or("no terminal running")?;
+        term.write(data.as_bytes())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn terminal_resize(harness: tauri::State<'_, Harness>, cols: u16, rows: u16) -> Res<()> {
-    let guard = harness.terminal.lock().unwrap();
-    let (_, term) = guard.as_ref().ok_or("no terminal running")?;
-    term.resize(cols, rows)
+async fn terminal_resize(app: tauri::AppHandle, cols: u16, rows: u16) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let guard = harness.terminal.lock().unwrap();
+        let (_, term) = guard.as_ref().ok_or("no terminal running")?;
+        term.resize(cols, rows)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn terminal_kill(harness: tauri::State<'_, Harness>) {
-    *harness.terminal.lock().unwrap() = None;
+async fn terminal_kill(app: tauri::AppHandle) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        *harness.terminal.lock().unwrap() = None;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------------------- git
@@ -1136,93 +1349,157 @@ fn git_bin() -> Res<PathBuf> {
 }
 
 #[tauri::command]
-fn git_status(project_hash: String) -> Res<Vec<git::FileStatus>> {
-    git::status(&git_bin()?, &project_root(&project_hash)?)
+async fn git_status(project_hash: String) -> Res<Vec<git::FileStatus>> {
+    tokio::task::spawn_blocking(move || git::status(&git_bin()?, &project_root(&project_hash)?))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_working_diff(project_hash: String) -> Res<String> {
-    git::working_tree_diff(&git_bin()?, &project_root(&project_hash)?)
+async fn git_working_diff(project_hash: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        git::working_tree_diff(&git_bin()?, &project_root(&project_hash)?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_staged_diff(project_hash: String) -> Res<String> {
-    git::staged_diff(&git_bin()?, &project_root(&project_hash)?)
+async fn git_staged_diff(project_hash: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        git::staged_diff(&git_bin()?, &project_root(&project_hash)?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_stage_hunk(project_hash: String, patch: String) -> Res<()> {
-    git::stage_hunk(&git_bin()?, &project_root(&project_hash)?, &patch)
+async fn git_stage_hunk(project_hash: String, patch: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::stage_hunk(&git_bin()?, &project_root(&project_hash)?, &patch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_unstage_hunk(project_hash: String, patch: String) -> Res<()> {
-    git::unstage_hunk(&git_bin()?, &project_root(&project_hash)?, &patch)
+async fn git_unstage_hunk(project_hash: String, patch: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::unstage_hunk(&git_bin()?, &project_root(&project_hash)?, &patch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_stage_file(project_hash: String, path: String) -> Res<()> {
-    git::stage_file(&git_bin()?, &project_root(&project_hash)?, &path)
+async fn git_stage_file(project_hash: String, path: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::stage_file(&git_bin()?, &project_root(&project_hash)?, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_commit(project_hash: String, message: String) -> Res<()> {
-    git::commit(&git_bin()?, &project_root(&project_hash)?, &message)
+async fn git_commit(project_hash: String, message: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::commit(&git_bin()?, &project_root(&project_hash)?, &message)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_branches(project_hash: String) -> Res<Vec<git::BranchInfo>> {
-    git::list_branches(&git_bin()?, &project_root(&project_hash)?)
+async fn git_branches(project_hash: String) -> Res<Vec<git::BranchInfo>> {
+    tokio::task::spawn_blocking(move || {
+        git::list_branches(&git_bin()?, &project_root(&project_hash)?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_checkout_branch(project_hash: String, name: String) -> Res<()> {
-    git::checkout_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+async fn git_checkout_branch(project_hash: String, name: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::checkout_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_create_branch(project_hash: String, name: String) -> Res<()> {
-    git::create_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+async fn git_create_branch(project_hash: String, name: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::create_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_delete_branch(project_hash: String, name: String) -> Res<()> {
-    git::delete_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+async fn git_delete_branch(project_hash: String, name: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::delete_branch(&git_bin()?, &project_root(&project_hash)?, &name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_fetch(project_hash: String) -> Res<()> {
-    git::fetch(&git_bin()?, &project_root(&project_hash)?)
+async fn git_fetch(project_hash: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || git::fetch(&git_bin()?, &project_root(&project_hash)?))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_pull(project_hash: String) -> Res<String> {
-    git::pull(&git_bin()?, &project_root(&project_hash)?)
+async fn git_pull(project_hash: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || git::pull(&git_bin()?, &project_root(&project_hash)?))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_push(project_hash: String) -> Res<String> {
-    git::push(&git_bin()?, &project_root(&project_hash)?)
+async fn git_push(project_hash: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || git::push(&git_bin()?, &project_root(&project_hash)?))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_ahead_behind(project_hash: String) -> Res<Option<(u32, u32)>> {
-    git::ahead_behind(&git_bin()?, &project_root(&project_hash)?)
+async fn git_ahead_behind(project_hash: String) -> Res<Option<(u32, u32)>> {
+    tokio::task::spawn_blocking(move || {
+        git::ahead_behind(&git_bin()?, &project_root(&project_hash)?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_discard_file(project_hash: String, path: String, untracked: bool) -> Res<()> {
-    git::discard_file(&git_bin()?, &project_root(&project_hash)?, &path, untracked)
+async fn git_discard_file(project_hash: String, path: String, untracked: bool) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::discard_file(&git_bin()?, &project_root(&project_hash)?, &path, untracked)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_is_repo(project_hash: String) -> Res<bool> {
-    Ok(git::is_git_repo(&git_bin()?, &project_root(&project_hash)?))
+async fn git_is_repo(project_hash: String) -> Res<bool> {
+    tokio::task::spawn_blocking(move || {
+        Ok(git::is_git_repo(&git_bin()?, &project_root(&project_hash)?))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_init(project_hash: String) -> Res<()> {
-    git::init_repo(&git_bin()?, &project_root(&project_hash)?)
+async fn git_init(project_hash: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::init_repo(&git_bin()?, &project_root(&project_hash)?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ------------------------------------------------------------- file tree
@@ -1244,70 +1521,82 @@ pub(crate) fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
 }
 
 #[tauri::command]
-fn list_directory(project_hash: String, relative_path: String, include_hidden: bool) -> Res<Vec<DirEntry>> {
-    let root = project_root(&project_hash)?;
-    let target = if relative_path.is_empty() {
-        root.clone()
-    } else {
-        let joined = root.join(&relative_path);
-        std::fs::canonicalize(&joined)
-            .map_err(|err| format!("no such directory: {} ({err})", joined.display()))?
-    };
-    if !target.starts_with(&root) {
-        return Err("path must stay inside the project".into());
-    }
-    let mut entries: Vec<DirEntry> = Vec::new();
-    for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
-        let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if should_skip_entry(&name, include_hidden) {
-            continue;
+async fn list_directory(
+    project_hash: String,
+    relative_path: String,
+    include_hidden: bool,
+) -> Res<Vec<DirEntry>> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let target = if relative_path.is_empty() {
+            root.clone()
+        } else {
+            let joined = root.join(&relative_path);
+            std::fs::canonicalize(&joined)
+                .map_err(|err| format!("no such directory: {} ({err})", joined.display()))?
+        };
+        if !target.starts_with(&root) {
+            return Err("path must stay inside the project".into());
         }
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let full = entry.path();
-        let path = full
-            .strip_prefix(&root)
-            .unwrap_or(&full)
-            .to_string_lossy()
-            .to_string();
-        entries.push(DirEntry { name, is_dir, path });
-    }
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
-    Ok(entries)
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
+            let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if should_skip_entry(&name, include_hidden) {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let full = entry.path();
+            let path = full
+                .strip_prefix(&root)
+                .unwrap_or(&full)
+                .to_string_lossy()
+                .to_string();
+            entries.push(DirEntry { name, is_dir, path });
+        }
+        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Recursive file listing for the fuzzy file-open palette (task 5.2). Applies
 /// the same skip rules as `list_directory` (dotfiles, node_modules, target)
 /// rather than a full `.gitignore` parser — matches what the tree already hides.
 #[tauri::command]
-fn list_all_files(project_hash: String) -> Res<Vec<String>> {
-    let root = project_root(&project_hash)?;
-    let mut files = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        let Ok(read_dir) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in read_dir.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if should_skip_entry(&name, false) {
+async fn list_all_files(project_hash: String) -> Res<Vec<String>> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let mut files = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(read_dir) = std::fs::read_dir(&dir) else {
                 continue;
-            }
-            let full = entry.path();
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                stack.push(full);
-            } else {
-                let rel = full
-                    .strip_prefix(&root)
-                    .unwrap_or(&full)
-                    .to_string_lossy()
-                    .to_string();
-                files.push(rel);
+            };
+            for entry in read_dir.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if should_skip_entry(&name, false) {
+                    continue;
+                }
+                let full = entry.path();
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    stack.push(full);
+                } else {
+                    let rel = full
+                        .strip_prefix(&root)
+                        .unwrap_or(&full)
+                        .to_string_lossy()
+                        .to_string();
+                    files.push(rel);
+                }
             }
         }
-    }
-    files.sort();
-    Ok(files)
+        files.sort();
+        Ok(files)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1445,13 +1734,17 @@ fn search_text_in(root: &Path, query: &str, options: SearchOptions) -> Res<TextS
 }
 
 #[tauri::command]
-fn search_text(
+async fn search_text(
     project_hash: String,
     query: String,
     options: Option<SearchOptions>,
 ) -> Res<TextSearchResult> {
-    let root = project_root(&project_hash)?;
-    search_text_in(&root, &query, options.unwrap_or_default())
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        search_text_in(&root, &query, options.unwrap_or_default())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Resolves `relative_path` against `root`, requiring it to already exist
@@ -1492,33 +1785,41 @@ fn looks_binary(path: &Path) -> bool {
 }
 
 #[tauri::command]
-fn read_file_content(project_hash: String, relative_path: String) -> Res<String> {
-    let root = project_root(&project_hash)?;
-    let resolved = resolve_existing_path(&root, &relative_path)?;
+async fn read_file_content(project_hash: String, relative_path: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let resolved = resolve_existing_path(&root, &relative_path)?;
 
-    let size = std::fs::metadata(&resolved)
-        .map_err(|err| format!("cannot read file: {err}"))?
-        .len();
-    if size > MAX_EDITABLE_BYTES {
-        return Err(format!("{TOO_LARGE_PREFIX} {size}"));
-    }
-    if looks_binary(&resolved) {
-        return Err(BINARY_PREFIX.to_string());
-    }
+        let size = std::fs::metadata(&resolved)
+            .map_err(|err| format!("cannot read file: {err}"))?
+            .len();
+        if size > MAX_EDITABLE_BYTES {
+            return Err(format!("{TOO_LARGE_PREFIX} {size}"));
+        }
+        if looks_binary(&resolved) {
+            return Err(BINARY_PREFIX.to_string());
+        }
 
-    std::fs::read_to_string(&resolved)
-        .map_err(|err| format!("cannot read file: {err}"))
+        std::fs::read_to_string(&resolved)
+            .map_err(|err| format!("cannot read file: {err}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Reads a file as base64 for binary previews (images/video/gif) the editor
 /// can't render as text.
 #[tauri::command]
-fn read_file_base64(project_hash: String, relative_path: String) -> Res<String> {
-    use base64::prelude::*;
-    let root = project_root(&project_hash)?;
-    let resolved = resolve_existing_path(&root, &relative_path)?;
-    let bytes = std::fs::read(&resolved).map_err(|err| format!("cannot read file: {err}"))?;
-    Ok(BASE64_STANDARD.encode(&bytes))
+async fn read_file_base64(project_hash: String, relative_path: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        use base64::prelude::*;
+        let root = project_root(&project_hash)?;
+        let resolved = resolve_existing_path(&root, &relative_path)?;
+        let bytes = std::fs::read(&resolved).map_err(|err| format!("cannot read file: {err}"))?;
+        Ok(BASE64_STANDARD.encode(&bytes))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Resolves `relative_path` against `root` for creating a file or directory
@@ -1570,24 +1871,29 @@ pub(crate) const CONFLICT_PREFIX: &str = "CONFLICT:";
 /// yet. Callers that legitimately write blind (creating a file, seeding
 /// `.project-settings.json`) pass `None` and are unaffected.
 #[tauri::command]
-fn write_file_content(
-    harness: tauri::State<'_, Harness>,
+async fn write_file_content(
+    app: tauri::AppHandle,
     project_hash: String,
     relative_path: String,
     content: String,
     expected_previous: Option<String>,
 ) -> Res<Option<String>> {
-    let root = project_root(&project_hash)?;
-    let resolved = resolve_creatable_path(&root, &relative_path)?;
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let root = project_root(&project_hash)?;
+        let resolved = resolve_creatable_path(&root, &relative_path)?;
 
-    check_not_stale(&resolved, expected_previous.as_deref(), &relative_path)?;
+        check_not_stale(&resolved, expected_previous.as_deref(), &relative_path)?;
 
-    // Recorded before the write so the event can't beat us to the watcher.
-    note_self_write(&harness, &resolved);
-    std::fs::write(&resolved, content).map_err(|err| format!("cannot write file: {err}"))?;
+        // Recorded before the write so the event can't beat us to the watcher.
+        note_self_write(&harness, &resolved);
+        std::fs::write(&resolved, content).map_err(|err| format!("cannot write file: {err}"))?;
 
-    let (settings, _) = settings::load(&root);
-    Ok(settings::run_format_on_save(&settings, &root, &relative_path))
+        let (settings, _) = settings::load(&root);
+        Ok(settings::run_format_on_save(&settings, &root, &relative_path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Refuses a delete that would take the whole project with it. An empty
@@ -1638,48 +1944,62 @@ fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Path) {
 /// so this is also how "reorganize" works). Refuses to clobber an existing
 /// file at the destination.
 #[tauri::command]
-fn rename_path(
-    harness: tauri::State<'_, Harness>,
+async fn rename_path(
+    app: tauri::AppHandle,
     project_hash: String,
     from: String,
     to: String,
 ) -> Res<()> {
-    let root = project_root(&project_hash)?;
-    let source = resolve_existing_path(&root, &from)?;
-    let target = resolve_creatable_path(&root, &to)?;
-    if target.exists() {
-        return Err(format!("{to} already exists"));
-    }
-    note_self_write(&harness, &source);
-    note_self_write(&harness, &target);
-    std::fs::rename(&source, &target).map_err(|err| format!("rename: {err}"))
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let root = project_root(&project_hash)?;
+        let source = resolve_existing_path(&root, &from)?;
+        let target = resolve_creatable_path(&root, &to)?;
+        if target.exists() {
+            return Err(format!("{to} already exists"));
+        }
+        note_self_write(&harness, &source);
+        note_self_write(&harness, &target);
+        std::fs::rename(&source, &target).map_err(|err| format!("rename: {err}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Deletes a file or directory (recursively) from the project.
 #[tauri::command]
-fn delete_path(
-    harness: tauri::State<'_, Harness>,
+async fn delete_path(
+    app: tauri::AppHandle,
     project_hash: String,
     relative_path: String,
 ) -> Res<()> {
-    let root = project_root(&project_hash)?;
-    let target = resolve_existing_path(&root, &relative_path)?;
-    check_not_project_root(&root, &target)?;
-    note_self_write(&harness, &target);
-    if target.is_dir() {
-        std::fs::remove_dir_all(&target).map_err(|err| format!("delete directory: {err}"))
-    } else {
-        std::fs::remove_file(&target).map_err(|err| format!("delete file: {err}"))
-    }
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let root = project_root(&project_hash)?;
+        let target = resolve_existing_path(&root, &relative_path)?;
+        check_not_project_root(&root, &target)?;
+        note_self_write(&harness, &target);
+        if target.is_dir() {
+            std::fs::remove_dir_all(&target).map_err(|err| format!("delete directory: {err}"))
+        } else {
+            std::fs::remove_file(&target).map_err(|err| format!("delete file: {err}"))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Creates a directory (and any missing parents) — the file tree's "New
 /// Folder" action.
 #[tauri::command]
-fn create_directory(project_hash: String, relative_path: String) -> Res<()> {
-    let root = project_root(&project_hash)?;
-    let target = resolve_creatable_path(&root, &relative_path)?;
-    std::fs::create_dir_all(&target).map_err(|err| format!("create directory: {err}"))
+async fn create_directory(project_hash: String, relative_path: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let target = resolve_creatable_path(&root, &relative_path)?;
+        std::fs::create_dir_all(&target).map_err(|err| format!("create directory: {err}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2210,5 +2530,11 @@ mod tests {
         std::fs::remove_dir_all(&target).unwrap();
 
         assert!(!canonical_root.join("a").exists());
+    }
+
+    #[tokio::test]
+    async fn list_projects_command_returns_ok_when_index_missing() {
+        let result = list_projects().await;
+        assert!(result.is_ok());
     }
 }

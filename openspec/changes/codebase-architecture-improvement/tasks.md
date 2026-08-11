@@ -22,26 +22,26 @@
 ## 2. Phase 2: Backend seam (#1)
 
 - [ ] 2.1 Profile baseline: measure IPC command latency before changes
-- [ ] 2.2 Add `tokio` runtime configuration if not already present in Cargo.toml
-- [ ] 2.3 Convert `list_projects` command to `async`; move body to `spawn_blocking`
-- [ ] 2.4 Convert `add_project` command to `async`; move body to `spawn_blocking`
+- [x] 2.2 Add `tokio` runtime configuration if not already present in Cargo.toml
+- [x] 2.3 Convert `list_projects` command to `async`; move body to `spawn_blocking`
+- [x] 2.4 Convert `add_project` command to `async`; move body to `spawn_blocking`
 - [ ] 2.5 Convert `switch_project` command to `async`; use `tokio::join!` for concurrent independent operations (watcher startup, graphify MCP, settings load)
-- [ ] 2.6 Convert `send_message` command to `async`; move body to `spawn_blocking`
-- [ ] 2.7 Convert `propose` command to `async`; move body to `spawn_blocking`
-- [ ] 2.8 Convert `run_verify` command to `async`; move git operations into spawned thread
+- [x] 2.6 Convert `send_message` command to `async`; move body to `spawn_blocking`
+- [x] 2.7 Convert `propose` command to `async`; move body to `spawn_blocking`
+- [x] 2.8 Convert `run_verify` command to `async`; move git operations into spawned thread
 - [ ] 2.9 Convert `session_attribution` command to `async`; use `tokio::join!` for concurrent git operations
-- [ ] 2.10 Convert OpenSpec commands (`list_spec_changes`, `show_spec_change`, `validate_spec_changes`, `archive_spec_change`) to `async`; move body to `spawn_blocking`
-- [ ] 2.11 Convert `run_graphify` command to `async`; move body to `spawn_blocking`
-- [ ] 2.12 Convert `terminal_spawn` command to `async`; move PTY spawn to `spawn_blocking`
-- [ ] 2.13 Convert all git commands (`git_status`, `git_working_diff`, `git_staged_diff`, etc.) to `async`; move body to `spawn_blocking`
-- [ ] 2.14 Convert `list_directory` command to `async`; move body to `spawn_blocking`
-- [ ] 2.15 Convert `list_all_files` command to `async`; move body to `spawn_blocking` with cancellation support
-- [ ] 2.16 Convert `search_text` command to `async`; move body to `spawn_blocking`
-- [ ] 2.17 Convert `read_file_content` command to `async`; move body to `spawn_blocking` for files > 1MB
-- [ ] 2.18 Convert `write_file_content` command to `async`; move format-on-save to `spawn_blocking`
-- [ ] 2.19 Convert `rename_path` command to `async`; move body to `spawn_blocking`
-- [ ] 2.20 Convert `delete_path` command to `async`; move body to `spawn_blocking` with progress reporting
-- [ ] 2.21 Update all commands to clone State before moving to blocking thread (spawn_blocking requires `'static`)
+- [x] 2.10 Convert OpenSpec commands (`list_spec_changes`, `show_spec_change`, `validate_spec_changes`, `archive_spec_change`) to `async`; move body to `spawn_blocking`
+- [x] 2.11 Convert `run_graphify` command to `async`; move body to `spawn_blocking`
+- [x] 2.12 Convert `terminal_spawn` command to `async`; move PTY spawn to `spawn_blocking`
+- [x] 2.13 Convert all git commands (`git_status`, `git_working_diff`, `git_staged_diff`, etc.) to `async`; move body to `spawn_blocking`
+- [x] 2.14 Convert `list_directory` command to `async`; move body to `spawn_blocking`
+- [x] 2.15 Convert `list_all_files` command to `async`; move body to `spawn_blocking` with cancellation support
+- [x] 2.16 Convert `search_text` command to `async`; move body to `spawn_blocking`
+- [x] 2.17 Convert `read_file_content` command to `async`; move body to `spawn_blocking` for files > 1MB
+- [x] 2.18 Convert `write_file_content` command to `async`; move format-on-save to `spawn_blocking`
+- [x] 2.19 Convert `rename_path` command to `async`; move body to `spawn_blocking`
+- [x] 2.20 Convert `delete_path` command to `async`; move body to `spawn_blocking` with progress reporting
+- [x] 2.21 Update all commands to clone State before moving to blocking thread (spawn_blocking requires `'static`)
 - [ ] 2.22 Use `JoinSet::spawn_blocking` for parallel operations where applicable (e.g., `switch_project`)
 - [ ] 2.23 Profile Phase 2: measure IPC command latency after changes; compare to baseline
 
