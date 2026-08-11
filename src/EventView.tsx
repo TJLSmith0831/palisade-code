@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Alert, Badge, Box, Code, Paper, Stack } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import {
@@ -231,7 +231,7 @@ function ToolBlock({
   );
 }
 
-export function EventList({
+export const EventList = memo(function EventList({
   items,
   showThinking,
   executor,
@@ -241,13 +241,16 @@ export function EventList({
   executor: Preflight["selected"];
 }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
-  const results = new Map<
-    string,
-    Extract<ExecutorEvent, { kind: "toolResult" }>
-  >();
-  for (const item of items) {
-    if (item.kind === "toolResult") results.set(item.id, item);
-  }
+  const results = useMemo(() => {
+    const map = new Map<
+      string,
+      Extract<ExecutorEvent, { kind: "toolResult" }>
+    >();
+    for (const item of items) {
+      if (item.kind === "toolResult") map.set(item.id, item);
+    }
+    return map;
+  }, [items]);
 
   return (
     <>
@@ -352,4 +355,4 @@ export function EventList({
       })}
     </>
   );
-}
+});

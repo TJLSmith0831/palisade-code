@@ -3,7 +3,6 @@ import { Alert } from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
-import "@uiw/react-markdown-preview/markdown.css";
 
 import * as api from "./api";
 import type { GraphifyOptions, GraphifyRun } from "./api";
@@ -45,19 +44,23 @@ export default function GraphPane({ projectHash }: Props) {
       () => {
         setBusy(true);
         api
-          .runGraphify(projectHash, "", { incremental: false, codeOnly: true, deep: false })
+          .runGraphify(projectHash, "", {
+            incremental: false,
+            codeOnly: true,
+            deep: false,
+          })
           .then(
             (fresh) => {
               if (!cancelled) setRun(fresh);
             },
             (err) => {
               if (!cancelled) setError(describeError(err));
-            },
+            }
           )
           .finally(() => {
             if (!cancelled) setBusy(false);
           });
-      },
+      }
     );
     return () => {
       cancelled = true;
@@ -68,7 +71,8 @@ export default function GraphPane({ projectHash }: Props) {
   // background; pick up its changes without a manual re-run.
   useEffect(() => {
     const updated = listen<string>("graphify-updated", ({ payload }) => {
-      if (payload === projectHash) api.loadGraphify(projectHash).then(setRun, () => {});
+      if (payload === projectHash)
+        api.loadGraphify(projectHash).then(setRun, () => {});
     });
     return () => {
       updated.then((un) => un());
@@ -90,7 +94,8 @@ export default function GraphPane({ projectHash }: Props) {
   const onQuery = async () => {
     // `path` takes two node names; `query`/`explain` take one question —
     // the real CLI shape (`graphify path "A" "B"`).
-    const args = subcommand === "path" ? [pathA.trim(), pathB.trim()] : [question.trim()];
+    const args =
+      subcommand === "path" ? [pathA.trim(), pathB.trim()] : [question.trim()];
     if (args.some((arg) => !arg)) return;
     setBusy(true);
     setError(null);
@@ -103,8 +108,12 @@ export default function GraphPane({ projectHash }: Props) {
     }
   };
 
-  const nodes = Array.isArray(run?.graph?.nodes) ? run.graph.nodes.length : null;
-  const links = Array.isArray(run?.graph?.links) ? run.graph.links.length : null;
+  const nodes = Array.isArray(run?.graph?.nodes)
+    ? run.graph.nodes.length
+    : null;
+  const links = Array.isArray(run?.graph?.links)
+    ? run.graph.links.length
+    : null;
 
   return (
     <div className="graph-pane" data-testid="graph-pane">
@@ -120,7 +129,8 @@ export default function GraphPane({ projectHash }: Props) {
             // scoped to a subdirectory without writing outside where the
             // pane reads from, so incremental only applies to the whole
             // project.
-            if (next.trim() && options.incremental) setOptions({ ...options, incremental: false });
+            if (next.trim() && options.incremental)
+              setOptions({ ...options, incremental: false });
           }}
           placeholder="whole project (or a subdirectory)"
           aria-label="Subdirectory scope"
@@ -132,7 +142,9 @@ export default function GraphPane({ projectHash }: Props) {
               type="checkbox"
               checked={options[key]}
               disabled={key === "incremental" && subpath.trim() !== ""}
-              onChange={(event) => setOptions({ ...options, [key]: event.target.checked })}
+              onChange={(event) =>
+                setOptions({ ...options, [key]: event.target.checked })
+              }
               data-testid={`graph-${key}`}
             />
             {key}
@@ -224,7 +236,13 @@ export default function GraphPane({ projectHash }: Props) {
           </details>
         </div>
       ) : (
-        !error && <p className="empty">{busy ? "Compiling codebase map…" : "No code map yet. Run Graphify to build one."}</p>
+        !error && (
+          <p className="empty">
+            {busy
+              ? "Compiling codebase map…"
+              : "No code map yet. Run Graphify to build one."}
+          </p>
+        )
       )}
     </div>
   );

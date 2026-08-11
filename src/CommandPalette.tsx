@@ -1,5 +1,11 @@
 import { useMemo, useState } from "react";
 import { Modal as MantineModal } from "@mantine/core";
+import {
+  IconAppWindow,
+  IconCircle,
+  IconColumns,
+  IconFileText,
+} from "@tabler/icons-react";
 import { filterCommands, formatChord, type Command } from "./commands";
 
 type Props = {
@@ -10,49 +16,19 @@ type Props = {
 function CommandIcon({ group }: { group: string }) {
   const normalized = group.toLowerCase();
 
-  const iconStyle = {
-    width: 19,
-    height: 19,
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.7,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-  };
-
   if (normalized === "go") {
-    return (
-      <svg viewBox="0 0 24 24" style={iconStyle} aria-hidden="true">
-        <path d="M6 3.5h8l4 4V20.5H6z" />
-        <path d="M14 3.5v4h4" />
-        <path d="M9 12h6M9 15.5h6" />
-      </svg>
-    );
+    return <IconFileText size={19} aria-hidden="true" />;
   }
 
   if (normalized === "tabs") {
-    return (
-      <svg viewBox="0 0 24 24" style={iconStyle} aria-hidden="true">
-        <rect x="4" y="5" width="16" height="14" rx="2" />
-        <path d="M8 5v14M16 5v14" />
-      </svg>
-    );
+    return <IconColumns size={19} aria-hidden="true" />;
   }
 
   if (normalized === "view") {
-    return (
-      <svg viewBox="0 0 24 24" style={iconStyle} aria-hidden="true">
-        <rect x="4" y="4" width="16" height="16" rx="2" />
-        <path d="M9 4v16M15 4v16" />
-      </svg>
-    );
+    return <IconAppWindow size={19} aria-hidden="true" />;
   }
 
-  return (
-    <svg viewBox="0 0 24 24" style={iconStyle} aria-hidden="true">
-      <circle cx="12" cy="12" r="8" />
-    </svg>
-  );
+  return <IconCircle size={19} aria-hidden="true" />;
 }
 
 /** ⌘⇧P — every action in the app, searchable. */

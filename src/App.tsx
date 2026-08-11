@@ -1,4 +1,7 @@
 import {
+  lazy,
+  memo,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -27,7 +30,16 @@ import {
   Alert,
   Group,
 } from "@mantine/core";
-import { IconGitCompare, IconMarkdown } from "@tabler/icons-react";
+import {
+  IconGitBranch,
+  IconGitCompare,
+  IconLayoutSidebarFilled,
+  IconLayoutSidebarRightFilled,
+  IconMarkdown,
+  IconSettings,
+  IconTerminal2,
+} from "@tabler/icons-react";
+import { useDebouncedCallback } from "@mantine/hooks";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -66,8 +78,9 @@ import { matchesChord, type Command } from "./commands";
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
+import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
-import GraphPane from "./GraphPane";
+const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import SpecChangeTab from "./SpecChangeTab";
 import VibeSpecLauncher from "./VibeSpecLauncher";
@@ -82,129 +95,6 @@ import TerminalPane from "./TerminalPane";
 import { enableModernWindowStyle } from "./macRoundedCorners";
 import { useResizable, type UseResizableResult } from "./useResizable";
 import "./App.css";
-
-// Cursor/VS Code-style panel-toggle glyph: outline + a filled column on the side being toggled.
-const SidebarIcon = ({ side }: { side: "left" | "right" }) => (
-  <svg
-    viewBox="0 0 16 16"
-    width="14"
-    height="14"
-    fill="none"
-    aria-hidden="true"
-  >
-    <rect
-      x="1.5"
-      y="2.5"
-      width="13"
-      height="11"
-      rx="2"
-      stroke="currentColor"
-      strokeWidth="1.3"
-    />
-    <rect
-      x={side === "left" ? 2.5 : 9.5}
-      y="3.5"
-      width="4"
-      height="9"
-      rx="1"
-      fill="currentColor"
-    />
-    <line
-      x1={side === "left" ? 6.5 : 9.5}
-      y1="2.5"
-      x2={side === "left" ? 6.5 : 9.5}
-      y2="13.5"
-      stroke="currentColor"
-      strokeWidth="1.3"
-    />
-  </svg>
-);
-
-// Standard gear/cog glyph (Heroicons Cog6Tooth outline), stroke-only to
-// match the weight of the sidebar/terminal icons alongside it.
-const SettingsIcon = () => (
-  <svg
-    viewBox="0 0 24 24"
-    width="14"
-    height="14"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    aria-hidden="true"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"
-    />
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
-    />
-  </svg>
-);
-
-// Same frame as SidebarIcon, with a prompt chevron + cursor bar instead of
-// a filled column — reads as "terminal" while matching the sidebar toggles'
-// weight and style.
-const TerminalIcon = () => (
-  <svg
-    viewBox="0 0 16 16"
-    width="14"
-    height="14"
-    fill="none"
-    aria-hidden="true"
-  >
-    <rect
-      x="1.5"
-      y="2.5"
-      width="13"
-      height="11"
-      rx="2"
-      stroke="currentColor"
-      strokeWidth="1.3"
-    />
-    <path
-      d="M4 6.2 6.8 8 4 9.8"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      fill="none"
-    />
-    <line
-      x1="8"
-      y1="9.8"
-      x2="11.2"
-      y2="9.8"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
-// Same stroke weight as SettingsIcon (24x24 viewBox, 1.5 stroke) — the family
-// used for small inline row actions (rename/delete/branch), as distinct from
-// the 16x16/1.3 panel-toggle family above. RenameIcon/DeleteIcon live in
-// ./icons since FilePalette needs the same two for its own row actions.
-const BranchIcon = () => (
-  <svg
-    viewBox="0 0 24 24"
-    width="14"
-    height="14"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    aria-hidden="true"
-  >
-    <line x1="6" y1="3" x2="6" y2="15" strokeLinecap="round" />
-    <circle cx="18" cy="6" r="3" />
-    <circle cx="6" cy="18" r="3" />
-    <path strokeLinecap="round" d="M18 9a9 9 0 0 1-9 9" />
-  </svg>
-);
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
 // Editor shell's right-rail chat area (see openspec/changes/
@@ -251,543 +141,558 @@ type ChatSurfaceProps = {
   hasLiveSession: boolean;
 };
 
-function ChatSurface({
-  project,
-  thread,
-  messages,
-  live,
-  busy,
-  showThinking,
-  executor,
-  flight,
-  flightSelected,
-  models,
-  onPickExecutor,
-  onPickModel,
-  onProbeModels,
-  draft,
-  setDraft,
-  onSend,
-  onRenameThread,
-  onSpec,
-  onGo,
-  onPropose,
-  onApply,
-  stage,
-  dragActive,
-  newThreadPicker,
-  showEmptyModePicker = false,
-  onPickMode,
-  onOpenSpec,
-  threadBypass,
-  onToggleBypass,
-  prefsMenuOpen,
-  setPrefsMenuOpen,
-  hasLiveSession,
-}: ChatSurfaceProps) {
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [modelQuery, setModelQuery] = useState("");
-  const executorLabel = executor
-    ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
-    : null;
-  const modelError =
-    models && typeof models === "object" && "error" in models
-      ? models.error
+const ChatSurface = memo(
+  function ChatSurface({
+    project,
+    thread,
+    messages,
+    live,
+    busy,
+    showThinking,
+    executor,
+    flight,
+    flightSelected,
+    models,
+    onPickExecutor,
+    onPickModel,
+    onProbeModels,
+    draft,
+    setDraft,
+    onSend,
+    onRenameThread,
+    onSpec,
+    onGo,
+    onPropose,
+    onApply,
+    stage,
+    dragActive,
+    newThreadPicker,
+    showEmptyModePicker = false,
+    onPickMode,
+    onOpenSpec,
+    threadBypass,
+    onToggleBypass,
+    prefsMenuOpen,
+    setPrefsMenuOpen,
+    hasLiveSession,
+  }: ChatSurfaceProps) {
+    const [modelMenuOpen, setModelMenuOpen] = useState(false);
+    const [modelQuery, setModelQuery] = useState("");
+    const executorLabel = executor
+      ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
       : null;
-  const modelState =
-    models && typeof models === "object" && !("error" in models)
-      ? models
-      : null;
-  const filteredModels = useMemo(() => {
-    if (!modelState) return [];
-    if (!modelQuery) return modelState.models;
-    return modelState.models
-      .map((m) => ({ model: m, score: fuzzyMatch(modelQuery, m.name) }))
-      .filter((x) => x.score !== null)
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-      .map((x) => x.model);
-  }, [modelState, modelQuery]);
-  useEffect(() => {
-    if (!modelMenuOpen) setModelQuery("");
-  }, [modelMenuOpen]);
-  const currentModelId = thread?.model ?? modelState?.current ?? null;
-  const modelLabel =
-    models === "loading"
-      ? "…"
-      : modelError
-        ? "models unavailable"
-        : currentModelId
-          ? (modelState?.models.find((m) => m.id === currentModelId)?.name ??
-            currentModelId)
-          : "default";
-  if (newThreadPicker || showEmptyModePicker) {
+    const modelError =
+      models && typeof models === "object" && "error" in models
+        ? models.error
+        : null;
+    const modelState =
+      models && typeof models === "object" && !("error" in models)
+        ? models
+        : null;
+    const filteredModels = useMemo(() => {
+      if (!modelState) return [];
+      if (!modelQuery) return modelState.models;
+      return modelState.models
+        .map((m) => ({ model: m, score: fuzzyMatch(modelQuery, m.name) }))
+        .filter((x) => x.score !== null)
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+        .map((x) => x.model);
+    }, [modelState, modelQuery]);
+    const items = useMemo(
+      () =>
+        filterForTab(
+          [...itemsFromMessages(messages), ...mergeDeltas(live)],
+          "chat"
+        ),
+      [messages, live]
+    );
+    useEffect(() => {
+      if (!modelMenuOpen) setModelQuery("");
+    }, [modelMenuOpen]);
+    const currentModelId = thread?.model ?? modelState?.current ?? null;
+    const modelLabel =
+      models === "loading"
+        ? "…"
+        : modelError
+          ? "models unavailable"
+          : currentModelId
+            ? (modelState?.models.find((m) => m.id === currentModelId)?.name ??
+              currentModelId)
+            : "default";
+    if (newThreadPicker || showEmptyModePicker) {
+      return (
+        <>
+          {newThreadPicker && (
+            <div className="pane-head">
+              <strong>New thread</strong>
+            </div>
+          )}
+          <div
+            className={`ds-new-thread-picker${showEmptyModePicker ? " ds-vibe-empty-picker" : ""}`}
+            data-testid="mode-picker"
+          >
+            <div className="ds-mode-picker">
+              <button
+                className="ds-mode-card"
+                onClick={() => onPickMode("go")}
+                data-testid="pick-vibe"
+                autoFocus
+              >
+                <strong>Vibe</strong>
+                <span>Chat first — start building right away.</span>
+              </button>
+              <button
+                className="ds-mode-card"
+                onClick={() => onPickMode("spec")}
+                data-testid="pick-spec"
+              >
+                <strong>Spec</strong>
+                <span>
+                  Plan first — read-only planning before code, via the grill
+                  flow.
+                </span>
+              </button>
+            </div>
+            <span className="hint">
+              You can switch modes any time from the composer.
+            </span>
+          </div>
+        </>
+      );
+    }
+
+    // Entice the user to create a new thread only if threads are focused
+    if (!thread) {
+      return (
+        <p className="empty">
+          {project
+            ? "Create a thread to get started."
+            : "Add a project to get started."}
+        </p>
+      );
+    }
+
     return (
       <>
-        {newThreadPicker && (
-          <div className="pane-head">
-            <strong>New thread</strong>
-          </div>
-        )}
-        <div
-          className={`ds-new-thread-picker${showEmptyModePicker ? " ds-vibe-empty-picker" : ""}`}
-          data-testid="mode-picker"
-        >
-          <div className="ds-mode-picker">
-            <button
-              className="ds-mode-card"
-              onClick={() => onPickMode("go")}
-              data-testid="pick-vibe"
-              autoFocus
+        <div className="pane-head">
+          <strong data-testid="thread-title">{thread.title}</strong>
+          <button
+            onClick={() => onRenameThread(thread)}
+            data-testid="rename-thread"
+          >
+            Rename
+          </button>
+          {thread.openSpecChangeName && (
+            <Badge
+              size="sm"
+              variant="default"
+              tt="none"
+              data-testid="change-chip"
+              onClick={() => onOpenSpec?.(thread.openSpecChangeName!)}
+              style={onOpenSpec ? { cursor: "pointer" } : undefined}
             >
-              <strong>Vibe</strong>
-              <span>Chat first — start building right away.</span>
-            </button>
-            <button
-              className="ds-mode-card"
-              onClick={() => onPickMode("spec")}
-              data-testid="pick-spec"
+              {thread.openSpecChangeName}
+            </Badge>
+          )}
+          <div className="spacer" />
+        </div>
+        {thread.currentMode === "spec" && (
+          <div className="spec-banner" data-testid="spec-banner">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="spec-icon"
             >
-              <strong>Spec</strong>
-              <span>
-                Plan first — read-only planning before code, via the grill flow.
-              </span>
-            </button>
-          </div>
-          <span className="hint">
-            You can switch modes any time from the composer.
-          </span>
-        </div>
-      </>
-    );
-  }
-
-  // Entice the user to create a new thread only if threads are focused
-  if (!thread) {
-    return (
-      <p className="empty">
-        {project
-          ? "Create a thread to get started."
-          : "Add a project to get started."}
-      </p>
-    );
-  }
-
-  return (
-    <>
-      <div className="pane-head">
-        <strong data-testid="thread-title">{thread.title}</strong>
-        <button
-          onClick={() => onRenameThread(thread)}
-          data-testid="rename-thread"
-        >
-          Rename
-        </button>
-        {thread.openSpecChangeName && (
-          <Badge
-            size="sm"
-            variant="default"
-            tt="none"
-            data-testid="change-chip"
-            onClick={() => onOpenSpec?.(thread.openSpecChangeName!)}
-            style={onOpenSpec ? { cursor: "pointer" } : undefined}
-          >
-            {thread.openSpecChangeName}
-          </Badge>
-        )}
-        <div className="spacer" />
-      </div>
-      {thread.currentMode === "spec" && (
-        <div className="spec-banner" data-testid="spec-banner">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="spec-icon"
-          >
-            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-          </svg>
-          Spec Mode — read-only planning
-        </div>
-      )}
-      <div className="messages" data-testid="messages">
-        {(() => {
-          const items = filterForTab(
-            [...itemsFromMessages(messages), ...mergeDeltas(live)],
-            "chat"
-          );
-          return (
-            <>
-              {items.length === 0 && <p className="empty">No messages yet.</p>}
-              <EventList
-                items={items}
-                showThinking={showThinking}
-                executor={executor}
-              />
-            </>
-          );
-        })()}
-        {busy && (
-          <div className="working" data-testid="working">
-            executor working
-            <Loader type="dots" size={16} color="var(--muted)" />
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+            Spec Mode — read-only planning
           </div>
         )}
-      </div>
-      {stage === "exploring" && !busy && flightSelected && (
-        <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
-          <Button
-            data-testid="proceed-to-proposal"
-            size="xs"
-            variant="light"
-            onClick={onPropose}
-          >
-            Proceed to proposal?
-          </Button>
+        <div className="messages" data-testid="messages">
+          <>
+            {items.length === 0 && <p className="empty">No messages yet.</p>}
+            <EventList
+              items={items}
+              showThinking={showThinking}
+              executor={executor}
+            />
+          </>
+          {busy && (
+            <div className="working" data-testid="working">
+              executor working
+              <Loader type="dots" size={16} color="var(--muted)" />
+            </div>
+          )}
         </div>
-      )}
-      {stage === "ready_to_apply" && !busy && flightSelected && (
-        <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
-          <Button
-            data-testid="apply-skill"
-            size="xs"
-            variant="filled"
-            onClick={onApply}
-          >
-            Apply
-          </Button>
-        </div>
-      )}
-      <form
-        className={`composer ${dragActive ? "drag-active" : ""}`}
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSend();
-        }}
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          width: "100%",
-          padding: 8,
-          border: "1px solid var(--border)",
-          borderRadius: 14,
-          background: "var(--surface)",
-          boxSizing: "border-box",
-        }}
-      >
-        {/* Message input */}
-        <Textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-
-              if (!busy && draft.trim()) {
-                event.currentTarget.form?.requestSubmit();
-              }
-            }
+        {stage === "exploring" && !busy && flightSelected && (
+          <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
+            <Button
+              data-testid="proceed-to-proposal"
+              size="xs"
+              variant="light"
+              onClick={onPropose}
+            >
+              Proceed to proposal?
+            </Button>
+          </div>
+        )}
+        {stage === "ready_to_apply" && !busy && flightSelected && (
+          <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
+            <Button
+              data-testid="apply-skill"
+              size="xs"
+              variant="filled"
+              onClick={onApply}
+            >
+              Apply
+            </Button>
+          </div>
+        )}
+        <form
+          className={`composer ${dragActive ? "drag-active" : ""}`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSend();
           }}
-          placeholder={
-            flightSelected
-              ? "Message, or /propose"
-              : "Chat-only — no executor on PATH"
-          }
-          aria-label="Message"
-          data-testid="composer-input"
-          minRows={1}
-          maxRows={6}
-          styles={{
-            root: {
-              width: "100%",
-            },
-            input: {
-              width: "100%",
-              minHeight: 42,
-              padding: "10px 12px",
-              border: 0,
-              background: "transparent",
-              boxShadow: "none",
-              resize: "none",
-              fontSize: 14,
-              lineHeight: 1.5,
-            },
-          }}
-        />
-
-        {/* Bottom controls */}
-        <div
           style={{
             display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 6,
+            flexDirection: "column",
+            gap: 8,
             width: "100%",
-            minHeight: 32,
+            padding: 8,
+            border: "1px solid var(--border)",
+            borderRadius: 14,
+            background: "var(--surface)",
+            boxSizing: "border-box",
           }}
         >
-          <Menu opened={prefsMenuOpen} onChange={setPrefsMenuOpen}>
-            <Menu.Target>
-              <button
-                className="ds-icon-btn"
-                data-testid="executor-btn"
-                data-tauri-drag-region-exclude
-                style={{ fontSize: 12, padding: "4px 8px" }}
-              >
-                {executorLabel ?? "none detected"}
-                {threadBypass ? " · bypass" : ""}
-              </button>
-            </Menu.Target>
-            <Menu.Dropdown
-              className="ds-model-menu"
-              data-testid="executor-menu"
-            >
-              <Menu.Label>Provider</Menu.Label>
-              {flight?.agents.map((a) => (
-                <Menu.Item
-                  key={a.id}
-                  className={`ds-model-opt ${executor === a.id ? "selected" : ""}`}
-                  data-testid={`executor-opt-${a.id}`}
-                  onClick={() => {
-                    if (a.id !== executor) {
-                      onPickExecutor(a.id);
-                    }
-                    setPrefsMenuOpen(false);
-                  }}
-                >
-                  {a.name}
-                </Menu.Item>
-              )) ?? (
-                <span className="hint" data-testid="no-executors-hint">
-                  No ACP agents installed.
-                </span>
-              )}
-              {hasLiveSession && (
-                <span className="hint" data-testid="next-session-hint">
-                  Next session will use {executorLabel ?? "auto-detected"}
-                  {threadBypass ? " · bypass on" : ""}. Switching hands the
-                  conversation off as text context.
-                </span>
-              )}
-              <Switch
-                className="ds-bypass-row"
-                label="Bypass permissions"
-                description="Skip approval prompts"
-                labelPosition="left"
-                color="var(--warn)"
-                checked={threadBypass}
-                onChange={onToggleBypass}
-                data-testid="bypass-toggle"
-              />
-            </Menu.Dropdown>
-          </Menu>
-          <Menu
-            opened={modelMenuOpen}
-            onChange={(open) => {
-              setModelMenuOpen(open);
-              if (open) onProbeModels();
+          {/* Message input */}
+          <Textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+
+                if (!busy && draft.trim()) {
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }
             }}
-            position="top"
-            withinPortal
+            placeholder={
+              flightSelected
+                ? "Message, or /propose"
+                : "Chat-only — no executor on PATH"
+            }
+            aria-label="Message"
+            data-testid="composer-input"
+            minRows={1}
+            maxRows={6}
+            styles={{
+              root: {
+                width: "100%",
+              },
+              input: {
+                width: "100%",
+                minHeight: 42,
+                padding: "10px 12px",
+                border: 0,
+                background: "transparent",
+                boxShadow: "none",
+                resize: "none",
+                fontSize: 14,
+                lineHeight: 1.5,
+              },
+            }}
+          />
+
+          {/* Bottom controls */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+              width: "100%",
+              minHeight: 32,
+            }}
           >
-            <Menu.Target>
-              <button
-                className="ds-icon-btn"
-                data-testid="model-btn"
-                data-tauri-drag-region-exclude
-                disabled={!executor}
-                style={{ fontSize: 12, padding: "4px 8px" }}
+            <Menu opened={prefsMenuOpen} onChange={setPrefsMenuOpen}>
+              <Menu.Target>
+                <button
+                  className="ds-icon-btn"
+                  data-testid="executor-btn"
+                  data-tauri-drag-region-exclude
+                  style={{ fontSize: 12, padding: "4px 8px" }}
+                >
+                  {executorLabel ?? "none detected"}
+                  {threadBypass ? " · bypass" : ""}
+                </button>
+              </Menu.Target>
+              <Menu.Dropdown
+                className="ds-model-menu"
+                data-testid="executor-menu"
               >
-                {modelLabel}
-              </button>
-            </Menu.Target>
-            <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
-              <Menu.Label>Model</Menu.Label>
-              <TextInput
-                placeholder="Search models…"
-                value={modelQuery}
-                onChange={(event) => setModelQuery(event.currentTarget.value)}
-                size="xs"
-                style={{ margin: "0 8px 8px" }}
-                data-testid="model-search"
-              />
-              <Box style={{ maxHeight: 210, overflowY: "auto" }}>
-                {models === "loading" && (
-                  <span className="hint" data-testid="models-loading">
-                    Asking {executorLabel ?? "the agent"}…
-                  </span>
-                )}
-                {modelError && (
-                  <span className="hint" data-testid="models-error">
-                    {modelError}
-                  </span>
-                )}
-                {modelState && modelState.models.length === 0 && (
-                  <span className="hint" data-testid="models-none">
-                    {executorLabel ?? "This provider"} manages its own model.
-                  </span>
-                )}
-                {filteredModels.map((m) => (
+                <Menu.Label>Provider</Menu.Label>
+                {flight?.agents.map((a) => (
                   <Menu.Item
-                    key={m.id}
-                    className={`ds-model-opt ${currentModelId === m.id ? "selected" : ""}`}
-                    data-testid={`model-opt-${m.id}`}
+                    key={a.id}
+                    className={`ds-model-opt ${executor === a.id ? "selected" : ""}`}
+                    data-testid={`executor-opt-${a.id}`}
                     onClick={() => {
-                      onPickModel(m.id);
-                      setModelMenuOpen(false);
+                      if (a.id !== executor) {
+                        onPickExecutor(a.id);
+                      }
+                      setPrefsMenuOpen(false);
                     }}
                   >
-                    {m.name}
+                    {a.name}
                   </Menu.Item>
-                ))}
-                {filteredModels.length === 0 &&
-                  modelQuery &&
-                  !modelError &&
-                  models !== "loading" && (
-                    <span className="hint" data-testid="models-no-matches">
-                      No models match.
+                )) ?? (
+                  <span className="hint" data-testid="no-executors-hint">
+                    No ACP agents installed.
+                  </span>
+                )}
+                {hasLiveSession && (
+                  <span className="hint" data-testid="next-session-hint">
+                    Next session will use {executorLabel ?? "auto-detected"}
+                    {threadBypass ? " · bypass on" : ""}. Switching hands the
+                    conversation off as text context.
+                  </span>
+                )}
+                <Switch
+                  className="ds-bypass-row"
+                  label="Bypass permissions"
+                  description="Skip approval prompts"
+                  labelPosition="left"
+                  color="var(--warn)"
+                  checked={threadBypass}
+                  onChange={onToggleBypass}
+                  data-testid="bypass-toggle"
+                />
+              </Menu.Dropdown>
+            </Menu>
+            <Menu
+              opened={modelMenuOpen}
+              onChange={(open) => {
+                setModelMenuOpen(open);
+                if (open) onProbeModels();
+              }}
+              position="top"
+              withinPortal
+            >
+              <Menu.Target>
+                <button
+                  className="ds-icon-btn"
+                  data-testid="model-btn"
+                  data-tauri-drag-region-exclude
+                  disabled={!executor}
+                  style={{ fontSize: 12, padding: "4px 8px" }}
+                >
+                  {modelLabel}
+                </button>
+              </Menu.Target>
+              <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
+                <Menu.Label>Model</Menu.Label>
+                <TextInput
+                  placeholder="Search models…"
+                  value={modelQuery}
+                  onChange={(event) => setModelQuery(event.currentTarget.value)}
+                  size="xs"
+                  style={{ margin: "0 8px 8px" }}
+                  data-testid="model-search"
+                />
+                <Box style={{ maxHeight: 210, overflowY: "auto" }}>
+                  {models === "loading" && (
+                    <span className="hint" data-testid="models-loading">
+                      Asking {executorLabel ?? "the agent"}…
                     </span>
                   )}
-              </Box>
-            </Menu.Dropdown>
-          </Menu>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <SegmentedControl
-              data-testid="mode-selector"
-              value={thread.currentMode}
-              onChange={(value) => {
-                if (value === "spec") {
-                  onSpec();
-                } else {
-                  onGo();
-                }
-              }}
-              disabled={busy || !flightSelected}
-              data={[
-                { label: "Spec", value: "spec" },
-                { label: "Go", value: "go" },
-              ]}
-              size="xs"
-              styles={{
-                root: {
-                  width: 190,
-                  height: 36,
+                  {modelError && (
+                    <span className="hint" data-testid="models-error">
+                      {modelError}
+                    </span>
+                  )}
+                  {modelState && modelState.models.length === 0 && (
+                    <span className="hint" data-testid="models-none">
+                      {executorLabel ?? "This provider"} manages its own model.
+                    </span>
+                  )}
+                  {filteredModels.map((m) => (
+                    <Menu.Item
+                      key={m.id}
+                      className={`ds-model-opt ${currentModelId === m.id ? "selected" : ""}`}
+                      data-testid={`model-opt-${m.id}`}
+                      onClick={() => {
+                        onPickModel(m.id);
+                        setModelMenuOpen(false);
+                      }}
+                    >
+                      {m.name}
+                    </Menu.Item>
+                  ))}
+                  {filteredModels.length === 0 &&
+                    modelQuery &&
+                    !modelError &&
+                    models !== "loading" && (
+                      <span className="hint" data-testid="models-no-matches">
+                        No models match.
+                      </span>
+                    )}
+                </Box>
+              </Menu.Dropdown>
+            </Menu>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <SegmentedControl
+                data-testid="mode-selector"
+                value={thread.currentMode}
+                onChange={(value) => {
+                  if (value === "spec") {
+                    onSpec();
+                  } else {
+                    onGo();
+                  }
+                }}
+                disabled={busy || !flightSelected}
+                data={[
+                  { label: "Spec", value: "spec" },
+                  { label: "Go", value: "go" },
+                ]}
+                size="xs"
+                styles={{
+                  root: {
+                    width: 190,
+                    height: 36,
 
-                  padding: 2,
-                  gap: 0,
+                    padding: 2,
+                    gap: 0,
 
-                  background: "transparent",
-                  border:
-                    "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
-                  borderRadius: 999,
+                    background: "transparent",
+                    border:
+                      "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
+                    borderRadius: 999,
 
-                  boxSizing: "border-box",
-                  overflow: "hidden",
-                },
+                    boxSizing: "border-box",
+                    overflow: "hidden",
+                  },
 
-                indicator: {
-                  background: "var(--accent)",
+                  indicator: {
+                    background: "var(--accent)",
 
-                  borderRadius: 999,
+                    borderRadius: 999,
 
-                  boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
-                },
+                    boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
+                  },
 
-                control: {
-                  flex: "1 1 0",
-                  width: "50%",
-                  minWidth: 0,
+                  control: {
+                    flex: "1 1 0",
+                    width: "50%",
+                    minWidth: 0,
 
-                  height: 32,
-                  minHeight: 32,
+                    height: 32,
+                    minHeight: 32,
 
-                  padding: 0,
-                  border: 0,
-                  borderRadius: 999,
+                    padding: 0,
+                    border: 0,
+                    borderRadius: 999,
 
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
 
-                  background: "transparent",
-                },
+                    background: "transparent",
+                  },
 
-                label: {
-                  fontSize: 13,
-                  fontWeight: 500,
-                  lineHeight: 1,
+                  label: {
+                    fontSize: 13,
+                    fontWeight: 500,
+                    lineHeight: 1,
 
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
 
-                  width: "100%",
-                  height: "100%",
+                    width: "100%",
+                    height: "100%",
 
-                  color: "inherit",
-                },
-              }}
-              classNames={{
-                control: "mode-selector-control",
-                label: "mode-selector-label",
-              }}
-            />
+                    color: "inherit",
+                  },
+                }}
+                classNames={{
+                  control: "mode-selector-control",
+                  label: "mode-selector-label",
+                }}
+              />
 
-            <ActionIcon
-              type="submit"
-              data-testid="composer-send"
-              disabled={busy || !draft.trim()}
-              aria-label="Send message"
-              title="Send message"
-              size={30}
-              radius="md"
-              variant="filled"
-              styles={{
-                root: {
-                  flexShrink: 0,
-                  backgroundColor: "var(--accent)",
-                  color: "var(--accent-on)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  transition: "transform 100ms ease, opacity 100ms ease",
-                  "&:hover": {
+              <ActionIcon
+                type="submit"
+                data-testid="composer-send"
+                disabled={busy || !draft.trim()}
+                aria-label="Send message"
+                title="Send message"
+                size={30}
+                radius="md"
+                variant="filled"
+                styles={{
+                  root: {
+                    flexShrink: 0,
                     backgroundColor: "var(--accent)",
-                    opacity: 0.9,
+                    color: "var(--accent-on)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "transform 100ms ease, opacity 100ms ease",
+                    "&:hover": {
+                      backgroundColor: "var(--accent)",
+                      opacity: 0.9,
+                    },
+                    "&:active": {
+                      transform: "scale(0.94)",
+                    },
+                    "&:disabled": {
+                      opacity: 0.4,
+                    },
                   },
-                  "&:active": {
-                    transform: "scale(0.94)",
-                  },
-                  "&:disabled": {
-                    opacity: 0.4,
-                  },
-                },
-              }}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="17"
-                height="17"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+                }}
               >
-                <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-                <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
-              </svg>
-            </ActionIcon>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="17"
+                  height="17"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                  <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
+                </svg>
+              </ActionIcon>
+            </div>
           </div>
-        </div>
-      </form>
-    </>
-  );
-}
+        </form>
+      </>
+    );
+  },
+  (prev, next) => {
+    const prevKeys = Object.keys(prev);
+    const nextKeys = Object.keys(next);
+    return (
+      prevKeys.length === nextKeys.length &&
+      prevKeys.every(
+        (k) =>
+          (prev as Record<string, unknown>)[k] ===
+          (next as Record<string, unknown>)[k]
+      )
+    );
+  }
+);
 
 // Keeps a resize drag alive after the pointer leaves the handle element.
 const bindDrag =
@@ -867,6 +772,183 @@ type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme =>
   t === "auto" ? "light" : t === "light" ? "dark" : "auto";
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+type ThreadRowProps = {
+  thread: ThreadMeta;
+  active: boolean;
+  onSelect: (thread: ThreadMeta) => void;
+  onRename: (thread: ThreadMeta) => void;
+  onDelete: (thread: ThreadMeta) => void;
+};
+
+const ThreadRow = memo(function ThreadRow({
+  thread,
+  active,
+  onSelect,
+  onRename,
+  onDelete,
+}: ThreadRowProps) {
+  const handleSelect = useCallback(() => onSelect(thread), [onSelect, thread]);
+  return (
+    <li
+      className={active ? "active" : ""}
+      role="button"
+      tabIndex={0}
+      onClick={handleSelect}
+      onKeyDown={onActivateKey(handleSelect)}
+    >
+      <div className="ds-thread-row">
+        <span className="ds-thread-title">{thread.title}</span>
+        <div className="ds-thread-actions">
+          <button
+            className="ds-thread-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRename(thread);
+            }}
+            title="Rename thread"
+            data-testid="rename-thread-item"
+          >
+            <RenameIcon />
+          </button>
+          <button
+            className="ds-thread-action delete"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(thread);
+            }}
+            title="Delete thread"
+            data-testid="delete-thread"
+          >
+            <DeleteIcon />
+          </button>
+        </div>
+      </div>
+      <span className="ds-thread-meta">
+        <Badge
+          size="xs"
+          variant={thread.currentMode === "spec" ? "light" : "default"}
+        >
+          {thread.currentMode}
+        </Badge>
+      </span>
+    </li>
+  );
+});
+
+type ThreadListProps = {
+  variant: "editor" | "vibe";
+  threads: ThreadMeta[];
+  activeThread: ThreadMeta | null;
+  project: Project | null;
+  onNewThread: () => void;
+  onSelect: (thread: ThreadMeta) => void;
+  onRename: (thread: ThreadMeta) => void;
+  onDelete: (thread: ThreadMeta) => void;
+};
+
+const ThreadList = memo(function ThreadList({
+  variant,
+  threads,
+  activeThread,
+  project,
+  onNewThread,
+  onSelect,
+  onRename,
+  onDelete,
+}: ThreadListProps) {
+  void variant;
+  return (
+    <div className="ds-threads-panel">
+      <button
+        className="ds-new-thread"
+        onClick={onNewThread}
+        disabled={!project}
+        data-testid="new-thread"
+      >
+        + New Thread
+      </button>
+      <ul data-testid="thread-list">
+        {threads.map((t) => (
+          <ThreadRow
+            key={t.id}
+            thread={t}
+            active={t.id === activeThread?.id}
+            onSelect={onSelect}
+            onRename={onRename}
+            onDelete={onDelete}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+});
+
+type WorkspacePickerProps = {
+  variant: "editor" | "vibe";
+  project: Project | null;
+  projects: Project[];
+  branches: api.BranchInfo[];
+  onSelectProject: (project: Project) => void;
+  onAddProject: () => void;
+  onRenameProject: () => void;
+  onOpenBranchPicker: () => void;
+};
+
+const WorkspacePicker = memo(function WorkspacePicker({
+  variant,
+  project,
+  projects,
+  branches,
+  onSelectProject,
+  onAddProject,
+  onRenameProject,
+  onOpenBranchPicker,
+}: WorkspacePickerProps) {
+  void variant;
+  return (
+    <div className="ds-workspace-panel">
+      <div className="ds-rail-section">
+        <div className="ds-rail-label">Workspace</div>
+        <select
+          data-testid="project-picker"
+          value={project?.hash ?? ""}
+          onChange={(event) => {
+            const next = projects.find((p) => p.hash === event.target.value);
+            if (next) onSelectProject(next);
+          }}
+        >
+          {projects.length === 0 && <option value="">No project</option>}
+          {projects.map((p) => (
+            <option key={p.hash} value={p.hash}>
+              {p.displayName}
+            </option>
+          ))}
+        </select>
+        <div className="ds-rail-actions">
+          <button onClick={onAddProject} data-testid="add-project">
+            Add
+          </button>
+          {project && (
+            <button onClick={onRenameProject} data-testid="rename-project">
+              Rename
+            </button>
+          )}
+        </div>
+        {project && branches.length > 0 && (
+          <button
+            className="ds-branch-btn"
+            onClick={onOpenBranchPicker}
+            data-testid="branch-indicator"
+          >
+            <IconGitBranch size={14} />{" "}
+            {branches.find((b) => b.isCurrent)?.name ?? "…"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 // The executor (Claude Code / Codex) has its own file-read tooling, so we
 // hand it a path rather than threading image bytes through the IPC channel.
 export const imagePathsFrom = (paths: string[]): string[] =>
@@ -985,6 +1067,11 @@ export default function App() {
   // straight into the ref, and a render-time assignment would erase them.
   const [session, setSession] = useState<EditorSession | null>(null);
   const sessionRef = useRef<EditorSession | null>(null);
+  const persistSession = useCallback((hash: string) => {
+    const s = sessionRef.current;
+    if (hash && s) saveSession(hash, s);
+  }, []);
+  const saveSessionDebounced = useDebouncedCallback(persistSession, 500);
   // A search result to scroll to once its file is open.
   const [revealLine, setRevealLine] = useState<{
     path: string;
@@ -1151,7 +1238,8 @@ export default function App() {
   }
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
   const filesCache = useRef<Map<string, string[]>>(new Map());
-  const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0);
+  const { refreshToken: fileTreeRefreshToken, invalidate: invalidateFileTree } =
+    useFileTreeCache();
   // Verify pins from `.project-settings.json` (D8): spec change name → list
   // of pinned verify command names. Machine-local UI state, loaded on project
   // switch and after a pin is added/removed.
@@ -1302,6 +1390,21 @@ export default function App() {
       setPrefsMenuOpen(false);
     },
     []
+  );
+
+  const onSelectEditorThread = useCallback(
+    (t: ThreadMeta) => {
+      if (project) selectThread(project.hash, t);
+      setEditorRailOpen(false);
+    },
+    [project, selectThread]
+  );
+
+  const onSelectVibeThread = useCallback(
+    (t: ThreadMeta) => {
+      if (project) selectThread(project.hash, t);
+    },
+    [project, selectThread]
   );
 
   // Not every project is a git repo — that's a normal state, not an error,
@@ -1784,7 +1887,9 @@ export default function App() {
       // The tree and the ⌘P palette both cache; without this they keep
       // showing files the agent already renamed or deleted.
       filesCache.current.delete(payload.projectHash);
-      setFileTreeRefreshToken((t) => t + 1);
+      for (const path of payload.paths) {
+        invalidateFileTree(path);
+      }
 
       for (const open of openPathsRef.current) {
         if (payload.paths.includes(open)) {
@@ -1797,9 +1902,8 @@ export default function App() {
     };
   }, []);
 
-  // Persist the editor's shape as it changes. Cheap enough to do on every
-  // change (localStorage, one small object) that it doesn't need debouncing,
-  // and it means a crash doesn't cost the layout.
+  // Persist the editor's shape as it changes. Debounced to avoid repeated
+  // localStorage writes while switching tabs or toggling panels.
   useEffect(() => {
     const hash = project?.hash;
     if (!hash || !sessionRef.current) return;
@@ -1811,7 +1915,7 @@ export default function App() {
       diffOpen,
     };
     sessionRef.current = next;
-    saveSession(hash, next);
+    saveSessionDebounced(hash);
   }, [project?.hash, tabs.tabs, tabs.activePath, centerShell, diffOpen]);
 
   const rememberCursor = useCallback((path: string, offset: number) => {
@@ -1832,7 +1936,7 @@ export default function App() {
   useEffect(() => {
     const flush = () => {
       const hash = currentProjectRef.current;
-      if (hash && sessionRef.current) saveSession(hash, sessionRef.current);
+      if (hash) saveSessionDebounced.flush();
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
@@ -1840,7 +1944,7 @@ export default function App() {
 
   useEffect(() => {
     const hash = currentProjectRef.current;
-    if (hash && sessionRef.current) saveSession(hash, sessionRef.current);
+    if (hash) saveSessionDebounced(hash);
   }, [tabs.activePath]);
 
   const rememberExpandedDirs = useCallback((dirs: string[]) => {
@@ -2077,9 +2181,9 @@ export default function App() {
       if (!project) return;
       await api.writeFileContent(project.hash, path, "");
       await refreshPaletteFiles();
-      setFileTreeRefreshToken((t) => t + 1);
+      invalidateFileTree(path);
     },
-    [project, refreshPaletteFiles]
+    [project, refreshPaletteFiles, invalidateFileTree]
   );
 
   const onRenameFile = useCallback(
@@ -2087,10 +2191,10 @@ export default function App() {
       if (!project) return;
       await api.renamePath(project.hash, from, to);
       await refreshPaletteFiles();
-      setFileTreeRefreshToken((t) => t + 1);
+      invalidateFileTree(from);
       tabs.rename(from, to);
     },
-    [project, refreshPaletteFiles]
+    [project, refreshPaletteFiles, invalidateFileTree]
   );
 
   const onDeleteFile = useCallback(
@@ -2098,10 +2202,10 @@ export default function App() {
       if (!project) return;
       await api.deletePath(project.hash, path);
       await refreshPaletteFiles();
-      setFileTreeRefreshToken((t) => t + 1);
+      invalidateFileTree(path);
       tabs.dropPath(path);
     },
-    [project, refreshPaletteFiles]
+    [project, refreshPaletteFiles, invalidateFileTree]
   );
 
   // The file tree performs its own create/rename/delete/move (surgical
@@ -2323,7 +2427,7 @@ export default function App() {
               data-testid="toggle-left-sidebar"
               data-tauri-drag-region-exclude
             >
-              <SidebarIcon side="left" />
+              <IconLayoutSidebarFilled size={14} />
             </button>
           </Tooltip>
           <div className="ds-chrome-utils">
@@ -2353,7 +2457,7 @@ export default function App() {
                 data-testid="toggle-right-sidebar"
                 data-tauri-drag-region-exclude
               >
-                <SidebarIcon side="right" />
+                <IconLayoutSidebarRightFilled size={14} />
               </button>
             </Tooltip>
             <Tooltip label="Toggle terminal (Cmd+`)">
@@ -2364,7 +2468,7 @@ export default function App() {
                 data-testid="toggle-terminal"
                 data-tauri-drag-region-exclude
               >
-                <TerminalIcon />
+                <IconTerminal2 size={14} />
               </button>
             </Tooltip>
             <Tooltip label="Settings">
@@ -2375,7 +2479,7 @@ export default function App() {
                 data-testid="open-settings"
                 data-tauri-drag-region-exclude
               >
-                <SettingsIcon />
+                <IconSettings size={14} />
               </button>
             </Tooltip>
           </div>
@@ -2648,53 +2752,16 @@ export default function App() {
                   } as CSSProperties
                 }
               >
-                <div className="ds-workspace-panel">
-                  <div className="ds-rail-section">
-                    <div className="ds-rail-label">Workspace</div>
-                    <select
-                      data-testid="project-picker"
-                      value={project?.hash ?? ""}
-                      onChange={(event) => {
-                        const next = projects.find(
-                          (p) => p.hash === event.target.value
-                        );
-                        if (next) selectProject(next);
-                      }}
-                    >
-                      {projects.length === 0 && (
-                        <option value="">No project</option>
-                      )}
-                      {projects.map((p) => (
-                        <option key={p.hash} value={p.hash}>
-                          {p.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="ds-rail-actions">
-                      <button onClick={onAddProject} data-testid="add-project">
-                        Add
-                      </button>
-                      {project && (
-                        <button
-                          onClick={onRenameProject}
-                          data-testid="rename-project"
-                        >
-                          Rename
-                        </button>
-                      )}
-                    </div>
-                    {project && branches.length > 0 && (
-                      <button
-                        className="ds-branch-btn"
-                        onClick={onOpenBranchPicker}
-                        data-testid="branch-indicator"
-                      >
-                        <BranchIcon />{" "}
-                        {branches.find((b) => b.isCurrent)?.name ?? "…"}
-                      </button>
-                    )}
-                  </div>
-                </div>
+                <WorkspacePicker
+                  variant="editor"
+                  project={project}
+                  projects={projects}
+                  branches={branches}
+                  onSelectProject={selectProject}
+                  onAddProject={onAddProject}
+                  onRenameProject={onRenameProject}
+                  onOpenBranchPicker={onOpenBranchPicker}
+                />
                 <div className="ds-right-panes">
                   {rightTab === "terminal" &&
                   terminalPlacement === "sidebar" ? (
@@ -2756,83 +2823,25 @@ export default function App() {
                             </Tabs.List>
                           </Tabs>
                           {rightTab === "threads" && (
-                            <div className="ds-threads-panel">
-                              <button
-                                className="ds-new-thread"
-                                onClick={onNewThread}
-                                disabled={!project}
-                                data-testid="new-thread"
-                              >
-                                + New Thread
-                              </button>
-                              <ul data-testid="thread-list">
-                                {threads.map((t) => (
-                                  <li
-                                    key={t.id}
-                                    className={
-                                      t.id === thread?.id ? "active" : ""
-                                    }
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => {
-                                      if (project)
-                                        selectThread(project.hash, t);
-                                      setEditorRailOpen(false);
-                                    }}
-                                    onKeyDown={onActivateKey(() => {
-                                      if (project)
-                                        selectThread(project.hash, t);
-                                      setEditorRailOpen(false);
-                                    })}
-                                  >
-                                    <div className="ds-thread-row">
-                                      <span className="ds-thread-title">
-                                        {t.title}
-                                      </span>
-                                      <div className="ds-thread-actions">
-                                        <button
-                                          className="ds-thread-action"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            onRenameThread(t);
-                                          }}
-                                          title="Rename thread"
-                                          data-testid="rename-thread-item"
-                                        >
-                                          <RenameIcon />
-                                        </button>
-                                        <button
-                                          className="ds-thread-action delete"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            onDeleteThread(t);
-                                          }}
-                                          title="Delete thread"
-                                          data-testid="delete-thread"
-                                        >
-                                          <DeleteIcon />
-                                        </button>
-                                      </div>
-                                    </div>
-                                    <span className="ds-thread-meta">
-                                      <Badge
-                                        size="xs"
-                                        variant={
-                                          t.currentMode === "spec"
-                                            ? "light"
-                                            : "default"
-                                        }
-                                      >
-                                        {t.currentMode}
-                                      </Badge>
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
+                            <ThreadList
+                              variant="editor"
+                              threads={threads}
+                              activeThread={thread}
+                              project={project}
+                              onNewThread={onNewThread}
+                              onSelect={onSelectEditorThread}
+                              onRename={onRenameThread}
+                              onDelete={onDeleteThread}
+                            />
                           )}
                           {rightTab === "codemap" && project && (
-                            <GraphPane projectHash={project.hash} />
+                            <Suspense
+                              fallback={
+                                <div style={{ padding: 12 }}>Loading map…</div>
+                              }
+                            >
+                              <GraphPane projectHash={project.hash} />
+                            </Suspense>
                           )}
                           {rightTab === "specs" && project && (
                             <SpecPane
@@ -3136,117 +3145,26 @@ export default function App() {
                   } as CSSProperties
                 }
               >
-                <div className="ds-workspace-panel">
-                  <div className="ds-rail-section">
-                    <div className="ds-rail-label">Workspace</div>
-                    <select
-                      data-testid="project-picker"
-                      value={project?.hash ?? ""}
-                      onChange={(event) => {
-                        const next = projects.find(
-                          (p) => p.hash === event.target.value
-                        );
-                        if (next) selectProject(next);
-                      }}
-                    >
-                      {projects.length === 0 && (
-                        <option value="">No project</option>
-                      )}
-                      {projects.map((p) => (
-                        <option key={p.hash} value={p.hash}>
-                          {p.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="ds-rail-actions">
-                      <button onClick={onAddProject} data-testid="add-project">
-                        Add
-                      </button>
-                      {project && (
-                        <button
-                          onClick={onRenameProject}
-                          data-testid="rename-project"
-                        >
-                          Rename
-                        </button>
-                      )}
-                    </div>
-                    {project && branches.length > 0 && (
-                      <button
-                        className="ds-branch-btn"
-                        onClick={onOpenBranchPicker}
-                        data-testid="branch-indicator"
-                      >
-                        <BranchIcon />{" "}
-                        {branches.find((b) => b.isCurrent)?.name ?? "…"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="ds-threads-panel">
-                  <button
-                    className="ds-new-thread"
-                    onClick={onNewThread}
-                    disabled={!project}
-                    data-testid="new-thread"
-                  >
-                    + New Thread
-                  </button>
-                  <ul data-testid="thread-list">
-                    {threads.map((t) => (
-                      <li
-                        key={t.id}
-                        className={t.id === thread?.id ? "active" : ""}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => {
-                          if (project) selectThread(project.hash, t);
-                        }}
-                        onKeyDown={onActivateKey(() => {
-                          if (project) selectThread(project.hash, t);
-                        })}
-                      >
-                        <div className="ds-thread-row">
-                          <span className="ds-thread-title">{t.title}</span>
-                          <div className="ds-thread-actions">
-                            <button
-                              className="ds-thread-action"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onRenameThread(t);
-                              }}
-                              title="Rename thread"
-                              data-testid="rename-thread-item"
-                            >
-                              <RenameIcon />
-                            </button>
-                            <button
-                              className="ds-thread-action delete"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onDeleteThread(t);
-                              }}
-                              title="Delete thread"
-                              data-testid="delete-thread"
-                            >
-                              <DeleteIcon />
-                            </button>
-                          </div>
-                        </div>
-                        <span className="ds-thread-meta">
-                          <Badge
-                            size="xs"
-                            variant={
-                              t.currentMode === "spec" ? "light" : "default"
-                            }
-                          >
-                            {t.currentMode}
-                          </Badge>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <WorkspacePicker
+                  variant="vibe"
+                  project={project}
+                  projects={projects}
+                  branches={branches}
+                  onSelectProject={selectProject}
+                  onAddProject={onAddProject}
+                  onRenameProject={onRenameProject}
+                  onOpenBranchPicker={onOpenBranchPicker}
+                />
+                <ThreadList
+                  variant="vibe"
+                  threads={threads}
+                  activeThread={thread}
+                  project={project}
+                  onNewThread={onNewThread}
+                  onSelect={onSelectVibeThread}
+                  onRename={onRenameThread}
+                  onDelete={onDeleteThread}
+                />
                 {project && (
                   <VibeSpecLauncher
                     projectHash={project.hash}

@@ -18,7 +18,6 @@ import {
   IconPlayerPlay,
 } from "@tabler/icons-react";
 import MDEditor from "@uiw/react-md-editor";
-import "@uiw/react-markdown-preview/markdown.css";
 import { listen } from "@tauri-apps/api/event";
 
 import * as api from "./api";
