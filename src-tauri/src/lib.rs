@@ -1,4 +1,11 @@
+mod acp_client;
+mod acp_events;
+mod acp_preflight;
+mod acp_registry;
 mod executor;
+mod grill_inject;
+mod handoff;
+mod permissions;
 mod fswatch;
 mod git;
 mod integrations;
@@ -14,7 +21,8 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
-use executor::{Envelope, ExecutorEvent, Harness, Preflight, Sink, Spawn};
+use acp_preflight::Preflight;
+use executor::{Envelope, ExecutorEvent, Harness, Sink};
 use serde::{Deserialize, Serialize};
 use store::{floo_home, Message, Project, Res, ThreadMeta};
 
@@ -80,7 +88,7 @@ fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harnes
     let Some(bin) = executor::find_on_path("graphify-mcp") else {
         return;
     };
-    let Ok((agent, _)) = selected_executor(app, harness, &project.hash) else {
+    let Ok((agent, _)) = selected_executor(app, harness, &project.hash, None) else {
         return;
     };
 
@@ -89,9 +97,9 @@ fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harnes
     // Kept as an explicit per-agent match (task 3.6): each agent's MCP config
     // file has its own real format, which is not BYOA friction to abstract
     // away. An agent with no MCP story is simply skipped.
-    let result = match agent.id {
-        "claude" => integrations::ensure_claude_mcp(&root, &bin, &graph_path),
-        "codex" => {
+    let result = match agent.id.as_str() {
+        "claude-acp" => integrations::ensure_claude_mcp(&root, &bin, &graph_path),
+        "codex-acp" => {
             integrations::ensure_codex_mcp(&root, &bin, &graph_path, &executor::home().join(".codex"))
         }
         _ => return,
@@ -248,6 +256,28 @@ impl Sink for AppSink {
         // from, not whichever thread the sink happened to be built for — with
         // concurrent sessions those stop being the same thing.
         let thread_id = &envelope.thread_id;
+
+        // Durable copy: the thread's JSONL log is the source of truth once a
+        // turn ends. persist() decides what lands (text, tool rows, crash
+        // markers) and what stays live-only (deltas, Done).
+        let mode = self
+            .app
+            .state::<Harness>()
+            .acp_sessions
+            .lock()
+            .unwrap()
+            .get(&envelope.session_id)
+            .map(|s| s.mode.clone())
+            .unwrap_or_else(|| "spec".to_string());
+        executor::persist(
+            &floo_home(),
+            &self.project_hash,
+            thread_id,
+            &envelope.session_id,
+            &mode,
+            &envelope.event,
+        );
+
         match &envelope.event {
             ExecutorEvent::Crashed { .. } => {
                 end_session(&self.app.state::<Harness>(), thread_id, &envelope.session_id, "crashed");
@@ -297,86 +327,68 @@ fn sink_for(app: &tauri::AppHandle, project_hash: &str) -> Arc<dyn Sink> {
 fn preflight(harness: tauri::State<'_, Harness>, refresh: bool) -> Preflight {
     let mut cached = harness.preflight.lock().unwrap();
     if refresh || cached.is_none() {
-        *cached = Some(executor::preflight());
+        *cached = Some(acp_preflight::preflight(
+            &store::floo_home(),
+            &|bin| executor::find_on_path(bin),
+        ));
     }
     cached.clone().expect("preflight just populated")
 }
 
 /// Pure decision: which executor a project should use, given a preflight
-/// snapshot and an optional `project-settings.json` override (D15). Only
-/// errors when nothing is usable at all — no override, and auto-detection
-/// found neither executor. An override naming an executor that isn't
-/// installed doesn't error; it falls back to auto-detection and returns a
-/// warning for the caller to surface, rather than leaving the project in
-/// chat-only mode.
-fn resolve_executor(
-    flight: &Preflight,
+/// snapshot and an optional `project-settings.json` override (D18).
+fn resolve_executor<'a>(
+    flight: &'a Preflight,
     override_id: Option<String>,
-) -> Res<(&'static executor::Agent, Option<String>)> {
-    let auto = || {
-        flight
-            .selected
-            .as_deref()
-            .and_then(executor::agent_by_id)
-            .ok_or("No executor found on PATH — chat-only mode.".to_string())
-    };
-    let Some(wanted) = override_id else {
-        return Ok((auto()?, None));
-    };
-    // An unknown *name* and a known-but-uninstalled agent are different
-    // failures, and the user needs to be told which one they hit.
-    match executor::agent_by_id(&wanted) {
-        Some(agent) if flight.agent(&wanted).is_some_and(|s| s.path.is_some()) => Ok((agent, None)),
-        Some(_) => Ok((
-            auto()?,
-            Some(format!(
-                "project-settings.json requests `{wanted}`, but it's not on PATH — falling back to auto-detection."
-            )),
-        )),
-        None => {
-            let known: Vec<&str> = executor::KNOWN_AGENTS.iter().map(|a| a.id).collect();
-            Ok((
-                auto()?,
-                Some(format!(
-                    "project-settings.json requests unknown executor `{wanted}` (known: {}) — falling back to auto-detection.",
-                    known.join(", ")
-                )),
-            ))
-        }
-    }
+) -> Res<(&'a acp_preflight::AgentStatus, Option<String>)> {
+    acp_preflight::resolve_executor(flight, override_id)
 }
 
-/// Resolves which agent a project uses and its binary path, applying
-/// `resolve_executor`'s decision against the live preflight cache.
+/// The thread's stored meta, if it exists.
+fn thread_meta(project_hash: &str, thread_id: &str) -> Option<store::ThreadMeta> {
+    store::list_threads(&floo_home(), project_hash)
+        .ok()?
+        .into_iter()
+        .find(|t| t.id == thread_id)
+}
+
+/// Resolves which agent a thread uses and its binary path. Selection order
+/// (D9/D18): the thread's own picker choice, then the project's
+/// `executorOverride`, then auto-detection (first installed agent).
 fn selected_executor(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
     project_hash: &str,
-) -> Res<(&'static executor::Agent, PathBuf)> {
+    thread_id: Option<&str>,
+) -> Res<(acp_preflight::AgentStatus, PathBuf)> {
     let flight = {
         let mut cached = harness.preflight.lock().unwrap();
         if cached.is_none() {
-            *cached = Some(executor::preflight());
+            *cached = Some(acp_preflight::preflight(
+                &store::floo_home(),
+                &|bin| executor::find_on_path(bin),
+            ));
         }
         cached.clone().expect("preflight just populated")
     };
-    let override_id = project_root(project_hash)
-        .ok()
-        .and_then(|root| settings::load(&root).0.executor_override);
+    let thread_override = thread_id.and_then(|id| thread_meta(project_hash, id)?.executor);
+    let override_id = thread_override.or_else(|| {
+        project_root(project_hash)
+            .ok()
+            .and_then(|root| settings::load(&root).0.executor_override)
+    });
     let (agent, warning) = resolve_executor(&flight, override_id)?;
     if let Some(message) = warning {
         let _ = app.emit("harness-warning", message);
     }
-    let path = flight.agent(agent.id).and_then(|s| s.path.clone());
-    Ok((agent, PathBuf::from(path.ok_or("detected executor has no path")?)))
+    let path = agent.path.clone().ok_or("detected executor has no path")?;
+    Ok((agent.clone(), PathBuf::from(path)))
 }
 
 /// The id of a live session on this thread running under `mode`, if any.
-/// Sessions are keyed independently, so a thread can hold a live spec session
-/// and a live go session at once (D19) — hence the mode in the lookup.
 fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode: &str) -> Option<String> {
     harness
-        .sessions
+        .acp_sessions
         .lock()
         .unwrap()
         .values()
@@ -384,90 +396,79 @@ fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode:
         .map(|s| s.id.clone())
 }
 
-/// Start a new session on a thread and record it open. Nothing else is
-/// terminated — that is the whole point of the map (D1).
-///
-/// `carry_forward` resumes the newest closed session of the *same agent* on
-/// this thread. A handle from a different agent is never reused: Claude's
-/// `--resume` and Codex's `resume --last` are private to their own CLIs (D14).
+/// Start a new ACP session on a thread and record it open.
 fn start_session(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
     project_hash: &str,
     thread_id: &str,
     mode: &str,
-    carry_forward: bool,
-    model: Option<String>,
+    _carry_forward: bool,
+    _model: Option<String>,
     bypass: bool,
 ) -> Res<String> {
-    let (agent, bin) = selected_executor(app, harness, project_hash)?;
-    let agent_id = agent.id;
+    let (agent, bin) = selected_executor(app, harness, project_hash, Some(thread_id))?;
+    let agent_id = agent.id.clone();
     let home = floo_home();
+    // The thread meta is the source of truth for the model choice; the IPC
+    // `model` parameter is legacy and ignored (the frontend passes null).
+    let model = thread_meta(project_hash, thread_id).and_then(|t| t.model);
 
-    let resume = carry_forward
-        .then(|| {
-            store::read_sessions(&home, project_hash, thread_id)
-                .ok()?
-                .into_iter()
-                .filter(|r| r.agent_id == agent_id && r.outcome.as_deref() != Some("crashed"))
-                .next_back()?
-                .provider_handle
-        })
-        .flatten();
-
-    // Floo cannot stop two agents writing the same file — the executor owns
-    // its own tool loop. Naming the collision is the honest mitigation; a lock
-    // would be a promise the harness can't keep (D6). Git remains the arbiter.
+    // ACP sessions don't use provider handles — each session is fresh.
+    // Collision warning: Floo cannot stop two agents writing the same file.
     let collision = {
-        let sessions = harness.sessions.lock().unwrap();
+        let sessions = harness.acp_sessions.lock().unwrap();
         sessions
             .values()
             .find(|s| s.project_hash == project_hash)
-            .map(|s| format!("{} session {} is already live in this project — concurrent edits are not coordinated; git is the arbiter.", s.agent.id, s.id))
+            .map(|s| format!("{} session {} is already live in this project — concurrent edits are not coordinated; git is the arbiter.", s.agent_name, s.id))
     };
     if let Some(message) = collision {
         let _ = app.emit("harness-warning", message);
     }
 
-    let session = executor::start(
-        Spawn {
-            agent,
-            bin,
-            project_root: project_root(project_hash)?,
-            project_hash,
-            thread_id,
-            mode,
-            resume,
-            floo_home: home.clone(),
-            model,
-            bypass,
-        },
-        sink_for(app, project_hash),
-    )?;
-    // The evidence layer for "what did this session change?" (D13): the commit
-    // it started from, and what was already dirty before it touched anything.
-    let git = git_bin().ok();
     let root = project_root(project_hash)?;
+    let spawn = acp_client::AcpSpawn {
+        agent_id: agent.id.clone(),
+        agent_name: agent.name.clone(),
+        bin: bin.clone(),
+        cmd: agent.cmd.clone(),
+        args: agent.args.clone(),
+        project_root: root.clone(),
+        project_hash: project_hash.to_string(),
+        thread_id: thread_id.to_string(),
+        mode: mode.to_string(),
+        bypass,
+        model,
+        floo_home: home.clone(),
+    };
+
+    let session = acp_client::start_acp_session(spawn, sink_for(app, project_hash))?;
     let id = session.id.clone();
+
+    let git = git_bin().ok();
     store::open_session(
         &home,
         project_hash,
         thread_id,
         &id,
-        agent_id,
+        &agent_id,
         mode,
-        Some(&session.provider_handle),
+        None, // ACP sessions have no provider_handle
         git.as_ref().and_then(|bin| git::rev_parse_head(bin, &root)).as_deref(),
         git.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)),
     )?;
-    harness.sessions.lock().unwrap().insert(id.clone(), session);
+    harness.acp_sessions.lock().unwrap().insert(id.clone(), session);
     Ok(id)
 }
 
-/// Reuse this thread's live session for `mode`, or start one. `model` and
-/// `bypass` are only applied when a new session is started — a reused live
-/// session keeps its original flags so an in-flight turn is not handed off to
-/// a different model or permission level.
+/// Reuse this thread's live session for `mode`, or start one.
+///
+/// When the thread's executor choice no longer matches the live session's
+/// agent, the old session is closed (`switched`) and the new agent starts
+/// fresh — the previous turns ride along as a raw-text transcript prepended
+/// to the first prompt (D6/D7). The returned `Option` is that transcript
+/// prefix, when a handoff happened.
 fn ensure_session(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
@@ -476,19 +477,54 @@ fn ensure_session(
     mode: &str,
     model: Option<String>,
     bypass: bool,
-) -> Res<String> {
-    match find_live_session(harness, thread_id, mode) {
-        Some(id) => Ok(id),
-        None => start_session(app, harness, project_hash, thread_id, mode, true, model, bypass),
+) -> Res<(String, Option<String>)> {
+    let (agent, _) = selected_executor(app, harness, project_hash, Some(thread_id))?;
+    if let Some(id) = find_live_session(harness, thread_id, mode) {
+        let matches = harness
+            .acp_sessions
+            .lock()
+            .unwrap()
+            .get(&id)
+            .is_some_and(|s| s.agent_id == agent.id);
+        if matches {
+            return Ok((id, None));
+        }
+        // Agent changed under a live session: hand off (D6). The transcript
+        // budget is a fixed default until the new agent reports its context
+        // window via usage_update (D8) — 100k tokens covers every current
+        // agent's window conservatively enough for a text prefix.
+        let turns: Vec<handoff::TranscriptTurn> = store::read_thread(
+            &floo_home(),
+            project_hash,
+            thread_id,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| handoff::TranscriptTurn {
+            role: m.role,
+            content: m.content,
+        })
+        .collect();
+        end_session(harness, thread_id, &id, "switched");
+        let new_id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
+        let transcript = handoff::build_handoff_transcript(&turns, 100_000);
+        let prefix = if transcript.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "This conversation was handed off from another agent. Transcript so far:\n\n{transcript}"
+            ))
+        };
+        return Ok((new_id, prefix));
     }
+    Ok((start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?, None))
 }
 
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
-    if let Some(mut session) = harness.sessions.lock().unwrap().remove(session_id) {
+    if let Some(mut session) = harness.acp_sessions.lock().unwrap().remove(session_id) {
         session.terminate();
-        // The closing half of the HEAD pair — with the opening one, everything
-        // this session committed is recoverable exactly (D13).
         let head_after = git_bin()
             .ok()
             .and_then(|bin| git::rev_parse_head(&bin, &session.project_root));
@@ -503,13 +539,10 @@ fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &s
     }
 }
 
-/// Release every idle session on a thread, closing each `done` (D20). `Done`
-/// only ends a *turn* — both transports keep the session alive and resumable
-/// across turns — so `done` is written when Floo lets an idle session go: on
-/// leaving its thread, and on shutdown. A busy session is left alone.
+/// Release every idle session on a thread, closing each `done`.
 fn release_idle_sessions(harness: &Harness, thread_id: Option<&str>) {
     let idle: Vec<(String, String)> = harness
-        .sessions
+        .acp_sessions
         .lock()
         .unwrap()
         .values()
@@ -529,7 +562,7 @@ fn leave_thread(harness: tauri::State<'_, Harness>, thread_id: String) {
 }
 
 /// Record the user's turn, then forward it to the executor if one is live.
-#[tauri::command]
+#[tauri::command(async)]
 fn send_message(
     app: tauri::AppHandle,
     harness: tauri::State<'_, Harness>,
@@ -543,33 +576,34 @@ fn send_message(
     // Recorded before the executor is resolved, deliberately: a chat-only
     // project still keeps the user's turn. There is no session to name yet.
     let message = store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
-    if selected_executor(&app, &harness, &project_hash).is_err() {
+    if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
         // Chat-only mode: the turn is still recorded, nothing answers it.
         return Ok(message);
     }
-    let id = ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
+    let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
+    let content = match handoff {
+        Some(prefix) => format!("{prefix}\n\n{content}"),
+        None => content,
+    };
     send_to(&app, &harness, &project_hash, &id, &content)?;
     Ok(message)
 }
 
 /// Send one turn to a named live session.
 fn send_to(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
-    project_hash: &str,
+    _project_hash: &str,
     session_id: &str,
     content: &str,
 ) -> Res<()> {
-    let sink = sink_for(app, project_hash);
-    let mut sessions = harness.sessions.lock().unwrap();
-    let session = sessions.get_mut(session_id).ok_or("executor session is not running")?;
-    executor::send(session, sink, content)
+    let sessions = harness.acp_sessions.lock().unwrap();
+    let session = sessions.get(session_id).ok_or("executor session is not running")?;
+    acp_client::send_acp_prompt(session, content)
 }
 
-/// `/go`: bring up a write-enabled session on this thread. Under D19 this no
-/// longer terminates the spec session — the two run side by side, each under
-/// its own permission flag — and it only sets the thread's default mode.
-#[tauri::command]
+/// `/go`: bring up a write-enabled session on this thread.
+#[tauri::command(async)]
 fn go_mode(
     app: tauri::AppHandle,
     harness: tauri::State<'_, Harness>,
@@ -578,39 +612,106 @@ fn go_mode(
     model: Option<String>,
     bypass: bool,
 ) -> Res<ThreadMeta> {
-    // A mid-session uninstall would otherwise only surface as a spawn failure.
     let flight = preflight(harness.clone(), true);
     if flight.selected.is_none() {
         return Err("No executor found on PATH — chat-only mode.".into());
     }
 
     let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "go")?;
-    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
+    let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
+    // Per amended D19: go-mode has no skill injection. The user toggles
+    // go-mode to let the agent write code; grill-apply is a separate
+    // UI-triggered one-shot in spec-mode.
+    Ok(meta)
+}
 
-    // A thread that already has a proposal starts go-mode by applying it.
-    if let Some(change) = meta.open_spec_change_name.clone() {
-        let prefix = {
-            let sessions = harness.sessions.lock().unwrap();
-            sessions.get(&id).ok_or("executor session is not running")?.agent.skill_prefix
-        };
-        let prompt = format!("{prefix}grill-apply {change}");
-        store::append_message(&floo_home(), &project_hash, &thread_id, "user", "go", &prompt, Some(&id))?;
-        send_to(&app, &harness, &project_hash, &id, &prompt)?;
+/// Decide what initial prompt (if any) to send when entering spec-mode.
+/// Per amended D19: spec-mode with no open change auto-fires grill-explore.
+/// With an existing change, the user is past explore — no auto-injection.
+fn spec_mode_initial_prompt(meta: &store::ThreadMeta) -> Option<String> {
+    if meta.open_spec_change_name.is_none() {
+        Some(grill_inject::build_prompt("spec", false, "grill-explore"))
+    } else {
+        None
+    }
+}
+
+/// Sets the thread's default mode back to spec. Under amended D19, entering
+/// spec-mode with no open change auto-fires grill-explore — the first stage
+/// of the explore → propose → apply progression. With an existing change,
+/// it just sets the mode (the user is past explore).
+#[tauri::command]
+fn spec_mode(
+    app: tauri::AppHandle,
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    thread_id: String,
+    bypass: bool,
+) -> Res<ThreadMeta> {
+    let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")?;
+    if let Some(prompt) = spec_mode_initial_prompt(&meta) {
+        if preflight(harness.clone(), true).selected.is_some() {
+            let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
+            let prompt = match handoff {
+                Some(prefix) => format!("{prefix}\n\n{prompt}"),
+                None => prompt,
+            };
+            store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt, Some(&id))?;
+            send_to(&app, &harness, &project_hash, &id, &prompt)?;
+        }
     }
     Ok(meta)
 }
 
-/// Sets the thread's default mode back to spec. Under D19 this kills nothing:
-/// mode is intent on the thread and enforcement on the session, so stopping a
-/// live session is an explicit, session-scoped action (`stop_executor`).
+/// The thread's executor picker choice (D9/D18). `None` reverts to the
+/// project `executorOverride`, then auto-detection. Persisted on the thread;
+/// the next `ensure_session` restarts a live session whose agent no longer
+/// matches.
 #[tauri::command]
-fn spec_mode(project_hash: String, thread_id: String) -> Res<ThreadMeta> {
-    store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")
+fn set_thread_executor(
+    project_hash: String,
+    thread_id: String,
+    executor: Option<String>,
+    model: Option<String>,
+) -> Res<ThreadMeta> {
+    store::set_thread_executor(
+        &floo_home(),
+        &project_hash,
+        &thread_id,
+        executor.as_deref(),
+        model.as_deref(),
+    )
 }
 
-/// `/propose`: run `grill-propose` in the live spec-mode executor and watch
-/// the project's change directory so the new change name can be linked.
-#[tauri::command]
+/// The models an installed agent actually offers, learned by spawning it for
+/// a throwaway `session/new` and reading its `model` config option (D11
+/// reversal — the picker needs a real list, not a hardcoded one).
+#[tauri::command(async)]
+fn list_models(
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    agent_id: String,
+) -> Res<acp_client::ModelState> {
+    let flight = {
+        let mut cached = harness.preflight.lock().unwrap();
+        if cached.is_none() {
+            *cached = Some(acp_preflight::preflight(
+                &store::floo_home(),
+                &|bin| executor::find_on_path(bin),
+            ));
+        }
+        cached.clone().expect("preflight just populated")
+    };
+    let agent = flight
+        .agent(&agent_id)
+        .ok_or_else(|| format!("unknown or unavailable agent `{agent_id}`"))?;
+    let path = agent.path.clone().ok_or("agent has no path")?;
+    let root = project_root(&project_hash)?;
+    acp_client::probe_models(PathBuf::from(path), agent.args.clone(), root)
+}
+
+/// `/propose`: run `grill-propose` in the live spec-mode executor.
+#[tauri::command(async)]
 fn propose(
     app: tauri::AppHandle,
     harness: tauri::State<'_, Harness>,
@@ -620,12 +721,12 @@ fn propose(
     bypass: bool,
 ) -> Res<()> {
     let root = project_root(&project_hash)?;
-    let id = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
-    let prefix = {
-        let sessions = harness.sessions.lock().unwrap();
-        sessions.get(&id).ok_or("executor session is not running")?.agent.skill_prefix
+    let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
+    let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
+    let prompt = match handoff {
+        Some(prefix) => format!("{prefix}\n\n{prompt}"),
+        None => prompt,
     };
-    let prompt = format!("{prefix}grill-propose");
 
     *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
         project_hash: project_hash.clone(),
@@ -638,12 +739,58 @@ fn propose(
     send_to(&app, &harness, &project_hash, &id, &prompt)
 }
 
-/// Stop one session by id, or every live session when none is named. Each is
-/// closed `cancelled` — an explicit stop is not a crash.
+/// Build the grill-apply prompt for a one-shot injection in spec-mode.
+/// Per amended D19: grill-apply is UI-triggered, not mode-triggered. The
+/// user clicks "Apply" after the proposal is complete; this builds the
+/// prompt that goes to the agent.
+fn apply_skill_prompt(change: &str) -> String {
+    grill_inject::inject_skill(&grill_inject::GrillSkill::Apply, &format!("grill-apply {change}"))
+}
+
+/// `apply_skill`: UI-triggered one-shot grill-apply injection in spec-mode.
+/// The user clicks "Apply" after the proposal artifacts are complete; this
+/// starts (or reuses) a spec-mode session and sends the grill-apply prompt.
+#[tauri::command]
+fn apply_skill(
+    app: tauri::AppHandle,
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    thread_id: String,
+    bypass: bool,
+) -> Res<()> {
+    let meta = store::list_threads(&floo_home(), &project_hash)?
+        .into_iter()
+        .find(|t| t.id == thread_id)
+        .ok_or("thread not found")?;
+    let change = meta.open_spec_change_name.ok_or("no open spec change — apply requires a proposal")?;
+    let (id, handoff) = ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
+    let prompt = apply_skill_prompt(&change);
+    let prompt = match handoff {
+        Some(prefix) => format!("{prefix}\n\n{prompt}"),
+        None => prompt,
+    };
+    store::append_message(&floo_home(), &project_hash, &thread_id, "user", "spec", &prompt, Some(&id))?;
+    send_to(&app, &harness, &project_hash, &id, &prompt)
+}
+
+/// `change_status`: whether a change's planning artifacts are all complete.
+/// Returns `true` when `openspec status` reports `isComplete: true`, `false`
+/// when it reports `false`, and `null` when `openspec` or the change is missing.
+#[tauri::command]
+fn change_status(
+    harness: tauri::State<'_, Harness>,
+    project_hash: String,
+    change_name: String,
+) -> Res<Option<bool>> {
+    let root = project_root(&project_hash)?;
+    Ok(executor::openspec_change_status(&root, &change_name))
+}
+
+/// Stop one session by id, or every live session when none is named.
 #[tauri::command]
 fn stop_executor(harness: tauri::State<'_, Harness>, session_id: Option<String>) {
     let targets: Vec<(String, String)> = harness
-        .sessions
+        .acp_sessions
         .lock()
         .unwrap()
         .values()
@@ -655,8 +802,7 @@ fn stop_executor(harness: tauri::State<'_, Harness>, session_id: Option<String>)
     }
 }
 
-/// What each live session is doing. A list, not one global flag: with sessions
-/// concurrent there is no single "the executor is busy" to report.
+/// What each live session is doing.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionStatus {
@@ -670,14 +816,14 @@ struct SessionStatus {
 #[tauri::command]
 fn executor_status(harness: tauri::State<'_, Harness>) -> Vec<SessionStatus> {
     let mut statuses: Vec<SessionStatus> = harness
-        .sessions
+        .acp_sessions
         .lock()
         .unwrap()
         .values()
         .map(|s| SessionStatus {
             id: s.id.clone(),
             thread_id: s.thread_id.clone(),
-            agent_id: s.agent.id.to_string(),
+            agent_id: s.agent_id.clone(),
             mode: s.mode.clone(),
             busy: s.is_busy(),
         })
@@ -686,16 +832,14 @@ fn executor_status(harness: tauri::State<'_, Harness>) -> Vec<SessionStatus> {
     statuses
 }
 
-/// Every session ever run against a thread. Records left open by a process
-/// that no longer exists (an app restart) are closed `interrupted` on the way
-/// out, using the live map as the authority on what is actually running.
+/// Every session ever run against a thread.
 #[tauri::command]
 fn list_sessions(
     harness: tauri::State<'_, Harness>,
     project_hash: String,
     thread_id: String,
 ) -> Res<Vec<store::SessionRecord>> {
-    let live: Vec<String> = harness.sessions.lock().unwrap().keys().cloned().collect();
+    let live: Vec<String> = harness.acp_sessions.lock().unwrap().keys().cloned().collect();
     store::close_stale_sessions(&floo_home(), &project_hash, &thread_id, &live)
 }
 
@@ -1564,6 +1708,8 @@ pub fn run() {
             list_threads,
             rename_thread,
             set_thread_mode,
+            set_thread_executor,
+            list_models,
             delete_thread,
             append_message,
             read_thread,
@@ -1572,6 +1718,8 @@ pub fn run() {
             go_mode,
             spec_mode,
             propose,
+            apply_skill,
+            change_status,
             stop_executor,
             executor_status,
             list_sessions,
@@ -1638,27 +1786,23 @@ pub fn run() {
 mod tests {
     use super::*;
 
-    /// Builds a preflight snapshot from whichever agents are "installed",
-    /// straight off the table — no test knows the field names of any agent.
-    fn flight(installed: &[&str]) -> Preflight {
-        let agents: Vec<executor::AgentStatus> = executor::KNOWN_AGENTS
+    /// Builds an ACP preflight snapshot from named agent ids.
+    fn flight(agent_ids: &[&str]) -> Preflight {
+        let agents: Vec<acp_preflight::AgentStatus> = agent_ids
             .iter()
-            .map(|agent| executor::AgentStatus {
-                id: agent.id.to_string(),
-                label: agent.label.to_string(),
-                path: installed
-                    .contains(&agent.id)
-                    .then(|| format!("/usr/bin/{}", agent.bin)),
-                skills_ok: true,
-                plugin_ok: true,
+            .map(|id| acp_preflight::AgentStatus {
+                id: id.to_string(),
+                name: id.to_string(),
+                version: None,
+                path: Some(format!("/usr/bin/{id}")),
+                cmd: id.to_string(),
+                args: vec![],
             })
             .collect();
         Preflight {
-            selected: agents.iter().find(|a| a.path.is_some()).map(|a| a.id.clone()),
+            selected: agents.first().map(|a| a.id.clone()),
             agents,
             openspec: true,
-            grill_apply: true,
-            ponytail: true,
             graphify: true,
             ready: true,
             warnings: vec![],
@@ -1668,53 +1812,104 @@ mod tests {
 
     #[test]
     fn no_override_uses_auto_detection() {
-        let (agent, warning) = resolve_executor(&flight(&["claude", "codex"]), None).unwrap();
-        assert_eq!(agent.id, "claude");
+        let f = flight(&["devin", "claude-acp"]);
+        let (agent, warning) = resolve_executor(&f, None).unwrap();
+        assert_eq!(agent.id, "devin");
         assert!(warning.is_none());
     }
 
     #[test]
     fn an_installed_override_wins_over_auto_detection() {
-        // Claude wins auto-detection when both are present, but the override
-        // must still be able to force Codex.
+        let f = flight(&["devin", "claude-acp"]);
         let (agent, warning) =
-            resolve_executor(&flight(&["claude", "codex"]), Some("codex".into())).unwrap();
-        assert_eq!(agent.id, "codex");
+            resolve_executor(&f, Some("claude-acp".into())).unwrap();
+        assert_eq!(agent.id, "claude-acp");
         assert!(warning.is_none());
     }
 
     #[test]
     fn an_override_naming_an_uninstalled_executor_falls_back_and_warns() {
-        let (agent, warning) = resolve_executor(&flight(&["claude"]), Some("codex".into())).unwrap();
-        assert_eq!(agent.id, "claude", "must fall back to auto-detection, not error");
+        // claude-acp is in the flight but has no PATH (simulating not installed).
+        let mut f = flight(&["devin"]);
+        f.agents.push(acp_preflight::AgentStatus {
+            id: "claude-acp".into(),
+            name: "Claude ACP".into(),
+            version: None,
+            path: None,
+            cmd: "claude-acp".into(),
+            args: vec![],
+        });
+        let (agent, warning) = resolve_executor(&f, Some("claude-acp".into())).unwrap();
+        assert_eq!(agent.id, "devin", "must fall back to auto-detection, not error");
         let warning = warning.unwrap();
-        assert!(warning.contains("codex") && warning.contains("not on PATH"));
+        assert!(warning.contains("claude-acp") && warning.contains("not on PATH"));
     }
 
-    /// Task 3.9: an unrecognized *name* is a different failure from a known
-    /// agent that isn't installed, and it must not be silently swallowed. The
-    /// old `Option<Kind>` typing made this case drop the whole settings file
-    /// back to defaults, taking `formatOnSave` with it.
+    // --------------------------------------------------- 6a.1: spec_mode auto-injects explore
+
+    fn thread_meta(change: Option<&str>) -> store::ThreadMeta {
+        store::ThreadMeta {
+            id: "t1".into(),
+            project_hash: "p1".into(),
+            title: "Test".into(),
+            created_at: "2026-08-11T00:00:00Z".into(),
+            updated_at: "2026-08-11T00:00:00Z".into(),
+            current_mode: "spec".into(),
+            open_spec_change_name: change.map(String::from),
+            executor: None,
+            model: None,
+        }
+    }
+
+    /// RED→GREEN 6a.1: spec-mode with no change auto-fires grill-explore.
+    #[test]
+    fn spec_mode_initial_prompt_with_no_change_injects_explore() {
+        let meta = thread_meta(None);
+        let prompt = spec_mode_initial_prompt(&meta).unwrap();
+        assert!(prompt.contains("grill-explore"));
+        assert!(prompt.contains("---"));
+    }
+
+    /// RED→GREEN 6a.1: spec-mode with an existing change does NOT auto-inject.
+    #[test]
+    fn spec_mode_initial_prompt_with_change_is_none() {
+        let meta = thread_meta(Some("my-change"));
+        assert!(spec_mode_initial_prompt(&meta).is_none());
+    }
+
+    // --------------------------------------------------- 6a.2: apply_skill one-shot
+
+    /// RED→GREEN 6a.2: apply_skill_prompt injects grill-apply for a change.
+    #[test]
+    fn apply_skill_prompt_injects_grill_apply() {
+        let prompt = apply_skill_prompt("my-change");
+        assert!(prompt.contains("grill-apply"));
+        assert!(prompt.contains("my-change"));
+        assert!(prompt.contains("---"));
+    }
+
     #[test]
     fn an_override_naming_an_unknown_agent_falls_back_and_names_the_known_ones() {
+        let f = flight(&["devin", "claude-acp"]);
         let (agent, warning) =
-            resolve_executor(&flight(&["claude", "codex"]), Some("gpt-9".into())).unwrap();
-        assert_eq!(agent.id, "claude");
+            resolve_executor(&f, Some("gpt-9".into())).unwrap();
+        assert_eq!(agent.id, "devin");
         let warning = warning.unwrap();
         assert!(warning.contains("gpt-9"), "the warning must name what was asked for");
-        for known in executor::KNOWN_AGENTS {
-            assert!(warning.contains(known.id), "and what it could have been: {}", known.id);
-        }
+        assert!(warning.contains("devin"), "and what it could have been: devin");
+        assert!(warning.contains("claude-acp"), "and what it could have been: claude-acp");
     }
 
     #[test]
     fn an_override_with_no_executors_installed_at_all_still_errors() {
-        assert!(resolve_executor(&flight(&[]), Some("claude".into())).is_err());
+        let f = flight(&[]);
+        assert!(resolve_executor(&f, Some("devin".into())).is_err());
     }
 
     #[test]
     fn no_override_and_nothing_installed_errors() {
-        let error = resolve_executor(&flight(&[]), None).unwrap_err();
+        let f = flight(&[]);
+        let error = resolve_executor(&f, None).unwrap_err();
         assert!(error.contains("chat-only"));
     }
 

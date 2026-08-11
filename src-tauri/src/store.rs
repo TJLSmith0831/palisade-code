@@ -197,6 +197,14 @@ pub struct ThreadMeta {
     /// longer describes what is running.
     pub current_mode: String,
     pub open_spec_change_name: Option<String>,
+    /// Per-thread executor override (an ACP registry agent id). None means
+    /// fall back to the project's `executorOverride`, then auto-detection.
+    #[serde(default)]
+    pub executor: Option<String>,
+    /// Per-thread model choice (the agent's config-option value id). Only
+    /// meaningful together with `executor`; None means the agent's default.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 // `executorSessionId` used to live here. It was a provider-private resume
 // handle on a provider-independent entity, and it was written unconditionally
@@ -223,6 +231,8 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         updated_at: stamp,
         current_mode: "spec".into(),
         open_spec_change_name: None,
+        executor: None,
+        model: None,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -287,6 +297,24 @@ pub fn rename_thread(home: &Path, hash: &str, id: &str, title: &str) -> Res<Thre
 pub fn set_open_spec_change(home: &Path, hash: &str, id: &str, change: Option<&str>) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| {
         m.open_spec_change_name = change.map(str::to_string)
+    })
+}
+
+/// Set the thread's executor (and optionally model) preference. Both are
+/// per-thread overrides: `None` falls back to the project default, then
+/// auto-detection. No process is spawned here — the next session start
+/// picks the change up, and `ensure_session` restarts a live session whose
+/// agent no longer matches.
+pub fn set_thread_executor(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    executor: Option<&str>,
+    model: Option<&str>,
+) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.executor = executor.map(str::to_string);
+        m.model = model.map(str::to_string);
     })
 }
 
@@ -716,6 +744,57 @@ mod tests {
         assert_eq!(project_hash("/a/b"), project_hash("/a/b"));
         assert_ne!(project_hash("/a/b"), project_hash("/a/c"));
         assert_eq!(project_hash("/a/b").len(), 64);
+    }
+
+    #[test]
+    fn thread_executor_preference_round_trips() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert_eq!(thread.executor, None);
+        assert_eq!(thread.model, None);
+
+        let updated = set_thread_executor(
+            home.path(),
+            &project.hash,
+            &thread.id,
+            Some("devin"),
+            Some("model-b"),
+        )
+        .unwrap();
+        assert_eq!(updated.executor.as_deref(), Some("devin"));
+        assert_eq!(updated.model.as_deref(), Some("model-b"));
+
+        // Persisted, not just in memory.
+        let loaded = list_threads(home.path(), &project.hash).unwrap();
+        let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
+        assert_eq!(found.executor.as_deref(), Some("devin"));
+        assert_eq!(found.model.as_deref(), Some("model-b"));
+
+        // Clearing returns to auto-detection.
+        let cleared =
+            set_thread_executor(home.path(), &project.hash, &thread.id, None, None).unwrap();
+        assert_eq!(cleared.executor, None);
+        assert_eq!(cleared.model, None);
+    }
+
+    #[test]
+    fn old_thread_meta_without_executor_fields_still_loads() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        // Simulate a meta file written before the executor/model fields existed.
+        let path = threads_dir(home.path(), &project.hash).join(format!("{}.meta.json", thread.id));
+        let body = fs::read_to_string(&path).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        value.as_object_mut().unwrap().remove("executor");
+        value.as_object_mut().unwrap().remove("model");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let loaded = list_threads(home.path(), &project.hash).unwrap();
+        let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
+        assert_eq!(found.executor, None);
+        assert_eq!(found.model, None);
     }
 
     #[test]

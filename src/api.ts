@@ -18,6 +18,10 @@ export type ThreadMeta = {
   updatedAt: string;
   currentMode: Mode;
   openSpecChangeName: string | null;
+  /** Per-thread executor override (ACP registry agent id); null = project default. */
+  executor?: string | null;
+  /** Per-thread model choice (the agent's config value id); null = agent default. */
+  model?: string | null;
 };
 
 export type Message = {
@@ -74,24 +78,21 @@ export const readThread = (projectHash: string, threadId: string) =>
 
 // ------------------------------------------------------- executor handoff
 
-/** Detection status for one row of the backend's `KNOWN_AGENTS` table. */
+/** Detection status for one ACP agent discovered via the registry. */
 export type AgentStatus = {
   id: string;
-  label: string;
+  name: string;
+  version: string | null;
   path: string | null;
-  skillsOk: boolean;
-  pluginOk: boolean;
+  cmd: string;
 };
 
 export type Preflight = {
-  /** One entry per known agent, in the backend's table order. Iterate this —
-   * adding an agent must not require a change here or at any call site. */
+  /** One entry per discovered ACP agent available on PATH. */
   agents: AgentStatus[];
-  /** The id of the first agent in table order that was found on PATH. */
+  /** The id of the first available agent. */
   selected: string | null;
   openspec: boolean;
-  grillApply: boolean;
-  ponytail: boolean;
   graphify: boolean;
   ready: boolean;
   warnings: string[];
@@ -129,12 +130,49 @@ export type Envelope = {
 
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
+
+/** One selectable model an agent reported through its ACP config options. */
+export type ModelInfo = { id: string; name: string };
+
+/**
+ * The agent's model selector as reported at session start. `configId` is
+ * null when the agent has no model selector — it manages its own model.
+ */
+export type ModelState = {
+  configId: string | null;
+  current: string | null;
+  models: ModelInfo[];
+};
+
+/**
+ * The thread's executor picker choice. Both null reverts to the project
+ * default, then auto-detection. Applies to the next session — a live session
+ * under a different agent is handed off on the next turn.
+ */
+export const setThreadExecutor = (
+  projectHash: string,
+  threadId: string,
+  executor: string | null,
+  model: string | null
+) =>
+  invoke<ThreadMeta>("set_thread_executor", {
+    projectHash,
+    threadId,
+    executor,
+    model,
+  });
+
+/**
+ * Probe an installed agent for the models it actually offers: spawns it for
+ * a throwaway `session/new` and reads its model config option.
+ */
+export const listModels = (projectHash: string, agentId: string) =>
+  invoke<ModelState>("list_models", { projectHash, agentId });
 export const sendMessage = (
   projectHash: string,
   threadId: string,
   content: string,
   mode: Mode,
-  model: string | null,
   bypass: boolean
 ) =>
   invoke<Message>("send_message", {
@@ -142,23 +180,36 @@ export const sendMessage = (
     threadId,
     content,
     mode,
-    model,
+    model: null,
     bypass,
   });
 export const goMode = (
   projectHash: string,
   threadId: string,
-  model: string | null,
   bypass: boolean
-) => invoke<ThreadMeta>("go_mode", { projectHash, threadId, model, bypass });
-export const specMode = (projectHash: string, threadId: string) =>
-  invoke<ThreadMeta>("spec_mode", { projectHash, threadId });
+) =>
+  invoke<ThreadMeta>("go_mode", { projectHash, threadId, model: null, bypass });
+export const specMode = (
+  projectHash: string,
+  threadId: string,
+  bypass: boolean
+) => invoke<ThreadMeta>("spec_mode", { projectHash, threadId, bypass });
 export const propose = (
   projectHash: string,
   threadId: string,
-  model: string | null,
   bypass: boolean
-) => invoke<void>("propose", { projectHash, threadId, model, bypass });
+) => invoke<void>("propose", { projectHash, threadId, model: null, bypass });
+
+/** UI-triggered one-shot grill-apply injection in spec-mode. */
+export const applySkill = (
+  projectHash: string,
+  threadId: string,
+  bypass: boolean
+) => invoke<void>("apply_skill", { projectHash, threadId, bypass });
+
+/** Whether a change's planning artifacts are all complete (openspec status). */
+export const changeStatus = (projectHash: string, changeName: string) =>
+  invoke<boolean | null>("change_status", { projectHash, changeName });
 /** Stop one session, or every live session when no id is given. */
 export const stopExecutor = (sessionId?: string) =>
   invoke<void>("stop_executor", { sessionId: sessionId ?? null });

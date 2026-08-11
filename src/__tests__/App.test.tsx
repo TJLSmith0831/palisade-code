@@ -281,50 +281,9 @@ describe("Top chrome (merged-design v2)", () => {
     unmount();
   });
 
-  it("shows preflight status in utility cluster", () => {
+  it("does not show an executor badge in the utility cluster", () => {
     render(<App />);
-    expect(screen.getByTestId("preflight-status")).toBeDefined();
-  });
-
-  it("shows a persistent visible 'claude' label, not just an icon, when Claude is selected", async () => {
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "list_projects") return Promise.resolve([]);
-      if (cmd === "preflight") {
-        return Promise.resolve({
-          agents: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              path: "/usr/local/bin/claude",
-              skillsOk: true,
-              pluginOk: true,
-            },
-            {
-              id: "codex",
-              label: "Codex",
-              path: null,
-              skillsOk: true,
-              pluginOk: true,
-            },
-          ],
-          selected: "claude",
-          openspec: true,
-          grillApply: false,
-          ponytail: true,
-          graphify: true,
-          ready: true,
-          warnings: [],
-          checkedAt: "2026-08-06T00:00:00Z",
-        });
-      }
-      return Promise.resolve([]);
-    });
-    render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("preflight-status")).toHaveTextContent(
-        /claude/i
-      )
-    );
+    expect(screen.queryByTestId("preflight-status")).toBeNull();
   });
 
   it("starts dragging on a single mousedown, and toggles maximize on double-click, on the top chrome", () => {
@@ -623,6 +582,19 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
             executorSessionId: null,
           });
         }
+        if (cmd === "spec_mode") {
+          setModeCalls.push(args ?? {});
+          return Promise.resolve({
+            id: "thread-new",
+            projectHash: "proj-1",
+            title: "New thread",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+            executorSessionId: null,
+          });
+        }
         if (cmd === "list_threads") {
           return Promise.resolve([
             {
@@ -686,8 +658,9 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
     fireEvent.click(screen.getByTestId("pick-spec"));
 
     await waitFor(() => expect(screen.queryByTestId("mode-picker")).toBeNull());
+    // spec_mode is now called instead of set_thread_mode for spec mode (amended D19).
     expect(setModeCalls).toEqual([
-      { projectHash: "proj-1", threadId: "thread-new", mode: "spec" },
+      { projectHash: "proj-1", threadId: "thread-new", bypass: false },
     ]);
     await waitFor(() =>
       expect(screen.getByTestId("spec-banner")).toBeDefined()
@@ -793,7 +766,7 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
       expect(invokeMock).toHaveBeenCalledWith("propose", {
         projectHash: "proj-1",
         threadId: "t1",
-        model: "sonnet",
+        model: null,
         bypass: false,
       })
     );
@@ -3011,23 +2984,21 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
           agents: [
             {
               id: "claude",
-              label: "Claude Code",
+              name: "Claude Code",
+              version: null,
               path: selected === "claude" ? "/usr/local/bin/claude" : null,
-              skillsOk: true,
-              pluginOk: true,
+              cmd: "claude-acp",
             },
             {
               id: "codex",
-              label: "Codex",
+              name: "Codex",
+              version: null,
               path: selected === "codex" ? "/usr/local/bin/codex" : null,
-              skillsOk: true,
-              pluginOk: true,
+              cmd: "codex-acp",
             },
           ],
           selected,
           openspec: true,
-          grillApply: false,
-          ponytail: true,
           graphify: true,
           ready: true,
           warnings: [],
@@ -3038,57 +3009,167 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   };
 
   afterEach(() => {
-    localStorage.removeItem("floo:default-model");
     localStorage.removeItem("floo:default-bypass");
     localStorage.removeItem("floo:thread-prefs:proj-1:t1");
   });
 
-  it("shows the current model in the composer and opens a menu on click", async () => {
+  it("shows the current executor in the composer and opens a menu on click", async () => {
     setupWithThread("claude");
     render(<App />);
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
     await waitFor(() =>
-      expect(screen.getByTestId("model-btn")).toHaveTextContent("Sonnet 5")
+      expect(screen.getByTestId("executor-btn")).toHaveTextContent(/claude/i)
     );
-    expect(screen.queryByTestId("model-menu")).toBeNull();
+    expect(screen.queryByTestId("executor-menu")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("model-btn"));
-    expect(await screen.findByTestId("model-menu")).toBeDefined();
+    fireEvent.click(screen.getByTestId("executor-btn"));
+    expect(await screen.findByTestId("executor-menu")).toBeDefined();
   });
 
-  it("shows the executor as read-only status in the menu, with no control to switch it", async () => {
+  it("shows discovered ACP agents in the executor dropdown", async () => {
     setupWithThread("claude");
     render(<App />);
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    fireEvent.click(screen.getByTestId("model-btn"));
+    fireEvent.click(screen.getByTestId("executor-btn"));
 
-    const executorRow = await screen.findByTestId("executor-row");
-    expect(executorRow.tagName).not.toBe("BUTTON");
-    expect(executorRow).toHaveTextContent(/claude/i);
+    // Should show agent entries from the preflight
+    expect(await screen.findByTestId("executor-opt-claude")).toBeDefined();
   });
 
-  it("lets the user pick a model, persisting the choice across menu close/reopen", async () => {
+  it("clicking a provider persists it on the thread and clears the model", async () => {
     setupWithThread("claude");
     render(<App />);
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    fireEvent.click(screen.getByTestId("model-btn"));
-    fireEvent.click(await screen.findByTestId("model-opt-opus-5"));
+    fireEvent.click(screen.getByTestId("executor-btn"));
+    fireEvent.click(await screen.findByTestId("executor-opt-codex"));
 
-    // First selection writes the global default (no per-thread override yet).
-    expect(localStorage.getItem("floo:default-model")).toBe("Opus 5");
-    expect(screen.getByTestId("model-btn")).toHaveTextContent("Opus 5");
-    await waitFor(() => expect(screen.queryByTestId("model-menu")).toBeNull());
-
-    fireEvent.click(screen.getByTestId("model-btn"));
-    expect((await screen.findByTestId("model-opt-opus-5")).className).toMatch(
-      /selected/
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_thread_executor", {
+        projectHash: "proj-1",
+        threadId: "t1",
+        executor: "codex",
+        model: null,
+      })
     );
+  });
+
+  it("feeds the model menu from the selected provider's probed models", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_models")
+        return Promise.resolve({
+          configId: "model",
+          current: "m1",
+          models: [
+            { id: "m1", name: "Model One" },
+            { id: "m2", name: "Model Two" },
+          ],
+        });
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.click(screen.getByTestId("model-btn"));
+    expect(await screen.findByTestId("model-opt-m1")).toBeDefined();
+    expect(await screen.findByTestId("model-opt-m2")).toBeDefined();
+    expect(invokeMock).toHaveBeenCalledWith("list_models", {
+      projectHash: "proj-1",
+      agentId: "claude",
+    });
+    // The button shows the agent's current model by name.
+    await waitFor(() =>
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("Model One")
+    );
+  });
+
+  it("filters the model menu by search query", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_models")
+        return Promise.resolve({
+          configId: "model",
+          current: "m1",
+          models: [
+            { id: "m1", name: "Model One" },
+            { id: "m2", name: "Model Two" },
+          ],
+        });
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.click(screen.getByTestId("model-btn"));
+    const search = await screen.findByTestId("model-search");
+    fireEvent.change(search, { target: { value: "Two" } });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("model-opt-m2")).not.toBeNull();
+      expect(screen.queryByTestId("model-opt-m1")).toBeNull();
+    });
+  });
+
+  it("clicking a model pins provider and model on the thread", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_models")
+        return Promise.resolve({
+          configId: "model",
+          current: "m1",
+          models: [
+            { id: "m1", name: "Model One" },
+            { id: "m2", name: "Model Two" },
+          ],
+        });
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.click(screen.getByTestId("model-btn"));
+    fireEvent.click(await screen.findByTestId("model-opt-m2"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_thread_executor", {
+        projectHash: "proj-1",
+        threadId: "t1",
+        executor: "claude",
+        model: "m2",
+      })
+    );
+  });
+
+  it("shows a hint when the provider manages its own model", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_models")
+        return Promise.resolve({ configId: null, current: null, models: [] });
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.click(screen.getByTestId("model-btn"));
+    expect(await screen.findByTestId("models-none")).toBeDefined();
   });
 
   it("has a bypass-permissions toggle, default off, that flips on and persists across menu reopen", async () => {
@@ -3097,7 +3178,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    fireEvent.click(screen.getByTestId("model-btn"));
+    fireEvent.click(screen.getByTestId("executor-btn"));
     const toggle = await screen.findByTestId("bypass-toggle");
     expect(toggle).not.toBeChecked();
 
@@ -3105,25 +3186,13 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     expect(toggle).toBeChecked();
     expect(localStorage.getItem("floo:default-bypass")).toBe("1");
 
-    fireEvent.click(screen.getByTestId("model-btn")); // close
-    fireEvent.click(screen.getByTestId("model-btn")); // reopen
+    fireEvent.click(screen.getByTestId("executor-btn")); // close
+    fireEvent.click(screen.getByTestId("executor-btn")); // reopen
     expect(await screen.findByTestId("bypass-toggle")).toBeChecked();
-  });
-
-  it("disables the model picker when the detected executor is Codex", async () => {
-    setupWithThread("codex");
-    render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
-    );
-    fireEvent.click(screen.getByTestId("model-btn"));
-    expect(await screen.findByTestId("model-disabled-hint")).toBeDefined();
-    expect(screen.queryByTestId("model-opt-opus-5")).toBeNull();
   });
 
   it("shows a 'next session' hint when a live session exists for the thread", async () => {
     setupWithThread("claude");
-    // Override executor_status to report a live session on this thread
     const baseImpl = invokeMock.getMockImplementation();
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "executor_status")
@@ -3142,20 +3211,18 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    fireEvent.click(screen.getByTestId("model-btn"));
+    fireEvent.click(screen.getByTestId("executor-btn"));
     expect(await screen.findByTestId("next-session-hint")).toBeDefined();
   });
 
-  it("passes the model alias and bypass to sendMessage", async () => {
+  it("passes bypass to sendMessage", async () => {
     setupWithThread("claude");
     render(<App />);
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    // Select Opus 5 and enable bypass
-    fireEvent.click(screen.getByTestId("model-btn"));
-    fireEvent.click(await screen.findByTestId("model-opt-opus-5"));
-    fireEvent.click(screen.getByTestId("model-btn"));
+    // Enable bypass
+    fireEvent.click(screen.getByTestId("executor-btn"));
     const toggle = await screen.findByTestId("bypass-toggle");
     fireEvent.click(toggle);
 
@@ -3171,7 +3238,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         threadId: "t1",
         content: "hello",
         mode: "spec",
-        model: "opus",
+        model: null,
         bypass: true,
       })
     );

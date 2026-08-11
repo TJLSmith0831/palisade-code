@@ -17,6 +17,8 @@ import {
   Tooltip,
   useMantineColorScheme,
   Textarea,
+  TextInput,
+  Box,
   SegmentedControl,
   ActionIcon,
   Button,
@@ -43,6 +45,7 @@ import type {
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
+import { deriveStage, type SpecStage } from "./stage";
 import { RenameIcon, DeleteIcon } from "./icons";
 import {
   EventList,
@@ -216,22 +219,32 @@ type ChatSurfaceProps = {
   busy: boolean;
   showThinking: boolean;
   executor: Preflight["selected"] | null;
-  executorLabel: string | null;
+  flight: Preflight | null;
   flightSelected: boolean;
+  /** Probed model selector for the effective provider, or its load state. */
+  models: api.ModelState | "loading" | { error: string } | null;
+  onPickExecutor: (agentId: string) => void;
+  onPickModel: (modelId: string) => void;
+  /** The model menu was opened — probe the provider if not yet cached. */
+  onProbeModels: () => void;
   draft: string;
   setDraft: (value: string) => void;
   onSend: () => void;
   onRenameThread: (target: ThreadMeta) => void;
   onSpec: () => void;
   onGo: () => void;
+  /** "Proceed to proposal?" — fires grill-propose in exploring stage. */
+  onPropose: () => void;
+  /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
+  onApply: () => void;
+  /** Spec-mode stage derivation (amended D19). */
+  stage: SpecStage;
   dragActive: boolean;
   newThreadPicker: boolean;
   showEmptyModePicker?: boolean;
   onPickMode: (mode: api.Mode) => void;
   onOpenSpec?: (specName: string) => void;
-  threadModel: string;
   threadBypass: boolean;
-  onSelectModel: (model: string) => void;
   onToggleBypass: () => void;
   prefsMenuOpen: boolean;
   setPrefsMenuOpen: (open: boolean) => void;
@@ -246,27 +259,67 @@ function ChatSurface({
   busy,
   showThinking,
   executor,
-  executorLabel,
+  flight,
   flightSelected,
+  models,
+  onPickExecutor,
+  onPickModel,
+  onProbeModels,
   draft,
   setDraft,
   onSend,
   onRenameThread,
   onSpec,
   onGo,
+  onPropose,
+  onApply,
+  stage,
   dragActive,
   newThreadPicker,
   showEmptyModePicker = false,
   onPickMode,
   onOpenSpec,
-  threadModel,
   threadBypass,
-  onSelectModel,
   onToggleBypass,
   prefsMenuOpen,
   setPrefsMenuOpen,
   hasLiveSession,
 }: ChatSurfaceProps) {
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const executorLabel = executor
+    ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
+    : null;
+  const modelError =
+    models && typeof models === "object" && "error" in models
+      ? models.error
+      : null;
+  const modelState =
+    models && typeof models === "object" && !("error" in models)
+      ? models
+      : null;
+  const filteredModels = useMemo(() => {
+    if (!modelState) return [];
+    if (!modelQuery) return modelState.models;
+    return modelState.models
+      .map((m) => ({ model: m, score: fuzzyMatch(modelQuery, m.name) }))
+      .filter((x) => x.score !== null)
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .map((x) => x.model);
+  }, [modelState, modelQuery]);
+  useEffect(() => {
+    if (!modelMenuOpen) setModelQuery("");
+  }, [modelMenuOpen]);
+  const currentModelId = thread?.model ?? modelState?.current ?? null;
+  const modelLabel =
+    models === "loading"
+      ? "…"
+      : modelError
+        ? "models unavailable"
+        : currentModelId
+          ? (modelState?.models.find((m) => m.id === currentModelId)?.name ??
+            currentModelId)
+          : "default";
   if (newThreadPicker || showEmptyModePicker) {
     return (
       <>
@@ -383,6 +436,30 @@ function ChatSurface({
           </div>
         )}
       </div>
+      {stage === "exploring" && !busy && flightSelected && (
+        <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
+          <Button
+            data-testid="proceed-to-proposal"
+            size="xs"
+            variant="light"
+            onClick={onPropose}
+          >
+            Proceed to proposal?
+          </Button>
+        </div>
+      )}
+      {stage === "ready_to_apply" && !busy && flightSelected && (
+        <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
+          <Button
+            data-testid="apply-skill"
+            size="xs"
+            variant="filled"
+            onClick={onApply}
+          >
+            Apply
+          </Button>
+        </div>
+      )}
       <form
         className={`composer ${dragActive ? "drag-active" : ""}`}
         onSubmit={(event) => {
@@ -456,40 +533,43 @@ function ChatSurface({
             <Menu.Target>
               <button
                 className="ds-icon-btn"
-                data-testid="model-btn"
+                data-testid="executor-btn"
                 data-tauri-drag-region-exclude
                 style={{ fontSize: 12, padding: "4px 8px" }}
               >
-                {threadModel}
+                {executorLabel ?? "none detected"}
                 {threadBypass ? " · bypass" : ""}
               </button>
             </Menu.Target>
-            <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
-              <Menu.Label>Executor</Menu.Label>
-              <div className="ds-model-executor-row" data-testid="executor-row">
-                {executorLabel ?? executor ?? "none detected"}
-              </div>
-              <Menu.Label>Model</Menu.Label>
-              {executor === "codex" ? (
-                <span className="hint" data-testid="model-disabled-hint">
-                  Model selection is not available for Codex.
+            <Menu.Dropdown
+              className="ds-model-menu"
+              data-testid="executor-menu"
+            >
+              <Menu.Label>Provider</Menu.Label>
+              {flight?.agents.map((a) => (
+                <Menu.Item
+                  key={a.id}
+                  className={`ds-model-opt ${executor === a.id ? "selected" : ""}`}
+                  data-testid={`executor-opt-${a.id}`}
+                  onClick={() => {
+                    if (a.id !== executor) {
+                      onPickExecutor(a.id);
+                    }
+                    setPrefsMenuOpen(false);
+                  }}
+                >
+                  {a.name}
+                </Menu.Item>
+              )) ?? (
+                <span className="hint" data-testid="no-executors-hint">
+                  No ACP agents installed.
                 </span>
-              ) : (
-                MODELS.map((m) => (
-                  <Menu.Item
-                    key={m}
-                    className={`ds-model-opt ${threadModel === m ? "selected" : ""}`}
-                    onClick={() => onSelectModel(m)}
-                    data-testid={`model-opt-${m.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
-                    {m}
-                  </Menu.Item>
-                ))
               )}
               {hasLiveSession && (
                 <span className="hint" data-testid="next-session-hint">
-                  Next session will use {threadModel}
-                  {threadBypass ? " · bypass on" : ""}.
+                  Next session will use {executorLabel ?? "auto-detected"}
+                  {threadBypass ? " · bypass on" : ""}. Switching hands the
+                  conversation off as text context.
                 </span>
               )}
               <Switch
@@ -502,6 +582,76 @@ function ChatSurface({
                 onChange={onToggleBypass}
                 data-testid="bypass-toggle"
               />
+            </Menu.Dropdown>
+          </Menu>
+          <Menu
+            opened={modelMenuOpen}
+            onChange={(open) => {
+              setModelMenuOpen(open);
+              if (open) onProbeModels();
+            }}
+            position="top"
+            withinPortal
+          >
+            <Menu.Target>
+              <button
+                className="ds-icon-btn"
+                data-testid="model-btn"
+                data-tauri-drag-region-exclude
+                disabled={!executor}
+                style={{ fontSize: 12, padding: "4px 8px" }}
+              >
+                {modelLabel}
+              </button>
+            </Menu.Target>
+            <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
+              <Menu.Label>Model</Menu.Label>
+              <TextInput
+                placeholder="Search models…"
+                value={modelQuery}
+                onChange={(event) => setModelQuery(event.currentTarget.value)}
+                size="xs"
+                style={{ margin: "0 8px 8px" }}
+                data-testid="model-search"
+              />
+              <Box style={{ maxHeight: 210, overflowY: "auto" }}>
+                {models === "loading" && (
+                  <span className="hint" data-testid="models-loading">
+                    Asking {executorLabel ?? "the agent"}…
+                  </span>
+                )}
+                {modelError && (
+                  <span className="hint" data-testid="models-error">
+                    {modelError}
+                  </span>
+                )}
+                {modelState && modelState.models.length === 0 && (
+                  <span className="hint" data-testid="models-none">
+                    {executorLabel ?? "This provider"} manages its own model.
+                  </span>
+                )}
+                {filteredModels.map((m) => (
+                  <Menu.Item
+                    key={m.id}
+                    className={`ds-model-opt ${currentModelId === m.id ? "selected" : ""}`}
+                    data-testid={`model-opt-${m.id}`}
+                    onClick={() => {
+                      onPickModel(m.id);
+                      setModelMenuOpen(false);
+                    }}
+                  >
+                    {m.name}
+                  </Menu.Item>
+                ))}
+                {filteredModels.length === 0 &&
+                  modelQuery &&
+                  !modelError &&
+                  models !== "loading" && (
+                    <span className="hint" data-testid="models-no-matches">
+                      No models match.
+                    </span>
+                  )}
+              </Box>
             </Menu.Dropdown>
           </Menu>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -639,23 +789,6 @@ function ChatSurface({
   );
 }
 
-/**
- * An agent's brand glyph, if it has one. Keyed by id because artwork can't
- * come from a backend table — but nothing else in the UI names an agent: the
- * label, the path and the status all come off `Preflight.agents`.
- */
-function AgentMark({ id }: { id: string }) {
-  if (id !== "claude") return null;
-  return (
-    <svg viewBox="0 0 256 257" width="12" height="12" aria-hidden="true">
-      <path
-        fill="#D97757"
-        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
-      />
-    </svg>
-  );
-}
-
 // Keeps a resize drag alive after the pointer leaves the handle element.
 const bindDrag =
   (
@@ -697,31 +830,19 @@ const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
 export const THEME_KEY = "floo:theme";
 const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
-const DEFAULT_MODEL_KEY = "floo:default-model";
 const DEFAULT_BYPASS_KEY = "floo:default-bypass";
-const MODELS = ["Sonnet 5", "Opus 5", "Haiku 4.5"];
-// Claude CLI aliases — the UI shows friendly names, the backend receives the
-// alias that `claude --model` accepts. Codex model selection is deferred.
-const MODEL_ALIASES: Record<string, string> = {
-  "Sonnet 5": "sonnet",
-  "Opus 5": "opus",
-  "Haiku 4.5": "haiku",
-};
 const threadPrefsKey = (hash: string, threadId: string) =>
   `floo:thread-prefs:${hash}:${threadId}`;
 
-type ThreadPrefs = { model: string; bypass: boolean };
+type ThreadPrefs = { bypass: boolean };
 
 const getThreadPrefs = (hash: string, threadId: string): ThreadPrefs | null => {
   const raw = localStorage.getItem(threadPrefsKey(hash, threadId));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<ThreadPrefs>;
-    if (
-      typeof parsed.model === "string" &&
-      typeof parsed.bypass === "boolean"
-    ) {
-      return { model: parsed.model, bypass: parsed.bypass };
+    if (typeof parsed.bypass === "boolean") {
+      return { bypass: parsed.bypass };
     }
   } catch {
     // fall through to default
@@ -733,32 +854,14 @@ const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
   localStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
 };
 
-const getDefaultModel = () =>
-  localStorage.getItem(DEFAULT_MODEL_KEY) || MODELS[0];
-const setDefaultModel = (model: string) =>
-  localStorage.setItem(DEFAULT_MODEL_KEY, model);
 const getDefaultBypass = () => localStorage.getItem(DEFAULT_BYPASS_KEY) === "1";
 const setDefaultBypass = (bypass: boolean) =>
   localStorage.setItem(DEFAULT_BYPASS_KEY, bypass ? "1" : "0");
 
-/** The effective model/bypass for a thread: per-thread override, or global
- * default. The frontend resolves this before each session-starting call so
- * the backend never needs to know the storage scheme. */
 const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
   getThreadPrefs(hash, threadId) ?? {
-    model: getDefaultModel(),
     bypass: getDefaultBypass(),
   };
-
-/** Maps a display model name to the CLI alias the backend passes to `--model`.
- * Returns null when the executor doesn't support model selection (Codex). */
-const modelAlias = (
-  model: string,
-  executorId: string | null
-): string | null => {
-  if (executorId === "codex") return null;
-  return MODEL_ALIASES[model] ?? null;
-};
 type TerminalPlacement = "bottom" | "sidebar";
 type Theme = "auto" | "light" | "dark";
 const nextTheme = (t: Theme): Theme =>
@@ -775,6 +878,9 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [thread, setThread] = useState<ThreadMeta | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  // Whether the thread's open spec change has all planning artifacts complete
+  // (openspec status isComplete). null = unknown / not fetched.
+  const [changeComplete, setChangeComplete] = useState<boolean | null>(null);
   const [branches, setBranches] = useState<api.BranchInfo[]>([]);
   // One reusable command bar: rename project, rename thread, and confirming
   // a delete. `window.prompt`/`confirm` are no-ops in
@@ -997,32 +1103,15 @@ export default function App() {
   // writes these; the effective values are resolved before each session-starting
   // call so a live session keeps its original flags (design.md Decision 2).
   const [threadPrefs, setThreadPrefsState] = useState<ThreadPrefs>(() => ({
-    model: getDefaultModel(),
     bypass: getDefaultBypass(),
   }));
   const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
   const [hasLiveSession, setHasLiveSession] = useState(false);
-  const onSelectModel = (model: string) => {
-    if (!project || !thread) return;
-    const prefs = { model, bypass: threadPrefs.bypass };
-    setThreadPrefs(project.hash, thread.id, prefs);
-    setThreadPrefsState(prefs);
-    setPrefsMenuOpen(false);
-  };
   const onToggleBypass = () => {
     if (!project || !thread) return;
-    const prefs = { model: threadPrefs.model, bypass: !threadPrefs.bypass };
+    const prefs = { bypass: !threadPrefs.bypass };
     setThreadPrefs(project.hash, thread.id, prefs);
     setThreadPrefsState(prefs);
-  };
-  // When no per-thread override has been set yet, changing the model or bypass
-  // also updates the global default so new threads inherit it.
-  const onSelectModelDefault = (model: string) => {
-    if (!project || !thread) return;
-    if (!getThreadPrefs(project.hash, thread.id)) {
-      setDefaultModel(model);
-    }
-    onSelectModel(model);
   };
   const onToggleBypassDefault = () => {
     if (!project || !thread) return;
@@ -1485,7 +1574,12 @@ export default function App() {
     setNewThreadPicker(false);
     try {
       const created = await api.createThread(project.hash, "New thread");
-      const updated = await api.setThreadMode(project.hash, created.id, mode);
+      // For spec mode, use spec_mode() which auto-fires grill-explore.
+      // For go mode, setThreadMode is sufficient (go has no auto-injection).
+      const updated =
+        mode === "spec"
+          ? await api.specMode(project.hash, created.id, false)
+          : await api.setThreadMode(project.hash, created.id, mode);
       setThreads(await api.listThreads(project.hash));
       await selectThread(project.hash, updated);
     } catch (err) {
@@ -1604,10 +1698,19 @@ export default function App() {
       api.listThreads(project.hash),
       api.readThread(project.hash, thread.id),
     ]);
+    const updated = found.find((t) => t.id === thread.id) ?? thread;
     setThreads(found);
-    setThread(found.find((t) => t.id === thread.id) ?? thread);
+    setThread(updated);
     setMessages(history);
     clearLiveFor(thread.id);
+    // Fetch change status when the thread has an open spec change.
+    if (updated.openSpecChangeName) {
+      api
+        .changeStatus(project.hash, updated.openSpecChangeName)
+        .then(setChangeComplete, () => setChangeComplete(null));
+    } else {
+      setChangeComplete(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -1758,12 +1861,7 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
-      const meta = await api.goMode(
-        project.hash,
-        thread.id,
-        modelAlias(prefs.model, flight?.selected ?? null),
-        prefs.bypass
-      );
+      const meta = await api.goMode(project.hash, thread.id, prefs.bypass);
       await refresh();
       // A linked change means /grill-apply was just sent; otherwise we're idle.
       if (!meta.openSpecChangeName) setBusy(false);
@@ -1773,14 +1871,100 @@ export default function App() {
     }
   };
 
+  // Probed model selectors, keyed by agent id. The ref is the guard against
+  // double-probing (state updaters can run twice); the state mirror is what
+  // re-renders the model menu.
+  const modelsRef = useRef<
+    Record<string, api.ModelState | "loading" | { error: string }>
+  >({});
+  const [modelsByAgent, setModelsByAgent] = useState<
+    Record<string, api.ModelState | "loading" | { error: string }>
+  >({});
+
+  const probeAgentModels = useCallback(async (agentId: string) => {
+    const { project } = current.current;
+    if (!project) return;
+    const existing = modelsRef.current[agentId];
+    // Cached success or in-flight probe: don't re-probe. Errors retry —
+    // the agent may just have been authed.
+    if (existing === "loading" || (existing && "error" in existing === false))
+      return;
+    modelsRef.current = { ...modelsRef.current, [agentId]: "loading" };
+    setModelsByAgent(modelsRef.current);
+    try {
+      const state = await api.listModels(project.hash, agentId);
+      modelsRef.current = { ...modelsRef.current, [agentId]: state };
+    } catch (err) {
+      modelsRef.current = {
+        ...modelsRef.current,
+        [agentId]: { error: describeError(err) },
+      };
+    }
+    setModelsByAgent(modelsRef.current);
+  }, []);
+
+  // Spec-mode stage derivation (amended D19): explore → propose → apply.
+  const stage = thread
+    ? deriveStage(
+        thread.currentMode,
+        !!thread.openSpecChangeName,
+        changeComplete
+      )
+    : "chat";
+
+  const onPickExecutor = useCallback(
+    async (agentId: string) => {
+      const { project, thread } = current.current;
+      if (!project || !thread) return;
+      try {
+        // Picking a provider clears the model — the old model id means
+        // nothing to the new agent.
+        await api.setThreadExecutor(project.hash, thread.id, agentId, null);
+        await refresh();
+      } catch (err) {
+        fail(err);
+      }
+      probeAgentModels(agentId);
+    },
+    [refresh, probeAgentModels]
+  );
+
+  const onPickModel = useCallback(
+    async (modelId: string) => {
+      const { project, thread } = current.current;
+      if (!project || !thread) return;
+      // Pin the provider alongside the model, so the pair can't drift apart
+      // if auto-detection later resolves differently.
+      const executorId = thread.executor ?? flight?.selected ?? null;
+      if (!executorId) return;
+      try {
+        await api.setThreadExecutor(
+          project.hash,
+          thread.id,
+          executorId,
+          modelId
+        );
+        await refresh();
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [refresh, flight]
+  );
+
   const onSpec = async () => {
     const { project, thread } = current.current;
     if (!project || !thread) return;
     try {
-      await api.specMode(project.hash, thread.id);
-      setBusy(false);
+      setBusy(true);
+      const prefs = resolvePrefs(project.hash, thread.id);
+      const meta = await api.specMode(project.hash, thread.id, prefs.bypass);
       await refresh();
+      // spec_mode auto-fires grill-explore when there's no change;
+      // if there IS a change, it just sets the mode (no session started).
+      if (meta.openSpecChangeName) setBusy(false);
     } catch (err) {
+      setBusy(false);
       fail(err);
     }
   };
@@ -1791,12 +1975,21 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
-      await api.propose(
-        project.hash,
-        thread.id,
-        modelAlias(prefs.model, flight?.selected ?? null),
-        prefs.bypass
-      );
+      await api.propose(project.hash, thread.id, prefs.bypass);
+      await refresh();
+    } catch (err) {
+      setBusy(false);
+      fail(err);
+    }
+  };
+
+  const onApply = async () => {
+    const { project, thread } = current.current;
+    if (!project || !thread) return;
+    try {
+      setBusy(true);
+      const prefs = resolvePrefs(project.hash, thread.id);
+      await api.applySkill(project.hash, thread.id, prefs.bypass);
       await refresh();
     } catch (err) {
       setBusy(false);
@@ -1820,7 +2013,6 @@ export default function App() {
         thread.id,
         text,
         thread.currentMode,
-        modelAlias(prefs.model, flight?.selected ?? null),
         prefs.bypass
       );
       setMessages(await api.readThread(project.hash, thread.id));
@@ -2186,35 +2378,6 @@ export default function App() {
                 <SettingsIcon />
               </button>
             </Tooltip>
-            <Tooltip
-              label={
-                flight
-                  ? [
-                      `executor: ${flight.selected ?? "none"}`,
-                      ...flight.warnings,
-                    ].join("\n")
-                  : "checking…"
-              }
-              multiline
-              styles={{ tooltip: { whiteSpace: "pre-line" } }}
-            >
-              <button
-                className={`ds-icon-btn ${flight?.ready ? "ok" : flight?.selected ? "warn" : "bad"}`}
-                onClick={() => api.preflight(true).then(setFlight, fail)}
-                data-tauri-drag-region-exclude
-                data-testid="preflight-status"
-              >
-                {flight?.selected ? (
-                  <span className="ds-preflight-label">
-                    <AgentMark id={flight.selected} />
-                    {flight.agents.find((a) => a.id === flight.selected)
-                      ?.label ?? flight.selected}
-                  </span>
-                ) : (
-                  "—"
-                )}
-              </button>
-            </Tooltip>
           </div>
         </header>
         {flight && flight.warnings.length > 0 && (
@@ -2335,7 +2498,22 @@ export default function App() {
                   onToggleMdPreview={toggleMdPreview}
                 />
                 {!diffOpen ? (
-                  project ? (
+                  tabs.activeTab?.type === "spec" ? (
+                    project &&
+                    tabs.activeTab.type === "spec" &&
+                    (() => {
+                      const specName = tabs.activeTab!.specName;
+                      return (
+                        <SpecChangeTab
+                          projectHash={project.hash}
+                          specName={specName}
+                          verifyPins={verifyPins[specName]}
+                          onAddPin={(cmd) => addVerifyPin(specName, cmd)}
+                          onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}
+                        />
+                      );
+                    })()
+                  ) : project ? (
                     <FileEditorPane
                       projectHash={project.hash}
                       path={selectedFile}
@@ -2683,26 +2861,35 @@ export default function App() {
                       live={live}
                       busy={busy}
                       showThinking={showThinking}
-                      executor={flight?.selected ?? null}
-                      executorLabel={
-                        flight?.agents.find((a) => a.id === flight.selected)
-                          ?.label ??
-                        flight?.selected ??
-                        null
+                      executor={thread?.executor ?? flight?.selected ?? null}
+                      models={
+                        (thread?.executor ?? flight?.selected)
+                          ? (modelsByAgent[
+                              (thread?.executor ?? flight?.selected)!
+                            ] ?? null)
+                          : null
                       }
+                      onPickExecutor={onPickExecutor}
+                      onPickModel={onPickModel}
+                      onProbeModels={() => {
+                        const id = thread?.executor ?? flight?.selected;
+                        if (id) probeAgentModels(id);
+                      }}
                       flightSelected={!!flight?.selected}
+                      flight={flight}
                       draft={draft}
                       setDraft={setDraft}
                       onSend={onSend}
                       onRenameThread={onRenameThread}
                       onSpec={onSpec}
                       onGo={onGo}
+                      onPropose={onPropose}
+                      onApply={onApply}
+                      stage={stage}
                       dragActive={dragActive}
                       newThreadPicker={newThreadPicker}
                       onPickMode={onPickMode}
-                      threadModel={threadPrefs.model}
                       threadBypass={threadPrefs.bypass}
-                      onSelectModel={onSelectModelDefault}
                       onToggleBypass={onToggleBypassDefault}
                       prefsMenuOpen={prefsMenuOpen}
                       setPrefsMenuOpen={openPrefsMenu}
@@ -2730,28 +2917,37 @@ export default function App() {
                   live={live}
                   busy={busy}
                   showThinking={showThinking}
-                  executor={flight?.selected ?? null}
-                  executorLabel={
-                    flight?.agents.find((a) => a.id === flight.selected)
-                      ?.label ??
-                    flight?.selected ??
-                    null
+                  executor={thread?.executor ?? flight?.selected ?? null}
+                  models={
+                    (thread?.executor ?? flight?.selected)
+                      ? (modelsByAgent[
+                          (thread?.executor ?? flight?.selected)!
+                        ] ?? null)
+                      : null
                   }
+                  onPickExecutor={onPickExecutor}
+                  onPickModel={onPickModel}
+                  onProbeModels={() => {
+                    const id = thread?.executor ?? flight?.selected;
+                    if (id) probeAgentModels(id);
+                  }}
                   flightSelected={!!flight?.selected}
+                  flight={flight}
                   draft={draft}
                   setDraft={setDraft}
                   onSend={onSend}
                   onRenameThread={onRenameThread}
                   onSpec={onSpec}
                   onGo={onGo}
+                  onPropose={onPropose}
+                  onApply={onApply}
+                  stage={stage}
                   dragActive={dragActive}
                   newThreadPicker={newThreadPicker}
                   showEmptyModePicker={threads.length === 0 && !thread}
                   onPickMode={onPickMode}
                   onOpenSpec={(name) => tabs.openSpec(name)}
-                  threadModel={threadPrefs.model}
                   threadBypass={threadPrefs.bypass}
-                  onSelectModel={onSelectModelDefault}
                   onToggleBypass={onToggleBypassDefault}
                   prefsMenuOpen={prefsMenuOpen}
                   setPrefsMenuOpen={openPrefsMenu}
