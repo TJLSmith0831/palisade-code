@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::commands::fs_ops::should_skip_entry;
 use notify::RecursiveMode;
 use notify_debouncer_full::{
     new_debouncer, DebounceEventResult, Debouncer, RecommendedCache,
@@ -153,7 +154,7 @@ fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
     }
     for component in relative.components() {
         let name = component.as_os_str().to_string_lossy();
-        if crate::should_skip_entry(&name, false) || name == GRAPHIFY_OUT_DIR {
+        if should_skip_entry(&name, false) || name == GRAPHIFY_OUT_DIR {
             return None;
         }
     }

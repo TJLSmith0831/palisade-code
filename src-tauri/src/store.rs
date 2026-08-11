@@ -376,17 +376,9 @@ fn append_session(home: &Path, record: &SessionRecord) -> Res<()> {
         fs::create_dir_all(parent).map_err(|err| e("create thread dir", err))?;
     }
     let line = serde_json::to_string(record).map_err(|err| e("serialize session", err))?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|err| e(&format!("open {}", path.display()), err))?;
-    if !ends_with_newline(&path)? {
-        file.write_all(b"\n").map_err(|err| e("close torn line", err))?;
-    }
-    file.write_all(line.as_bytes()).map_err(|err| e("append session", err))?;
-    file.write_all(b"\n").map_err(|err| e("append newline", err))?;
-    file.sync_all().map_err(|err| e("fsync session log", err))
+    let writer = crate::session_log_writer::shared_session_log_writer();
+    let mut guard = writer.lock().map_err(|err| e("session log writer", err))?;
+    guard.append(&path, line.as_bytes()).map_err(|err| e("append session", err))
 }
 
 /// Record a session starting. The returned record is what `close_session`
@@ -432,6 +424,9 @@ pub fn close_session(
     outcome: &str,
     git_head_after: Option<&str>,
 ) -> Res<Option<SessionRecord>> {
+    // The matching open record may still be in the process-global buffer; flush
+    // before reading so close_session can amend the record it opened.
+    flush_session_log_writer()?;
     let Some(mut record) = read_sessions(home, hash, thread_id)?.into_iter().find(|r| r.id == id)
     else {
         return Ok(None);
@@ -517,6 +512,9 @@ pub fn close_stale_sessions(home: &Path, hash: &str, thread_id: &str, live: &[St
             close_session(home, hash, thread_id, &record.id, "interrupted", None)?;
         }
     }
+    // The close records were buffered; flush before re-reading the log so the
+    // returned set reflects the updated state.
+    flush_session_log_writer()?;
     read_sessions(home, hash, thread_id)
 }
 
@@ -617,11 +615,12 @@ pub struct Message {
 /// the seq is recomputed from disk.
 static SEQ_CACHE: Mutex<Option<HashMap<PathBuf, (u64, u64)>>> = Mutex::new(None);
 
-fn file_len(path: &Path) -> u64 {
+pub(crate) fn file_len(path: &Path) -> u64 {
     fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-/// Append one JSON line to the thread's log and fsync before returning.
+/// Append one JSON line to the thread's log. The write is buffered in-process
+/// and only flushed + fsynced when a turn ends or the app quits (D9).
 #[allow(clippy::too_many_arguments)]
 pub fn append_message(
     home: &Path,
@@ -633,10 +632,17 @@ pub fn append_message(
     session_id: Option<&str>,
 ) -> Res<Message> {
     let path = log_path(home, hash, id);
+
+    // Lock the writer first so no other thread can change the buffered byte
+    // count while we compute the next seq and append.
+    let writer = crate::session_log_writer::shared_session_log_writer();
+    let mut writer = writer.lock().map_err(|err| e("session log writer", err))?;
+    let expected_len = file_len(&path) + writer.buffered_len(&path);
+
     let mut cache = SEQ_CACHE.lock().map_err(|err| e("seq cache", err))?;
     let cache = cache.get_or_insert_with(HashMap::new);
     let seq = match cache.get(&path) {
-        Some((len, seq)) if *len == file_len(&path) => *seq,
+        Some((len, seq)) if *len == expected_len => *seq,
         _ => read_thread(home, hash, id)?.last().map_or(0, |m| m.seq + 1),
     };
     let message = Message {
@@ -652,24 +658,26 @@ pub fn append_message(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| e("create thread dir", err))?;
     }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|err| e(&format!("open {}", path.display()), err))?;
-    // A torn write leaves the file without its trailing newline; close that
-    // line off first so this message doesn't get glued onto the broken one.
-    if !ends_with_newline(&path)? {
-        file.write_all(b"\n").map_err(|err| e("close torn line", err))?;
-    }
-    file.write_all(line.as_bytes()).map_err(|err| e("append message", err))?;
-    file.write_all(b"\n").map_err(|err| e("append newline", err))?;
-    file.sync_all().map_err(|err| e("fsync session log", err))?;
-    cache.insert(path.clone(), (file_len(&path), seq + 1));
+
+    let torn_newline_len: u64 = if ends_with_newline(&path)? { 0 } else { 1 };
+    writer
+        .append(&path, line.as_bytes())
+        .map_err(|err| e("append message", err))?;
+    // Update the seq cache with the expected on-disk length after the next flush.
+    cache.insert(path.clone(), (expected_len + torn_newline_len + line.len() as u64 + 1, seq + 1));
     Ok(message)
 }
 
-fn ends_with_newline(path: &Path) -> Res<bool> {
+/// Flush the process-global session log writer. Tests should call this before
+/// reading back recently appended rows; production flushes on turn-done and
+/// app-quit.
+pub fn flush_session_log_writer() -> Res<()> {
+    let writer = crate::session_log_writer::shared_session_log_writer();
+    let mut guard = writer.lock().map_err(|err| e("session log writer", err))?;
+    guard.flush()
+}
+
+pub(crate) fn ends_with_newline(path: &Path) -> Res<bool> {
     use std::io::{Seek, SeekFrom};
     let mut file = match File::open(path) {
         Ok(file) => file,
@@ -888,6 +896,7 @@ mod tests {
         for i in 0..5 {
             append_message(home.path(), &project.hash, &thread.id, "user", "spec", &format!("m{i}"), None).unwrap();
         }
+        flush_session_log_writer().unwrap();
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.len(), 5);
         assert_eq!(messages.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
@@ -901,6 +910,7 @@ mod tests {
         let project = add_project(home.path(), repo.path()).unwrap();
         let thread = create_thread(home.path(), &project.hash, "t").unwrap();
         append_message(home.path(), &project.hash, &thread.id, "user", "spec", "good", None).unwrap();
+        flush_session_log_writer().unwrap();
 
         let path = log_path(home.path(), &project.hash, &thread.id);
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
@@ -916,6 +926,7 @@ mod tests {
 
         // A later good append still lands after the torn line.
         append_message(home.path(), &project.hash, &thread.id, "user", "spec", "after", None).unwrap();
+        flush_session_log_writer().unwrap();
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.last().unwrap().content, "after");
     }
@@ -931,12 +942,14 @@ mod tests {
         assert_eq!(meta.current_mode, "go");
         assert_eq!(list_threads(home.path(), &project.hash).unwrap()[0].current_mode, "go");
 
+        flush_session_log_writer().unwrap();
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "tool");
         assert_eq!(messages[0].mode, "go");
 
         set_thread_mode(home.path(), &project.hash, &thread.id, "spec").unwrap();
+        flush_session_log_writer().unwrap();
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].mode, "spec");
@@ -980,6 +993,7 @@ mod tests {
         .unwrap();
         assert_eq!(opened.ended_at, None);
         assert_eq!(opened.outcome, None);
+        flush_session_log_writer().unwrap();
 
         let live = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(live.len(), 1, "the open row is readable on its own");
@@ -991,6 +1005,7 @@ mod tests {
             let thread = create_thread(home.path(), &project.hash, "t").unwrap();
             open_session(home.path(), &project.hash, &thread.id, "s1", "claude", "go", None, None, None).unwrap();
             close_session(home.path(), &project.hash, &thread.id, "s1", outcome, Some("def456")).unwrap();
+            flush_session_log_writer().unwrap();
 
             let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
             assert_eq!(records.len(), 1, "the close amends the open, it does not duplicate it");
@@ -1012,6 +1027,7 @@ mod tests {
         open_session(home.path(), &project.hash, &thread.id, "s1", "claude", "go", None, None, None).unwrap();
         close_session(home.path(), &project.hash, &thread.id, "s1", "crashed", None).unwrap();
         close_session(home.path(), &project.hash, &thread.id, "s1", "cancelled", None).unwrap();
+        flush_session_log_writer().unwrap();
 
         let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(records[0].outcome.as_deref(), Some("crashed"));
@@ -1028,6 +1044,7 @@ mod tests {
 
         open_session(home.path(), &project.hash, &thread.id, "dead", "claude", "go", None, None, None).unwrap();
         open_session(home.path(), &project.hash, &thread.id, "alive", "codex", "spec", None, None, None).unwrap();
+        flush_session_log_writer().unwrap();
 
         let records =
             close_stale_sessions(home.path(), &project.hash, &thread.id, &["alive".to_string()]).unwrap();
@@ -1059,6 +1076,7 @@ mod tests {
 
         // Once the thread has a real session log, the shim stops firing.
         open_session(home.path(), &project.hash, &thread.id, "s1", "codex", "spec", None, None, None).unwrap();
+        flush_session_log_writer().unwrap();
         let records = read_sessions(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(records.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["s1"]);
     }
@@ -1120,6 +1138,7 @@ mod tests {
                     .unwrap();
             assert_eq!(message.seq, i, "the returned message carries its own seq");
         }
+        flush_session_log_writer().unwrap();
 
         let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.len(), 500);
@@ -1139,6 +1158,7 @@ mod tests {
         let thread = create_thread(home.path(), &project.hash, "t").unwrap();
 
         append_message(home.path(), &project.hash, &thread.id, "user", "spec", "one", None).unwrap();
+        flush_session_log_writer().unwrap();
 
         // Another writer appends a real message behind our back.
         let path = log_path(home.path(), &project.hash, &thread.id);
@@ -1180,6 +1200,7 @@ mod tests {
         let thread = create_thread(home.path(), &project.hash, "t").unwrap();
         append_message(home.path(), &project.hash, &thread.id, "assistant", "go", "out", Some(session))
             .unwrap();
+        flush_session_log_writer().unwrap();
         read_thread(home.path(), &project.hash, &thread.id).unwrap().remove(0)
     }
 

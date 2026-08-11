@@ -7,7 +7,8 @@ import {
   type CSSVariablesResolver,
 } from "@mantine/core";
 import "@mantine/core/styles.css";
-import App, { THEME_KEY } from "./App";
+import App from "./App";
+import { THEME_KEY } from "./hooks/useAppShell";
 
 // Radius/font tokens mirror DESIGN.md's documented scale (rounded, typography).
 const theme = createTheme({

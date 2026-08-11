@@ -18,7 +18,6 @@ import {
   Switch,
   Tabs,
   Tooltip,
-  useMantineColorScheme,
   Textarea,
   TextInput,
   Box,
@@ -46,6 +45,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import * as api from "./api";
+import { useAppShell } from "./hooks/useAppShell";
+import { useProjectManager } from "./hooks/useProjectManager";
+import { useExecutor } from "./hooks/useExecutor";
 import type {
   Envelope,
   ExecutorEvent,
@@ -93,7 +95,7 @@ import SettingsPanel, {
 } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
 import { enableModernWindowStyle } from "./macRoundedCorners";
-import { useResizable, type UseResizableResult } from "./useResizable";
+import { type UseResizableResult } from "./useResizable";
 import "./App.css";
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
@@ -733,8 +735,6 @@ const PROJECT_SETTINGS_FILE = ".project-settings.json";
 
 const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
 const SHOW_THINKING_KEY = "floo:showThinking";
-export const THEME_KEY = "floo:theme";
-const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
 const DEFAULT_BYPASS_KEY = "floo:default-bypass";
 const threadPrefsKey = (hash: string, threadId: string) =>
   `floo:thread-prefs:${hash}:${threadId}`;
@@ -767,10 +767,6 @@ const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
   getThreadPrefs(hash, threadId) ?? {
     bypass: getDefaultBypass(),
   };
-type TerminalPlacement = "bottom" | "sidebar";
-type Theme = "auto" | "light" | "dark";
-const nextTheme = (t: Theme): Theme =>
-  t === "auto" ? "light" : t === "light" ? "dark" : "auto";
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 type ThreadRowProps = {
   thread: ThreadMeta;
@@ -955,15 +951,37 @@ export const imagePathsFrom = (paths: string[]): string[] =>
   paths.filter((p) => IMAGE_PATH.test(p));
 
 export default function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [project, setProject] = useState<Project | null>(null);
-  const [threads, setThreads] = useState<ThreadMeta[]>([]);
-  const [thread, setThread] = useState<ThreadMeta | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  // Whether the thread's open spec change has all planning artifacts complete
-  // (openspec status isComplete). null = unknown / not fetched.
-  const [changeComplete, setChangeComplete] = useState<boolean | null>(null);
-  const [branches, setBranches] = useState<api.BranchInfo[]>([]);
+  const pm = useProjectManager();
+  const project = pm.project;
+  const setProject = pm.setProject;
+  const projects = pm.projects;
+  const setProjects = pm.setProjects;
+  const thread = pm.thread;
+  const setThread = pm.setThread;
+  const threads = pm.threads;
+  const setThreads = pm.setThreads;
+  const branches = pm.branches;
+  const setBranches = pm.setBranches;
+  const changeComplete = pm.changeComplete;
+  const setChangeComplete = pm.setChangeComplete;
+  const specLinkChoice = pm.specLinkChoice;
+  const setSpecLinkChoice = pm.setSpecLinkChoice;
+  const ex = useExecutor();
+  const messages = ex.messages;
+  const setMessages = ex.setMessages;
+  const draft = ex.draft;
+  const setDraft = ex.setDraft;
+  const errors = ex.errors;
+  const setErrors = ex.setErrors;
+  const flight = ex.flight;
+  const setFlight = ex.setFlight;
+  const liveBySession = ex.liveBySession;
+  const setLiveBySession = ex.setLiveBySession;
+  const busyThreads = ex.busyThreads;
+  const setBusyFor = ex.setBusyFor;
+  const modelsRef = ex.modelsRef;
+  const modelsByAgent = ex.modelsByAgent;
+  const setModelsByAgent = ex.setModelsByAgent;
   // One reusable command bar: rename project, rename thread, and confirming
   // a delete. `window.prompt`/`confirm` are no-ops in
   // Tauri's WKWebView — they return null without ever showing a dialog —
@@ -994,53 +1012,11 @@ export default function App() {
   // thread view — not part of `bar` since it isn't an overlay (spec:
   // new-thread-mode-picker requires it inline, not a modal dialog).
   const [newThreadPicker, setNewThreadPicker] = useState(false);
-  // Editor shell: Threads & Codebase Map collapsible disclosure, collapsed
-  // by default so chat owns the rail's height when idle (spec:
-  // editor-collapsible-rail).
-  const [editorRailOpen, setEditorRailOpen] = useState(false);
-  // Vibe shell: File Explorer collapsible disclosure in the right rail,
-  // collapsed by default (mirrors editorRailOpen's pattern).
-  const [vibeExplorerOpen, setVibeExplorerOpen] = useState(false);
-  // (Vibe's "changes vs file" state used to live here. It said the same
-  // thing as the Editor shell's own editor/diff state, and the two could
-  // disagree — they're now one `diffOpen`, shared by both shells.)
-  // Live-filters the "select" bar's option list (branch picker) as the user
-  // types, the same fuzzy-match convention FilePalette/TextSearchPalette use.
   const [selectQuery, setSelectQuery] = useState("");
   useEffect(() => {
     if (!bar) setSelectQuery("");
   }, [bar]);
-  const [draft, setDraft] = useState("");
-  // A list, not a single string: an action failing while an earlier failure
-  // is still showing must not silently erase it — each stays visible until
-  // its own dismiss, so a user who triggers two things in a row can tell
-  // which one broke.
-  const [errors, setErrors] = useState<{ id: string; message: string }[]>([]);
-  const [flight, setFlight] = useState<Preflight | null>(null);
-  // Live executor output keyed by the session that produced it. One flat array
-  // can't survive concurrent sessions: two agents streaming at once would
-  // interleave into one another's transcript, and switching threads mid-turn
-  // would fold the session you left into the thread you arrived at.
-  const [liveBySession, setLiveBySession] = useState<
-    Map<string, { threadId: string; events: ExecutorEvent[] }>
-  >(new Map());
-  // Busy is per thread, not global: with sessions concurrent, another thread's
-  // turn finishing must not unlock this thread's composer, and switching
-  // threads must not carry the old thread's spinner across.
-  const [busyThreads, setBusyThreads] = useState<Set<string>>(new Set());
-  // Set when a propose turn produced more than one change; cleared when the
-  // user picks one or dismisses.
-  const [specLinkChoice, setSpecLinkChoice] =
-    useState<api.SpecLinkAmbiguous | null>(null);
-  const setBusyFor = useCallback((threadId: string, value: boolean) => {
-    setBusyThreads((previous) => {
-      if (previous.has(threadId) === value) return previous;
-      const next = new Set(previous);
-      if (value) next.add(threadId);
-      else next.delete(threadId);
-      return next;
-    });
-  }, []);
+  // Executor/live state lives in useExecutor and is aliased here.
   const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   // The open files. Shared by both shells, so switching between Vibe and
   // Editor never closes anything or loses where you were in a file.
@@ -1093,99 +1069,7 @@ export default function App() {
   // live tab list without re-binding on every tab change.
   const activePathRef = useRef<string | null>(null);
   activePathRef.current = tabs.activePath;
-  // Whether the centre pane is showing the diff instead of a file. One state
-  // for both shells — it used to be `centerTab` in one and `vibeFileTab` in
-  // the other, two names for the same idea that could disagree.
-  const [diffOpen, setDiffOpen] = useState(false);
-  // Which workspace shell is rendered — layout only, independent of a thread's
-  // own Spec/Go mode (see openspec/changes/vibe-editor-shell-redesign).
-  // Defaults to "editor" (today's layout) so existing users see no change
-  // until they opt into "vibe" via the toggle.
-  const [centerShell, setCenterShellState] = useState<"vibe" | "editor">(
-    "editor"
-  );
-  // Set once the user picks a shell themselves. The launch restore runs
-  // asynchronously, and without this it would undo a choice made while the
-  // project was still loading.
-  const shellChosenRef = useRef(false);
-  const setCenterShell = useCallback((shell: "vibe" | "editor") => {
-    shellChosenRef.current = true;
-    setCenterShellState(shell);
-  }, []);
-  const [rightTab, setRightTab] = useState<
-    "threads" | "codemap" | "specs" | "verify" | "terminal"
-  >("threads");
-  const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
-    () =>
-      (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) ||
-      "bottom"
-  );
-  const layoutHash = project?.hash ?? "default";
-  const leftRail = useResizable({
-    storageKey: `floo:layout:${layoutHash}:left`,
-    defaultSize: 193,
-    min: 160,
-    max: 420,
-    axis: "horizontal",
-  });
-  const rightPanel = useResizable({
-    storageKey: `floo:layout:${layoutHash}:right`,
-    defaultSize: 300,
-    min: 260,
-    max: 820,
-    axis: "horizontal",
-    reverse: true,
-    defaultCollapsed: false,
-  });
-  const terminalPanel = useResizable({
-    storageKey: `floo:layout:${layoutHash}:terminal`,
-    defaultSize: 220,
-    min: 120,
-    max: 560,
-    axis: "vertical",
-    reverse: true,
-    defaultCollapsed: true,
-  });
-  const vibeChat = useResizable({
-    storageKey: `floo:layout:${layoutHash}:vibe-chat`,
-    defaultSize: 520,
-    min: 380,
-    max: 900,
-    axis: "horizontal",
-  });
-  const toggleTerminalPlacement = useCallback(() => {
-    setTerminalPlacement((prev) => {
-      const next = prev === "bottom" ? "sidebar" : "bottom";
-      localStorage.setItem(TERMINAL_PLACEMENT_KEY, next);
-      if (next === "sidebar") {
-        setRightTab("terminal");
-        rightPanel.setCollapsed(false);
-      } else {
-        setRightTab((tab) => (tab === "terminal" ? "threads" : tab));
-        terminalPanel.setCollapsed(false);
-      }
-      return next;
-    });
-  }, [rightPanel.setCollapsed, terminalPanel.setCollapsed]);
-  // Placement-aware: toggles the bottom panel directly, or — when the
-  // terminal lives in the sidebar — switches to its tab and opens the
-  // sidebar, since terminalPanel.collapsed doesn't control visibility there.
-  const toggleTerminal = useCallback(() => {
-    if (terminalPlacement === "sidebar") {
-      setRightTab("terminal");
-      rightPanel.setCollapsed(false);
-    } else {
-      terminalPanel.toggleCollapsed();
-    }
-  }, [
-    terminalPlacement,
-    rightPanel.setCollapsed,
-    terminalPanel.toggleCollapsed,
-  ]);
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(THEME_KEY) as Theme) || "auto"
-  );
-  const { setColorScheme: setMantineColorScheme } = useMantineColorScheme();
+  const shell = useAppShell(project?.hash);
   // Thread-level model/bypass preferences. The composer control reads and
   // writes these; the effective values are resolved before each session-starting
   // call so a live session keeps its original flags (design.md Decision 2).
@@ -1233,7 +1117,7 @@ export default function App() {
   // what anyone wants. Once opened it stays mounted, so collapsing the
   // panel keeps the scrollback instead of disposing the instance.
   const terminalEverOpened = useRef(false);
-  if (terminalPlacement === "bottom" && !terminalPanel.collapsed) {
+  if (shell.terminalPlacement === "bottom" && !shell.terminalPanel.collapsed) {
     terminalEverOpened.current = true;
   }
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
@@ -1328,10 +1212,9 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (theme === "auto") delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = theme;
-    localStorage.setItem(THEME_KEY, theme);
-  }, [theme]);
+    if (shell.theme === "auto") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = shell.theme;
+  }, [shell.theme]);
 
   // Restore a previously-chosen accent color on launch.
   useEffect(() => {
@@ -1395,7 +1278,7 @@ export default function App() {
   const onSelectEditorThread = useCallback(
     (t: ThreadMeta) => {
       if (project) selectThread(project.hash, t);
-      setEditorRailOpen(false);
+      shell.setEditorRailOpen(false);
     },
     [project, selectThread]
   );
@@ -1428,8 +1311,9 @@ export default function App() {
         const saved = loadSession(next.hash);
         sessionRef.current = saved;
         setSession(saved);
-        if (!shellChosenRef.current) setCenterShellState(saved.centerShell);
-        setDiffOpen(saved.diffOpen);
+        if (!shell.shellChosenRef.current)
+          shell.setCenterShell(saved.centerShell);
+        shell.setDiffOpen(saved.diffOpen);
 
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
@@ -1566,7 +1450,7 @@ export default function App() {
   // gets thrown away.
   const selectFile = useCallback(
     (path: string, line?: number) => {
-      setDiffOpen(false);
+      shell.setDiffOpen(false);
       tabs.open(path);
       // Consumed once by the editor pane; the timestamp makes a repeat jump
       // to the same line a new instruction rather than a no-op.
@@ -1617,7 +1501,7 @@ export default function App() {
         return;
       }
     }
-    setDiffOpen(false);
+    shell.setDiffOpen(false);
     selectFile(PROJECT_SETTINGS_FILE);
   };
 
@@ -1666,7 +1550,7 @@ export default function App() {
     setNewThreadPicker(true);
     // Collapse the Editor shell's disclosure so the picker (mounted in the
     // always-visible chat area below it) is immediately visible.
-    setEditorRailOpen(false);
+    shell.setEditorRailOpen(false);
   };
 
   // Vibe/Spec is a friendlier front door onto the two modes that already
@@ -1911,12 +1795,18 @@ export default function App() {
       ...sessionRef.current,
       openPaths: tabs.tabs.map((tab) => tabKey(tab)),
       activePath: tabs.activePath,
-      centerShell,
-      diffOpen,
+      centerShell: shell.centerShell,
+      diffOpen: shell.diffOpen,
     };
     sessionRef.current = next;
     saveSessionDebounced(hash);
-  }, [project?.hash, tabs.tabs, tabs.activePath, centerShell, diffOpen]);
+  }, [
+    project?.hash,
+    tabs.tabs,
+    tabs.activePath,
+    shell.centerShell,
+    shell.diffOpen,
+  ]);
 
   const rememberCursor = useCallback((path: string, offset: number) => {
     const current = sessionRef.current;
@@ -1978,12 +1868,6 @@ export default function App() {
   // Probed model selectors, keyed by agent id. The ref is the guard against
   // double-probing (state updaters can run twice); the state mirror is what
   // re-renders the model menu.
-  const modelsRef = useRef<
-    Record<string, api.ModelState | "loading" | { error: string }>
-  >({});
-  const [modelsByAgent, setModelsByAgent] = useState<
-    Record<string, api.ModelState | "loading" | { error: string }>
-  >({});
 
   const probeAgentModels = useCallback(async (agentId: string) => {
     const { project } = current.current;
@@ -2288,21 +2172,24 @@ export default function App() {
         group: "View",
         label: "Toggle changes view",
         keywords: "diff git review",
-        run: () => setDiffOpen((open) => !open),
+        run: () => shell.setDiffOpen((open) => !open),
       },
       {
         id: "view.shell",
         group: "View",
         label: "Switch between Vibe and Editor",
         keywords: "shell layout agent",
-        run: () => setCenterShell(centerShell === "vibe" ? "editor" : "vibe"),
+        run: () =>
+          shell.setCenterShell(
+            shell.centerShell === "vibe" ? "editor" : "vibe"
+          ),
       },
       {
         id: "view.rightPanel",
         group: "View",
         label: "Toggle right panel",
         chord: "Mod+J",
-        run: () => rightPanel.toggleCollapsed(),
+        run: () => shell.rightPanel.toggleCollapsed(),
       },
       {
         id: "view.leftRail",
@@ -2310,20 +2197,20 @@ export default function App() {
         label: "Toggle file tree",
         chord: "Mod+Backslash",
         keywords: "explorer sidebar",
-        run: () => leftRail.toggleCollapsed(),
+        run: () => shell.leftRail.toggleCollapsed(),
       },
       {
         id: "view.terminal",
         group: "View",
         label: "Toggle terminal",
         chord: "Mod+Backtick",
-        run: () => toggleTerminal(),
+        run: () => shell.toggleTerminal(),
       },
       {
         id: "app.settings",
         group: "App",
         label: "Open settings",
-        keywords: "preferences font theme wrap",
+        keywords: "preferences font shell.theme wrap",
         run: () => setSettingsOpen(true),
       },
       {
@@ -2338,16 +2225,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       project,
-      centerShell,
+      shell.centerShell,
       // Recomputed as tabs come and go: "Close tab" is only offered when
       // there is one, and a stale memo would keep hiding it.
       tabs.activePath,
       openFilePalette,
       openTextSearch,
-      rightPanel.toggleCollapsed,
-      leftRail.toggleCollapsed,
-      toggleTerminal,
-      setCenterShell,
+      shell.rightPanel.toggleCollapsed,
+      shell.leftRail.toggleCollapsed,
+      shell.toggleTerminal,
+      shell.setCenterShell,
     ]
   );
   const commandsRef = useRef(commands);
@@ -2405,15 +2292,15 @@ export default function App() {
             data-tauri-drag-region-exclude
           >
             <button
-              className={centerShell === "vibe" ? "active" : ""}
-              onClick={() => setCenterShell("vibe")}
+              className={shell.centerShell === "vibe" ? "active" : ""}
+              onClick={() => shell.setCenterShell("vibe")}
               data-testid="shell-vibe"
             >
               Vibe
             </button>
             <button
-              className={centerShell === "editor" ? "active" : ""}
-              onClick={() => setCenterShell("editor")}
+              className={shell.centerShell === "editor" ? "active" : ""}
+              onClick={() => shell.setCenterShell("editor")}
               data-testid="shell-editor"
             >
               Editor
@@ -2422,7 +2309,7 @@ export default function App() {
           <Tooltip label="Toggle left sidebar (Cmd+\)">
             <button
               className="ds-icon-btn"
-              onClick={() => leftRail.toggleCollapsed()}
+              onClick={() => shell.leftRail.toggleCollapsed()}
               aria-label="Toggle left sidebar"
               data-testid="toggle-left-sidebar"
               data-tauri-drag-region-exclude
@@ -2435,16 +2322,15 @@ export default function App() {
               <button
                 className="ds-icon-btn"
                 onClick={() => {
-                  const next = nextTheme(theme);
-                  setTheme(next);
-                  setMantineColorScheme(next);
+                  const next = shell.nextTheme(shell.theme);
+                  shell.setTheme(next);
                 }}
                 data-testid="theme-toggle"
                 data-tauri-drag-region-exclude
               >
-                {theme === "auto"
+                {shell.theme === "auto"
                   ? "Auto"
-                  : theme === "light"
+                  : shell.theme === "light"
                     ? "Light"
                     : "Dark"}
               </button>
@@ -2452,7 +2338,7 @@ export default function App() {
             <Tooltip label="Toggle right sidebar (Cmd+J)">
               <button
                 className="ds-icon-btn"
-                onClick={() => rightPanel.toggleCollapsed()}
+                onClick={() => shell.rightPanel.toggleCollapsed()}
                 aria-label="Toggle right sidebar"
                 data-testid="toggle-right-sidebar"
                 data-tauri-drag-region-exclude
@@ -2463,7 +2349,7 @@ export default function App() {
             <Tooltip label="Toggle terminal (Cmd+`)">
               <button
                 className="ds-icon-btn"
-                onClick={toggleTerminal}
+                onClick={shell.toggleTerminal}
                 aria-label="Toggle terminal"
                 data-testid="toggle-terminal"
                 data-tauri-drag-region-exclude
@@ -2549,15 +2435,17 @@ export default function App() {
         ))}
 
         <div className="body">
-          {centerShell === "editor" ? (
+          {shell.centerShell === "editor" ? (
             <div className="ds-shell-contents" data-testid="editor-shell">
               <nav
                 className="ds-nav-rail"
                 data-testid="nav-rail"
                 style={
                   {
-                    "--rail-w": `${leftRail.size}px`,
-                    marginLeft: leftRail.collapsed ? -leftRail.size : 0,
+                    "--rail-w": `${shell.leftRail.size}px`,
+                    marginLeft: shell.leftRail.collapsed
+                      ? -shell.leftRail.size
+                      : 0,
                   } as CSSProperties
                 }
               >
@@ -2579,11 +2467,14 @@ export default function App() {
                 )}
               </nav>
 
-              {!leftRail.collapsed && (
+              {!shell.leftRail.collapsed && (
                 <div
                   className="ds-resize-handle ds-resize-handle-x"
                   data-testid="resize-left-rail"
-                  onPointerDown={bindDrag(leftRail.handleProps, "col-resize")}
+                  onPointerDown={bindDrag(
+                    shell.leftRail.handleProps,
+                    "col-resize"
+                  )}
                 />
               )}
 
@@ -2592,16 +2483,16 @@ export default function App() {
                   tabs={tabs.tabs}
                   activePath={selectedFile}
                   onSelect={(path) => {
-                    setDiffOpen(false);
+                    shell.setDiffOpen(false);
                     tabs.open(path);
                   }}
                   onClose={closeTab}
-                  diffOpen={diffOpen}
-                  onToggleDiff={() => setDiffOpen((open) => !open)}
+                  diffOpen={shell.diffOpen}
+                  onToggleDiff={() => shell.setDiffOpen((open) => !open)}
                   activeMdPreview={tabs.activeMdPreview}
                   onToggleMdPreview={toggleMdPreview}
                 />
-                {!diffOpen ? (
+                {!shell.diffOpen ? (
                   tabs.activeTab?.type === "spec" ? (
                     project &&
                     tabs.activeTab.type === "spec" &&
@@ -2697,48 +2588,54 @@ export default function App() {
                   </div>
                 )}
 
-                {terminalPlacement === "bottom" && !terminalPanel.collapsed && (
-                  <div
-                    className="ds-resize-handle ds-resize-handle-y"
-                    data-testid="resize-terminal-panel"
-                    onPointerDown={bindDrag(
-                      terminalPanel.handleProps,
-                      "row-resize"
-                    )}
-                  />
-                )}
+                {shell.terminalPlacement === "bottom" &&
+                  !shell.terminalPanel.collapsed && (
+                    <div
+                      className="ds-resize-handle ds-resize-handle-y"
+                      data-testid="resize-terminal-panel"
+                      onPointerDown={bindDrag(
+                        shell.terminalPanel.handleProps,
+                        "row-resize"
+                      )}
+                    />
+                  )}
                 {/* Hidden rather than unmounted while collapsed: unmounting
                     disposes the xterm instance, so every collapse threw away
                     the scrollback and re-spawned the shell on reopen. */}
-                {terminalPlacement === "bottom" &&
+                {shell.terminalPlacement === "bottom" &&
                   terminalEverOpened.current && (
                     <div
                       className="ds-terminal-panel"
                       data-testid="terminal-panel"
-                      hidden={terminalPanel.collapsed}
+                      hidden={shell.terminalPanel.collapsed}
                       style={
                         {
-                          "--terminal-h": `${terminalPanel.size}px`,
-                          display: terminalPanel.collapsed ? "none" : undefined,
+                          "--terminal-h": `${shell.terminalPanel.size}px`,
+                          display: shell.terminalPanel.collapsed
+                            ? "none"
+                            : undefined,
                         } as CSSProperties
                       }
                     >
                       {project && (
                         <TerminalPane
                           projectHash={project.hash}
-                          placement={terminalPlacement}
-                          onTogglePlacement={toggleTerminalPlacement}
+                          placement={shell.terminalPlacement}
+                          onTogglePlacement={shell.toggleTerminalPlacement}
                         />
                       )}
                     </div>
                   )}
               </main>
 
-              {!rightPanel.collapsed && (
+              {!shell.rightPanel.collapsed && (
                 <div
                   className="ds-resize-handle ds-resize-handle-x"
                   data-testid="resize-right-panel"
-                  onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
+                  onPointerDown={bindDrag(
+                    shell.rightPanel.handleProps,
+                    "col-resize"
+                  )}
                 />
               )}
 
@@ -2747,8 +2644,10 @@ export default function App() {
                 data-testid="right-sidebar"
                 style={
                   {
-                    "--panel-w": `${rightPanel.size}px`,
-                    marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+                    "--panel-w": `${shell.rightPanel.size}px`,
+                    marginRight: shell.rightPanel.collapsed
+                      ? -shell.rightPanel.size
+                      : 0,
                   } as CSSProperties
                 }
               >
@@ -2763,19 +2662,21 @@ export default function App() {
                   onOpenBranchPicker={onOpenBranchPicker}
                 />
                 <div className="ds-right-panes">
-                  {rightTab === "terminal" &&
-                  terminalPlacement === "sidebar" ? (
+                  {shell.rightTab === "terminal" &&
+                  shell.terminalPlacement === "sidebar" ? (
                     project && (
                       <TerminalPane
                         projectHash={project.hash}
-                        placement={terminalPlacement}
-                        onTogglePlacement={toggleTerminalPlacement}
+                        placement={shell.terminalPlacement}
+                        onTogglePlacement={shell.toggleTerminalPlacement}
                       />
                     )
                   ) : (
                     <Accordion
-                      value={editorRailOpen ? "threads-map" : null}
-                      onChange={(value) => setEditorRailOpen(value !== null)}
+                      value={shell.editorRailOpen ? "threads-map" : null}
+                      onChange={(value) =>
+                        shell.setEditorRailOpen(value !== null)
+                      }
                       keepMounted={false}
                       transitionDuration={0}
                       chevronPosition="left"
@@ -2792,10 +2693,10 @@ export default function App() {
                           data-testid="rail-disclosure-body"
                         >
                           <Tabs
-                            value={rightTab}
+                            value={shell.rightTab}
                             onChange={(value) =>
                               value &&
-                              setRightTab(
+                              shell.setRightTab(
                                 value as
                                   "threads" | "codemap" | "specs" | "verify"
                               )
@@ -2822,7 +2723,7 @@ export default function App() {
                               </Tabs.Tab>
                             </Tabs.List>
                           </Tabs>
-                          {rightTab === "threads" && (
+                          {shell.rightTab === "threads" && (
                             <ThreadList
                               variant="editor"
                               threads={threads}
@@ -2834,7 +2735,7 @@ export default function App() {
                               onDelete={onDeleteThread}
                             />
                           )}
-                          {rightTab === "codemap" && project && (
+                          {shell.rightTab === "codemap" && project && (
                             <Suspense
                               fallback={
                                 <div style={{ padding: 12 }}>Loading map…</div>
@@ -2843,13 +2744,13 @@ export default function App() {
                               <GraphPane projectHash={project.hash} />
                             </Suspense>
                           )}
-                          {rightTab === "specs" && project && (
+                          {shell.rightTab === "specs" && project && (
                             <SpecPane
                               projectHash={project.hash}
                               linkedChange={thread?.openSpecChangeName}
                             />
                           )}
-                          {rightTab === "verify" && project && (
+                          {shell.rightTab === "verify" && project && (
                             <VerifyPane
                               projectHash={project.hash}
                               threadId={thread?.id}
@@ -2861,7 +2762,8 @@ export default function App() {
                   )}
 
                   {!(
-                    rightTab === "terminal" && terminalPlacement === "sidebar"
+                    shell.rightTab === "terminal" &&
+                    shell.terminalPlacement === "sidebar"
                   ) && (
                     <ChatSurface
                       project={project}
@@ -2915,7 +2817,7 @@ export default function App() {
                 data-testid="vibe-chat-column"
                 style={
                   {
-                    "--vibe-chat-w": `${vibeChat.size}px`,
+                    "--vibe-chat-w": `${shell.vibeChat.size}px`,
                   } as CSSProperties
                 }
               >
@@ -2967,7 +2869,10 @@ export default function App() {
               <div
                 className="ds-resize-handle ds-resize-handle-x"
                 data-testid="resize-vibe-chat"
-                onPointerDown={bindDrag(vibeChat.handleProps, "col-resize")}
+                onPointerDown={bindDrag(
+                  shell.vibeChat.handleProps,
+                  "col-resize"
+                )}
               />
 
               <section className="ds-vibe-files" data-testid="col-files">
@@ -2999,7 +2904,7 @@ export default function App() {
                       <Button
                         variant="subtle"
                         size="compact-xs"
-                        onClick={() => setCenterShell("editor")}
+                        onClick={() => shell.setCenterShell("editor")}
                         data-testid="vibe-more-tabs"
                       >
                         +{tabs.tabs.length - 1}
@@ -3028,16 +2933,16 @@ export default function App() {
                     </Tooltip>
                   )}
                   <Tooltip
-                    label={diffOpen ? "Back to editor" : "Review changes"}
+                    label={shell.diffOpen ? "Back to editor" : "Review changes"}
                     withinPortal
                   >
                     <ActionIcon
-                      variant={diffOpen ? "filled" : "subtle"}
+                      variant={shell.diffOpen ? "filled" : "subtle"}
                       aria-label={
-                        diffOpen ? "Back to editor" : "Review changes"
+                        shell.diffOpen ? "Back to editor" : "Review changes"
                       }
-                      aria-pressed={diffOpen}
-                      onClick={() => setDiffOpen((open) => !open)}
+                      aria-pressed={shell.diffOpen}
+                      onClick={() => shell.setDiffOpen((open) => !open)}
                       data-testid="vibe-toggle-diff"
                       ml={isMarkdownPath(selectedFile) ? undefined : "auto"}
                     >
@@ -3045,7 +2950,7 @@ export default function App() {
                     </ActionIcon>
                   </Tooltip>
                 </div>
-                {!diffOpen && tabs.activeTab?.type === "spec" ? (
+                {!shell.diffOpen && tabs.activeTab?.type === "spec" ? (
                   project &&
                   tabs.activeTab.type === "spec" &&
                   (() => {
@@ -3060,7 +2965,7 @@ export default function App() {
                       />
                     );
                   })()
-                ) : !diffOpen && selectedFile ? (
+                ) : !shell.diffOpen && selectedFile ? (
                   project && (
                     <FileEditorPane
                       projectHash={project.hash}
@@ -3127,11 +3032,14 @@ export default function App() {
                 )}
               </section>
 
-              {!rightPanel.collapsed && (
+              {!shell.rightPanel.collapsed && (
                 <div
                   className="ds-resize-handle ds-resize-handle-x"
                   data-testid="resize-right-panel"
-                  onPointerDown={bindDrag(rightPanel.handleProps, "col-resize")}
+                  onPointerDown={bindDrag(
+                    shell.rightPanel.handleProps,
+                    "col-resize"
+                  )}
                 />
               )}
 
@@ -3140,8 +3048,10 @@ export default function App() {
                 data-testid="right-sidebar"
                 style={
                   {
-                    "--panel-w": `${rightPanel.size}px`,
-                    marginRight: rightPanel.collapsed ? -rightPanel.size : 0,
+                    "--panel-w": `${shell.rightPanel.size}px`,
+                    marginRight: shell.rightPanel.collapsed
+                      ? -shell.rightPanel.size
+                      : 0,
                   } as CSSProperties
                 }
               >
@@ -3174,8 +3084,10 @@ export default function App() {
                 )}
                 <div className="ds-vibe-explorer">
                   <Accordion
-                    value={vibeExplorerOpen ? "file-explorer" : null}
-                    onChange={(value) => setVibeExplorerOpen(value !== null)}
+                    value={shell.vibeExplorerOpen ? "file-explorer" : null}
+                    onChange={(value) =>
+                      shell.setVibeExplorerOpen(value !== null)
+                    }
                     keepMounted={false}
                     transitionDuration={0}
                     chevronPosition="left"

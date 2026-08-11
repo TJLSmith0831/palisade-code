@@ -234,51 +234,14 @@ pub struct SpecChange {
     pub status: Option<String>,
 }
 
-/// Run an `openspec` subcommand in `project_root` and return its stdout.
-/// `None` when the binary is missing, the run fails, or it outstays its
-/// welcome — every caller degrades rather than erroring (task 4.4).
-fn openspec_json(project_root: &Path, args: &[&str]) -> Option<String> {
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-    let bin = find_on_path("openspec")?;
-    let mut child = Command::new(bin)
-        .args(args)
-        .current_dir(project_root)
-        .env("PATH", child_path_env())
-        .stdout(Stdio::piped())
-        // The CLI prints deprecation notices on stderr; only stdout is JSON.
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let deadline = std::time::Instant::now() + TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            // A non-zero exit is a real answer ("not an OpenSpec project"),
-            // not something to retry or surface as an error.
-            Ok(Some(_)) => return None,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Err(_) => return None,
-        }
-    }
-    let mut body = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut body).ok()?;
-    Some(body)
-}
-
 /// The project's OpenSpec changes, asked of the CLI — which is the authority
 /// on what a change *is* (D11). Falls back to the directory listing when
 /// `openspec` isn't installed, which is exactly today's behavior.
-pub fn openspec_list(project_root: &Path) -> Vec<SpecChange> {
-    if let Some(body) = openspec_json(project_root, &["list", "--json"]) {
+pub fn openspec_list(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    project_root: &Path,
+) -> Vec<SpecChange> {
+    if let Some(body) = cache.list(project_root) {
         if let Some(changes) = parse_openspec_list(&body) {
             return changes;
         }
@@ -309,8 +272,12 @@ pub fn parse_openspec_list(body: &str) -> Option<Vec<SpecChange>> {
 
 /// The full detail of one change, verbatim from the CLI. Floo renders this and
 /// writes none of it: the filesystem and `openspec` stay authoritative (D11).
-pub fn openspec_show(project_root: &Path, name: &str) -> Option<Value> {
-    let body = openspec_json(project_root, &["show", name, "--json"])?;
+pub fn openspec_show(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    project_root: &Path,
+    name: &str,
+) -> Option<Value> {
+    let body = cache.show(project_root, name)?;
     serde_json::from_str(&body).ok()
 }
 
@@ -323,27 +290,38 @@ pub fn parse_change_status(body: &str) -> Option<bool> {
 
 /// Whether a change's planning artifacts are all complete, per `openspec status`.
 /// Returns `None` when `openspec` isn't installed or the change doesn't exist.
-pub fn openspec_change_status(project_root: &Path, name: &str) -> Option<bool> {
-    let body = openspec_json(project_root, &["status", "--change", name, "--json"])?;
+pub fn openspec_change_status(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    project_root: &Path,
+    name: &str,
+) -> Option<bool> {
+    let body = cache.status(project_root, name)?;
     parse_change_status(&body)
 }
 
 /// Whether the project's changes validate, as the CLI judges it.
-pub fn openspec_validate(project_root: &Path) -> Option<bool> {
-    // `validate` exits non-zero when something is invalid, which
-    // `openspec_json` reports as `None` — so a successful run means valid and
-    // a failed one means either invalid or unavailable. Distinguishing those
-    // needs the binary itself to exist.
+pub fn openspec_validate(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    project_root: &Path,
+) -> Option<bool> {
+    // `validate` exits non-zero when something is invalid, which the adapter
+    // reports as `None` — so a successful run means valid and a failed one
+    // means either invalid or unavailable. Distinguishing those needs the
+    // binary itself to exist.
     find_on_path("openspec")?;
-    Some(openspec_json(project_root, &["validate", "--changes"]).is_some())
+    Some(cache.validate(project_root).is_some())
 }
 
 /// Archive one change via the openspec CLI. `--yes` skips the interactive
 /// confirmation prompt (the subprocess has no stdin to answer it); `--json`
 /// gives a stable machine-readable stdout. Returns that stdout on success;
 /// `openspec` missing or a non-zero exit becomes an error string.
-pub fn openspec_archive(project_root: &Path, name: &str) -> crate::store::Res<String> {
-    openspec_json(project_root, &["archive", name, "--yes", "--json"]).ok_or_else(|| {
+pub fn openspec_archive(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    project_root: &Path,
+    name: &str,
+) -> crate::store::Res<String> {
+    cache.archive(project_root, name).ok_or_else(|| {
         format!("`openspec archive {name}` failed — check that `openspec` is on PATH and the change exists")
     })
 }
@@ -365,8 +343,11 @@ pub fn openspec_change_dirs(project_root: &Path) -> Vec<String> {
 }
 
 /// Snapshot for `newly_added_change` to diff against.
-pub fn openspec_changes(project_root: &Path) -> Vec<String> {
-    openspec_list(project_root).into_iter().map(|c| c.name).collect()
+pub fn openspec_changes(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    project_root: &Path,
+) -> Vec<String> {
+    openspec_list(cache, project_root).into_iter().map(|c| c.name).collect()
 }
 
 /// What a `/propose` turn produced. Ambiguity is surfaced, never dropped:
@@ -411,7 +392,6 @@ pub struct ProposeWatch {
     pub before: Vec<String>,
 }
 
-#[derive(Default)]
 pub struct Harness {
     /// Every live ACP session, keyed by its own id.
     pub acp_sessions: Mutex<HashMap<String, AcpSession>>,
@@ -420,6 +400,26 @@ pub struct Harness {
     pub watch: Mutex<Option<crate::integrations::Watcher>>,
     pub terminal: Mutex<Option<(String, crate::terminal::Terminal)>>,
     pub fswatch: Mutex<Option<crate::fswatch::FsWatcher>>,
+    /// Buffered JSONL writer for session and thread logs; flushed on turn-done
+    /// and app-quit (D9).
+    pub session_log_writer: crate::session_log_writer::SharedSessionLogWriter,
+    /// Mtime-keyed cache over `openspec` CLI output (D10).
+    pub openspec_cache: std::sync::Arc<crate::openspec_cache::OpenSpecCache>,
+}
+
+impl Default for Harness {
+    fn default() -> Self {
+        Self {
+            acp_sessions: Default::default(),
+            preflight: Default::default(),
+            pending_propose: Default::default(),
+            watch: Default::default(),
+            terminal: Default::default(),
+            fswatch: Default::default(),
+            session_log_writer: crate::session_log_writer::shared_session_log_writer(),
+            openspec_cache: std::sync::Arc::new(crate::openspec_cache::OpenSpecCache::with_real_adapter()),
+        }
+    }
 }
 
 impl Harness {
@@ -596,11 +596,12 @@ mod tests {
         fs::create_dir_all(changes.join("some-change")).unwrap();
         fs::create_dir_all(changes.join("archive")).unwrap();
 
-        let listed = openspec_list(repo.path());
+        let cache = crate::openspec_cache::OpenSpecCache::with_real_adapter();
+        let listed = openspec_list(&cache, repo.path());
         assert_eq!(listed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["some-change"]);
         assert_eq!(listed[0].total_tasks, 0, "the fallback claims no task counts it can't know");
 
-        assert_eq!(openspec_show(repo.path(), "some-change"), None);
+        assert_eq!(openspec_show(&cache, repo.path(), "some-change"), None);
         assert!(openspec_change_dirs(repo.path()).contains(&"some-change".to_string()));
     }
 
@@ -619,6 +620,7 @@ mod tests {
         ] {
             persist(home.path(), &project.hash, &thread.id, "sess-1", "go", &event);
         }
+        store::flush_session_log_writer().unwrap();
 
         let messages = store::read_thread(home.path(), &project.hash, &thread.id).unwrap();
         assert_eq!(messages.len(), 2);
@@ -647,6 +649,7 @@ mod tests {
         )
         .unwrap();
         store::close_session(home.path(), &hash, &thread_id, "s1", "crashed", None).unwrap();
+        store::flush_session_log_writer().unwrap();
 
         on_crash(home.path(), &hash, &thread_id).unwrap();
 

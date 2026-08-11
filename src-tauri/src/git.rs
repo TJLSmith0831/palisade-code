@@ -1,23 +1,16 @@
-//! Working-tree diff review — shells out to `git`, matching the codebase's
-//! existing pattern for graphify/executor (D20). Callers own PATH lookup
-//! (`git_bin()` in lib.rs, mirroring `graphify_bin()`); this module only
-//! knows what to do with a resolved binary.
+//! Git operations. Write paths still shell out to the `git` binary (the
+//! implementation note for Phase 3 keeps stage/commit/branch/fetch/pull as
+//! subprocesses). Read paths are delegated to the [`GitRepo`] abstraction in
+//! `git_repo.rs` so they can migrate to `gix` without changing callers.
 
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use serde::Serialize;
-
+use crate::git_repo;
 use crate::store::Res;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileStatus {
-    pub path: String,
-    /// Raw two-char porcelain v1 status code (e.g. " M", "??", "A ", "MM").
-    pub code: String,
-}
+pub use crate::git_repo::{BranchInfo, FileStatus};
 
 fn run(bin: &Path, root: &Path, args: &[&str]) -> Res<String> {
     let output = Command::new(bin)
@@ -37,49 +30,41 @@ fn run(bin: &Path, root: &Path, args: &[&str]) -> Res<String> {
 /// this session change?" has an exact answer for anything committed (D13).
 /// `None` when there is no HEAD to read — a project need not be a git repo,
 /// and a repo with no commits yet has none.
-pub fn rev_parse_head(bin: &Path, root: &Path) -> Option<String> {
-    run(bin, root, &["rev-parse", "HEAD"]).ok().map(|out| out.trim().to_string())
+pub fn rev_parse_head(_bin: &Path, root: &Path) -> Option<String> {
+    git_repo::shared_git_repo().rev_parse_head(root)
 }
 
 /// The set of paths git reports as dirty, as a sorted list. Compared between
 /// session open and close, its delta is "what this session left uncommitted" —
 /// exact only while no other session shares the root (D13).
-pub fn porcelain_snapshot(bin: &Path, root: &Path) -> Vec<String> {
-    let mut paths: Vec<String> = run(bin, root, &["status", "--porcelain=v1"])
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| line.len() > 3)
-        .map(|line| line[3..].to_string())
-        .collect();
-    paths.sort();
-    paths
+pub fn porcelain_snapshot(_bin: &Path, root: &Path) -> Vec<String> {
+    git_repo::shared_git_repo().porcelain_snapshot(root)
 }
 
 /// Paths that changed between two commits. This is the *exact* half of
 /// attribution: whatever a session committed is recoverable from its HEAD
 /// pair, with no inference involved.
-pub fn changed_between(bin: &Path, root: &Path, before: &str, after: &str) -> Res<Vec<String>> {
-    let raw = run(bin, root, &["diff", "--name-only", before, after])?;
-    Ok(raw.lines().map(str::to_string).filter(|line| !line.is_empty()).collect())
+pub fn changed_between(_bin: &Path, root: &Path, before: &str, after: &str) -> Res<Vec<String>> {
+    git_repo::shared_git_repo().changed_between(root, before, after)
 }
 
 /// One entry per changed path, tracked or not — `git diff` alone never lists
 /// untracked files, so this is the only way the pane learns about new files.
-pub fn status(bin: &Path, root: &Path) -> Res<Vec<FileStatus>> {
-    let raw = run(bin, root, &["status", "--porcelain=v1"])?;
-    Ok(raw
-        .lines()
-        .filter(|line| line.len() > 3)
-        .map(|line| FileStatus { code: line[..2].to_string(), path: line[3..].to_string() })
-        .collect())
+pub fn status(_bin: &Path, root: &Path) -> Res<Vec<FileStatus>> {
+    git_repo::shared_git_repo().status(root)
 }
 
-pub fn working_tree_diff(bin: &Path, root: &Path) -> Res<String> {
-    run(bin, root, &["diff"])
+pub fn working_tree_diff(_bin: &Path, root: &Path) -> Res<String> {
+    git_repo::shared_git_repo().working_tree_diff(root)
 }
 
-pub fn staged_diff(bin: &Path, root: &Path) -> Res<String> {
-    run(bin, root, &["diff", "--cached"])
+pub fn staged_diff(_bin: &Path, root: &Path) -> Res<String> {
+    git_repo::shared_git_repo().staged_diff(root)
+}
+
+/// Batched read query: status + working diff + staged diff together.
+pub fn snapshot(_bin: &Path, root: &Path) -> Res<git_repo::Snapshot> {
+    git_repo::shared_git_repo().snapshot(root)
 }
 
 /// `patch` is a unified diff for one hunk (or a whole single-hunk file diff)
@@ -132,41 +117,12 @@ pub fn commit(bin: &Path, root: &Path, message: &str) -> Res<()> {
 
 // ---------------------------------------------------------------- branches
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BranchInfo {
-    pub name: String,
-    pub is_current: bool,
-    pub is_remote: bool,
+pub fn list_branches(_bin: &Path, root: &Path) -> Res<Vec<BranchInfo>> {
+    git_repo::shared_git_repo().list_branches(root)
 }
 
-fn parse_local_branches(raw: &str) -> Vec<BranchInfo> {
-    raw.lines()
-        .filter_map(|line| {
-            let (name, head) = line.split_once('\t')?;
-            Some(BranchInfo { name: name.to_string(), is_current: head == "*", is_remote: false })
-        })
-        .collect()
-}
-
-fn parse_remote_branches(raw: &str) -> Vec<BranchInfo> {
-    raw.lines()
-        // `origin/HEAD` is a symbolic pointer, not a real branch to offer.
-        .filter(|line| !line.ends_with("/HEAD"))
-        .map(|name| BranchInfo { name: name.to_string(), is_current: false, is_remote: true })
-        .collect()
-}
-
-pub fn list_branches(bin: &Path, root: &Path) -> Res<Vec<BranchInfo>> {
-    let local = run(bin, root, &["branch", "--format=%(refname:short)\t%(HEAD)"])?;
-    let remote = run(bin, root, &["branch", "-r", "--format=%(refname:short)"])?;
-    let mut branches = parse_local_branches(&local);
-    branches.extend(parse_remote_branches(&remote));
-    Ok(branches)
-}
-
-pub fn current_branch_name(bin: &Path, root: &Path) -> Res<String> {
-    run(bin, root, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string())
+pub fn current_branch_name(_bin: &Path, root: &Path) -> Res<String> {
+    git_repo::shared_git_repo().current_branch_name(root)
 }
 
 /// A dirty working tree that would be overwritten surfaces git's own error
@@ -211,23 +167,8 @@ pub fn push(bin: &Path, root: &Path) -> Res<String> {
 
 /// `None` when the current branch has no upstream configured (a brand new
 /// local branch) — not an error, just nothing to compare against yet.
-pub fn ahead_behind(bin: &Path, root: &Path) -> Res<Option<(u32, u32)>> {
-    // Explicit preconditions rather than matching git's stderr text (which
-    // differs by situation — "no such branch: 'HEAD...'" on a just-`init`'d
-    // repo with zero commits vs. "no upstream configured" on a branch with
-    // commits but nothing tracked; found live testing D55's Initialize
-    // Repository flow). Either way there's nothing to compare against yet.
-    if run(bin, root, &["rev-parse", "--verify", "-q", "HEAD"]).is_err() {
-        return Ok(None);
-    }
-    if run(bin, root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_err() {
-        return Ok(None);
-    }
-    let out = run(bin, root, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])?;
-    let mut parts = out.trim().split_whitespace();
-    let ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    Ok(Some((ahead, behind)))
+pub fn ahead_behind(_bin: &Path, root: &Path) -> Res<Option<(u32, u32)>> {
+    git_repo::shared_git_repo().ahead_behind(root)
 }
 
 // ------------------------------------------------------- discard + init
@@ -249,8 +190,8 @@ pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res
     }
 }
 
-pub fn is_git_repo(bin: &Path, root: &Path) -> bool {
-    run(bin, root, &["rev-parse", "--is-inside-work-tree"]).is_ok()
+pub fn is_git_repo(_bin: &Path, root: &Path) -> bool {
+    git_repo::shared_git_repo().is_git_repo(root)
 }
 
 pub fn init_repo(bin: &Path, root: &Path) -> Res<()> {
@@ -397,7 +338,7 @@ mod tests {
 
     #[test]
     fn parse_local_branches_marks_the_current_branch() {
-        let branches = parse_local_branches("feature\t\nmain\t*\n");
+        let branches = crate::git_repo::parse_local_branches("feature\t\nmain\t*\n");
         assert_eq!(
             branches,
             vec![
@@ -409,7 +350,7 @@ mod tests {
 
     #[test]
     fn parse_remote_branches_skips_the_symbolic_head_pointer() {
-        let branches = parse_remote_branches("origin/HEAD\norigin/main\n");
+        let branches = crate::git_repo::parse_remote_branches("origin/HEAD\norigin/main\n");
         assert_eq!(branches, vec![BranchInfo { name: "origin/main".into(), is_current: false, is_remote: true }]);
     }
 
