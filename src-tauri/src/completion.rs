@@ -28,7 +28,7 @@ const FIM_MIDDLE: &str = "<|fim_middle|>";
 
 const DEFAULT_CTX_SIZE: u32 = 2048;
 const DEFAULT_N_GPU_LAYERS: u32 = 99;
-const DEFAULT_N_PREDICT: u32 = 32;
+const DEFAULT_N_PREDICT: u32 = 128;
 const DEFAULT_TEMPERATURE: f64 = 0.0;
 
 /// Averaged characters per token for code-like text. Used to approximate the
@@ -285,7 +285,7 @@ pub fn parse_completion_response(body: &str) -> Res<CompletionResponse> {
         .ok_or("completion response missing 'timings.prompt_ms'")?;
 
     Ok(CompletionResponse {
-        completion: clean_completion(content),
+        completion: truncate_to_complete_lines(clean_completion(content)),
         model_latency_ms,
     })
 }
@@ -352,6 +352,20 @@ fn clean_first_line(line: &str) -> String {
         words.join(" ")
     } else {
         trimmed.to_string()
+    }
+}
+
+/// Truncates a completion to the last complete line if the model was cut
+/// off mid-statement (no trailing newline). Single-line completions with
+/// no newline are kept whole — showing a partial line is better than
+/// showing nothing.
+fn truncate_to_complete_lines(completion: String) -> String {
+    if completion.ends_with('\n') || completion.is_empty() {
+        return completion;
+    }
+    match completion.rfind('\n') {
+        Some(idx) => completion[..=idx].to_string(),
+        None => completion,
     }
 }
 
@@ -492,6 +506,15 @@ mod tests {
     fn parse_completion_response_fails_when_timings_missing() {
         let body = r#"{"content":"hello"}"#;
         assert!(parse_completion_response(body).is_err());
+    }
+
+    #[test]
+    fn parse_completion_response_trims_truncated_multi_line_content() {
+        // Model hit n_predict mid-statement on the third line — no trailing
+        // newline. The partial trailing line should be dropped.
+        let body = r#"{"content":"    x = 1\n    y = 2\n    return x +","timings":{"prompt_ms":12.0}}"#;
+        let parsed = parse_completion_response(body).unwrap();
+        assert_eq!(parsed.completion, "x = 1\ny = 2\n");
     }
 
     #[test]
@@ -686,5 +709,37 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         let input = "fromfrom fastmcp.client import Client as FastmcpClient\nfrom fastmcp.client.transports import StdioTransport as FastmcpStdio".to_string();
         let cleaned = clean_completion(input);
         assert_eq!(cleaned, "from fastmcp.client import Client as FastmcpClient\nfrom fastmcp.client.transports import StdioTransport as FastmcpStdio");
+    }
+
+    // --- truncate_to_complete_lines -------------------------------------------
+
+    #[test]
+    fn truncate_keeps_completion_with_trailing_newline_unchanged() {
+        let input = "    return x + y\n".to_string();
+        let result = truncate_to_complete_lines(input);
+        assert_eq!(result, "    return x + y\n");
+    }
+
+    #[test]
+    fn truncate_cuts_mid_line_multi_line_completion_to_last_newline() {
+        // Model hit n_predict mid-statement on the third line.
+        let input = "    x = 1\n    y = 2\n    return x +".to_string();
+        let result = truncate_to_complete_lines(input);
+        assert_eq!(result, "    x = 1\n    y = 2\n");
+    }
+
+    #[test]
+    fn truncate_keeps_single_line_completion_whole() {
+        // No newline at all — truncating to nothing would be worse than
+        // showing a partial line.
+        let input = "return x +".to_string();
+        let result = truncate_to_complete_lines(input);
+        assert_eq!(result, "return x +");
+    }
+
+    #[test]
+    fn truncate_returns_empty_string_unchanged() {
+        let result = truncate_to_complete_lines("".to_string());
+        assert_eq!(result, "");
     }
 }

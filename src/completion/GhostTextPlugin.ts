@@ -73,7 +73,7 @@ export const ghostTextState = StateField.define<GhostText | null>({
 });
 
 /** Widget that renders the greyed completion text after the cursor. */
-class GhostTextWidget extends WidgetType {
+export class GhostTextWidget extends WidgetType {
   constructor(
     readonly text: string,
     readonly keybinding: string
@@ -82,10 +82,17 @@ class GhostTextWidget extends WidgetType {
   }
 
   toDOM() {
+    // Multi-line completions (e.g. "\n    ZZZZ" after a Python `else:`) need
+    // inline (not inline-flex) so the inner span's white-space: pre renders
+    // \n as visual line breaks. inline-flex lays out children in a single
+    // row and swallows newlines.
+    const isMultiLine = this.text.includes("\n");
     const container = document.createElement("span");
-    container.style.display = "inline-flex";
-    container.style.alignItems = "center";
-    container.style.gap = "4px";
+    container.style.display = isMultiLine ? "inline" : "inline-flex";
+    if (!isMultiLine) {
+      container.style.alignItems = "center";
+      container.style.gap = "4px";
+    }
 
     // Hint first so it sits right after the user's typed text, before the
     // ghost completion — not trailing the whole ghost block.
@@ -96,6 +103,9 @@ class GhostTextWidget extends WidgetType {
     hint.style.pointerEvents = "none";
     hint.style.userSelect = "none";
     hint.style.marginRight = "2px";
+    // Lift the hint so it stays visible on the first line when the completion
+    // starts with a newline (otherwise it would render below the break).
+    if (isMultiLine) hint.style.verticalAlign = "super";
     container.appendChild(hint);
 
     const span = document.createElement("span");
@@ -241,10 +251,12 @@ class FimViewPlugin {
 
   update(update: ViewUpdate) {
     if (update.docChanged) {
-      // Only react to genuine user typing (not programmatic edits like saves).
+      // Trigger on any user-initiated edit (typing, Enter, backspace, paste),
+      // but not programmatic changes like saves. CodeMirror sets a userEvent
+      // annotation for user actions; programmatic changes have none.
       if (
         update.transactions.some(
-          (tr) => tr.annotation(Transaction.userEvent) === "input.type"
+          (tr) => tr.annotation(Transaction.userEvent) !== undefined
         )
       ) {
         this.cancel();

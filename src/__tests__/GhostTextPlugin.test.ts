@@ -12,6 +12,7 @@ import {
   dismissGhostText,
   extractContext,
   fimCompletion,
+  GhostTextWidget,
   ghostTextState,
   setGhostText,
   stripStarterOverlap,
@@ -155,6 +156,34 @@ describe("GhostTextPlugin", () => {
     view.destroy();
   });
 
+  it("hitting Enter schedules and shows a completion after the debounce", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    invokeMock.mockResolvedValue({
+      completion: "\n    ZZZZ",
+      modelLatencyMs: 12.34,
+    });
+
+    const view = viewWith("if XXXX:\n    YYYY\nelse:", 23);
+    // Simulate Enter: insert newline and move cursor. CodeMirror uses "input"
+    // for Enter in some configurations; we accept any userEvent.
+    view.dispatch({
+      changes: { from: 23, to: 23, insert: "\n" },
+      selection: { anchor: 24 },
+      userEvent: "input",
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+    await vi.waitFor(() => view.state.field(ghostTextState) !== null, {
+      timeout: 2000,
+    });
+
+    const ghost = view.state.field(ghostTextState);
+    expect(ghost?.text).toBe("\n    ZZZZ");
+
+    vi.useRealTimers();
+    view.destroy();
+  });
+
   it("moving the cursor dismisses ghost text", async () => {
     const view = viewWith("function add() {\n  \n}", 18);
     view.dispatch({
@@ -248,5 +277,48 @@ describe("GhostTextPlugin", () => {
 
     vi.useRealTimers();
     view.destroy();
+  });
+
+  describe("GhostTextWidget multi-line rendering", () => {
+    it("uses inline-flex and no verticalAlign for single-line completions", () => {
+      const widget = new GhostTextWidget("return x + y;", "Alt-Tab");
+      const dom = widget.toDOM() as HTMLElement;
+      expect(dom.tagName).toBe("SPAN");
+      expect(dom.style.display).toBe("inline-flex");
+      // Text span preserves whitespace and renders greyed.
+      const textSpan = dom.querySelector(".cm-ghostText") as HTMLElement;
+      expect(textSpan).not.toBeNull();
+      expect(textSpan.style.whiteSpace).toBe("pre");
+      // Hint sits before the text span.
+      const hint = dom.querySelector("span") as HTMLElement;
+      expect(hint.textContent).toBe("⌥⇥");
+      expect(hint.style.verticalAlign).toBe("");
+    });
+
+    it("uses inline display for multi-line completions so newlines render as breaks", () => {
+      const widget = new GhostTextWidget("\n    ZZZZ", "Alt-Tab");
+      const dom = widget.toDOM() as HTMLElement;
+      expect(dom.style.display).toBe("inline");
+      // Flex-only alignment props are not set on the multi-line container.
+      expect(dom.style.alignItems).toBe("");
+      expect(dom.style.gap).toBe("");
+      // Text span still preserves whitespace so \\n renders as a line break.
+      const textSpan = dom.querySelector(".cm-ghostText") as HTMLElement;
+      expect(textSpan.style.whiteSpace).toBe("pre");
+      expect(textSpan.textContent).toBe("\n    ZZZZ");
+      // Hint is lifted so it stays visible on the first line.
+      const hint = dom.querySelector("span") as HTMLElement;
+      expect(hint.style.verticalAlign).toBe("super");
+    });
+
+    it("eq returns true only when both text and keybinding match", () => {
+      const a = new GhostTextWidget("foo", "Alt-Tab");
+      const same = new GhostTextWidget("foo", "Alt-Tab");
+      const diffText = new GhostTextWidget("bar", "Alt-Tab");
+      const diffKey = new GhostTextWidget("foo", "Tab");
+      expect(a.eq(same)).toBe(true);
+      expect(a.eq(diffText)).toBe(false);
+      expect(a.eq(diffKey)).toBe(false);
+    });
   });
 });
