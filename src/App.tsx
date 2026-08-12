@@ -1996,14 +1996,23 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
-      await api.sendMessage(
+      // sendMessage returns the persisted user message; append it directly
+      // instead of re-reading the whole thread. A second readThread here would
+      // race with the done/thread-updated handlers' refresh() on fast turns —
+      // a stale snapshot could clobber the fresh one. The done handler is the
+      // single writer of the full history; onSend only adds this one row.
+      const sent = await api.sendMessage(
         project.hash,
         thread.id,
         text,
         thread.currentMode,
         prefs.bypass
       );
-      setMessages(await api.readThread(project.hash, thread.id));
+      setMessages((prev) =>
+        // A fast turn may have already refreshed history (which includes this
+        // message); don't duplicate it.
+        prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
+      );
       // Chat-only mode never answers, so never leave the composer locked.
       if (!flight?.selected) setBusy(false);
     } catch (err) {

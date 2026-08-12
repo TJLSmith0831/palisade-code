@@ -40,6 +40,13 @@ impl SessionLogWriter {
         self.buffers.get(path).map(|b| b.len() as u64).unwrap_or(0)
     }
 
+    /// The raw bytes buffered for `path` since the last flush, so a reader can
+    /// see unflushed writes without forcing a flush. Each buffered entry is a
+    /// serialized JSON line followed by `\n`, so the slice is valid UTF-8.
+    pub fn buffer_for(&self, path: &Path) -> Option<&[u8]> {
+        self.buffers.get(path).map(|b| b.as_slice())
+    }
+
     /// Flush every buffered log: open the file, close any torn line from an
     /// unclean shutdown, write the buffered bytes, fsync, and close.
     ///

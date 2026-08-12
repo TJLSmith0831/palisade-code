@@ -643,7 +643,9 @@ pub fn append_message(
     let cache = cache.get_or_insert_with(HashMap::new);
     let seq = match cache.get(&path) {
         Some((len, seq)) if *len == expected_len => *seq,
-        _ => read_thread(home, hash, id)?.last().map_or(0, |m| m.seq + 1),
+        _ => read_thread_impl(home, hash, id, writer.buffer_for(&path).unwrap_or(&[]))?
+            .last()
+            .map_or(0, |m| m.seq + 1),
     };
     let message = Message {
         seq,
@@ -696,16 +698,40 @@ pub(crate) fn ends_with_newline(path: &Path) -> Res<bool> {
 
 /// Read a thread's history in `seq` order. A line that fails to parse — a torn
 /// write from an unclean shutdown — is dropped and logged to `harness.log`
-/// rather than surfaced to the user.
+/// rather than surfaced to the user. Unflushed bytes still held in the
+/// process-global `SessionLogWriter` buffer are merged with disk so a read
+/// mid-turn (before `Done` flushes) sees the same view `append_message` just
+/// wrote — the user's turn and any buffered assistant events.
 pub fn read_thread(home: &Path, hash: &str, id: &str) -> Res<Vec<Message>> {
+    let path = log_path(home, hash, id);
+    let writer = crate::session_log_writer::shared_session_log_writer();
+    let writer = writer.lock().map_err(|err| e("session log writer", err))?;
+    let buffered = writer.buffer_for(&path).unwrap_or(&[]);
+    read_thread_impl(home, hash, id, buffered)
+}
+
+/// Inner reader that takes the buffered bytes directly, so callers already
+/// holding the writer lock (e.g. `append_message`'s seq-cache fallback) can
+/// read without re-locking and deadlocking.
+fn read_thread_impl(home: &Path, hash: &str, id: &str, buffered: &[u8]) -> Res<Vec<Message>> {
     let path = log_path(home, hash, id);
     let mut body = String::new();
     match File::open(&path) {
         Ok(mut file) => {
             file.read_to_string(&mut body).map_err(|err| e("read session log", err))?;
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(e("open session log", err)),
+    }
+
+    // Merge unflushed buffered writes. If the on-disk content doesn't end with
+    // a newline, insert one so the first buffered line isn't glued to a torn
+    // tail — the same separator `flush` inserts when it writes.
+    if !buffered.is_empty() {
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(std::str::from_utf8(buffered).map_err(|err| e("buffer utf8", err))?);
     }
 
     let mut messages = vec![];
@@ -901,6 +927,30 @@ mod tests {
         assert_eq!(messages.len(), 5);
         assert_eq!(messages.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
         assert_eq!(messages[3].content, "m3");
+    }
+
+    /// RED: read_thread must see messages that append_message has buffered
+    /// in the in-memory SessionLogWriter but not yet flushed to disk. This is
+    /// the live-during-a-turn case: the frontend calls read_thread right after
+    /// send_message appends the user's turn, before the turn's Done flushes.
+    /// A read that only sees disk returns stale history and the user's bubble
+    /// vanishes for the whole turn.
+    #[test]
+    fn read_thread_sees_unflushed_buffered_messages() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        // One flushed message on disk, then a second that stays buffered.
+        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "on disk", None).unwrap();
+        flush_session_log_writer().unwrap();
+        append_message(home.path(), &project.hash, &thread.id, "user", "spec", "in buffer", None).unwrap();
+
+        let messages = read_thread(home.path(), &project.hash, &thread.id).unwrap();
+        assert_eq!(messages.len(), 2, "read_thread must merge the in-memory buffer with disk");
+        assert_eq!(messages[0].content, "on disk");
+        assert_eq!(messages[1].content, "in buffer");
     }
 
     #[test]
