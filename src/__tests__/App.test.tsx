@@ -519,10 +519,10 @@ describe("Right sidebar — Workspace + Threads (D57)", () => {
     // inline in the chat surface below it, not a modal.
     expect(screen.queryByTestId("rail-disclosure-body")).toBeNull();
     expect(screen.getByTestId("mode-picker")).toBeDefined();
-    expect(screen.getByTestId("pick-vibe")).toBeDefined();
+    expect(screen.getByTestId("pick-go")).toBeDefined();
     expect(screen.getByTestId("pick-spec")).toBeDefined();
 
-    fireEvent.click(screen.getByTestId("pick-vibe"));
+    fireEvent.click(screen.getByTestId("pick-go"));
 
     await waitFor(() => expect(screen.queryByTestId("mode-picker")).toBeNull());
     expect(setModeCalls).toEqual([
@@ -2219,7 +2219,7 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
     const picker = screen.getByTestId("mode-picker");
     expect(picker).toBeDefined();
     expect(picker.className).toContain("ds-vibe-empty-picker");
-    expect(screen.getByTestId("pick-vibe")).toBeDefined();
+    expect(screen.getByTestId("pick-go")).toBeDefined();
     expect(screen.getByTestId("pick-spec")).toBeDefined();
     expect(screen.queryByText("Create a thread to get started.")).toBeNull();
   });
@@ -3213,6 +3213,43 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     );
     fireEvent.click(screen.getByTestId("executor-btn"));
     expect(await screen.findByTestId("next-session-hint")).toBeDefined();
+  });
+
+  it("shows a stop button and calls stop_executor when the agent is busy", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "send_message")
+          return Promise.resolve({
+            seq: 1,
+            role: "user",
+            content: "hello",
+            createdAt: "2026-08-12T00:00:00Z",
+          });
+        return baseImpl?.(cmd, args) ?? Promise.resolve([]);
+      }
+    );
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    // Type and send a message — this sets busy=true because an executor is
+    // detected (flight.selected is truthy), and busy stays true until the
+    // event listener receives Done/Crashed.
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "hello" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    // The stop button replaces the send button while busy.
+    const stopBtn = await screen.findByTestId("composer-stop");
+    expect(stopBtn).toBeDefined();
+    fireEvent.click(stopBtn);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("stop_executor", {
+        sessionId: null,
+      })
+    );
   });
 
   it("passes bypass to sendMessage", async () => {

@@ -934,6 +934,19 @@ async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res
             .map(|s| (s.id.clone(), s.thread_id.clone()))
             .collect();
         for (id, thread_id) in targets {
+            // Emit a Crashed event so the frontend's event listener clears
+            // the busy state. Without this, the UI stays stuck on "busy"
+            // because end_session terminates the bridge before the prompt
+            // response can arrive.
+            let envelope = executor::Envelope {
+                session_id: id.clone(),
+                thread_id: thread_id.clone(),
+                event: executor::ExecutorEvent::Crashed {
+                    exit_code: None,
+                    message: "Cancelled by user".into(),
+                },
+            };
+            let _ = app.emit("executor-event", &envelope);
             end_session(&harness, &thread_id, &id, "cancelled");
         }
         Ok(())

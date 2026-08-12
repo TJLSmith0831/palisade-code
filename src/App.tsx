@@ -122,6 +122,8 @@ type ChatSurfaceProps = {
   draft: string;
   setDraft: (value: string) => void;
   onSend: () => void;
+  /** Stop the live session for this thread. */
+  onStop: () => void;
   onRenameThread: (target: ThreadMeta) => void;
   onSpec: () => void;
   onGo: () => void;
@@ -161,6 +163,7 @@ const ChatSurface = memo(
     draft,
     setDraft,
     onSend,
+    onStop,
     onRenameThread,
     onSpec,
     onGo,
@@ -237,11 +240,13 @@ const ChatSurface = memo(
               <button
                 className="ds-mode-card"
                 onClick={() => onPickMode("go")}
-                data-testid="pick-vibe"
+                data-testid="pick-go"
                 autoFocus
               >
-                <strong>Vibe</strong>
-                <span>Chat first — start building right away.</span>
+                <strong>Go</strong>
+                <span>
+                  Start building — the agent can edit code right away.
+                </span>
               </button>
               <button
                 className="ds-mode-card"
@@ -250,8 +255,8 @@ const ChatSurface = memo(
               >
                 <strong>Spec</strong>
                 <span>
-                  Plan first — read-only planning before code, via the grill
-                  flow.
+                  Plan first — reach shared understanding with the agent before
+                  it writes any code.
                 </span>
               </button>
             </div>
@@ -630,52 +635,91 @@ const ChatSurface = memo(
                 }}
               />
 
-              <ActionIcon
-                type="submit"
-                data-testid="composer-send"
-                disabled={busy || !draft.trim()}
-                aria-label="Send message"
-                title="Send message"
-                size={30}
-                radius="md"
-                variant="filled"
-                styles={{
-                  root: {
-                    flexShrink: 0,
-                    backgroundColor: "var(--accent)",
-                    color: "var(--accent-on)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    transition: "transform 100ms ease, opacity 100ms ease",
-                    "&:hover": {
-                      backgroundColor: "var(--accent)",
-                      opacity: 0.9,
+              {busy ? (
+                <ActionIcon
+                  data-testid="composer-stop"
+                  onClick={onStop}
+                  aria-label="Stop"
+                  title="Stop"
+                  size={30}
+                  radius="md"
+                  variant="filled"
+                  styles={{
+                    root: {
+                      flexShrink: 0,
+                      backgroundColor: "var(--danger, #e5484d)",
+                      color: "var(--danger-on, #fff)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transition: "transform 100ms ease, opacity 100ms ease",
+                      "&:hover": {
+                        opacity: 0.9,
+                      },
+                      "&:active": {
+                        transform: "scale(0.94)",
+                      },
                     },
-                    "&:active": {
-                      transform: "scale(0.94)",
-                    },
-                    "&:disabled": {
-                      opacity: 0.4,
-                    },
-                  },
-                }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="17"
-                  height="17"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+                  }}
                 >
-                  <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-                  <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
-                </svg>
-              </ActionIcon>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                  >
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                </ActionIcon>
+              ) : (
+                <ActionIcon
+                  type="submit"
+                  data-testid="composer-send"
+                  disabled={busy || !draft.trim()}
+                  aria-label="Send message"
+                  title="Send message"
+                  size={30}
+                  radius="md"
+                  variant="filled"
+                  styles={{
+                    root: {
+                      flexShrink: 0,
+                      backgroundColor: "var(--accent)",
+                      color: "var(--accent-on)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transition: "transform 100ms ease, opacity 100ms ease",
+                      "&:hover": {
+                        backgroundColor: "var(--accent)",
+                        opacity: 0.9,
+                      },
+                      "&:active": {
+                        transform: "scale(0.94)",
+                      },
+                      "&:disabled": {
+                        opacity: 0.4,
+                      },
+                    },
+                  }}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="17"
+                    height="17"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                    <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
+                  </svg>
+                </ActionIcon>
+              )}
             </div>
           </div>
         </form>
@@ -1641,6 +1685,21 @@ export default function App() {
         .flatMap((entry) => entry.events),
     [liveBySession, thread?.id]
   );
+
+  // The session id for the live session on this thread, if any. Used by the
+  // stop button to cancel the in-flight turn.
+  const liveSessionId = useMemo(() => {
+    for (const [id, entry] of liveBySession) {
+      if (entry.threadId === thread?.id) return id;
+    }
+    return null;
+  }, [liveBySession, thread?.id]);
+
+  const onStop = useCallback(() => {
+    // Stop the live session for this thread, or all sessions if we can't
+    // identify the specific one (e.g. events haven't started streaming yet).
+    void api.stopExecutor(liveSessionId ?? undefined);
+  }, [liveSessionId]);
 
   // A thread's live buffer is dropped once its history is re-read from disk —
   // every event was already persisted as it arrived, so keeping it would
@@ -2800,6 +2859,7 @@ export default function App() {
                       draft={draft}
                       setDraft={setDraft}
                       onSend={onSend}
+                      onStop={onStop}
                       onRenameThread={onRenameThread}
                       onSpec={onSpec}
                       onGo={onGo}
@@ -2856,6 +2916,7 @@ export default function App() {
                   draft={draft}
                   setDraft={setDraft}
                   onSend={onSend}
+                  onStop={onStop}
                   onRenameThread={onRenameThread}
                   onSpec={onSpec}
                   onGo={onGo}

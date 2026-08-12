@@ -287,6 +287,41 @@ fn answer_permission(
     }
 }
 
+/// Check whether a tool call notification violates the session's permission
+/// mode. Some agents (OpenCode) auto-approve workspace writes internally and
+/// never send `session/request_permission` for in-project edits — so Floo must
+/// also enforce Spec mode at the `session/update` layer, by cancelling the
+/// turn when a write-kind tool call appears in Spec mode.
+///
+/// Returns `Some(reason)` when the tool call should be cancelled, describing
+/// the violation for the `Crashed` event. Returns `None` when the tool call
+/// is permitted under the current mode.
+///
+/// Mirrors `permissions::decide_permission` but operates on the *notification*
+/// stream rather than the *request* stream: the agent already started the
+/// tool call, so the only action is to cancel the whole turn.
+fn spec_mode_violation(
+    kind: permissions::ToolKind,
+    mode: PermissionMode,
+    command: Option<&str>,
+) -> Option<String> {
+    match permissions::decide_permission(mode, kind, command) {
+        PermissionDecision::Deny => {
+            let kind_label = match kind {
+                permissions::ToolKind::Edit => "edit",
+                permissions::ToolKind::Delete => "delete",
+                permissions::ToolKind::Move => "move",
+                permissions::ToolKind::Execute => "execute",
+                _ => "write",
+            };
+            Some(format!(
+                "Spec mode denies {kind_label} tool calls — switch to Go mode to allow writes."
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Run the ACP connection until shutdown. Errors before the session is ready
 /// are reported through `ready_tx`; errors afterwards surface as `Crashed`
 /// events on the sink.
@@ -312,6 +347,12 @@ async fn run_bridge(
     let think_buf = Arc::new(std::sync::Mutex::new(String::new()));
     let notif_text = text_buf.clone();
     let notif_think = think_buf.clone();
+    // Whether the current turn has already been cancelled for a Spec-mode
+    // violation. Prevents double-cancellation when multiple write tool calls
+    // arrive in the same turn.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let notif_cancelled = cancelled.clone();
+    let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
     let tail_ready_tx = ready_tx.clone();
@@ -322,7 +363,42 @@ async fn run_bridge(
     let result = acp::Client.builder()
         .name("floo-network")
         .on_receive_notification(
-            async move |notification: v1::SessionNotification, _cx| {
+            async move |notification: v1::SessionNotification, cx| {
+                // Spec-mode enforcement at the notification layer: some agents
+                // (OpenCode) auto-approve workspace writes and never send
+                // `session/request_permission` for in-project edits. When a
+                // write-kind tool call appears in Spec mode, cancel the turn
+                // and emit a Crashed event so the user sees the denial.
+                if let v1::SessionUpdate::ToolCall(ref call) = notification.update {
+                    if !notif_cancelled.load(Ordering::SeqCst) {
+                        let kind = tool_kind(Some(&call.kind));
+                        let command = raw_command(call.raw_input.as_ref());
+                        if let Some(reason) =
+                            spec_mode_violation(kind, perm_mode, command.as_deref())
+                        {
+                            notif_cancelled.store(true, Ordering::SeqCst);
+                            notif_busy.store(false, Ordering::SeqCst);
+                            // Ask the agent to stop the current turn.
+                            let _ = cx.send_notification(v1::CancelNotification::new(
+                                notification.session_id.clone(),
+                            ));
+                            // Clear the turn's buffers so the prompt response
+                            // doesn't flush partial text as a "completed" turn.
+                            notif_text.lock().unwrap().clear();
+                            notif_think.lock().unwrap().clear();
+                            emit(
+                                &notif_sink,
+                                &notif_session,
+                                &notif_thread,
+                                ExecutorEvent::Crashed {
+                                    exit_code: None,
+                                    message: reason,
+                                },
+                            );
+                            return Ok(());
+                        }
+                    }
+                }
                 if let Some(update) = crate::acp_events::from_session_update(&notification.update)
                 {
                     match &update {
@@ -427,12 +503,22 @@ async fn run_bridge(
                                 let done_busy = busy.clone();
                                 let done_text = text_buf.clone();
                                 let done_think = think_buf.clone();
+                                let done_cancelled = cancelled.clone();
+                                // Reset the per-turn cancellation flag.
+                                cancelled.store(false, Ordering::SeqCst);
                                 let send = cx.send_request(v1::PromptRequest::new(
                                     session_id.clone(),
                                     vec![v1::ContentBlock::Text(v1::TextContent::new(text))],
                                 ));
                                 if let Err(e) = send.on_receiving_result(async move |result| {
                                     done_busy.store(false, Ordering::SeqCst);
+                                    // If the notification handler already cancelled
+                                    // the turn for a Spec-mode violation, it emitted
+                                    // Crashed and cleared the buffers — don't emit a
+                                    // duplicate Done/Crashed here.
+                                    if done_cancelled.load(Ordering::SeqCst) {
+                                        return Ok(());
+                                    }
                                     // Flush the turn's accumulated chunks as the
                                     // complete events persist() records.
                                     let full = std::mem::take(&mut *done_text.lock().unwrap());
@@ -830,6 +916,110 @@ mod tests {
             res.outcome,
             v1::RequestPermissionOutcome::Cancelled
         ));
+    }
+
+    // --------------------------------------------------------- spec-mode notification enforcement
+
+    /// RED→GREEN: spec_mode_violation flags an edit tool call in Spec mode.
+    /// OpenCode auto-approves workspace writes and never sends
+    /// `session/request_permission` for in-project edits, so Floo must enforce
+    /// Spec mode at the `session/update` notification layer.
+    #[test]
+    fn spec_mode_violation_flags_edit_in_spec_mode() {
+        let reason = spec_mode_violation(
+            permissions::ToolKind::Edit,
+            PermissionMode::Spec,
+            None,
+        );
+        assert!(reason.is_some(), "spec mode should flag an edit");
+        let reason = reason.unwrap();
+        assert!(
+            reason.to_lowercase().contains("spec mode"),
+            "reason should mention spec mode: {reason}"
+        );
+        assert!(
+            reason.to_lowercase().contains("edit"),
+            "reason should mention edit: {reason}"
+        );
+    }
+
+    /// RED→GREEN: spec_mode_violation flags delete and move in Spec mode.
+    #[test]
+    fn spec_mode_violation_flags_delete_and_move() {
+        for kind in &[permissions::ToolKind::Delete, permissions::ToolKind::Move] {
+            assert!(
+                spec_mode_violation(*kind, PermissionMode::Spec, None).is_some(),
+                "spec mode should flag {kind:?}"
+            );
+        }
+    }
+
+    /// RED→GREEN: spec_mode_violation does NOT flag reads in Spec mode.
+    #[test]
+    fn spec_mode_violation_allows_reads_in_spec_mode() {
+        for kind in &[
+            permissions::ToolKind::Read,
+            permissions::ToolKind::Search,
+            permissions::ToolKind::Think,
+            permissions::ToolKind::Fetch,
+        ] {
+            assert!(
+                spec_mode_violation(*kind, PermissionMode::Spec, None).is_none(),
+                "spec mode should NOT flag {kind:?}"
+            );
+        }
+    }
+
+    /// RED→GREEN: spec_mode_violation does NOT flag edits in Go mode.
+    #[test]
+    fn spec_mode_violation_allows_edits_in_go_mode() {
+        assert!(
+            spec_mode_violation(permissions::ToolKind::Edit, PermissionMode::Go, None).is_none(),
+            "go mode should allow edits"
+        );
+        assert!(
+            spec_mode_violation(permissions::ToolKind::Move, PermissionMode::Go, None).is_none(),
+            "go mode should allow moves"
+        );
+    }
+
+    /// RED→GREEN: spec_mode_violation does NOT flag anything in Bypass mode.
+    #[test]
+    fn spec_mode_violation_allows_everything_in_bypass() {
+        for kind in &[
+            permissions::ToolKind::Edit,
+            permissions::ToolKind::Delete,
+            permissions::ToolKind::Move,
+            permissions::ToolKind::Execute,
+        ] {
+            assert!(
+                spec_mode_violation(*kind, PermissionMode::Bypass, None).is_none(),
+                "bypass should allow {kind:?}"
+            );
+        }
+    }
+
+    /// RED→GREEN: openspec execute commands are whitelisted even in Spec mode.
+    #[test]
+    fn spec_mode_violation_whitelists_openspec_execute() {
+        assert!(
+            spec_mode_violation(
+                permissions::ToolKind::Execute,
+                PermissionMode::Spec,
+                Some("openspec list --json"),
+            )
+            .is_none(),
+            "openspec execute should be whitelisted in spec mode"
+        );
+        assert!(
+            spec_mode_violation(
+                permissions::ToolKind::Execute,
+                PermissionMode::Spec,
+                Some("cargo build"),
+            )
+            .is_some(),
+            "non-openspec execute should be flagged in spec mode"
+        );
     }
 
     // --------------------------------------------------------- send / terminate
