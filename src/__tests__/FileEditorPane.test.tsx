@@ -78,13 +78,20 @@ describe("FileEditorPane", () => {
     // from a clean slate rather than inheriting the last test's document.
     evictProjectSessions("abc");
     invokeMock.mockReset();
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "read_file_content")
-        return Promise.resolve("line one\nline two\n");
-      if (cmd === "read_file_base64") return Promise.resolve("Zm9v");
-      if (cmd === "write_file_content") return Promise.resolve();
-      return Promise.reject(new Error(`unexpected command ${cmd}`));
-    });
+    invokeMock.mockImplementation(
+      (cmd: string, args: Record<string, unknown>) => {
+        if (cmd === "read_file_content")
+          return Promise.resolve("line one\nline two\n");
+        if (cmd === "read_file_base64") return Promise.resolve("Zm9v");
+        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "complete_code" && typeof args?.prefix === "string")
+          return Promise.resolve({
+            completion: args.prefix + "e one",
+            modelLatencyMs: 12.34,
+          });
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      }
+    );
   });
 
   it("prompts for a file when none is selected", () => {
@@ -228,7 +235,7 @@ describe("FileEditorPane", () => {
     expect(contentAfter).toBe(contentBefore);
   });
 
-  it("offers autocomplete suggestions from the document and dismisses on Escape", async () => {
+  it("shows AI ghost text inline and dismisses it on Escape", async () => {
     const user = userEvent.setup();
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
     await waitFor(() =>
@@ -242,12 +249,12 @@ describe("FileEditorPane", () => {
     await user.type(content, "lin");
 
     await waitFor(() =>
-      expect(document.querySelector(".cm-tooltip-autocomplete")).not.toBeNull()
+      expect(document.querySelector(".cm-ghostText")).not.toBeNull()
     );
 
     await user.keyboard("{Escape}");
     await waitFor(() =>
-      expect(document.querySelector(".cm-tooltip-autocomplete")).toBeNull()
+      expect(document.querySelector(".cm-ghostText")).toBeNull()
     );
   });
 

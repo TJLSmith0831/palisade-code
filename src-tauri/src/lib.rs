@@ -2,6 +2,7 @@ mod acp_client;
 mod acp_events;
 mod acp_preflight;
 mod acp_registry;
+mod completion;
 mod executor;
 mod grill_inject;
 mod handoff;
@@ -27,7 +28,7 @@ use tauri::{Emitter, Manager};
 
 use acp_preflight::Preflight;
 use executor::{Envelope, ExecutorEvent, Harness, Sink};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use store::{floo_home, Message, Project};
 pub(crate) use store::{Res, ThreadMeta};
 
@@ -1153,6 +1154,175 @@ async fn session_attribution(
     .map_err(|e| e.to_string())?
 }
 
+// --------------------------------------------------------------- completion
+
+/// Starts the completion sidecar if it isn't already running.
+fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
+    let harness = app.state::<Harness>();
+    let mut server_slot = harness.completion_server.lock().unwrap();
+    if let Some(server) = server_slot.as_ref() {
+        if server.is_alive() {
+            return Ok(());
+        }
+    }
+
+    let (binary, model) = completion::resolve_sidecar_paths(app)?;
+    if !binary.exists() || !model.exists() {
+        return Err(format!(
+            "completion sidecar or model missing: binary={}, model={}",
+            binary.display(),
+            model.display()
+        ));
+    }
+
+    let server = completion::CompletionServer::default();
+    if let Err(err) = server.spawn(&binary, &model) {
+        return Err(format!("failed to start completion sidecar: {err}"));
+    }
+    *server_slot = Some(server);
+    Ok(())
+}
+
+fn stop_completion_server(harness: &Harness) {
+    if let Some(server) = harness.completion_server.lock().unwrap().take() {
+        drop(server);
+    }
+    *harness.completion_crashes.lock().unwrap() = 0;
+}
+
+/// Ensures the completion sidecar is running before a request, applying the
+/// one-restart-then-disable policy from D33.
+fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()> {
+    let mut server_slot = harness.completion_server.lock().unwrap();
+
+    if let Some(server) = server_slot.as_ref() {
+        if server.is_alive() {
+            return Ok(());
+        }
+    }
+
+    *server_slot = None;
+
+    let crashes = *harness.completion_crashes.lock().unwrap();
+    if crashes >= 2 {
+        return Err("AI completion is disabled because the sidecar crashed twice.".into());
+    }
+
+    let (binary, model) = completion::resolve_sidecar_paths(app)?;
+    if !binary.exists() || !model.exists() {
+        *harness.completion_crashes.lock().unwrap() = 2;
+        let _ = app.emit(
+            "harness-warning",
+            "AI completion is unavailable: bundled sidecar or model is missing.",
+        );
+        return Err("completion sidecar or model missing".into());
+    }
+
+    let server = completion::CompletionServer::default();
+    match server.spawn(&binary, &model) {
+        Ok(()) => {
+            *server_slot = Some(server);
+            *harness.completion_crashes.lock().unwrap() = 0;
+            Ok(())
+        }
+        Err(err) => {
+            *harness.completion_crashes.lock().unwrap() += 1;
+            if *harness.completion_crashes.lock().unwrap() >= 2 {
+                let _ = app.emit(
+                    "harness-warning",
+                    "AI completion disabled after the sidecar crashed twice.",
+                );
+            }
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+async fn complete_code(
+    app: tauri::AppHandle,
+    _project_hash: String,
+    _file_path: String,
+    prefix: String,
+    suffix: String,
+) -> Res<completion::CompletionResponse> {
+    tokio::task::spawn_blocking(move || {
+        let harness = app.state::<Harness>();
+        if !*harness.completion_enabled.lock().unwrap() {
+            return Err("AI completion is disabled.".into());
+        }
+
+        ensure_completion_server(&app, &harness)?;
+
+        let guard = harness.completion_server.lock().unwrap();
+        let server = guard
+            .as_ref()
+            .ok_or("completion server is not running")?;
+        server.complete(&prefix, &suffix)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn set_completion_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Res<bool> {
+    tokio::task::spawn_blocking(move || {
+        let harness = app.state::<Harness>();
+        *harness.completion_enabled.lock().unwrap() = enabled;
+        if enabled {
+            if let Err(err) = start_completion_server(&app) {
+                eprintln!("completion: {err}");
+            }
+        } else {
+            stop_completion_server(&harness);
+        }
+        Ok(enabled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn set_completion_keybinding(
+    app: tauri::AppHandle,
+    keybinding: String,
+) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let harness = app.state::<Harness>();
+        *harness.completion_keybinding.lock().unwrap() = keybinding.clone();
+        Ok(keybinding)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn flush_completion_telemetry(
+    telemetry: completion::CompletionTelemetry,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || completion::flush_telemetry(&telemetry))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::CompletionSettings> {
+    tokio::task::spawn_blocking(move || {
+        let harness = app.state::<Harness>();
+        let enabled = *harness.completion_enabled.lock().unwrap();
+        let accept_keybinding = harness.completion_keybinding.lock().unwrap().clone();
+        Ok(completion::CompletionSettings {
+            enabled,
+            accept_keybinding,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity// ------------------------------------------------------------- graphify
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1171,8 +1341,24 @@ pub fn run() {
         );
     }
     builder
+        .setup(|app| {
+            let harness: tauri::State<'_, Harness> = app.state();
+            if *harness.completion_enabled.lock().unwrap() {
+                let handle = app.handle();
+                if let Err(err) = start_completion_server(&handle) {
+                    eprintln!("completion: {err}");
+                    let _ = app.emit("harness-warning", err);
+                }
+            }
+            Ok(())
+        })
         .manage(Harness::default())
         .invoke_handler(tauri::generate_handler![
+            complete_code,
+            set_completion_enabled,
+            set_completion_keybinding,
+            get_completion_settings,
+            flush_completion_telemetry,
             list_projects,
             add_project,
             switch_project,
@@ -1252,6 +1438,7 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 release_idle_sessions(&app.state::<Harness>(), None);
                 let _ = app.state::<Harness>().session_log_writer.lock().unwrap().flush();
+                stop_completion_server(&app.state::<Harness>());
             }
         });
 }

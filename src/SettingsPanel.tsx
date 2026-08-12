@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
-import { Modal, Button } from "@mantine/core";
+import { Modal, Button, Switch } from "@mantine/core";
 import * as api from "./api";
+import {
+  COMPLETION_ENABLED_KEY,
+  COMPLETION_KEYBINDING_KEY,
+  COMPLETION_SETTINGS_CHANGED_EVENT,
+} from "./completion/GhostTextPlugin";
+
+export {
+  COMPLETION_ENABLED_KEY,
+  COMPLETION_KEYBINDING_KEY,
+  COMPLETION_SETTINGS_CHANGED_EVENT,
+};
 
 // Personal display preferences — localStorage, not .project-settings.json.
 export const ACCENT_HUE_KEY = "floo:accentHue";
@@ -366,6 +377,12 @@ export default function SettingsPanel({
   const [editorFont, setEditorFontState] = useState(loadEditorFont);
   const [editorFontSize, setEditorFontSizeState] = useState(loadEditorFontSize);
   const [editorWrap, setEditorWrapState] = useState(loadEditorWrap);
+  const [completionEnabled, setCompletionEnabledState] = useState(
+    () => localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false"
+  );
+  const [completionKeybinding, setCompletionKeybindingState] = useState(
+    () => localStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Alt-Tab"
+  );
   const [appearance, setAppearance] = useState<Appearance>({});
 
   useEffect(() => {
@@ -403,6 +420,25 @@ export default function SettingsPanel({
     setEditorWrapState(wrap);
     localStorage.setItem(EDITOR_WRAP_KEY, wrap ? "1" : "0");
     window.dispatchEvent(new Event(EDITOR_WRAP_CHANGED_EVENT));
+  };
+
+  const handleCompletionEnabled = (enabled: boolean) => {
+    setCompletionEnabledState(enabled);
+    localStorage.setItem(COMPLETION_ENABLED_KEY, String(enabled));
+    void api.setCompletionEnabled(enabled).catch(() => {
+      // best-effort backend sync
+    });
+    window.dispatchEvent(new Event(COMPLETION_SETTINGS_CHANGED_EVENT));
+  };
+
+  const handleCompletionKeybinding = (keybinding: string | null) => {
+    if (!keybinding) return;
+    setCompletionKeybindingState(keybinding);
+    localStorage.setItem(COMPLETION_KEYBINDING_KEY, keybinding);
+    void api.setCompletionKeybinding(keybinding).catch(() => {
+      // best-effort backend sync
+    });
+    window.dispatchEvent(new Event(COMPLETION_SETTINGS_CHANGED_EVENT));
   };
 
   const setEditorFontSize = (size: number) => {
@@ -968,6 +1004,96 @@ export default function SettingsPanel({
               }}
             />
           </button>
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* AI completion                                                      */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 18,
+            marginBottom: 18,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>AI completion</div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  color: text,
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+              >
+                Inline suggestions
+              </div>
+              <div
+                style={{
+                  marginTop: 3,
+                  color: dim,
+                  fontSize: 11,
+                }}
+              >
+                Show ghost-text FIM completions while typing
+              </div>
+            </div>
+
+            <Switch
+              checked={completionEnabled}
+              onChange={(event) =>
+                handleCompletionEnabled(event.currentTarget.checked)
+              }
+              data-testid="completion-enabled-switch"
+              aria-label="Enable inline AI completions"
+            />
+          </div>
+
+          <label
+            htmlFor="completion-keybinding-select"
+            style={{
+              display: "block",
+              color: dim,
+              fontSize: 11,
+              marginBottom: 6,
+            }}
+          >
+            Accept suggestion
+          </label>
+          <select
+            id="completion-keybinding-select"
+            value={completionKeybinding}
+            onChange={(event) => handleCompletionKeybinding(event.target.value)}
+            disabled={!completionEnabled}
+            data-testid="completion-keybinding-select"
+            style={{
+              flex: 1,
+              width: "100%",
+              height: 42,
+              padding: "0 12px",
+              color: text,
+              background: field,
+              border: `1px solid ${border}`,
+              borderRadius: 7,
+              outline: "none",
+              fontFamily: "inherit",
+              fontSize: 13,
+              cursor: completionEnabled ? "pointer" : "not-allowed",
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="Alt-Tab">Option / Alt + Tab</option>
+            <option value="Tab">Tab</option>
+          </select>
         </section>
 
         {/* ---------------------------------------------------------------- */}

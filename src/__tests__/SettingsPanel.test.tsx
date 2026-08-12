@@ -6,10 +6,14 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 
 import SettingsPanel, {
   ACCENT_HUE_KEY,
+  COMPLETION_ENABLED_KEY,
+  COMPLETION_KEYBINDING_KEY,
+  COMPLETION_SETTINGS_CHANGED_EVENT,
   EDITOR_FONT_CHANGED_EVENT,
   EDITOR_FONT_KEY,
   EDITOR_FONT_SIZE_KEY,
@@ -41,6 +45,11 @@ afterEach(() => {
 });
 
 describe("SettingsPanel", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+  });
+
   it("applies an accent color as a CSS custom property and persists it", () => {
     render(
       <SettingsPanel
@@ -77,6 +86,53 @@ describe("SettingsPanel", () => {
     );
     expect(onFontChanged).toHaveBeenCalled();
     window.removeEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
+  });
+
+  it("toggling AI completion persists it, syncs to backend, and notifies listeners", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    window.addEventListener(COMPLETION_SETTINGS_CHANGED_EVENT, onChanged);
+    render(
+      <SettingsPanel
+        projectHash="proj1"
+        onOpenProjectSettings={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    const input = screen.getByRole("switch", { name: /Enable inline AI/ });
+    await user.click(input);
+
+    expect(localStorage.getItem(COMPLETION_ENABLED_KEY)).toBe("false");
+    expect(invokeMock).toHaveBeenCalledWith("set_completion_enabled", {
+      enabled: false,
+    });
+    expect(onChanged).toHaveBeenCalled();
+    window.removeEventListener(COMPLETION_SETTINGS_CHANGED_EVENT, onChanged);
+  });
+
+  it("changing the accept keybinding persists it and notifies listeners", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    window.addEventListener(COMPLETION_SETTINGS_CHANGED_EVENT, onChanged);
+    render(
+      <SettingsPanel
+        projectHash="proj1"
+        onOpenProjectSettings={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId("completion-keybinding-select"), {
+      target: { value: "Tab" },
+    });
+
+    expect(localStorage.getItem(COMPLETION_KEYBINDING_KEY)).toBe("Tab");
+    expect(invokeMock).toHaveBeenCalledWith("set_completion_keybinding", {
+      keybinding: "Tab",
+    });
+    expect(onChanged).toHaveBeenCalled();
+    window.removeEventListener(COMPLETION_SETTINGS_CHANGED_EVENT, onChanged);
   });
 
   it("changing the editor font size persists it and notifies listeners", () => {

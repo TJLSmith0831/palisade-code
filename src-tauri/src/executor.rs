@@ -405,6 +405,14 @@ pub struct Harness {
     pub session_log_writer: crate::session_log_writer::SharedSessionLogWriter,
     /// Mtime-keyed cache over `openspec` CLI output (D10).
     pub openspec_cache: std::sync::Arc<crate::openspec_cache::OpenSpecCache>,
+    /// Local FIM completion sidecar (llama-server).
+    pub completion_server: Mutex<Option<crate::completion::CompletionServer>>,
+    /// Consecutive sidecar crashes; one restart, then disable for the session (D33).
+    pub completion_crashes: Mutex<u8>,
+    /// User-toggled enable/disable for AI completion.
+    pub completion_enabled: Mutex<bool>,
+    /// Configurable accept keybinding, stored as a CodeMirror key name.
+    pub completion_keybinding: Mutex<String>,
 }
 
 impl Default for Harness {
@@ -418,6 +426,10 @@ impl Default for Harness {
             fswatch: Default::default(),
             session_log_writer: crate::session_log_writer::shared_session_log_writer(),
             openspec_cache: std::sync::Arc::new(crate::openspec_cache::OpenSpecCache::with_real_adapter()),
+            completion_server: Default::default(),
+            completion_crashes: Mutex::new(0),
+            completion_enabled: Mutex::new(true),
+            completion_keybinding: Mutex::new("Alt-Tab".into()),
         }
     }
 }

@@ -33,3 +33,7 @@ graphify-out/
 
 .mcp.json
 .project-settings.json
+
+# Bundled sidecar and model (build inputs, not source; distribution needs an installer/fetcher in future).
+src-tauri/resources/models/
+src-tauri/llama-server-aarch64-apple-darwin

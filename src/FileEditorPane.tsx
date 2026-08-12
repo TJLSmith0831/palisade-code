@@ -20,12 +20,12 @@ import {
   historyKeymap,
   indentWithTab,
 } from "@codemirror/commands";
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import {
-  autocompletion,
-  completeAnyWord,
-  closeBrackets,
-  closeBracketsKeymap,
-} from "@codemirror/autocomplete";
+  COMPLETION_SETTINGS_CHANGED_EVENT,
+  fimCompletion,
+  loadCompletionSettings,
+} from "./completion/GhostTextPlugin";
 import {
   syntaxHighlighting,
   HighlightStyle,
@@ -249,6 +249,7 @@ export default function FileEditorPane({
   const languageCompartment = useRef(new Compartment());
   const fontCompartment = useRef(new Compartment());
   const wrapCompartment = useRef(new Compartment());
+  const fimCompartment = useRef(new Compartment());
   // Refs so the update/save listeners (bound once per file load) always see
   // the latest callback/path without re-mounting the EditorView per render.
   const onSaveRef = useRef(onSave);
@@ -387,7 +388,9 @@ export default function FileEditorPane({
       search({ top: true }),
       codeHighlightStyle,
       codeColorTheme,
-      autocompletion({ override: [completeAnyWord] }),
+      fimCompartment.current.of(
+        fimCompletion(loadCompletionSettings(), projectHash, forPath)
+      ),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },
         ...closeBracketsKeymap,
@@ -410,7 +413,7 @@ export default function FileEditorPane({
       ),
       fontCompartment.current.of(editorFontTheme()),
     ],
-    []
+    [projectHash, path]
   );
 
   // Read through a ref so this reacts only to a new change event, not to the
@@ -546,13 +549,28 @@ export default function FileEditorPane({
         ),
       });
     };
+    const onCompletionSettingsChanged = () => {
+      viewRef.current?.dispatch({
+        effects: fimCompartment.current.reconfigure(
+          fimCompletion(loadCompletionSettings(), projectHash, path ?? "")
+        ),
+      });
+    };
     window.addEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
     window.addEventListener(EDITOR_WRAP_CHANGED_EVENT, onWrapChanged);
+    window.addEventListener(
+      COMPLETION_SETTINGS_CHANGED_EVENT,
+      onCompletionSettingsChanged
+    );
     return () => {
       window.removeEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
       window.removeEventListener(EDITOR_WRAP_CHANGED_EVENT, onWrapChanged);
+      window.removeEventListener(
+        COMPLETION_SETTINGS_CHANGED_EVENT,
+        onCompletionSettingsChanged
+      );
     };
-  }, []);
+  }, [projectHash, path]);
 
   // Scroll a searched-for line into view once the document is actually
   // there. Keyed on the event rather than the line so jumping to the same

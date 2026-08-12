@@ -543,3 +543,49 @@ export const deletePath = (projectHash: string, relativePath: string) =>
 
 export const createDirectory = (projectHash: string, relativePath: string) =>
   invoke<void>("create_directory", { projectHash, relativePath });
+
+// --------------------------------------------------------------- completion
+
+export type CompletionResponse = {
+  completion: string;
+  modelLatencyMs: number;
+};
+
+export type CompletionSettings = {
+  enabled: boolean;
+  acceptKeybinding: string;
+};
+
+export type CompletionTelemetry = {
+  shown: number;
+  accepted: number;
+  dismissed: number;
+  typedPast: number;
+  ttftP50: number;
+  ttftP99: number;
+};
+
+export const completeCode = (
+  projectHash: string,
+  filePath: string,
+  prefix: string,
+  suffix: string
+) =>
+  invoke<CompletionResponse>("complete_code", {
+    projectHash,
+    filePath,
+    prefix,
+    suffix,
+  });
+
+export const setCompletionEnabled = (enabled: boolean) =>
+  invoke<boolean>("set_completion_enabled", { enabled });
+
+export const setCompletionKeybinding = (keybinding: string) =>
+  invoke<string>("set_completion_keybinding", { keybinding });
+
+export const getCompletionSettings = () =>
+  invoke<CompletionSettings>("get_completion_settings");
+
+export const flushCompletionTelemetry = (telemetry: CompletionTelemetry) =>
+  invoke<void>("flush_completion_telemetry", { telemetry });

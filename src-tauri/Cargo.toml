@@ -36,7 +36,7 @@ regex = "1.13.1"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 agent-client-protocol = "2"
-ureq = "2"
+ureq = { version = "2", features = ["json"] }
 tokio = { version = "1", features = ["rt", "macros", "io-util"] }
 gix = "0.86"
 
