@@ -260,11 +260,19 @@ fn trim_suffix(suffix: &str) -> &str {
 }
 
 fn request_body(prompt: &str) -> serde_json::Value {
+    // Add stop sequences for common code patterns to prevent repetition
+    let stop_tokens = vec![
+        FIM_SUFFIX.to_string(),
+        FIM_PREFIX.to_string(),
+        "\n\n".to_string(), // Stop at double newlines (end of block)
+        "]\n".to_string(), // Stop at end of list
+    ];
+    
     serde_json::json!({
         "prompt": prompt,
         "n_predict": DEFAULT_N_PREDICT,
         "temperature": DEFAULT_TEMPERATURE,
-        "stop": [FIM_SUFFIX, FIM_PREFIX],
+        "stop": stop_tokens,
     })
 }
 
@@ -538,6 +546,18 @@ mod tests {
             MAX_SUFFIX_CHARS,
             "suffix should be trimmed"
         );
+    }
+
+    #[test]
+    fn request_body_includes_additional_stop_tokens() {
+        let prompt = build_fim_prompt("def f():", "\n    pass");
+        let body = request_body(&prompt);
+        
+        let stop = body.get("stop").and_then(|v| v.as_array()).unwrap();
+        assert!(stop.iter().any(|s| s.as_str() == Some(FIM_SUFFIX)));
+        assert!(stop.iter().any(|s| s.as_str() == Some(FIM_PREFIX)));
+        assert!(stop.iter().any(|s| s.as_str() == Some("\n\n")));
+        assert!(stop.iter().any(|s| s.as_str() == Some("]\n")));
     }
 
     const FAKE_SIDECAR_SCRIPT: &str = r#"#!/usr/bin/env python3
