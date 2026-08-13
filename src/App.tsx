@@ -168,7 +168,7 @@ type ChatSurfaceProps = {
   hasLiveSession: boolean;
 };
 
-const ChatSurface = memo(
+export const ChatSurface = memo(
   function ChatSurface({
     project,
     thread,
@@ -220,6 +220,16 @@ const ChatSurface = memo(
     // D6/D15: "Other" spec-type text input state — local to the framing menu.
     const [otherSpecText, setOtherSpecText] = useState("");
     const [showOtherInput, setShowOtherInput] = useState(false);
+    // Auto-scroll: stick to the bottom as messages stream in, but yield if the
+    // user scrolls up to read. Sending a new message re-arms it. ChatSurface
+    // isn't remounted on thread switch, so scrolling up in one thread would
+    // otherwise leave the next thread opened mid-scroll instead of at the
+    // bottom — re-arm on thread switch too.
+    const messagesRef = useRef<HTMLDivElement>(null);
+    const [autoScroll, setAutoScroll] = useState(true);
+    useEffect(() => {
+      setAutoScroll(true);
+    }, [thread?.id]);
     const executorLabel = executor
       ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
       : null;
@@ -248,6 +258,23 @@ const ChatSurface = memo(
         ),
       [messages, live]
     );
+    // Re-arm auto-scroll on send, then let the effect below pin to bottom.
+    const handleSend = () => {
+      setAutoScroll(true);
+      onSend();
+    };
+    const handleScroll = () => {
+      const el = messagesRef.current;
+      if (!el) return;
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+      setAutoScroll(nearBottom);
+    };
+    useEffect(() => {
+      if (!autoScroll) return;
+      const el = messagesRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+    }, [items, busy, autoScroll]);
     useEffect(() => {
       if (!modelMenuOpen) setModelQuery("");
     }, [modelMenuOpen]);
@@ -753,7 +780,13 @@ const ChatSurface = memo(
           )}
           <div className="spacer" />
         </div>
-        <div className="messages" data-testid="messages">
+        <div
+          className="messages"
+          data-testid="messages"
+          ref={messagesRef}
+          onScroll={handleScroll}
+          data-autoscroll={autoScroll}
+        >
           <>
             {items.length === 0 && <p className="empty">No messages yet.</p>}
             <EventList
@@ -785,7 +818,7 @@ const ChatSurface = memo(
           className={`composer ${dragActive ? "drag-active" : ""}`}
           onSubmit={(event) => {
             event.preventDefault();
-            onSend();
+            handleSend();
           }}
           style={{
             display: "flex",
@@ -2084,7 +2117,8 @@ export default function App() {
     // without touching the executor dropdown, fall back the same way here,
     // or the model pick is silently dropped along with the executor (never
     // persisted, since setThreadExecutor is skipped when pickedExecutor is null).
-    const pickedExecutor = framingExecutor ?? (framingModel ? flight?.selected : null) ?? null;
+    const pickedExecutor =
+      framingExecutor ?? (framingModel ? flight?.selected : null) ?? null;
     const pickedModel = framingModel;
     try {
       const created = await api.createThread(project.hash, "New thread");
