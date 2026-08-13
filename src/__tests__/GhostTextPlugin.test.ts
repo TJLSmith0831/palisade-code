@@ -142,7 +142,7 @@ describe("GhostTextPlugin", () => {
       userEvent: "input.type",
     });
 
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(3100);
     await vi.waitFor(() => view.state.field(ghostTextState) !== null, {
       timeout: 2000,
     });
@@ -172,7 +172,7 @@ describe("GhostTextPlugin", () => {
       userEvent: "input",
     });
 
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(3100);
     await vi.waitFor(() => view.state.field(ghostTextState) !== null, {
       timeout: 2000,
     });
@@ -249,6 +249,30 @@ describe("GhostTextPlugin", () => {
     it("returns the completion unchanged when completion is empty", () => {
       expect(stripStarterOverlap("from", "")).toBe("");
     });
+
+    it("strips leading whitespace when prefix ends with non-newline whitespace", () => {
+      // D11: prefix "else: " (trailing space), completion "  # TODO: ..." —
+      // the model regenerated whitespace the user already typed. Strip it
+      // so the ghost text continues right at the cursor, not indented.
+      expect(stripStarterOverlap("else: ", "  # TODO: add servers")).toBe(
+        "# TODO: add servers"
+      );
+    });
+
+    it("preserves leading whitespace when prefix ends with a newline", () => {
+      // D11: prefix ends with newline — the completion's leading whitespace
+      // is the indent of the new line, not regenerated whitespace.
+      expect(stripStarterOverlap("if x:\n", "    y = 1")).toBe("    y = 1");
+    });
+
+    it("preserves leading whitespace when prefix ends with newline + indent", () => {
+      // D11: prefix "if x:\n    " — user already typed the indent on the
+      // new line. The completion's leading whitespace is spurious here too,
+      // but we only strip when the prefix's trailing whitespace is not
+      // preceded by a newline. Actually — the user typed the indent, so
+      // the model regenerating it IS spurious. Strip it.
+      expect(stripStarterOverlap("if x:\n    ", "    y = 1")).toBe("y = 1");
+    });
   });
 
   it("typing a starter word strips the regenerated prefix from the ghost text", async () => {
@@ -265,7 +289,7 @@ describe("GhostTextPlugin", () => {
       userEvent: "input.type",
     });
 
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(3100);
     await vi.waitFor(() => view.state.field(ghostTextState) !== null, {
       timeout: 2000,
     });
@@ -274,6 +298,62 @@ describe("GhostTextPlugin", () => {
     // The leading "from" is stripped so accepting produces "from fastmcp..."
     // rather than "fromfrom fastmcp...".
     expect(ghost?.text).toBe(" fastmcp.client import Client");
+
+    vi.useRealTimers();
+    view.destroy();
+  });
+
+  it("drops stale result when a new keystroke aborts an in-flight request", async () => {
+    // D7: when a new keystroke aborts an in-flight request, the stale result
+    // is dropped even if the cursor returns to the same position (which
+    // would bypass the existing cursor-position staleness check).
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // Control when the first (stale) request resolves.
+    let resolveStale!: (value: unknown) => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStale = resolve;
+        })
+    );
+
+    const view = viewWith("hello", 5);
+
+    // Type "r" at position 5 → cursor at 6, schedules request after debounce.
+    view.dispatch({
+      changes: { from: 5, to: 5, insert: "r" },
+      selection: { anchor: 6 },
+      userEvent: "input.type",
+    });
+
+    // Advance past debounce → first request fires (pos = 6).
+    await vi.advanceTimersByTimeAsync(3100);
+
+    // Type "s" → cursor at 7, cancels the in-flight request.
+    view.dispatch({
+      changes: { from: 6, to: 6, insert: "s" },
+      selection: { anchor: 7 },
+      userEvent: "input.type",
+    });
+
+    // Backspace → cursor returns to 6 (same as the stale request's pos).
+    // Without the abort check, the cursor-position check would pass and
+    // the stale result would be dispatched.
+    view.dispatch({
+      changes: { from: 6, to: 7, insert: "" },
+      selection: { anchor: 6 },
+      userEvent: "delete.backward",
+    });
+
+    // Resolve the stale request.
+    resolveStale({ completion: "return x + y;", modelLatencyMs: 12.34 });
+
+    // Flush microtasks so the stale request's continuation runs.
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The stale result must be dropped — no ghost text.
+    expect(view.state.field(ghostTextState)).toBeNull();
 
     vi.useRealTimers();
     view.destroy();

@@ -8,11 +8,11 @@ Provides AI-powered fill-in-the-middle code completion using a local bundled mod
 
 ### Requirement: Inline ghost text completion
 
-The system SHALL display AI-generated code completions as greyed inline ghost text at the cursor position in the code editor, with a configurable keybinding (default: Option+Tab) to accept the suggestion into the document. The accept keybinding SHALL only trigger when ghost text is visible.
+The system SHALL display AI-generated code completions as greyed inline ghost text at the cursor position in the code editor, with a configurable keybinding (default: Option+Tab) to accept the suggestion into the document. The accept keybinding SHALL only trigger when ghost text is visible. Completions SHALL fire after a 1250ms trailing-edge debounce (no typing for 1.25 seconds), not on every micro-pause.
 
 #### Scenario: Ghost text appears after typing pause
 
-- **WHEN** user types in the code editor and pauses for 150ms
+- **WHEN** user types in the code editor and pauses for 1250ms
 - **THEN** the system displays greyed ghost text showing the predicted completion at the cursor position
 
 #### Scenario: Accept completion with Option+Tab
@@ -38,21 +38,40 @@ The system SHALL display AI-generated code completions as greyed inline ghost te
 #### Scenario: Cancel in-flight request on new keystroke
 
 - **WHEN** a completion request is in-flight and user types another character
-- **THEN** the system cancels the in-flight request and starts a new completion request after the debounce period
+- **THEN** the system marks the in-flight request as aborted and drops its result when it returns, then starts a new completion request after the debounce period
 
 ### Requirement: FIM completion request format
 
-The system SHALL send fill-in-the-middle completion requests to the local inference server with prefix (text before cursor), suffix (text after cursor), and cursor position, respecting the token budget (256 prefix tokens, 128 suffix tokens, 32 max generation tokens).
+The system SHALL send fill-in-the-middle completion requests to the local inference server with prefix (text before cursor), suffix (text after cursor), and cursor position, respecting the token budget (256 prefix tokens, 128 suffix tokens, 128 max generation tokens). The request SHALL include `repeat_penalty: 1.1` and `top_p: 0.95` to prevent repetition traps, with `temperature: 0.0` for deterministic output.
 
 #### Scenario: Completion request with prefix and suffix
 
 - **WHEN** the system requests a completion
-- **THEN** it sends the prefix (up to 256 tokens), suffix (up to 128 tokens), and cursor position to the inference server
+- **THEN** it sends the prefix (up to 256 tokens), suffix (up to 128 tokens), cursor position, `n_predict: 128`, `repeat_penalty: 1.1`, `top_p: 0.95`, and `temperature: 0.0` to the inference server
 
 #### Scenario: Completion response includes latency tracking
 
 - **WHEN** the inference server returns a completion
 - **THEN** the response includes the completion text and model latency in milliseconds for telemetry
+
+### Requirement: Completion post-processing preserves indentation
+
+The system SHALL preserve leading whitespace (indentation) in all lines of a completion. The keyword-dedup post-processing (removing `from from` / `importimport` / `import import` duplicates) SHALL operate on line content without stripping or normalizing indentation. This matches the Continue.dev reference implementation, which separates dedup from indent normalization and only performs the former.
+
+#### Scenario: Multi-line completion preserves indentation on all lines
+
+- **WHEN** the model returns a multi-line completion with leading whitespace on lines after the first
+- **THEN** the system preserves that whitespace in the ghost text without stripping or normalizing it
+
+#### Scenario: Keyword dedup still works without stripping indent
+
+- **WHEN** the model returns a completion with a duplicate keyword (e.g., `from from fastmcp` or `importimport pandas`)
+- **THEN** the system removes the duplicate keyword while preserving any leading indentation on that line
+
+#### Scenario: First-line indentation is preserved
+
+- **WHEN** the model returns a completion whose first line has leading whitespace
+- **THEN** the system preserves that leading whitespace without collapsing it via whitespace normalization
 
 ### Requirement: Local inference sidecar process
 
@@ -173,7 +192,7 @@ The system SHALL disable completion silently and log an error if the bundled mod
 - **D11** — Standalone benchmark script created before app integration to validate model loads and performs. (2026-08-12, socrata-fim-completion)
 - **D12** — Benchmark passed: 67-70ms TTFT, ~200 tok/s, 26MB CPU memory, correct FIM output. (2026-08-12, socrata-fim-completion)
 - **D13** — Context budget: 256 prefix tokens, 128 suffix tokens, 32 max generation. TTFT stays under 70ms even at 1024 tokens. (2026-08-12, socrata-fim-completion)
-- **D14** — 150ms debounce after last keystroke, cancel immediately on new keystroke or cursor movement. (2026-08-12, socrata-fim-completion)
+- **D14** — 150ms debounce after last keystroke, cancel immediately on new keystroke or cursor movement. (2026-08-12, socrata-fim-completion) **Superseded by D47 — 1250ms is the tuned value; 150ms fired on every micro-pause and disrupted coding flow.**
 - **D15** — Completion enabled by default for all projects; 67ms TTFT justifies always-on. (2026-08-12, socrata-fim-completion)
 - **D16** — Model must be bundled for distribution; Downloads/home directory locations are user-deletable. (2026-08-12, socrata-fim-completion)
 - **D17** — Tauri `bundle.resources` used to bundle the model; runtime path via `app.path().resolve(..., BaseDirectory::Resource)`. (2026-08-12, socrata-fim-completion)
@@ -206,3 +225,8 @@ The system SHALL disable completion silently and log an error if the bundled mod
 - **D44** — FileEditorPane integration point (`autocompletion({ override: [completeAnyWord] })` at line 390) confirmed intact after architecture refactor. (2026-08-12, socrata-fim-completion)
 - **D45** — Large bundled assets (540MB model, 20MB binary) are build inputs, not committed source; gitignored. Future distribution requires an installer/fetcher to deliver them to build machines. (2026-08-12, socrata-fim-completion)
 - **D46** — `externalBin` name is `llama-server` (not `binaries/llama-server`); Tauri v2 bundler resolves from `src-tauri/<name>-<target-triple>`. (2026-08-12, socrata-fim-completion)
+- **D47** — 1250ms trailing-edge debounce (amended from 3000ms after live dogfooding). Supersedes D14's 150ms. Pure debounce, not throttle+trailing — a throttle would fire mid-keystroke with stale context on a model prone to repetition. (2026-08-13, fim-completion-throttle-and-repetition-fix)
+- **D48** — Sampling params: `repeat_penalty: 1.1` + `top_p: 0.95`, `temperature` stays 0.0. Breaks the greedy-decoding repetition trap on the 0.8B model. `top_k` rejected as redundant with `top_p` for this vocabulary size. (2026-08-13, fim-completion-throttle-and-repetition-fix)
+- **D49** — Backend `clean_completion`/`clean_first_line` preserve indentation (no `trim_start`); keyword-dedup regex stays. Matches Continue.dev, which separates dedup from indent normalization and only performs the former. (2026-08-13, fim-completion-throttle-and-repetition-fix)
+- **D50** — Client-side abort check only (no server-side cancel IPC). Tauri `invoke` can't accept an `AbortSignal`; the 1250ms debounce limits wasted compute from stale requests. The controller is captured locally before `await` so the check tests the right request. (2026-08-13, fim-completion-throttle-and-repetition-fix)
+- **D51** — Frontend `stripStarterOverlap` strips spurious first-line whitespace when the prefix ends with non-newline whitespace (cursor mid-line); preserves indent when the prefix ends with a newline (cursor at line start). Splits indent handling with D49: backend preserves all lines, frontend strips mid-line whitespace regen. (2026-08-13, fim-completion-throttle-and-repetition-fix)

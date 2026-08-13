@@ -248,8 +248,10 @@ describe("FileEditorPane", () => {
     content.focus();
     await user.type(content, "lin");
 
-    await waitFor(() =>
-      expect(document.querySelector(".cm-ghostText")).not.toBeNull()
+    // D1: debounce is 3000ms, so waitFor needs a timeout beyond that.
+    await waitFor(
+      () => expect(document.querySelector(".cm-ghostText")).not.toBeNull(),
+      { timeout: 5000 }
     );
 
     await user.keyboard("{Escape}");

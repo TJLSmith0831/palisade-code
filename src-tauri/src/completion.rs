@@ -30,6 +30,12 @@ const DEFAULT_CTX_SIZE: u32 = 2048;
 const DEFAULT_N_GPU_LAYERS: u32 = 99;
 const DEFAULT_N_PREDICT: u32 = 128;
 const DEFAULT_TEMPERATURE: f64 = 0.0;
+// D4: repeat_penalty breaks the greedy-decoding repetition trap on the 0.8B
+// model; top_p is a second guard against probability concentration. Both are
+// mild, standard llama.cpp values. Temperature stays 0 for deterministic
+// output (see decisions.md D4/D5).
+const DEFAULT_REPEAT_PENALTY: f64 = 1.1;
+const DEFAULT_TOP_P: f64 = 0.95;
 
 /// Averaged characters per token for code-like text. Used to approximate the
 /// 256/128 token budget without shipping a tokenizer in v1.
@@ -267,11 +273,13 @@ fn request_body(prompt: &str) -> serde_json::Value {
         "\n\n".to_string(), // Stop at double newlines (end of block)
         "]\n".to_string(), // Stop at end of list
     ];
-    
+
     serde_json::json!({
         "prompt": prompt,
         "n_predict": DEFAULT_N_PREDICT,
         "temperature": DEFAULT_TEMPERATURE,
+        "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+        "top_p": DEFAULT_TOP_P,
         "stop": stop_tokens,
     })
 }
@@ -300,26 +308,24 @@ pub fn parse_completion_response(body: &str) -> Res<CompletionResponse> {
 
 /// Cleans up common FIM completion artifacts:
 /// - Removes duplicate keywords at the start (e.g., "from from")
-/// - Fixes excessive leading whitespace
+/// - Preserves indentation on all lines (D6: indent stripping caused
+///   misaligned multi-line completions; Continue.dev does not strip it)
 /// - Preserves trailing newlines
 fn clean_completion(completion: String) -> String {
     let has_trailing_newline = completion.ends_with('\n');
     let mut lines: Vec<String> = completion.lines().map(|s| s.to_string()).collect();
-    
+
     if lines.is_empty() {
         return completion;
     }
 
-    // Clean up the first line: remove duplicate keywords and excessive leading spaces
+    // Clean up the first line: remove duplicate keywords. Indentation is
+    // preserved (D6).
     if let Some(first_line) = lines.first_mut() {
         *first_line = clean_first_line(first_line);
     }
 
-    // Clean up remaining lines: normalize indentation
-    for line in lines.iter_mut().skip(1) {
-        *line = line.trim_start().to_string();
-    }
-
+    // Lines 2+ pass through untouched — indentation is preserved (D6).
     // Join lines back together, preserving single newlines between lines
     let result = lines.join("\n");
     if has_trailing_newline {
@@ -329,38 +335,36 @@ fn clean_completion(completion: String) -> String {
     }
 }
 
-/// Removes duplicate keywords at the start of a line and normalizes spaces.
+/// Removes duplicate keywords (e.g., "from from", "importimport") from the
+/// first line of a completion while preserving indentation. D6: indentation
+/// passes through untouched — only the keyword-dedup regex runs, no
+/// whitespace normalization.
 /// Example: "from    from fastmcp" -> "from fastmcp"
 /// Example: "fromfrom fastmcp" -> "from fastmcp"
+/// Example: "    from    from fastmcp" -> "    from fastmcp"
 fn clean_first_line(line: &str) -> String {
-    let trimmed = line.trim_start();
-    
     // Common Python/TypeScript import keywords that might be duplicated
     let keywords = ["from", "import", "class", "def", "async", "const", "let", "var", "function"];
-    
+
     for keyword in &keywords {
-        // Check if the line starts with the keyword followed by optional whitespace, then the same keyword again
-        // This handles both "from from" and "fromfrom" cases
+        // Check if the line contains the keyword followed by optional
+        // whitespace, then the same keyword again. This handles both
+        // "from from" and "fromfrom" cases.
         let pattern = format!("{}\\s*{}", keyword, keyword);
         if let Some(re) = regex::Regex::new(&pattern).ok() {
-            if re.is_match(trimmed) {
-                // Replace the duplicate with a single occurrence and normalize all whitespace
-                let replacement = format!("{} ", keyword);
-                let cleaned = re.replace(trimmed, replacement).to_string();
-                // Normalize all whitespace to single spaces
-                let words: Vec<&str> = cleaned.split_whitespace().collect();
-                return words.join(" ");
+            if re.is_match(line) {
+                // Replace the duplicate with a single occurrence (no trailing
+                // space — the original separator after the matched pattern is
+                // preserved). Leading indentation is preserved because the
+                // regex matches the keyword, not the leading whitespace.
+                let replacement = format!("{}", keyword);
+                return re.replace(line, replacement).to_string();
             }
         }
     }
-    
-    // If no duplicate found, just trim excessive leading spaces (keep at most 1 space)
-    let words: Vec<&str> = trimmed.split_whitespace().collect();
-    if words.len() > 1 {
-        words.join(" ")
-    } else {
-        trimmed.to_string()
-    }
+
+    // No duplicate found — return the line unchanged (indent preserved, D6).
+    line.to_string()
 }
 
 /// Truncates a completion to the last complete line if the model was cut
@@ -500,7 +504,8 @@ mod tests {
     fn parse_completion_response_extracts_content_and_latency() {
         let body = r#"{"content":"        total += item['price']\n","timings":{"prompt_ms":38.343}}"#;
         let parsed = parse_completion_response(body).unwrap();
-        assert_eq!(parsed.completion, "total += item['price']\n");
+        // D6: first-line indentation is preserved.
+        assert_eq!(parsed.completion, "        total += item['price']\n");
         assert!((parsed.model_latency_ms - 38.343).abs() < 0.001);
     }
 
@@ -519,10 +524,11 @@ mod tests {
     #[test]
     fn parse_completion_response_trims_truncated_multi_line_content() {
         // Model hit n_predict mid-statement on the third line — no trailing
-        // newline. The partial trailing line should be dropped.
+        // newline. The partial trailing line should be dropped. Indentation
+        // is preserved on all lines (D6).
         let body = r#"{"content":"    x = 1\n    y = 2\n    return x +","timings":{"prompt_ms":12.0}}"#;
         let parsed = parse_completion_response(body).unwrap();
-        assert_eq!(parsed.completion, "x = 1\ny = 2\n");
+        assert_eq!(parsed.completion, "    x = 1\n    y = 2\n");
     }
 
     #[test]
@@ -552,12 +558,35 @@ mod tests {
     fn request_body_includes_additional_stop_tokens() {
         let prompt = build_fim_prompt("def f():", "\n    pass");
         let body = request_body(&prompt);
-        
+
         let stop = body.get("stop").and_then(|v| v.as_array()).unwrap();
         assert!(stop.iter().any(|s| s.as_str() == Some(FIM_SUFFIX)));
         assert!(stop.iter().any(|s| s.as_str() == Some(FIM_PREFIX)));
         assert!(stop.iter().any(|s| s.as_str() == Some("\n\n")));
         assert!(stop.iter().any(|s| s.as_str() == Some("]\n")));
+    }
+
+    #[test]
+    fn request_body_includes_sampling_params_to_break_repetition_traps() {
+        // D4: repeat_penalty (1.1) + top_p (0.95), temperature stays 0.0.
+        let prompt = build_fim_prompt("def f():", "\n    pass");
+        let body = request_body(&prompt);
+
+        assert_eq!(
+            body.get("repeat_penalty").and_then(|v| v.as_f64()),
+            Some(1.1),
+            "repeat_penalty must be 1.1 to break greedy-decoding repetition traps"
+        );
+        assert_eq!(
+            body.get("top_p").and_then(|v| v.as_f64()),
+            Some(0.95),
+            "top_p must be 0.95 as a second guard against probability concentration"
+        );
+        assert_eq!(
+            body.get("temperature").and_then(|v| v.as_f64()),
+            Some(0.0),
+            "temperature stays 0.0 for deterministic output"
+        );
     }
 
     const FAKE_SIDECAR_SCRIPT: &str = r#"#!/usr/bin/env python3
@@ -690,31 +719,64 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
     }
 
     #[test]
-    fn clean_completion_normalizes_indentation() {
+    fn clean_completion_preserves_indentation_on_lines_after_first() {
+        // D6: indentation on lines 2+ must be preserved, not stripped.
+        // The old behavior (trim_start on lines 2+) caused the misaligned
+        // multi-line completions in the bug report.
         let input = "from fastmcp.client import Client\n    from fastmcp.client.transports import StdioTransport".to_string();
         let cleaned = clean_completion(input);
-        assert_eq!(cleaned, "from fastmcp.client import Client\nfrom fastmcp.client.transports import StdioTransport");
+        assert_eq!(
+            cleaned,
+            "from fastmcp.client import Client\n    from fastmcp.client.transports import StdioTransport"
+        );
     }
 
     #[test]
     fn clean_completion_handles_multiline_with_duplicates() {
+        // D6: indentation on lines 2+ is preserved; only the duplicate
+        // keyword on line 1 is deduplicated.
         let input = "from    from fastmcp.client import Client\n    from fastmcp.client.transports import StdioTransport".to_string();
         let cleaned = clean_completion(input);
-        assert_eq!(cleaned, "from fastmcp.client import Client\nfrom fastmcp.client.transports import StdioTransport");
+        assert_eq!(cleaned, "from fastmcp.client import Client\n    from fastmcp.client.transports import StdioTransport");
     }
 
     #[test]
     fn clean_completion_handles_multiline_with_duplicates_no_space() {
+        // D6: indentation on lines 2+ is preserved; only the duplicate
+        // keyword on line 1 is deduplicated.
         let input = "fromfrom fastmcp.client import Client\n    from fastmcp.client.transports import StdioTransport".to_string();
         let cleaned = clean_completion(input);
-        assert_eq!(cleaned, "from fastmcp.client import Client\nfrom fastmcp.client.transports import StdioTransport");
+        assert_eq!(cleaned, "from fastmcp.client import Client\n    from fastmcp.client.transports import StdioTransport");
     }
 
     #[test]
     fn clean_completion_preserves_normal_completion() {
+        // D6: first-line indentation is preserved, not stripped.
         let input = "    total += item['price']\n".to_string();
         let cleaned = clean_completion(input);
-        assert_eq!(cleaned, "total += item['price']\n");
+        assert_eq!(cleaned, "    total += item['price']\n");
+    }
+
+    #[test]
+    fn clean_first_line_preserves_leading_whitespace_without_duplicate_keyword() {
+        // D6: when no duplicate keyword is found, leading whitespace passes
+        // through untouched. The old code collapsed it via
+        // split_whitespace().join(" ").
+        assert_eq!(
+            clean_first_line("    total += item['price']"),
+            "    total += item['price']"
+        );
+        assert_eq!(
+            clean_first_line("\treturn x + y"),
+            "\treturn x + y"
+        );
+    }
+
+    #[test]
+    fn clean_first_line_preserves_indent_while_deduplicating_keyword() {
+        // D6: keyword dedup still works, but leading indentation is preserved.
+        let result = clean_first_line("    from    from fastmcp.client import Client");
+        assert_eq!(result, "    from fastmcp.client import Client");
     }
 
     #[test]

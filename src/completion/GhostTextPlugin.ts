@@ -18,7 +18,11 @@ import {
 
 const GHOST_TEXT_CLASS = "cm-ghostText";
 
-const DEBOUNCE_MS = 150;
+// D1: 1250ms trailing-edge debounce (amended from 3000ms after live
+// tuning). The 0.8B model's low-quality suggestions on every micro-pause
+// (150ms, D14) disrupted coding flow; 1250ms gives space to finish a
+// thought without the model feeling absent.
+const DEBOUNCE_MS = 1250;
 export const PREFIX_BUDGET_CHARS = 1024; // 256 tokens * 4 chars/token
 export const SUFFIX_BUDGET_CHARS = 512; // 128 tokens * 4 chars/token
 
@@ -184,27 +188,38 @@ export function stripStarterOverlap(
   const trimmedPrefix = prefix.replace(/\s+$/, "");
   if (!trimmedPrefix) return completion;
 
+  // D11: if the prefix ends with non-newline whitespace and the completion
+  // starts with whitespace, the model regenerated whitespace the user
+  // already typed. Strip it before word-overlap detection so the ghost
+  // text continues right at the cursor. When the prefix ends with a
+  // newline, the completion's leading whitespace is the new line's indent
+  // — preserve it.
+  let result = completion;
+  if (prefixEndsWithWs && !/\n$/.test(prefix) && /^\s/.test(result)) {
+    result = result.replace(/^\s+/, "");
+  }
+
   const lastWs = trimmedPrefix.search(/\s[^\s]*$/);
   const lastWord =
     lastWs === -1 ? trimmedPrefix : trimmedPrefix.slice(lastWs + 1);
-  if (!lastWord) return completion;
+  if (!lastWord) return result;
 
-  const firstWs = completion.search(/\s/);
-  const firstWord = firstWs === -1 ? completion : completion.slice(0, firstWs);
-  if (!firstWord) return completion;
+  const firstWs = result.search(/\s/);
+  const firstWord = firstWs === -1 ? result : result.slice(0, firstWs);
+  if (!firstWord) return result;
 
   const max = Math.min(lastWord.length, firstWord.length);
   let overlap = 0;
   for (let len = 1; len <= max; len++) {
     if (lastWord.endsWith(firstWord.slice(0, len))) overlap = len;
   }
-  if (overlap === 0) return completion;
+  if (overlap === 0) return result;
 
   let stripLen = overlap;
-  if (prefixEndsWithWs && /\s/.test(completion[overlap] ?? "")) {
+  if (prefixEndsWithWs && /\s/.test(result[overlap] ?? "")) {
     stripLen += 1;
   }
-  return completion.slice(stripLen);
+  return result.slice(stripLen);
 }
 
 /** Insert the ghost text at the cursor and clear it. */
@@ -300,7 +315,11 @@ class FimViewPlugin {
     this.cancel();
 
     const { prefix, suffix, pos } = extractContext(view);
-    this.controller = new AbortController();
+    // Capture the controller locally so we can check if THIS request was
+    // aborted after the await resolves. this.controller is replaced by the
+    // next request's controller, so checking it would test the wrong one.
+    const controller = new AbortController();
+    this.controller = controller;
 
     try {
       const res = await api.completeCode(
@@ -310,6 +329,11 @@ class FimViewPlugin {
         suffix
       );
       recordLatency(res.modelLatencyMs);
+      // D7: drop stale results if a new keystroke aborted this request.
+      // The cursor-position check below catches cursor moves, but a
+      // type-then-backspace cycle can return the cursor to the same
+      // position with stale context — only the abort check catches that.
+      if (controller.signal.aborted) return;
       // Ignore stale responses for a cursor that has moved.
       if (view.state.selection.main.head !== pos) return;
       if (res.completion) {
