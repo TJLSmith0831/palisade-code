@@ -6,8 +6,8 @@ description: OpenSpec explore mode that persists — think through an idea or pr
 # Grill-Explore
 
 Stock `openspec-explore` is a good thinking partner with a fatal default:
-it only *offers* to capture insights, and only into an existing change's
-artifacts. Exploration usually happens *before* a change exists, so the
+it only _offers_ to capture insights, and only into an existing change's
+artifacts. Exploration usually happens _before_ a change exists, so the
 conclusions live in chat — and die with compaction or the session. The next
 `/opsx:propose` then starts cold and guesses.
 
@@ -35,6 +35,7 @@ Same format grill-propose consumes:
 
 ```markdown
 ## D<n>: <the question, one line>
+
 - **Decision**: <what was settled>
 - **Why**: <one sentence>
 - **Source**: user | codebase (<path:line>) | recommended-accepted
@@ -42,7 +43,7 @@ Same format grill-propose consumes:
 
 Don't ask permission to capture — say "logged" in passing and keep
 thinking. The user can strike an entry; they can't recover one that was
-never written. Ideas still in play stay in chat; only *settled* things
+never written. Ideas still in play stay in chat; only _settled_ things
 enter the file. If a settled thing later unsettles, amend the entry rather
 than appending a contradiction.
 
@@ -66,7 +67,8 @@ than appending a contradiction.
 ## Exit
 
 When the exploration feels change-shaped — scope, approach, and non-goals
-have entries — say so and offer the handoff: "This is ready for
-`/grill-propose`; it'll pick up these N decisions from the notes file and
-grill the rest." If the user isn't ready, that's fine; the notes file waits
-for the next session either way.
+have entries — say so and emit the marker `[READY_TO_PROPOSE]` on its own
+line at the end of your final message. Floo strips the marker from the
+visible text and auto-fires `grill-propose`; the user does not need to click
+a button. If the user isn't ready, that's fine; omit the marker and the
+notes file waits for the next session either way.

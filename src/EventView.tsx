@@ -266,7 +266,7 @@ export const EventList = memo(function EventList({
                   variant="light"
                   data-testid="crash-banner"
                 >
-                  {item.text} Reverted to spec mode.
+                  {item.text}
                 </Alert>
               );
             }
@@ -343,8 +343,7 @@ export const EventList = memo(function EventList({
                 data-testid="crash-banner"
               >
                 {item.message}
-                {item.exitCode !== null && ` (exit code ${item.exitCode})`}{" "}
-                Reverted to spec mode.
+                {item.exitCode !== null && ` (exit code ${item.exitCode})`}
               </Alert>
             );
           // Tool output is drawn inside its call; `done` is bookkeeping.

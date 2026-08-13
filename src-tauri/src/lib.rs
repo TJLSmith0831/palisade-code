@@ -313,12 +313,34 @@ struct AppSink {
 
 impl Sink for AppSink {
     fn emit(&self, envelope: &Envelope) {
-        let _ = self.app.emit("executor-event", envelope);
+        // D22: detect the [READY_TO_PROPOSE] marker in agent text. If present,
+        // strip it from the visible text and auto-fire `propose`. The user
+        // never sees the marker — it's a machine-readable signal from the
+        // agent that exploration is change-shaped and ready to propose.
+        let mut propose_after_persist = false;
+        let envelope_to_emit: Envelope;
+        let envelope_ref: &Envelope = if let ExecutorEvent::Text { text } = &envelope.event {
+            if let Some(stripped) = detect_and_strip_ready_to_propose(text) {
+                propose_after_persist = true;
+                envelope_to_emit = Envelope {
+                    session_id: envelope.session_id.clone(),
+                    thread_id: envelope.thread_id.clone(),
+                    event: ExecutorEvent::Text { text: stripped },
+                };
+                &envelope_to_emit
+            } else {
+                envelope
+            }
+        } else {
+            envelope
+        };
+
+        let _ = self.app.emit("executor-event", envelope_ref);
 
         // The thread these side effects belong to is the one the event came
         // from, not whichever thread the sink happened to be built for — with
         // concurrent sessions those stop being the same thing.
-        let thread_id = &envelope.thread_id;
+        let thread_id = envelope_ref.thread_id.clone();
 
         // Durable copy: the thread's JSONL log is the source of truth once a
         // turn ends. persist() decides what lands (text, tool rows, crash
@@ -329,23 +351,36 @@ impl Sink for AppSink {
             .acp_sessions
             .lock()
             .unwrap()
-            .get(&envelope.session_id)
+            .get(&envelope_ref.session_id)
             .map(|s| s.mode.clone())
             .unwrap_or_else(|| "spec".to_string());
         executor::persist(
             &floo_home(),
             &self.project_hash,
-            thread_id,
-            &envelope.session_id,
+            &thread_id,
+            &envelope_ref.session_id,
             &mode,
-            &envelope.event,
+            &envelope_ref.event,
         );
 
-        match &envelope.event {
+        // D22: auto-fire propose after the marker was detected and persisted.
+        // Spawned as a tokio task because propose is async and the sink is sync.
+        if propose_after_persist {
+            let app = self.app.clone();
+            let project_hash = self.project_hash.clone();
+            let tid = thread_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = propose(app, project_hash, tid, None, false).await {
+                    eprintln!("auto-propose failed: {e}");
+                }
+            });
+        }
+
+        match &envelope_ref.event {
             ExecutorEvent::Crashed { .. } => {
-                end_session(&self.app.state::<Harness>(), thread_id, &envelope.session_id, "crashed");
-                let _ = executor::on_crash(&floo_home(), &self.project_hash, thread_id);
-                let _ = self.app.emit("thread-updated", thread_id);
+                end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
+                let _ = executor::on_crash(&floo_home(), &self.project_hash, &thread_id);
+                let _ = self.app.emit("thread-updated", &thread_id);
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
@@ -582,12 +617,23 @@ fn ensure_session(
         end_session(harness, thread_id, &id, "switched");
         let new_id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
         let transcript = handoff::build_handoff_transcript(&turns, 100_000);
-        let prefix = if transcript.is_empty() {
+        let transcript_prefix = if transcript.is_empty() {
             None
         } else {
             Some(format!(
                 "This conversation was handed off from another agent. Transcript so far:\n\n{transcript}"
             ))
+        };
+        // D12: re-inject the stored spec_type as the first turn body on
+        // handoff, so the new agent doesn't lose the framing if the original
+        // turn was truncated by the 100k budget. Only when spec_type is set
+        // and no open change exists. Prepended to the transcript prefix.
+        let reinjection = thread_meta(project_hash, thread_id)
+            .and_then(|m| spec_type_reinjection(&m));
+        let prefix = match (reinjection, transcript_prefix) {
+            (Some(reinjection), Some(tp)) => Some(format!("{reinjection}\n\n{tp}")),
+            (Some(reinjection), None) => Some(reinjection),
+            (None, tp) => tp,
         };
         return Ok((new_id, prefix));
     }
@@ -714,12 +760,38 @@ async fn go_mode(
     .map_err(|e| e.to_string())?
 }
 
+/// Wrap the spec_type in a sentence so the agent knows it is the starting
+/// concept, not just an unexplained topic like "Feature" or "Bugfix".
+fn framed_spec_body(spec_type: &str) -> String {
+    let trimmed = spec_type.trim();
+    if trimmed.is_empty() {
+        "Start exploring.".to_string()
+    } else {
+        format!("Start exploring the following concept: {trimmed}")
+    }
+}
+
+/// Per D12: on agent handoff (transcript rebuilt with 100k budget), re-inject
+/// the stored `spec_type` as the first turn body if the thread has a spec_type
+/// and no open change. Returns the grill-explore skill + spec_type prompt to
+/// prepend to the handoff prefix. None when conditions aren't met — and
+/// `ensure_session` only calls this in the handoff path (same-agent restart
+/// returns None prefix, so no reinjection happens there).
+fn spec_type_reinjection(meta: &store::ThreadMeta) -> Option<String> {
+    match (&meta.spec_type, &meta.open_spec_change_name) {
+        (Some(spec_type), None) => Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type))),
+        _ => None,
+    }
+}
+
 /// Decide what initial prompt (if any) to send when entering spec-mode.
 /// Per amended D19: spec-mode with no open change auto-fires grill-explore.
-/// With an existing change, the user is past explore — no auto-injection.
-fn spec_mode_initial_prompt(meta: &store::ThreadMeta) -> Option<String> {
+/// Per D5: `spec_type` is the user turn body (replacing the bare "grill-explore"
+/// literal). Per D10: when an existing change is open, spec_type is silently
+/// dropped — no auto-injection, the user is past explore.
+fn spec_mode_initial_prompt(meta: &store::ThreadMeta, spec_type: &str) -> Option<String> {
     if meta.open_spec_change_name.is_none() {
-        Some(grill_inject::build_prompt("spec", false, "grill-explore"))
+        Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type)))
     } else {
         None
     }
@@ -734,29 +806,42 @@ async fn spec_mode(
     app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
+    spec_type: String,
     bypass: bool,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")?;
-        if let Some(prompt) = spec_mode_initial_prompt(&meta) {
+        // Persist the spec_type framing on the thread (D11) — survives restarts
+        // and is re-injected on agent handoff (D12). Only stored when the user
+        // commits to a spec type (non-empty).
+        let meta = if spec_type.trim().is_empty() {
+            meta
+        } else {
+            store::set_spec_type(&floo_home(), &project_hash, &thread_id, &spec_type)?
+        };
+        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
                 let (id, handoff) =
                     ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
-                let prompt = match handoff {
+                let full_prompt = match handoff {
                     Some(prefix) => format!("{prefix}\n\n{prompt}"),
                     None => prompt,
                 };
+                // Persist only the spec type as the visible user message —
+                // the skill instructions are sent to the agent but not shown
+                // in the chat. The user sees "Feature" (or "Bugfix", etc.),
+                // not the entire grill-explore skill content.
                 store::append_message(
                     &floo_home(),
                     &project_hash,
                     &thread_id,
                     "user",
                     "spec",
-                    &prompt,
+                    &spec_type,
                     Some(&id),
                 )?;
-                send_to(&app, &harness, &project_hash, &id, &prompt)?;
+                send_to(&app, &harness, &project_hash, &id, &full_prompt)?;
             }
         }
         Ok(meta)
@@ -827,7 +912,7 @@ async fn propose(
         let (id, handoff) =
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
         let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
-        let prompt = match handoff {
+        let full_prompt = match handoff {
             Some(prefix) => format!("{prefix}\n\n{prompt}"),
             None => prompt,
         };
@@ -839,16 +924,18 @@ async fn propose(
             project_root: root,
         });
 
+        // Persist only the short label — the skill content goes to the agent
+        // but is not shown in the chat.
         store::append_message(
             &floo_home(),
             &project_hash,
             &thread_id,
             "user",
             "spec",
-            &prompt,
+            "grill-propose",
             Some(&id),
         )?;
-        send_to(&app, &harness, &project_hash, &id, &prompt)
+        send_to(&app, &harness, &project_hash, &id, &full_prompt)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -884,20 +971,22 @@ async fn apply_skill(
         let (id, handoff) =
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
         let prompt = apply_skill_prompt(&change);
-        let prompt = match handoff {
+        let full_prompt = match handoff {
             Some(prefix) => format!("{prefix}\n\n{prompt}"),
             None => prompt,
         };
+        // Persist only the short label — the skill content goes to the agent
+        // but is not shown in the chat.
         store::append_message(
             &floo_home(),
             &project_hash,
             &thread_id,
             "user",
             "spec",
-            &prompt,
+            &format!("grill-apply {change}"),
             Some(&id),
         )?;
-        send_to(&app, &harness, &project_hash, &id, &prompt)
+        send_to(&app, &harness, &project_hash, &id, &full_prompt)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1443,6 +1532,33 @@ pub fn run() {
         });
 }
 
+/// D22: The marker the agent emits when exploration is change-shaped and
+/// the agent is ready to move to the proposal phase. Floo strips it from
+/// the visible text and auto-fires `propose`.
+const READY_TO_PROPOSE_MARKER: &str = "[READY_TO_PROPOSE]";
+
+/// D22: Pure helper — detects the `[READY_TO_PROPOSE]` marker in agent text
+/// and returns the stripped text if found, or `None` if the marker is absent.
+/// The marker may appear anywhere in the text, possibly surrounded by other
+/// content. Stripping removes the marker and any extra whitespace it leaves
+/// behind so the user never sees it.
+fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
+    if !text.contains(READY_TO_PROPOSE_MARKER) {
+        return None;
+    }
+    let stripped = text.replace(READY_TO_PROPOSE_MARKER, "");
+    // Collapse the double-space (or double-newline) the marker may leave
+    // behind, but preserve overall structure.
+    let stripped = stripped
+        .replace("  ", " ")
+        .replace("\n \n", "\n\n")
+        .replace(" \n", "\n")
+        .replace("\n ", "\n")
+        .trim()
+        .to_string();
+    Some(stripped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,23 +1635,76 @@ mod tests {
             open_spec_change_name: change.map(String::from),
             executor: None,
             model: None,
+            spec_type: None,
         }
     }
 
     /// RED→GREEN 6a.1: spec-mode with no change auto-fires grill-explore.
+    /// Amended by D5: the spec_type is the user turn body, not "grill-explore".
     #[test]
-    fn spec_mode_initial_prompt_with_no_change_injects_explore() {
+    fn spec_mode_initial_prompt_with_no_change_uses_spec_type_as_body() {
         let meta = thread_meta(None);
-        let prompt = spec_mode_initial_prompt(&meta).unwrap();
+        let prompt = spec_mode_initial_prompt(&meta, "Feature").unwrap();
+        // The grill-explore skill content is still prepended (it contains the
+        // label "grill-explore" and a "---" separator before the body).
         assert!(prompt.contains("grill-explore"));
         assert!(prompt.contains("---"));
+        // The spec_type is now the body — it appears after the separator.
+        let after_sep = prompt.rsplit("---").next().unwrap();
+        assert!(
+            after_sep.contains("Feature"),
+            "spec_type must be the body after the separator"
+        );
     }
 
     /// RED→GREEN 6a.1: spec-mode with an existing change does NOT auto-inject.
+    /// Amended by D10: spec_type is silently ignored when a change exists.
     #[test]
     fn spec_mode_initial_prompt_with_change_is_none() {
         let meta = thread_meta(Some("my-change"));
-        assert!(spec_mode_initial_prompt(&meta).is_none());
+        assert!(spec_mode_initial_prompt(&meta, "Feature").is_none());
+    }
+
+    // ----------------------------------------------- D12: handoff re-injection
+
+    fn thread_meta_with_spec_type(change: Option<&str>, spec_type: Option<&str>) -> store::ThreadMeta {
+        let mut m = thread_meta(change);
+        m.spec_type = spec_type.map(String::from);
+        m
+    }
+
+    /// RED→GREEN D12: on agent handoff with stored spec_type and no open
+    /// change, the reinjection is the grill-explore skill + spec_type as the
+    /// first turn body. `ensure_session` prepends this to the handoff prefix.
+    #[test]
+    fn spec_type_reinjection_with_stored_type_and_no_change_returns_framing() {
+        let meta = thread_meta_with_spec_type(None, Some("Feature"));
+        let reinjection = spec_type_reinjection(&meta).unwrap();
+        // The grill-explore skill content is prepended.
+        assert!(reinjection.contains("grill-explore"));
+        assert!(reinjection.contains("---"));
+        // The spec_type is the body after the separator.
+        let after_sep = reinjection.rsplit("---").next().unwrap();
+        assert!(
+            after_sep.contains("Feature"),
+            "spec_type must be the reinjected body"
+        );
+    }
+
+    /// RED→GREEN D12: on same-agent restart (no handoff), `ensure_session`
+    /// returns None prefix — no reinjection. The pure function also returns
+    /// None when a change is open, so even if called it wouldn't inject.
+    #[test]
+    fn spec_type_reinjection_with_open_change_is_none() {
+        let meta = thread_meta_with_spec_type(Some("my-change"), Some("Feature"));
+        assert_eq!(spec_type_reinjection(&meta), None);
+    }
+
+    /// RED→GREEN D12: no stored spec_type → no reinjection (nothing to re-inject).
+    #[test]
+    fn spec_type_reinjection_without_stored_type_is_none() {
+        let meta = thread_meta_with_spec_type(None, None);
+        assert_eq!(spec_type_reinjection(&meta), None);
     }
 
     // --------------------------------------------------- 6a.2: apply_skill one-shot
@@ -1578,5 +1747,40 @@ mod tests {
     async fn list_projects_command_returns_ok_when_index_missing() {
         let result = list_projects().await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn detect_and_strip_ready_to_propose_strips_marker_and_returns_cleaned_text() {
+        let input = "I've finished exploring.\n[READY_TO_PROPOSE]\nLet's move on.";
+        let result = detect_and_strip_ready_to_propose(input);
+        assert!(result.is_some());
+        let stripped = result.unwrap();
+        assert!(!stripped.contains("[READY_TO_PROPOSE]"));
+        assert!(stripped.contains("I've finished exploring."));
+        assert!(stripped.contains("Let's move on."));
+    }
+
+    #[test]
+    fn detect_and_strip_ready_to_propose_returns_none_when_marker_absent() {
+        let input = "I'm still exploring the codebase.";
+        let result = detect_and_strip_ready_to_propose(input);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn detect_and_strip_ready_to_propose_handles_marker_alone() {
+        let input = "[READY_TO_PROPOSE]";
+        let result = detect_and_strip_ready_to_propose(input);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    #[test]
+    fn detect_and_strip_ready_to_propose_handles_marker_at_end() {
+        let input = "Exploration complete. [READY_TO_PROPOSE]";
+        let result = detect_and_strip_ready_to_propose(input);
+        assert!(result.is_some());
+        let stripped = result.unwrap();
+        assert_eq!(stripped, "Exploration complete.");
     }
 }

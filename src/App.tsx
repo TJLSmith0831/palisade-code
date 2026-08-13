@@ -28,6 +28,7 @@ import {
   Badge,
   Alert,
   Group,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   IconGitBranch,
@@ -127,8 +128,6 @@ type ChatSurfaceProps = {
   onRenameThread: (target: ThreadMeta) => void;
   onSpec: () => void;
   onGo: () => void;
-  /** "Proceed to proposal?" — fires grill-propose in exploring stage. */
-  onPropose: () => void;
   /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
   onApply: () => void;
   /** Spec-mode stage derivation (amended D19). */
@@ -136,6 +135,30 @@ type ChatSurfaceProps = {
   dragActive: boolean;
   newThreadPicker: boolean;
   showEmptyModePicker?: boolean;
+  /** D19/D20: deferred mode — "go" shows an empty composer, "spec" shows the framing menu. */
+  pendingMode?: api.Mode | null;
+  /** D1: spec-type framing menu is visible (Feature/Bugfix/Other cards). */
+  specTypePicker?: boolean;
+  /** D13: Back button on the framing menu returns to the Vibe/Spec picker. */
+  onSpecTypeBack?: () => void;
+  /** D5: spec-type selection starts grill-explore with the spec type as body. */
+  onPickSpecType?: (specType: string) => void;
+  /** D9: composer-toggle framing menu — shown when toggling an existing thread to spec mode. */
+  composerSpecTypePicker?: boolean;
+  /** D19/D20: true during async thread creation — prevents mode picker flash. */
+  transitioning?: boolean;
+  /** D21: executor selected in the framing menu (before thread exists). */
+  framingExecutor?: string | null;
+  /** D21: model selected in the framing menu (before thread exists). */
+  framingModel?: string | null;
+  /** D21: set the framing-menu executor (stored locally, persisted on thread creation). */
+  onPickFramingExecutor?: (agentId: string) => void;
+  /** D21: set the framing-menu model (stored locally, persisted on thread creation). */
+  onPickFramingModel?: (modelId: string) => void;
+  /** D9: spec-type selection from the composer-toggle framing menu. */
+  onPickComposerSpecType?: (specType: string) => void;
+  /** D13: Back button on the composer-toggle framing menu returns to the chat. */
+  onComposerSpecTypeBack?: () => void;
   onPickMode: (mode: api.Mode) => void;
   onOpenSpec?: (specName: string) => void;
   threadBypass: boolean;
@@ -167,12 +190,23 @@ const ChatSurface = memo(
     onRenameThread,
     onSpec,
     onGo,
-    onPropose,
     onApply,
     stage,
     dragActive,
     newThreadPicker,
     showEmptyModePicker = false,
+    pendingMode = null,
+    specTypePicker = false,
+    onSpecTypeBack,
+    onPickSpecType,
+    composerSpecTypePicker = false,
+    transitioning = false,
+    framingExecutor = null,
+    framingModel = null,
+    onPickFramingExecutor,
+    onPickFramingModel,
+    onPickComposerSpecType,
+    onComposerSpecTypeBack,
     onPickMode,
     onOpenSpec,
     threadBypass,
@@ -183,6 +217,9 @@ const ChatSurface = memo(
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
+    // D6/D15: "Other" spec-type text input state — local to the framing menu.
+    const [otherSpecText, setOtherSpecText] = useState("");
+    const [showOtherInput, setShowOtherInput] = useState(false);
     const executorLabel = executor
       ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
       : null;
@@ -224,7 +261,187 @@ const ChatSurface = memo(
             ? (modelState?.models.find((m) => m.id === currentModelId)?.name ??
               currentModelId)
             : "default";
-    if (newThreadPicker || showEmptyModePicker) {
+    // Provider/model picker row — shared between the spec-type framing menu
+    // (new thread) and the composer-toggle framing menu (existing thread).
+    // Renders the same executor + model dropdowns as the chat composer's
+    // bottom controls, but without the mode selector and send button.
+    // The spec type cards are disabled until a provider is selected.
+    // When no thread exists (new-thread framing menu), the executor/model
+    // selection is stored in framingExecutor/framingModel and persisted on
+    // the thread when it's created. When a thread exists (composer-toggle),
+    // the normal executor/onPickExecutor path is used.
+    // specTypePicker means the new-thread framing menu is up — no thread
+    // has been created yet. `thread` may still hold the previously selected
+    // thread (onNewThread doesn't clear it, since the sidebar keeps showing
+    // it underneath), so it must not be used as the "does a thread exist"
+    // signal here — that would silently read/mutate the old thread's
+    // executor/model instead of the framingExecutor/framingModel scratch
+    // state meant for the thread about to be created.
+    const framingThread = specTypePicker ? null : thread;
+    const framingExecutorId = framingThread
+      ? executor
+      : (framingExecutor ?? flight?.selected ?? null);
+    const framingModelId = framingThread ? currentModelId : framingModel;
+    const framingExecutorLabel = framingExecutorId
+      ? (flight?.agents.find((a) => a.id === framingExecutorId)?.name ??
+        framingExecutorId)
+      : null;
+    const framingModelLabel = framingModelId
+      ? (modelState?.models.find((m) => m.id === framingModelId)?.name ??
+        framingModelId)
+      : "default";
+    const handleFramingExecutor = (agentId: string) => {
+      if (framingThread) {
+        onPickExecutor(agentId);
+      } else {
+        onPickFramingExecutor?.(agentId);
+      }
+    };
+    const handleFramingModel = (modelId: string) => {
+      if (framingThread) {
+        onPickModel(modelId);
+      } else {
+        onPickFramingModel?.(modelId);
+      }
+    };
+    const providerSelected = !!framingExecutorId;
+    const framingPickerRow = (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginBottom: 12,
+        }}
+        data-testid="framing-picker-row"
+      >
+        <Menu opened={prefsMenuOpen} onChange={setPrefsMenuOpen}>
+          <Menu.Target>
+            <button
+              className="ds-icon-btn"
+              data-testid="framing-executor-btn"
+              style={{ fontSize: 12, padding: "4px 8px" }}
+            >
+              {framingExecutorLabel ?? "select provider"}
+            </button>
+          </Menu.Target>
+          <Menu.Dropdown
+            className="ds-model-menu"
+            data-testid="framing-executor-menu"
+          >
+            <Menu.Label>Provider</Menu.Label>
+            {flight?.agents.map((a) => (
+              <Menu.Item
+                key={a.id}
+                className={`ds-model-opt ${framingExecutorId === a.id ? "selected" : ""}`}
+                data-testid={`framing-executor-opt-${a.id}`}
+                onClick={() => {
+                  if (a.id !== framingExecutorId) {
+                    handleFramingExecutor(a.id);
+                  }
+                  setPrefsMenuOpen(false);
+                }}
+              >
+                {a.name}
+              </Menu.Item>
+            )) ?? (
+              <span className="hint" data-testid="framing-no-executors-hint">
+                No ACP agents installed.
+              </span>
+            )}
+          </Menu.Dropdown>
+        </Menu>
+        <Menu
+          opened={modelMenuOpen}
+          onChange={(open) => {
+            setModelMenuOpen(open);
+            if (open) onProbeModels();
+          }}
+          position="bottom"
+          withinPortal
+        >
+          <Menu.Target>
+            <button
+              className="ds-icon-btn"
+              data-testid="framing-model-btn"
+              disabled={!framingExecutorId}
+              style={{ fontSize: 12, padding: "4px 8px" }}
+            >
+              {framingModelLabel}
+            </button>
+          </Menu.Target>
+          <Menu.Dropdown
+            className="ds-model-menu"
+            data-testid="framing-model-menu"
+          >
+            <Menu.Label>Model</Menu.Label>
+            <TextInput
+              placeholder="Search models…"
+              value={modelQuery}
+              onChange={(event) => setModelQuery(event.currentTarget.value)}
+              size="xs"
+              style={{ margin: "0 8px 8px" }}
+              data-testid="framing-model-search"
+            />
+            <Box style={{ maxHeight: 210, overflowY: "auto" }}>
+              {models === "loading" && (
+                <span className="hint" data-testid="framing-models-loading">
+                  Asking {framingExecutorLabel ?? "the agent"}…
+                </span>
+              )}
+              {modelError && (
+                <span className="hint" data-testid="framing-models-error">
+                  {modelError}
+                </span>
+              )}
+              {modelState && modelState.models.length === 0 && (
+                <span className="hint" data-testid="framing-models-none">
+                  {framingExecutorLabel ?? "This provider"} manages its own
+                  model.
+                </span>
+              )}
+              {filteredModels.map((m) => (
+                <Menu.Item
+                  key={m.id}
+                  className={`ds-model-opt ${framingModelId === m.id ? "selected" : ""}`}
+                  data-testid={`framing-model-opt-${m.id}`}
+                  onClick={() => {
+                    handleFramingModel(m.id);
+                    setModelMenuOpen(false);
+                  }}
+                >
+                  {m.name}
+                </Menu.Item>
+              ))}
+              {filteredModels.length === 0 &&
+                modelQuery &&
+                !modelError &&
+                models !== "loading" && (
+                  <span
+                    className="hint"
+                    data-testid="framing-models-no-matches"
+                  >
+                    No models match.
+                  </span>
+                )}
+            </Box>
+          </Menu.Dropdown>
+        </Menu>
+      </div>
+    );
+    // D19/D20: pendingMode and specTypePicker take priority over the empty
+    // mode picker — once the user has picked a mode, show the deferred state
+    // (empty go composer or spec-type framing menu), not the picker again.
+    // `transitioning` covers the async gap between clearing picker state and
+    // the thread being selected — without it, showEmptyModePicker re-renders
+    // the mode picker mid-transition (Vibe shell bug).
+    if (
+      (newThreadPicker || showEmptyModePicker) &&
+      !pendingMode &&
+      !specTypePicker &&
+      !composerSpecTypePicker &&
+      !transitioning
+    ) {
       return (
         <>
           {newThreadPicker && (
@@ -268,8 +485,237 @@ const ChatSurface = memo(
       );
     }
 
+    // D1: spec-type framing menu — shown after picking "Spec" from the
+    // Vibe/Spec picker. Three Mantine cards (Feature/Bugfix/Other) with a
+    // Back button (D13). The agent does NOT run until a spec type is picked.
+    if (specTypePicker) {
+      return (
+        <>
+          <div className="pane-head">
+            <strong>New thread</strong>
+          </div>
+          <div className="ds-new-thread-picker" data-testid="spec-type-picker">
+            <p className="hint" style={{ marginBottom: 12 }}>
+              What would you like to spec out today?
+            </p>
+            {framingPickerRow}
+            {!providerSelected && (
+              <p
+                className="hint"
+                style={{ marginBottom: 12, fontSize: 12, color: "var(--warn)" }}
+              >
+                Select a provider to continue.
+              </p>
+            )}
+            {!showOtherInput && (
+              <div className="ds-mode-picker">
+                <UnstyledButton
+                  className="ds-mode-card"
+                  data-testid="spec-type-feature"
+                  disabled={!providerSelected}
+                  onClick={() =>
+                    providerSelected && onPickSpecType?.("Feature")
+                  }
+                >
+                  <strong>Feature</strong>
+                  <span>
+                    Build something new — a capability, screen, or integration
+                    that doesn't exist yet.
+                  </span>
+                </UnstyledButton>
+                <UnstyledButton
+                  className="ds-mode-card"
+                  data-testid="spec-type-bugfix"
+                  disabled={!providerSelected}
+                  onClick={() => providerSelected && onPickSpecType?.("Bugfix")}
+                >
+                  <strong>Bugfix</strong>
+                  <span>
+                    Diagnose and fix — trace a broken behavior to its root cause
+                    before changing code.
+                  </span>
+                </UnstyledButton>
+                <UnstyledButton
+                  className="ds-mode-card"
+                  data-testid="spec-type-other"
+                  disabled={!providerSelected}
+                  onClick={() => providerSelected && setShowOtherInput(true)}
+                >
+                  <strong>Other</strong>
+                  <span>
+                    Open-ended — describe your own framing and the agent will
+                    explore from there.
+                  </span>
+                </UnstyledButton>
+              </div>
+            )}
+            {showOtherInput && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <TextInput
+                  value={otherSpecText}
+                  onChange={(event) =>
+                    setOtherSpecText(event.currentTarget.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      // D17: empty/whitespace submission is disabled.
+                      const trimmed = otherSpecText.trim();
+                      if (trimmed) {
+                        onPickSpecType?.(trimmed);
+                      }
+                    }
+                  }}
+                  placeholder="Describe what you'd like to spec out..."
+                  aria-label="Custom spec type"
+                  data-testid="other-spec-input"
+                  autoFocus
+                />
+                <button
+                  className="ds-icon-btn"
+                  data-testid="other-spec-escape"
+                  onClick={() => {
+                    setShowOtherInput(false);
+                    setOtherSpecText("");
+                  }}
+                  style={{ fontSize: 12, alignSelf: "flex-start" }}
+                >
+                  ← or pick a different type
+                </button>
+              </div>
+            )}
+            <button
+              className="ds-icon-btn"
+              data-testid="spec-type-back"
+              onClick={onSpecTypeBack}
+              style={{ marginTop: 8, fontSize: 12 }}
+            >
+              ← Back
+            </button>
+          </div>
+        </>
+      );
+    }
+
+    // D9: composer-toggle spec-type framing menu — shown when toggling an
+    // existing thread to spec mode with no open change and no stored spec_type.
+    // The thread already exists; picking a spec type calls specMode directly.
+    if (composerSpecTypePicker && thread) {
+      return (
+        <>
+          <div className="pane-head">
+            <strong data-testid="thread-title">{thread.title}</strong>
+          </div>
+          <div className="ds-new-thread-picker" data-testid="spec-type-picker">
+            <p className="hint" style={{ marginBottom: 12 }}>
+              What would you like to spec out today?
+            </p>
+            {framingPickerRow}
+            {!providerSelected && (
+              <p
+                className="hint"
+                style={{ marginBottom: 12, fontSize: 12, color: "var(--warn)" }}
+              >
+                Select a provider to continue.
+              </p>
+            )}
+            {!showOtherInput && (
+              <div className="ds-mode-picker">
+                <UnstyledButton
+                  className="ds-mode-card"
+                  data-testid="spec-type-feature"
+                  disabled={!providerSelected}
+                  onClick={() =>
+                    providerSelected && onPickComposerSpecType?.("Feature")
+                  }
+                >
+                  <strong>Feature</strong>
+                  <span>
+                    Build something new — a capability, screen, or integration
+                    that doesn't exist yet.
+                  </span>
+                </UnstyledButton>
+                <UnstyledButton
+                  className="ds-mode-card"
+                  data-testid="spec-type-bugfix"
+                  disabled={!providerSelected}
+                  onClick={() =>
+                    providerSelected && onPickComposerSpecType?.("Bugfix")
+                  }
+                >
+                  <strong>Bugfix</strong>
+                  <span>
+                    Diagnose and fix — trace a broken behavior to its root cause
+                    before changing code.
+                  </span>
+                </UnstyledButton>
+                <UnstyledButton
+                  className="ds-mode-card"
+                  data-testid="spec-type-other"
+                  disabled={!providerSelected}
+                  onClick={() => providerSelected && setShowOtherInput(true)}
+                >
+                  <strong>Other</strong>
+                  <span>
+                    Open-ended — describe your own framing and the agent will
+                    explore from there.
+                  </span>
+                </UnstyledButton>
+              </div>
+            )}
+            {showOtherInput && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <TextInput
+                  value={otherSpecText}
+                  onChange={(event) =>
+                    setOtherSpecText(event.currentTarget.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      const trimmed = otherSpecText.trim();
+                      if (trimmed) {
+                        onPickComposerSpecType?.(trimmed);
+                      }
+                    }
+                  }}
+                  placeholder="Describe what you'd like to spec out..."
+                  aria-label="Custom spec type"
+                  data-testid="other-spec-input"
+                  autoFocus
+                />
+                <button
+                  className="ds-icon-btn"
+                  data-testid="other-spec-escape"
+                  onClick={() => {
+                    setShowOtherInput(false);
+                    setOtherSpecText("");
+                  }}
+                  style={{ fontSize: 12, alignSelf: "flex-start" }}
+                >
+                  ← or pick a different type
+                </button>
+              </div>
+            )}
+            <button
+              className="ds-icon-btn"
+              data-testid="spec-type-back"
+              onClick={onComposerSpecTypeBack}
+              style={{ marginTop: 8, fontSize: 12 }}
+            >
+              ← Back
+            </button>
+          </div>
+        </>
+      );
+    }
+
+    // D20: pendingMode "go" is the deferred empty composer — no thread
+    // exists yet, but the composer below must still render so the user can
+    // type their first message (which creates the thread on send).
     // Entice the user to create a new thread only if threads are focused
-    if (!thread) {
+    // and no mode is pending.
+    if (!thread && pendingMode !== "go") {
       return (
         <p className="empty">
           {project
@@ -282,14 +728,18 @@ const ChatSurface = memo(
     return (
       <>
         <div className="pane-head">
-          <strong data-testid="thread-title">{thread.title}</strong>
-          <button
-            onClick={() => onRenameThread(thread)}
-            data-testid="rename-thread"
-          >
-            Rename
-          </button>
-          {thread.openSpecChangeName && (
+          <strong data-testid="thread-title">
+            {thread?.title ?? "New thread"}
+          </strong>
+          {thread && (
+            <button
+              onClick={() => onRenameThread(thread)}
+              data-testid="rename-thread"
+            >
+              Rename
+            </button>
+          )}
+          {thread?.openSpecChangeName && (
             <Badge
               size="sm"
               variant="default"
@@ -303,22 +753,6 @@ const ChatSurface = memo(
           )}
           <div className="spacer" />
         </div>
-        {thread.currentMode === "spec" && (
-          <div className="spec-banner" data-testid="spec-banner">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="spec-icon"
-            >
-              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-            </svg>
-            Spec Mode — read-only planning
-          </div>
-        )}
         <div className="messages" data-testid="messages">
           <>
             {items.length === 0 && <p className="empty">No messages yet.</p>}
@@ -335,18 +769,6 @@ const ChatSurface = memo(
             </div>
           )}
         </div>
-        {stage === "exploring" && !busy && flightSelected && (
-          <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
-            <Button
-              data-testid="proceed-to-proposal"
-              size="xs"
-              variant="light"
-              onClick={onPropose}
-            >
-              Proceed to proposal?
-            </Button>
-          </div>
-        )}
         {stage === "ready_to_apply" && !busy && flightSelected && (
           <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
             <Button
@@ -556,7 +978,7 @@ const ChatSurface = memo(
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <SegmentedControl
                 data-testid="mode-selector"
-                value={thread.currentMode}
+                value={thread?.currentMode ?? "go"}
                 onChange={(value) => {
                   if (value === "spec") {
                     onSpec();
@@ -1056,6 +1478,27 @@ export default function App() {
   // thread view — not part of `bar` since it isn't an overlay (spec:
   // new-thread-mode-picker requires it inline, not a modal dialog).
   const [newThreadPicker, setNewThreadPicker] = useState(false);
+  // D19/D20: deferred thread creation — picking a mode from the Vibe/Spec
+  // picker no longer creates a thread immediately. For "go", an empty composer
+  // appears; the thread is created on first send. For "spec", the framing menu
+  // appears (Group 7); the thread is created on spec-type commit (Group 8).
+  const [pendingMode, setPendingMode] = useState<api.Mode | null>(null);
+  // D21: executor/model selected in the framing menu — stored before the
+  // thread exists, then persisted on the thread when it's created.
+  const [framingExecutor, setFramingExecutor] = useState<string | null>(null);
+  const [framingModel, setFramingModel] = useState<string | null>(null);
+  // D1: spec-type framing menu — shown after picking "Spec" from the Vibe/Spec
+  // picker. The user picks Feature/Bugfix/Other before the agent runs (D2/D3).
+  const [specTypePicker, setSpecTypePicker] = useState(false);
+  // D9: composer-toggle spec-type framing menu — shown when toggling an
+  // existing thread to spec mode with no open change and no stored spec_type.
+  // Separate from `specTypePicker` because the thread already exists — the
+  // spec-type handler calls specMode(thread.id, specType) directly.
+  const [composerSpecTypePicker, setComposerSpecTypePicker] = useState(false);
+  // D19/D20: transitioning — true during the async gap between clearing
+  // picker state and the thread being selected. Prevents the Vibe shell's
+  // showEmptyModePicker from re-rendering the mode picker mid-transition.
+  const [transitioning, setTransitioning] = useState(false);
   const [selectQuery, setSelectQuery] = useState("");
   useEffect(() => {
     if (!bar) setSelectQuery("");
@@ -1603,18 +2046,84 @@ export default function App() {
   const onPickMode = async (mode: api.Mode) => {
     if (!project) return;
     setNewThreadPicker(false);
+    // D20: defer thread creation for BOTH modes until the first meaningful
+    // interaction. Go shows an empty composer; the thread is created on
+    // first send (onSend). Spec shows the framing menu; the thread is
+    // created on spec-type commit (onPickSpecType).
+    if (mode === "go") {
+      setPendingMode("go");
+      return;
+    }
+    // spec: show the framing menu (Feature/Bugfix/Other) — no thread yet.
+    setSpecTypePicker(true);
+  };
+
+  // D13: Back button on the framing menu returns to the Vibe/Spec picker.
+  const onSpecTypeBack = () => {
+    setSpecTypePicker(false);
+    setNewThreadPicker(true);
+  };
+
+  // D5/D19: spec-type selection creates the thread + fires grill-explore with
+  // the spec type as the user turn body. "Other" is handled separately (D6,
+  // Group 9) — this handler covers Feature and Bugfix.
+  const onPickSpecType = async (specType: string) => {
+    if (!project) return;
+    // Optimistic: create the thread, swap to chat immediately, then fire
+    // specMode in the background. The agent's response streams in via events.
+    setSpecTypePicker(false);
+    setTransitioning(true);
+    setBusy(true);
+    // Capture the framing-menu executor/model before clearing them. The
+    // executor button displays flight.selected as a fallback even when the
+    // user never explicitly opened it (D21) — if they picked a model without
+    // touching the executor dropdown, fall back the same way here, or the
+    // model pick is silently dropped along with the executor (never persisted).
+    // The executor button displays flight.selected as a fallback even when
+    // the user never explicitly opened it (D21) — if they picked a model
+    // without touching the executor dropdown, fall back the same way here,
+    // or the model pick is silently dropped along with the executor (never
+    // persisted, since setThreadExecutor is skipped when pickedExecutor is null).
+    const pickedExecutor = framingExecutor ?? (framingModel ? flight?.selected : null) ?? null;
+    const pickedModel = framingModel;
     try {
       const created = await api.createThread(project.hash, "New thread");
-      // For spec mode, use spec_mode() which auto-fires grill-explore.
-      // For go mode, setThreadMode is sufficient (go has no auto-injection).
-      const updated =
-        mode === "spec"
-          ? await api.specMode(project.hash, created.id, false)
-          : await api.setThreadMode(project.hash, created.id, mode);
-      setThreads(await api.listThreads(project.hash));
+      // Persist the framing-menu executor/model on the thread before
+      // specMode fires — ensure_session reads the thread's stored executor
+      // to decide which agent to start. Without this, it falls back to
+      // auto-detection and ignores the user's framing-menu choice.
+      if (pickedExecutor) {
+        await api.setThreadExecutor(
+          project.hash,
+          created.id,
+          pickedExecutor,
+          pickedModel ?? null
+        );
+      }
+      // Re-read the thread metadata so the executor/model is reflected.
+      const threads = await api.listThreads(project.hash);
+      const updated = threads.find((t) => t.id === created.id) ?? created;
       await selectThread(project.hash, updated);
+      setThreads(threads);
+      // Fire specMode without awaiting — don't block the UI. The busy state
+      // stays true until the agent's turn ends (ExecutorEvent::Done clears it).
+      api
+        .specMode(project.hash, updated.id, specType, false)
+        .then((meta) => {
+          setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
+          setThread(meta);
+        })
+        .catch((err) => {
+          setBusy(false);
+          fail(err);
+        });
     } catch (err) {
+      setBusy(false);
       fail(err);
+    } finally {
+      setTransitioning(false);
+      setFramingExecutor(null);
+      setFramingModel(null);
     }
   };
 
@@ -1950,6 +2459,20 @@ export default function App() {
     setModelsByAgent(modelsRef.current);
   }, []);
 
+  // D21: framing-menu executor/model callbacks — store locally before the
+  // thread exists; persisted on the thread when it's created in onPickSpecType.
+  const onPickFramingExecutor = useCallback(
+    (agentId: string) => {
+      setFramingExecutor(agentId);
+      setFramingModel(null);
+      probeAgentModels(agentId);
+    },
+    [probeAgentModels]
+  );
+  const onPickFramingModel = useCallback((modelId: string) => {
+    setFramingModel(modelId);
+  }, []);
+
   // Spec-mode stage derivation (amended D19): explore → propose → apply.
   const stage = thread
     ? deriveStage(
@@ -2002,18 +2525,55 @@ export default function App() {
   const onSpec = async () => {
     const { project, thread } = current.current;
     if (!project || !thread) return;
-    try {
-      setBusy(true);
-      const prefs = resolvePrefs(project.hash, thread.id);
-      const meta = await api.specMode(project.hash, thread.id, prefs.bypass);
-      await refresh();
-      // spec_mode auto-fires grill-explore when there's no change;
-      // if there IS a change, it just sets the mode (no session started).
-      if (meta.openSpecChangeName) setBusy(false);
-    } catch (err) {
-      setBusy(false);
-      fail(err);
+    // D9: show the framing menu when entering spec mode with no open change
+    // and no stored spec_type. Reuse the stored spec_type if one exists (D11).
+    // Skip the menu entirely if a change is already open.
+    if (!thread.openSpecChangeName && !thread.specType) {
+      setComposerSpecTypePicker(true);
+      return;
     }
+    setBusy(true);
+    const prefs = resolvePrefs(project.hash, thread.id);
+    // Reuse the stored spec_type if available; otherwise the change is
+    // already open so spec_type is silently dropped (D10).
+    const specType = thread.specType ?? "grill-explore";
+    // Fire specMode without awaiting — busy stays true until the agent's
+    // turn ends (ExecutorEvent::Done clears it). If there's an open change,
+    // spec_mode just sets the mode (no session started) so clear busy.
+    api
+      .specMode(project.hash, thread.id, specType, prefs.bypass)
+      .then((meta) => {
+        if (meta.openSpecChangeName) setBusy(false);
+        refresh();
+      })
+      .catch((err) => {
+        setBusy(false);
+        fail(err);
+      });
+  };
+
+  // D9: spec-type selection from the composer-toggle framing menu — the
+  // thread already exists, so this calls specMode directly (no createThread).
+  const onPickComposerSpecType = async (specType: string) => {
+    const { project, thread } = current.current;
+    if (!project || !thread) return;
+    setComposerSpecTypePicker(false);
+    setBusy(true);
+    const prefs = resolvePrefs(project.hash, thread.id);
+    // Fire specMode without awaiting — busy stays true until the agent's
+    // turn ends (ExecutorEvent::Done clears it).
+    api
+      .specMode(project.hash, thread.id, specType, prefs.bypass)
+      .then(() => refresh())
+      .catch((err) => {
+        setBusy(false);
+        fail(err);
+      });
+  };
+
+  // D13: Back button on the composer-toggle framing menu returns to the chat.
+  const onComposerSpecTypeBack = () => {
+    setComposerSpecTypePicker(false);
   };
 
   const onPropose = async () => {
@@ -2045,16 +2605,33 @@ export default function App() {
   };
 
   const onSend = async () => {
-    if (!project || !thread || !draft.trim()) return;
+    if (!project || !draft.trim()) return;
     const text = draft.trim();
     setDraft("");
     // /go and /propose are the same functions the buttons call.
     if (text === "/go") return onGo();
     if (text === "/spec") return onSpec();
     if (text === "/propose") return onPropose();
+    // D20: go-mode's empty composer has no thread yet — create it (+ set
+    // go mode) on this, the first send, then fall through to the normal
+    // send path below using the freshly created thread.
+    let activeThread = thread;
+    if (!activeThread) {
+      if (pendingMode !== "go") return;
+      try {
+        const created = await api.createThread(project.hash, "New thread");
+        activeThread = await api.setThreadMode(project.hash, created.id, "go");
+        setThreads(await api.listThreads(project.hash));
+        await selectThread(project.hash, activeThread);
+        setPendingMode(null);
+      } catch (err) {
+        fail(err);
+        return;
+      }
+    }
     try {
       setBusy(true);
-      const prefs = resolvePrefs(project.hash, thread.id);
+      const prefs = resolvePrefs(project.hash, activeThread.id);
       // sendMessage returns the persisted user message; append it directly
       // instead of re-reading the whole thread. A second readThread here would
       // race with the done/thread-updated handlers' refresh() on fast turns —
@@ -2062,9 +2639,9 @@ export default function App() {
       // single writer of the full history; onSend only adds this one row.
       const sent = await api.sendMessage(
         project.hash,
-        thread.id,
+        activeThread.id,
         text,
-        thread.currentMode,
+        activeThread.currentMode,
         prefs.bypass
       );
       setMessages((prev) =>
@@ -2840,18 +3417,30 @@ export default function App() {
                       live={live}
                       busy={busy}
                       showThinking={showThinking}
-                      executor={thread?.executor ?? flight?.selected ?? null}
+                      executor={
+                        thread?.executor ??
+                        framingExecutor ??
+                        flight?.selected ??
+                        null
+                      }
                       models={
-                        (thread?.executor ?? flight?.selected)
+                        (thread?.executor ??
+                        framingExecutor ??
+                        flight?.selected)
                           ? (modelsByAgent[
-                              (thread?.executor ?? flight?.selected)!
+                              (thread?.executor ??
+                                framingExecutor ??
+                                flight?.selected)!
                             ] ?? null)
                           : null
                       }
                       onPickExecutor={onPickExecutor}
                       onPickModel={onPickModel}
                       onProbeModels={() => {
-                        const id = thread?.executor ?? flight?.selected;
+                        const id =
+                          thread?.executor ??
+                          framingExecutor ??
+                          flight?.selected;
                         if (id) probeAgentModels(id);
                       }}
                       flightSelected={!!flight?.selected}
@@ -2863,11 +3452,22 @@ export default function App() {
                       onRenameThread={onRenameThread}
                       onSpec={onSpec}
                       onGo={onGo}
-                      onPropose={onPropose}
                       onApply={onApply}
                       stage={stage}
                       dragActive={dragActive}
                       newThreadPicker={newThreadPicker}
+                      pendingMode={pendingMode}
+                      specTypePicker={specTypePicker}
+                      onSpecTypeBack={onSpecTypeBack}
+                      onPickSpecType={onPickSpecType}
+                      composerSpecTypePicker={composerSpecTypePicker}
+                      transitioning={transitioning}
+                      framingExecutor={framingExecutor}
+                      framingModel={framingModel}
+                      onPickFramingExecutor={onPickFramingExecutor}
+                      onPickFramingModel={onPickFramingModel}
+                      onPickComposerSpecType={onPickComposerSpecType}
+                      onComposerSpecTypeBack={onComposerSpecTypeBack}
                       onPickMode={onPickMode}
                       threadBypass={threadPrefs.bypass}
                       onToggleBypass={onToggleBypassDefault}
@@ -2897,18 +3497,26 @@ export default function App() {
                   live={live}
                   busy={busy}
                   showThinking={showThinking}
-                  executor={thread?.executor ?? flight?.selected ?? null}
+                  executor={
+                    thread?.executor ??
+                    framingExecutor ??
+                    flight?.selected ??
+                    null
+                  }
                   models={
-                    (thread?.executor ?? flight?.selected)
+                    (thread?.executor ?? framingExecutor ?? flight?.selected)
                       ? (modelsByAgent[
-                          (thread?.executor ?? flight?.selected)!
+                          (thread?.executor ??
+                            framingExecutor ??
+                            flight?.selected)!
                         ] ?? null)
                       : null
                   }
                   onPickExecutor={onPickExecutor}
                   onPickModel={onPickModel}
                   onProbeModels={() => {
-                    const id = thread?.executor ?? flight?.selected;
+                    const id =
+                      thread?.executor ?? framingExecutor ?? flight?.selected;
                     if (id) probeAgentModels(id);
                   }}
                   flightSelected={!!flight?.selected}
@@ -2920,11 +3528,22 @@ export default function App() {
                   onRenameThread={onRenameThread}
                   onSpec={onSpec}
                   onGo={onGo}
-                  onPropose={onPropose}
                   onApply={onApply}
                   stage={stage}
                   dragActive={dragActive}
                   newThreadPicker={newThreadPicker}
+                  pendingMode={pendingMode}
+                  specTypePicker={specTypePicker}
+                  onSpecTypeBack={onSpecTypeBack}
+                  onPickSpecType={onPickSpecType}
+                  composerSpecTypePicker={composerSpecTypePicker}
+                  transitioning={transitioning}
+                  framingExecutor={framingExecutor}
+                  framingModel={framingModel}
+                  onPickFramingExecutor={onPickFramingExecutor}
+                  onPickFramingModel={onPickFramingModel}
+                  onPickComposerSpecType={onPickComposerSpecType}
+                  onComposerSpecTypeBack={onComposerSpecTypeBack}
                   showEmptyModePicker={threads.length === 0 && !thread}
                   onPickMode={onPickMode}
                   onOpenSpec={(name) => tabs.openSpec(name)}

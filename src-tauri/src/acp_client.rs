@@ -256,6 +256,23 @@ fn raw_command(raw_input: Option<&serde_json::Value>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Extract file paths from a tool call's `locations` array. ACP agents
+/// advertise the file paths they touch via `ToolCallLocation.path`.
+/// Handles both `Vec<ToolCallLocation>` (notification) and
+/// `Option<Vec<ToolCallLocation>>` (permission request update fields).
+fn location_paths(locations: &[v1::ToolCallLocation]) -> Vec<String> {
+    locations
+        .iter()
+        .map(|loc| loc.path.to_string_lossy().to_string())
+        .collect()
+}
+
+/// Extract file paths from an optional `locations` array (permission
+/// request path — `ToolCallUpdateFields.locations` is `Option<Vec<...>>`).
+fn location_paths_opt(locations: &Option<Vec<v1::ToolCallLocation>>) -> Vec<String> {
+    locations.as_deref().map(location_paths).unwrap_or_default()
+}
+
 /// Answer an agent permission request according to the session's mode
 /// policy (D12, D15). `Prompt` has no UI surface yet, so it cancels — the
 /// safe default until the permission prompt UI lands.
@@ -265,7 +282,9 @@ fn answer_permission(
 ) -> v1::RequestPermissionResponse {
     let kind = tool_kind(request.tool_call.fields.kind.as_ref());
     let command = raw_command(request.tool_call.fields.raw_input.as_ref());
-    match permissions::decide_permission(mode, kind, command.as_deref()) {
+    let paths = location_paths_opt(&request.tool_call.fields.locations);
+    let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+    match permissions::decide_permission(mode, kind, command.as_deref(), &path_refs) {
         PermissionDecision::Allow => {
             let option = request
                 .options
@@ -304,8 +323,9 @@ fn spec_mode_violation(
     kind: permissions::ToolKind,
     mode: PermissionMode,
     command: Option<&str>,
+    file_paths: &[&str],
 ) -> Option<String> {
-    match permissions::decide_permission(mode, kind, command) {
+    match permissions::decide_permission(mode, kind, command, file_paths) {
         PermissionDecision::Deny => {
             let kind_label = match kind {
                 permissions::ToolKind::Edit => "edit",
@@ -373,8 +393,11 @@ async fn run_bridge(
                     if !notif_cancelled.load(Ordering::SeqCst) {
                         let kind = tool_kind(Some(&call.kind));
                         let command = raw_command(call.raw_input.as_ref());
+                        let paths = location_paths(&call.locations);
+                        let path_refs: Vec<&str> =
+                            paths.iter().map(|s| s.as_str()).collect();
                         if let Some(reason) =
-                            spec_mode_violation(kind, perm_mode, command.as_deref())
+                            spec_mode_violation(kind, perm_mode, command.as_deref(), &path_refs)
                         {
                             notif_cancelled.store(true, Ordering::SeqCst);
                             notif_busy.store(false, Ordering::SeqCst);
@@ -930,6 +953,7 @@ mod tests {
             permissions::ToolKind::Edit,
             PermissionMode::Spec,
             None,
+            &[],
         );
         assert!(reason.is_some(), "spec mode should flag an edit");
         let reason = reason.unwrap();
@@ -948,7 +972,7 @@ mod tests {
     fn spec_mode_violation_flags_delete_and_move() {
         for kind in &[permissions::ToolKind::Delete, permissions::ToolKind::Move] {
             assert!(
-                spec_mode_violation(*kind, PermissionMode::Spec, None).is_some(),
+                spec_mode_violation(*kind, PermissionMode::Spec, None, &[]).is_some(),
                 "spec mode should flag {kind:?}"
             );
         }
@@ -964,7 +988,7 @@ mod tests {
             permissions::ToolKind::Fetch,
         ] {
             assert!(
-                spec_mode_violation(*kind, PermissionMode::Spec, None).is_none(),
+                spec_mode_violation(*kind, PermissionMode::Spec, None, &[]).is_none(),
                 "spec mode should NOT flag {kind:?}"
             );
         }
@@ -974,11 +998,11 @@ mod tests {
     #[test]
     fn spec_mode_violation_allows_edits_in_go_mode() {
         assert!(
-            spec_mode_violation(permissions::ToolKind::Edit, PermissionMode::Go, None).is_none(),
+            spec_mode_violation(permissions::ToolKind::Edit, PermissionMode::Go, None, &[]).is_none(),
             "go mode should allow edits"
         );
         assert!(
-            spec_mode_violation(permissions::ToolKind::Move, PermissionMode::Go, None).is_none(),
+            spec_mode_violation(permissions::ToolKind::Move, PermissionMode::Go, None, &[]).is_none(),
             "go mode should allow moves"
         );
     }
@@ -993,33 +1017,27 @@ mod tests {
             permissions::ToolKind::Execute,
         ] {
             assert!(
-                spec_mode_violation(*kind, PermissionMode::Bypass, None).is_none(),
+                spec_mode_violation(*kind, PermissionMode::Bypass, None, &[]).is_none(),
                 "bypass should allow {kind:?}"
             );
         }
     }
 
-    /// RED→GREEN: openspec execute commands are whitelisted even in Spec mode.
+    /// RED→GREEN: execute commands are allowed even in Spec mode.
     #[test]
-    fn spec_mode_violation_whitelists_openspec_execute() {
-        assert!(
-            spec_mode_violation(
-                permissions::ToolKind::Execute,
-                PermissionMode::Spec,
-                Some("openspec list --json"),
-            )
-            .is_none(),
-            "openspec execute should be whitelisted in spec mode"
-        );
-        assert!(
-            spec_mode_violation(
-                permissions::ToolKind::Execute,
-                PermissionMode::Spec,
-                Some("cargo build"),
-            )
-            .is_some(),
-            "non-openspec execute should be flagged in spec mode"
-        );
+    fn spec_mode_violation_allows_execute() {
+        for cmd in &[Some("openspec list --json"), Some("cargo build"), None] {
+            assert!(
+                spec_mode_violation(
+                    permissions::ToolKind::Execute,
+                    PermissionMode::Spec,
+                    *cmd,
+                    &[],
+                )
+                .is_none(),
+                "execute should not be flagged in spec mode"
+            );
+        }
     }
 
     // --------------------------------------------------------- send / terminate

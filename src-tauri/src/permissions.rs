@@ -59,8 +59,10 @@ pub enum PermissionMode {
 ///
 /// D15: Mode as permission-response policy, aligned with industry patterns.
 ///
-/// - **Spec-mode**: auto-approve read/search/think/fetch; auto-deny edit/delete/move/execute.
-///   The agent investigates and proposes but cannot modify files.
+/// - **Spec-mode**: auto-approve read/search/think/fetch/execute; auto-deny
+///   edit/delete/move *except* writes to `openspec/` paths — the whole point
+///   of spec mode is that the agent writes spec files, so those writes are
+///   allowed.
 /// - **Go-mode**: auto-approve read/search/think/fetch/edit/move; prompt for execute/delete.
 ///   Auto-approves file edits within workspace but gates shell execution and destructive ops.
 /// - **Bypass**: auto-approve everything.
@@ -72,6 +74,7 @@ pub fn decide_permission(
     mode: PermissionMode,
     tool_kind: ToolKind,
     command: Option<&str>,
+    file_paths: &[&str],
 ) -> PermissionDecision {
     // Bypass: everything is auto-approved.
     if mode == PermissionMode::Bypass {
@@ -92,9 +95,20 @@ pub fn decide_permission(
             ToolKind::Read | ToolKind::Search | ToolKind::Think | ToolKind::Fetch => {
                 PermissionDecision::Allow
             }
-            ToolKind::Edit | ToolKind::Delete | ToolKind::Move | ToolKind::Execute => {
-                PermissionDecision::Deny
+            // Spec mode allows edits/moves to openspec/ paths — the agent
+            // writes spec files as its primary output. Deletes are still denied
+            // (you don't delete specs in spec mode), but execute is allowed.
+            ToolKind::Edit | ToolKind::Move => {
+                if !file_paths.is_empty()
+                    && file_paths.iter().all(|p| is_openspec_path(p))
+                {
+                    PermissionDecision::Allow
+                } else {
+                    PermissionDecision::Deny
+                }
             }
+            ToolKind::Delete => PermissionDecision::Deny,
+            ToolKind::Execute => PermissionDecision::Allow,
             ToolKind::Other => PermissionDecision::Prompt,
         },
         PermissionMode::Go => match tool_kind {
@@ -120,6 +134,19 @@ fn is_openspec_command(command: &str) -> bool {
         || trimmed.starts_with("npx openspec")
 }
 
+/// Check if a file path is inside the `openspec/` directory.
+/// Accepts both absolute paths (ending in `/openspec/...`) and relative
+/// paths (`openspec/...`). The check is path-segment-aware so
+/// `my-openspec/` does not match.
+fn is_openspec_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let trimmed = normalized.trim_start_matches("./");
+    // Walk the path segments and check if any segment is exactly "openspec".
+    trimmed
+        .split('/')
+        .any(|seg| seg == "openspec")
+}
+
 // ------------------------------------------------------------------ tests
 
 #[cfg(test)]
@@ -128,16 +155,26 @@ mod tests {
 
     // --------------------------------------------------------- 5.1: spec-mode auto-deny
 
-    /// RED→GREEN 5.1: Spec-mode auto-denies edit/delete/move/execute.
+    /// RED→GREEN 5.1: Spec-mode auto-denies edit/delete/move outside openspec/.
+    /// Execute is allowed in spec mode.
     #[test]
     fn spec_mode_auto_denies_writes() {
-        for kind in &[ToolKind::Edit, ToolKind::Delete, ToolKind::Move, ToolKind::Execute] {
+        for kind in &[ToolKind::Edit, ToolKind::Delete, ToolKind::Move] {
             assert_eq!(
-                decide_permission(PermissionMode::Spec, *kind, None),
+                decide_permission(PermissionMode::Spec, *kind, None, &[]),
                 PermissionDecision::Deny,
                 "spec-mode should deny {kind:?}"
             );
         }
+    }
+
+    /// RED→GREEN: Spec-mode allows execute tool calls.
+    #[test]
+    fn spec_mode_allows_execute() {
+        assert_eq!(
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, None, &[]),
+            PermissionDecision::Allow,
+        );
     }
 
     // --------------------------------------------------------- 5.2: spec-mode auto-approve
@@ -147,7 +184,7 @@ mod tests {
     fn spec_mode_auto_approves_reads() {
         for kind in &[ToolKind::Read, ToolKind::Search, ToolKind::Think, ToolKind::Fetch] {
             assert_eq!(
-                decide_permission(PermissionMode::Spec, *kind, None),
+                decide_permission(PermissionMode::Spec, *kind, None, &[]),
                 PermissionDecision::Allow,
                 "spec-mode should allow {kind:?}"
             );
@@ -161,7 +198,7 @@ mod tests {
     fn go_mode_auto_approves_reads_and_edits() {
         for kind in &[ToolKind::Read, ToolKind::Search, ToolKind::Think, ToolKind::Fetch, ToolKind::Edit, ToolKind::Move] {
             assert_eq!(
-                decide_permission(PermissionMode::Go, *kind, None),
+                decide_permission(PermissionMode::Go, *kind, None, &[]),
                 PermissionDecision::Allow,
                 "go-mode should allow {kind:?}"
             );
@@ -175,7 +212,7 @@ mod tests {
     fn go_mode_prompts_for_execute_and_delete() {
         for kind in &[ToolKind::Execute, ToolKind::Delete] {
             assert_eq!(
-                decide_permission(PermissionMode::Go, *kind, None),
+                decide_permission(PermissionMode::Go, *kind, None, &[]),
                 PermissionDecision::Prompt,
                 "go-mode should prompt for {kind:?}"
             );
@@ -194,7 +231,7 @@ mod tests {
         ];
         for kind in &all_kinds {
             assert_eq!(
-                decide_permission(PermissionMode::Bypass, *kind, None),
+                decide_permission(PermissionMode::Bypass, *kind, None, &[]),
                 PermissionDecision::Allow,
                 "bypass should allow {kind:?}"
             );
@@ -207,35 +244,35 @@ mod tests {
     #[test]
     fn openspec_is_whitelisted_in_spec_mode() {
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec list --json")),
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec list --json"), &[]),
             PermissionDecision::Allow,
         );
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec show my-change --json")),
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec show my-change --json"), &[]),
             PermissionDecision::Allow,
         );
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec validate --changes")),
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec validate --changes"), &[]),
             PermissionDecision::Allow,
         );
     }
 
-    // --------------------------------------------------------- 5.7: non-openspec execute denied
+    // --------------------------------------------------------- 5.7: non-openspec execute allowed
 
-    /// RED→GREEN 5.7: Non-openspec execute is still denied in spec-mode.
+    /// RED→GREEN 5.7: Non-openspec execute is also allowed in spec-mode.
     #[test]
-    fn non_openspec_execute_is_denied_in_spec_mode() {
+    fn non_openspec_execute_is_allowed_in_spec_mode() {
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("rm -rf /")),
-            PermissionDecision::Deny,
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("rm -rf /"), &[]),
+            PermissionDecision::Allow,
         );
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("cargo build")),
-            PermissionDecision::Deny,
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("cargo build"), &[]),
+            PermissionDecision::Allow,
         );
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Execute, None),
-            PermissionDecision::Deny,
+            decide_permission(PermissionMode::Spec, ToolKind::Execute, None, &[]),
+            PermissionDecision::Allow,
         );
     }
 
@@ -245,13 +282,100 @@ mod tests {
     #[test]
     fn other_tool_kind_prompts_user() {
         assert_eq!(
-            decide_permission(PermissionMode::Spec, ToolKind::Other, None),
+            decide_permission(PermissionMode::Spec, ToolKind::Other, None, &[]),
             PermissionDecision::Prompt,
         );
         assert_eq!(
-            decide_permission(PermissionMode::Go, ToolKind::Other, None),
+            decide_permission(PermissionMode::Go, ToolKind::Other, None, &[]),
             PermissionDecision::Prompt,
         );
+    }
+
+    // --------------------------------------------------------- spec-mode openspec path whitelist
+
+    /// Spec-mode allows edits to openspec/ paths — the agent writes spec
+    /// files as its primary output.
+    #[test]
+    fn spec_mode_allows_edits_to_openspec_paths() {
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Spec,
+                ToolKind::Edit,
+                None,
+                &["/home/user/project/openspec/changes/my-change/design.md"],
+            ),
+            PermissionDecision::Allow,
+        );
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Spec,
+                ToolKind::Move,
+                None,
+                &["openspec/changes/my-change/tasks.md"],
+            ),
+            PermissionDecision::Allow,
+        );
+    }
+
+    /// Spec-mode denies edits when any path is outside openspec/.
+    #[test]
+    fn spec_mode_denies_edits_outside_openspec() {
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Spec,
+                ToolKind::Edit,
+                None,
+                &["/home/user/project/src/main.rs"],
+            ),
+            PermissionDecision::Deny,
+        );
+        // Mixed paths — one openspec, one src — still denied.
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Spec,
+                ToolKind::Edit,
+                None,
+                &[
+                    "openspec/changes/my-change/design.md",
+                    "src/main.rs",
+                ],
+            ),
+            PermissionDecision::Deny,
+        );
+    }
+
+    /// Spec-mode still denies delete even for openspec paths, but allows execute.
+    #[test]
+    fn spec_mode_denies_delete_allows_execute_for_openspec_paths() {
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Spec,
+                ToolKind::Delete,
+                None,
+                &["openspec/changes/old-change/design.md"],
+            ),
+            PermissionDecision::Deny,
+        );
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Spec,
+                ToolKind::Execute,
+                None,
+                &["openspec/changes/my-change/run.sh"],
+            ),
+            PermissionDecision::Allow,
+        );
+    }
+
+    /// is_openspec_path is segment-aware — "my-openspec" does not match.
+    #[test]
+    fn is_openspec_path_segment_aware() {
+        assert!(is_openspec_path("openspec/changes/x.md"));
+        assert!(is_openspec_path("/home/user/project/openspec/changes/x.md"));
+        assert!(is_openspec_path("./openspec/specs/foo.md"));
+        assert!(!is_openspec_path("src/main.rs"));
+        assert!(!is_openspec_path("my-openspec/file.md"));
+        assert!(!is_openspec_path("openspec-backup/file.md"));
     }
 
     // --------------------------------------------------------- ToolKind parsing

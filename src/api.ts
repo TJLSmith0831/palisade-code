@@ -22,6 +22,8 @@ export type ThreadMeta = {
   executor?: string | null;
   /** Per-thread model choice (the agent's config value id); null = agent default. */
   model?: string | null;
+  /** Spec-type framing (Feature/Bugfix/custom text) picked on spec-mode entry (D11). */
+  specType?: string | null;
 };
 
 export type Message = {
@@ -192,8 +194,10 @@ export const goMode = (
 export const specMode = (
   projectHash: string,
   threadId: string,
+  specType: string,
   bypass: boolean
-) => invoke<ThreadMeta>("spec_mode", { projectHash, threadId, bypass });
+) =>
+  invoke<ThreadMeta>("spec_mode", { projectHash, threadId, specType, bypass });
 export const propose = (
   projectHash: string,
   threadId: string,

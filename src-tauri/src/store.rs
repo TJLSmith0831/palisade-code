@@ -205,6 +205,11 @@ pub struct ThreadMeta {
     /// meaningful together with `executor`; None means the agent's default.
     #[serde(default)]
     pub model: Option<String>,
+    /// The spec-type framing the user picked when entering spec-mode
+    /// (Feature/Bugfix/custom text). Framing context for the agent's opening
+    /// turn; re-injected on agent handoff (D11/D12). None on old records.
+    #[serde(default)]
+    pub spec_type: Option<String>,
 }
 // `executorSessionId` used to live here. It was a provider-private resume
 // handle on a provider-independent entity, and it was written unconditionally
@@ -233,6 +238,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         open_spec_change_name: None,
         executor: None,
         model: None,
+        spec_type: None,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -315,6 +321,16 @@ pub fn set_thread_executor(
     update_thread(home, hash, id, |m| {
         m.executor = executor.map(str::to_string);
         m.model = model.map(str::to_string);
+    })
+}
+
+/// Persist the spec-type framing on the thread (D11). Stored as `spec_type`
+/// on `ThreadMeta`; survives mode switches and app restarts. Re-injected on
+/// agent handoff (D12). Called by `spec_mode` when the user commits to a
+/// spec type.
+pub fn set_spec_type(home: &Path, hash: &str, id: &str, spec_type: &str) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.spec_type = Some(spec_type.to_string());
     })
 }
 
@@ -829,6 +845,70 @@ mod tests {
         let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
         assert_eq!(found.executor, None);
         assert_eq!(found.model, None);
+    }
+
+    // ----------------------------------------------- spec_type field (D11)
+
+    #[test]
+    fn thread_meta_spec_type_round_trips() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        // Set spec_type directly via update_thread (the persistence helper
+        // set_spec_type arrives in Group 3; here we only exercise serde).
+        let with_type = update_thread(home.path(), &project.hash, &thread.id, |m| {
+            m.spec_type = Some("Feature".into());
+        })
+        .unwrap();
+        assert_eq!(with_type.spec_type.as_deref(), Some("Feature"));
+
+        // Reload from disk — the field must survive a serialize/deserialize cycle.
+        let loaded = list_threads(home.path(), &project.hash).unwrap();
+        let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
+        assert_eq!(found.spec_type.as_deref(), Some("Feature"));
+    }
+
+    #[test]
+    fn old_thread_meta_without_spec_type_still_loads() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        // Simulate a meta file written before spec_type existed.
+        let path = threads_dir(home.path(), &project.hash).join(format!("{}.meta.json", thread.id));
+        let body = fs::read_to_string(&path).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        value.as_object_mut().unwrap().remove("specType");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let loaded = list_threads(home.path(), &project.hash).unwrap();
+        let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
+        assert_eq!(found.spec_type, None);
+    }
+
+    // ----------------------------------------------- spec_type persistence (D11)
+
+    #[test]
+    fn set_spec_type_stores_the_spec_type_on_the_thread() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert_eq!(thread.spec_type, None);
+
+        let stored = set_spec_type(home.path(), &project.hash, &thread.id, "Bugfix").unwrap();
+        assert_eq!(stored.spec_type.as_deref(), Some("Bugfix"));
+    }
+
+    #[test]
+    fn reading_a_thread_with_stored_spec_type_returns_the_value() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        set_spec_type(home.path(), &project.hash, &thread.id, "Feature").unwrap();
+
+        // Reload from disk — the spec_type must survive persistence.
+        let loaded = list_threads(home.path(), &project.hash).unwrap();
+        let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
+        assert_eq!(found.spec_type.as_deref(), Some("Feature"));
     }
 
     #[test]
