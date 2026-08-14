@@ -2757,6 +2757,10 @@ details.graph-report-wrap > summary {
   border-right: 1px solid var(--border);
 }
 [data-preset="vibe"] .ds-editor-col { order: 1; flex: 0 0 38%; }
+/* Vibe pins the editor to a fixed share so chat stays the subject. With
+   chat collapsed there is nothing to hold that share against, and the
+   reclaimed width sat empty — a collapsed panel gives its space back. */
+[data-preset="vibe"][data-chat="collapsed"] .ds-editor-col { flex: 1 1 auto; }
 
 /* --- Vibe session list --------------------------------------------------- */
 

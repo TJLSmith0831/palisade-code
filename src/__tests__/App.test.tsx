@@ -589,6 +589,28 @@ describe("Picking a provider/model before the thread exists", () => {
   });
 });
 
+describe("Collapsing chat (Cmd+J)", () => {
+  it("hands the reclaimed width to the editor instead of leaving a gap", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+
+    // Vibe pins the editor to a fixed share so chat stays the subject. With
+    // chat gone there is nothing left to hold that share against, and the
+    // reclaimed width sat empty — DESIGN.md's rule is that a collapsed
+    // panel gives its space back, not that it leaves a hole.
+    fireEvent.click(screen.getByTestId("toggle-chat"));
+    expect(screen.queryByTestId("right-sidebar")).toBeNull();
+    expect(screen.getByTestId("vibe-shell")).toHaveAttribute(
+      "data-chat",
+      "collapsed"
+    );
+
+    fireEvent.click(screen.getByTestId("toggle-chat"));
+    expect(screen.getByTestId("vibe-shell")).not.toHaveAttribute("data-chat");
+  });
+});
+
 describe("Resize handles (one per row)", () => {
   it("keeps each handle in its own row, so the sidebar edge is grabbable", async () => {
     render(<App />);
@@ -1136,12 +1158,17 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("hides the chat toggle in the Vibe preset", async () => {
+  it("offers the chat toggle in both presets", async () => {
+    // It used to be Editor-only. Cmd+J collapses chat in either preset, so
+    // hiding the button left a Vibe user with no visible way back — the
+    // shortcut was the only route, and only if you knew it.
     render(<App />);
     await openProject();
+    expect(screen.getByTestId("toggle-chat")).toBeDefined();
+
     fireEvent.click(screen.getByTestId("shell-vibe"));
     await screen.findByTestId("vibe-shell");
-    expect(screen.queryByTestId("toggle-chat")).toBeNull();
+    expect(screen.getByTestId("toggle-chat")).toBeDefined();
   });
 });
 

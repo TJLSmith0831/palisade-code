@@ -3687,8 +3687,10 @@ export default function App() {
               </button>
             </Tooltip>
             )}
-            {/* Editor preset only — Vibe's chat has no second toggle. */}
-            {project && shell.centerShell === "editor" && (
+            {/* Both presets: Cmd+J collapses chat in either, and gating the
+                button to Editor left a Vibe user staring at the reclaimed
+                space with no visible way back. */}
+            {project && (
               <Tooltip label="Toggle chat panel (Cmd+J)">
                 <button
                   className="ds-icon-btn"
@@ -3823,6 +3825,7 @@ export default function App() {
           <div
             className="ds-shell-contents"
             data-preset={shell.centerShell}
+            data-chat={shell.chatCollapsed ? "collapsed" : undefined}
             data-testid={
               shell.centerShell === "vibe" ? "vibe-shell" : "editor-shell"
             }
