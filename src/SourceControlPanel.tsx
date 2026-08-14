@@ -173,6 +173,8 @@ export default function SourceControlPanel({
 }) {
   const [files, setFiles] = useState<FileStatus[]>([]);
   const [log, setLog] = useState<LogEntry[]>([]);
+  /** `[ahead, behind]` against the upstream, or null when there isn't one. */
+  const [aheadBehind, setAheadBehind] = useState<[number, number] | null>(null);
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -188,10 +190,15 @@ export default function SourceControlPanel({
   const reload = useCallback(() => {
     api.gitStatus(projectHash).then(setFiles).catch(onError);
     api.gitLog(projectHash, 12).then(setLog).catch(onError);
+    // No upstream is a normal state, not an error — no counts, no banner.
+    api.gitAheadBehind(projectHash).then(setAheadBehind, () =>
+      setAheadBehind(null)
+    );
   }, [projectHash, onError]);
 
   useEffect(reload, [reload, refreshToken]);
 
+  const [ahead, behind] = aheadBehind ?? [0, 0];
   const staged = files.filter((f) => isStaged(f.code));
   const unstaged = files.filter((f) => !isStaged(f.code));
 
@@ -247,11 +254,17 @@ export default function SourceControlPanel({
             >
               Fetch
             </Menu.Item>
-            <Menu.Item onClick={() => act(api.gitPull(projectHash))}>
-              Pull
+            <Menu.Item
+              onClick={() => act(api.gitPull(projectHash))}
+              data-testid="sc-pull"
+            >
+              Pull{behind > 0 ? ` ${behind}` : ""}
             </Menu.Item>
-            <Menu.Item onClick={() => act(api.gitPush(projectHash))}>
-              Push
+            <Menu.Item
+              onClick={() => act(api.gitPush(projectHash))}
+              data-testid="sc-push"
+            >
+              Push{ahead > 0 ? ` ${ahead}` : ""}
             </Menu.Item>
           </Menu.Dropdown>
         </Menu>

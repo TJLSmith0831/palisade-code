@@ -12,6 +12,7 @@ import SourceControlPanel, { isStaged, statusChip, splitPath } from "../SourceCo
 import * as api from "../api";
 
 vi.mock("../api", () => ({
+  gitAheadBehind: vi.fn(),
   gitStatus: vi.fn(),
   gitLog: vi.fn(),
   gitStageFile: vi.fn(),
@@ -43,6 +44,7 @@ beforeEach(() => {
     { path: "src/b.ts", code: " M" },
     { path: "new.ts", code: "??" },
   ]);
+  mocked.gitAheadBehind.mockResolvedValue([0, 0]);
   mocked.gitLog.mockResolvedValue([
     { hash: "abc1234", subject: "first", author: "T", date: "2026-08-14" },
   ]);
@@ -137,6 +139,24 @@ describe("SourceControlPanel staging", () => {
     expect(
       within(screen.getByTestId("sc-changes-section")).queryAllByTestId("sc-file").length
     ).toBeGreaterThan(0);
+  });
+
+  it("says how far ahead and behind the branch is, on the actions that act on it", async () => {
+    // This used to be visible on the diff pane's own Pull/Push buttons; it
+    // is real information ("push what, exactly?") and it should not have
+    // disappeared with them.
+    mocked.gitAheadBehind.mockResolvedValue([2, 3]);
+    render(<SourceControlPanel {...props} />);
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    expect(await screen.findByTestId("sc-pull")).toHaveTextContent("Pull 3");
+    expect(screen.getByTestId("sc-push")).toHaveTextContent("Push 2");
+  });
+
+  it("leaves the counts off when the branch is level", async () => {
+    render(<SourceControlPanel {...props} />);
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    expect(await screen.findByTestId("sc-pull")).toHaveTextContent("Pull");
+    expect(screen.getByTestId("sc-pull").textContent).not.toMatch(/\d/);
   });
 
   it("collapses the commit graph too", async () => {
