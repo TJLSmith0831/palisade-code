@@ -24,7 +24,7 @@ export const PANEL_IDS = [
   "codemap",
   "run",
   "history",
-  "account",
+  "workspace",
   "settings",
 ] as const;
 

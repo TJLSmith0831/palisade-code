@@ -7,7 +7,7 @@ import {
   IconTopologyStar3,
   IconPlayerPlay,
   IconHistory,
-  IconUser,
+  IconFolders,
   IconSettings,
 } from "@tabler/icons-react";
 import type { PanelId } from "./hooks/useAppShell";
@@ -34,7 +34,11 @@ const TOP: RailItem[] = [
 
 const BOTTOM: RailItem[] = [
   { id: "history", label: "History", Icon: IconHistory },
-  { id: "account", label: "Account", Icon: IconUser },
+  // Not "Account": Floo has no account (PRODUCT.md — no sign-in, no
+  // billing), and the panel this opens is the project/branch picker. A
+  // first-run reviewer clicked it expecting a profile and landed somewhere
+  // unrelated-looking.
+  { id: "workspace", label: "Workspace", Icon: IconFolders },
   { id: "settings", label: "Settings", Icon: IconSettings },
 ];
 

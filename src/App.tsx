@@ -3534,7 +3534,7 @@ export default function App() {
             </div>
           </>
         );
-      case "account":
+      case "workspace":
         // WorkspacePicker carries its own "Workspace" heading.
         return (
           <>

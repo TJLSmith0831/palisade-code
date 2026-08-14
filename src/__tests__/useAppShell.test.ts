@@ -27,7 +27,7 @@ describe("left rail panel selection", () => {
       "codemap",
       "run",
       "history",
-      "account",
+      "workspace",
       "settings",
     ]);
   });

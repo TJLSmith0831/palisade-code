@@ -29,13 +29,13 @@ const openProject = async () => {
   await screen.findByTestId("shell-toggle");
 };
 
-// The workspace picker moved out of the right rail and behind the Account
+// The workspace picker moved out of the right rail and behind the Workspace
 // icon on the shared left rail (Amendment 3 — the right rail is chat +
 // threads only now). Idempotent so repeated calls in one test don't toggle
 // the panel back shut.
-const openAccountPanel = () => {
+const openWorkspacePanel = () => {
   if (!screen.queryByTestId("project-picker")) {
-    fireEvent.click(screen.getByTestId("rail-account"));
+    fireEvent.click(screen.getByTestId("rail-workspace"));
   }
   return screen.getByTestId("project-picker");
 };
@@ -738,7 +738,7 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
       "codemap",
       "run",
       "history",
-      "account",
+      "workspace",
       "settings",
     ]) {
       expect(within(rail).getByTestId(`rail-${id}`)).toBeDefined();
@@ -820,7 +820,7 @@ describe("Right rail — chat only (shell-redesign Amendment 3)", () => {
   it("reaches the workspace picker from the Account rail icon", async () => {
     render(<App />);
     await openProject();
-    await waitFor(() => expect(openAccountPanel()).toHaveValue("proj-1"));
+    await waitFor(() => expect(openWorkspacePanel()).toHaveValue("proj-1"));
   });
 
   it("reaches the thread list and New Thread from the History rail icon", async () => {
@@ -928,7 +928,7 @@ describe("Settings panel (D14/D15)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.click(screen.getByTestId("open-settings"));
 
@@ -999,7 +999,7 @@ describe("Settings panel (D14/D15)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.click(screen.getByTestId("open-settings"));
     fireEvent.click(screen.getByTestId("open-project-settings"));
@@ -1077,7 +1077,7 @@ describe("Settings panel (D14/D15)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.click(screen.getByTestId("open-settings"));
     fireEvent.click(screen.getByTestId("open-project-settings"));
@@ -1171,7 +1171,7 @@ describe("Resizable layout persistence", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     expect(document.body.style.userSelect).not.toBe("none");
@@ -1380,7 +1380,7 @@ describe("Keyboard navigation (accessibility)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(within(openAccountPanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
     fireEvent.click(screen.getByTestId("branch-indicator"));
 
@@ -1468,7 +1468,7 @@ describe("Keyboard navigation (accessibility)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(within(openAccountPanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
     fireEvent.click(screen.getByTestId("branch-indicator"));
     await waitFor(() =>
@@ -1698,7 +1698,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
 
     // Switching projects closes every tab at once — the expensive version of
     // the mistake the file-open path has guarded against for a while.
-    fireEvent.change(openAccountPanel(), {
+    fireEvent.change(openWorkspacePanel(), {
       target: { value: "proj-2" },
     });
 
@@ -1960,7 +1960,7 @@ describe("Labeled inputs (accessibility)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(within(openAccountPanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
     fireEvent.click(screen.getByTestId("branch-indicator"));
 
@@ -2045,7 +2045,7 @@ describe("Error banner provenance", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(within(openAccountPanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
 
     fireEvent.click(screen.getByTestId("branch-indicator"));
@@ -2069,7 +2069,7 @@ describe("Find in files (Cmd+Shift+F)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.keyDown(window, { key: "f", metaKey: true, shiftKey: true });
@@ -2223,7 +2223,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     expect(screen.getByTestId("editor-shell")).toBeDefined();
     expect(screen.queryByTestId("vibe-shell")).toBeNull();
@@ -2232,7 +2232,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
 
     expect(screen.queryByTestId("editor-shell")).toBeNull();
     expect(screen.getByTestId("vibe-shell")).toBeDefined();
-    expect(openAccountPanel()).toHaveValue("proj-1");
+    expect(openWorkspacePanel()).toHaveValue("proj-1");
   });
 
   it("picking Go from the Vibe shell's empty mode picker shows the empty composer (not the picker again)", async () => {
@@ -2777,7 +2777,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.click(screen.getByTestId("shell-editor"));
@@ -2888,7 +2888,7 @@ describe("Command palette", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
@@ -2909,7 +2909,7 @@ describe("Command palette", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     await waitFor(() =>
@@ -2936,7 +2936,7 @@ describe("Command palette", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     await waitFor(() =>
@@ -2953,7 +2953,7 @@ describe("Command palette", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
@@ -3111,7 +3111,7 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
     render(<App />);
     await openProject();
     await waitFor(() =>
-      expect(openAccountPanel()).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     expect(screen.getByTestId("nav-rail")).toBeDefined();
     expect(screen.getByTestId("editor-tabs")).toBeDefined();
@@ -3418,7 +3418,7 @@ describe("Project switching", () => {
       screen.getByText("a.ts", { selector: ".ds-editor-path" })
     ).toBeDefined();
 
-    fireEvent.change(openAccountPanel(), {
+    fireEvent.change(openWorkspacePanel(), {
       target: { value: projB.hash },
     });
 
