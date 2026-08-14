@@ -207,9 +207,12 @@ button:hover:not(:disabled) {
   border-color: var(--fg);
 }
 
+/* textarea is in this list because the commit-message box is one, and it
+   was the only control in the git flow with no focus indicator at all. */
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
 }

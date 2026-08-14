@@ -336,3 +336,26 @@ describe("Responsive breakpoints", () => {
     expect(navRailDisplayNoneRules).toHaveLength(0);
   });
 });
+
+describe("focus ring coverage (DESIGN.md: the focus ring is the accent)", () => {
+  it("covers textareas, not just buttons and inputs", () => {
+    // The commit-message box is a <textarea>, and it was the one control in
+    // the git flow with no focus indicator at all — a keyboard reviewer
+    // called landing there blind, one keystroke from writing history,
+    // disqualifying.
+    const focusRules = allStyleRules().filter((rule) =>
+      rule.selectorText?.includes(":focus-visible")
+    );
+    const covered = (tag: string) =>
+      focusRules.some((rule) =>
+        rule.selectorText
+          .split(",")
+          .some((part) => part.trim() === `${tag}:focus-visible`)
+      );
+
+    expect(covered("button")).toBe(true);
+    expect(covered("input")).toBe(true);
+    expect(covered("select")).toBe(true);
+    expect(covered("textarea")).toBe(true);
+  });
+});
