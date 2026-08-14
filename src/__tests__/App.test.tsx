@@ -423,6 +423,58 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
   });
 });
 
+describe("New thread always starts a new thread", () => {
+  const withThreads = () =>
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+
+  it("returns to the mode picker after Go was picked but nothing was sent", async () => {
+    withThreads();
+    render(<App />);
+    await openProject();
+
+    // Pick Go: the composer opens, no thread created yet.
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    expect(await screen.findByTestId("composer-input")).toBeDefined();
+
+    // New thread must start over. It used to do nothing at all here: the
+    // leftover pending mode outranked the picker in the render condition,
+    // so every "New thread" button looked broken.
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    expect(await screen.findByTestId("mode-picker")).toBeDefined();
+  });
+
+  it("returns to the mode picker after Spec's framing menu was opened", async () => {
+    withThreads();
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-spec"));
+    expect(await screen.findByTestId("spec-type-picker")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    expect(await screen.findByTestId("mode-picker")).toBeDefined();
+  });
+});
+
 describe("Picking a provider/model before the thread exists", () => {
   it("remembers the choice instead of silently doing nothing", async () => {
     // Picking "Go" shows the composer before any thread exists (D20's

@@ -2344,6 +2344,15 @@ export default function App() {
 
   const onNewThread = () => {
     if (!project) return;
+    // Starting a new thread means starting over: clear the half-finished
+    // states from the last attempt. Each of these outranks the picker in
+    // the chat's render condition, so leaving one set made every "New
+    // thread" button silently do nothing — pick Go, don't send, and the
+    // app had no way back to the picker.
+    setPendingMode(null);
+    setSpecTypePicker(false);
+    setComposerSpecTypePicker(false);
+    setTransitioning(false);
     setNewThreadPicker(true);
     // Collapse the Editor shell's disclosure so the picker (mounted in the
     // always-visible chat area below it) is immediately visible.

@@ -72,7 +72,19 @@ impl FsWatcher {
         let root = match std::fs::canonicalize(&project_root) {
             Ok(root) => root,
             Err(err) => {
-                on_crash(format!("could not watch project files: {err}"));
+                // Overwhelmingly this is a project whose folder was moved or
+                // deleted since it was added. "No such file or directory" on
+                // its own tells the user nothing about which directory or
+                // what to do; naming it makes it actionable.
+                on_crash(if err.kind() == std::io::ErrorKind::NotFound {
+                    format!(
+                        "this project's folder is missing — {} no longer exists. \
+                         Move it back, or remove the project and add it again.",
+                        project_root.display()
+                    )
+                } else {
+                    format!("could not watch project files: {err}")
+                });
                 return Self { debouncer: None, self_writes };
             }
         };
@@ -180,6 +192,25 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
+    #[test]
+    fn a_missing_project_folder_says_which_folder_and_what_to_do() {
+        let (tx, rx) = mpsc::channel::<String>();
+        let gone = std::path::PathBuf::from("/tmp/floo-does-not-exist-abc123");
+        let _watcher = FsWatcher::spawn(
+            gone.clone(),
+            move |_| {},
+            move |err| {
+                let _ = tx.send(err);
+            },
+        );
+
+        let message = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(message.contains("floo-does-not-exist-abc123"), "{message}");
+        assert!(message.contains("folder is missing"), "{message}");
+        // Bare io text is not something a user can act on.
+        assert!(!message.contains("os error"), "{message}");
+    }
+
     /// Waits for one batch of changed paths, or gives up. Generous because
     /// FSEvents latency plus `DEBOUNCE` is not instant.
     fn recv_changes(rx: &mpsc::Receiver<Vec<String>>) -> Option<Vec<String>> {
@@ -283,6 +314,8 @@ mod tests {
         );
         assert!(watcher.debouncer.is_none());
         let message = rx.recv_timeout(Duration::from_secs(2)).expect("on_crash should fire");
-        assert!(message.contains("could not watch project files"), "got {message}");
+        // A path that isn't there is the missing-folder case, which names
+        // the folder rather than repeating the io error.
+        assert!(message.contains("/definitely/not/a/project"), "got {message}");
     }
 }
