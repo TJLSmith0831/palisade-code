@@ -3424,10 +3424,13 @@ export default function App() {
     if (!project) return null;
     switch (shell.activePanel) {
       case "explorer":
-        // FileTree renders its own project-name header — a second one here
-        // just repeats it.
+        // FileTree heads itself with the project name; the panel name goes
+        // above it, as in VS Code. Every other panel already announces what
+        // it is, and three first-run reviewers in a row read the icon rail
+        // as unlabelled glyphs — clicking one should teach you its name.
         return (
           <>
+            <div className="ds-panel-head">Explorer</div>
             <div className="ds-panel-body">
               <FileTree
                 projectHash={project.hash}
