@@ -39,8 +39,6 @@ export function useAppShell(projectHash: string | undefined) {
   const { setColorScheme: setMantineColorScheme } = useMantineColorScheme();
 
   const [diffOpen, setDiffOpen] = useState(false);
-  const [editorRailOpen, setEditorRailOpen] = useState(false);
-  const [vibeExplorerOpen, setVibeExplorerOpen] = useState(false);
 
   const [centerShell, setCenterShellState] = useState<"vibe" | "editor">(
     "editor"
@@ -172,10 +170,6 @@ export function useAppShell(projectHash: string | undefined) {
     () => ({
       diffOpen,
       setDiffOpen,
-      editorRailOpen,
-      setEditorRailOpen,
-      vibeExplorerOpen,
-      setVibeExplorerOpen,
       centerShell,
       setCenterShell,
       shellChosenRef,
@@ -206,8 +200,6 @@ export function useAppShell(projectHash: string | undefined) {
     }),
     [
       diffOpen,
-      editorRailOpen,
-      vibeExplorerOpen,
       centerShell,
       activePanel,
       selectPanel,

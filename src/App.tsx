@@ -2045,7 +2045,6 @@ export default function App() {
   const onSelectEditorThread = useCallback(
     (t: ThreadMeta) => {
       if (project) selectThread(project.hash, t);
-      shell.setEditorRailOpen(false);
     },
     [project, selectThread]
   );
@@ -2354,9 +2353,6 @@ export default function App() {
     setComposerSpecTypePicker(false);
     setTransitioning(false);
     setNewThreadPicker(true);
-    // Collapse the Editor shell's disclosure so the picker (mounted in the
-    // always-visible chat area below it) is immediately visible.
-    shell.setEditorRailOpen(false);
   };
 
   // Vibe/Spec is a friendlier front door onto the two modes that already
