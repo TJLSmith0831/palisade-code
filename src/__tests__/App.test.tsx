@@ -461,6 +461,68 @@ describe("New thread always starts a new thread", () => {
     expect(await screen.findByTestId("mode-picker")).toBeDefined();
   });
 
+  it("picking Go on a new thread does not reopen the thread you were reading", async () => {
+    // The picker used to render *over* the selected thread without
+    // deselecting it, so Go fell straight through to that thread's history —
+    // the new draft vanished and an older conversation took its place.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads")
+          return Promise.resolve([
+            {
+              id: "t1",
+              projectHash: "proj-1",
+              title: "Older conversation",
+              createdAt: "2026-08-06T00:00:00Z",
+              updatedAt: "2026-08-06T00:00:00Z",
+              currentMode: "go",
+              openSpecChangeName: null,
+            },
+          ]);
+        if (cmd === "read_thread")
+          return Promise.resolve([
+            {
+              seq: 1,
+              ts: "2026-08-06T00:00:00Z",
+              role: "user",
+              mode: "go",
+              content: "what did we do yesterday",
+            },
+          ]);
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent(
+        "Older conversation"
+      )
+    );
+
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    fireEvent.click(await screen.findByTestId("pick-go"));
+
+    // An empty composer for a thread that doesn't exist yet — not the old
+    // thread's messages.
+    expect(await screen.findByTestId("composer-input")).toBeDefined();
+    expect(screen.queryByText("what did we do yesterday")).toBeNull();
+    expect(screen.getByTestId("thread-title")).toHaveTextContent("New thread");
+  });
+
   it("returns to the mode picker after Spec's framing menu was opened", async () => {
     withThreads();
     render(<App />);

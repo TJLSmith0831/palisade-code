@@ -2352,6 +2352,15 @@ export default function App() {
     setSpecTypePicker(false);
     setComposerSpecTypePicker(false);
     setTransitioning(false);
+    // Deselect the thread you were reading. The picker renders *over* the
+    // chat, so leaving it selected meant picking Go fell straight through
+    // to that thread's history — the new draft vanished and an older
+    // conversation took its place. (Spec looked fine only because its
+    // framing menu has its own branch above that fall-through.)
+    setThread(null);
+    // …and the messages that were on screen with it, or the new thread's
+    // empty composer renders under the old thread's transcript.
+    setMessages([]);
     setNewThreadPicker(true);
   };
 
