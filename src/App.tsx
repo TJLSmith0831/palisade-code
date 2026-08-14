@@ -318,7 +318,8 @@ export const ChatSurface = memo(
     useEffect(() => {
       if (!modelMenuOpen) setModelQuery("");
     }, [modelMenuOpen]);
-    const currentModelId = thread?.model ?? modelState?.current ?? null;
+    const currentModelId =
+      thread?.model ?? framingModel ?? modelState?.current ?? null;
     const modelLabel =
       models === "loading"
         ? "…"
@@ -2801,7 +2802,16 @@ export default function App() {
   const onPickExecutor = useCallback(
     async (agentId: string) => {
       const { project, thread } = current.current;
-      if (!project || !thread) return;
+      // No thread yet (the chat's "New thread" state, or every tab closed):
+      // there is nothing to persist onto, so the choice goes to the same
+      // scratch state the new-thread flow uses and is written when the
+      // thread is created. It used to return here — menu closed, label
+      // unchanged, nothing written anywhere.
+      if (!thread) {
+        onPickFramingExecutor(agentId);
+        return;
+      }
+      if (!project) return;
       try {
         // Picking a provider clears the model — the old model id means
         // nothing to the new agent.
@@ -2812,13 +2822,17 @@ export default function App() {
       }
       probeAgentModels(agentId);
     },
-    [refresh, probeAgentModels]
+    [refresh, probeAgentModels, onPickFramingExecutor]
   );
 
   const onPickModel = useCallback(
     async (modelId: string) => {
       const { project, thread } = current.current;
-      if (!project || !thread) return;
+      if (!thread) {
+        onPickFramingModel(modelId);
+        return;
+      }
+      if (!project) return;
       // Pin the provider alongside the model, so the pair can't drift apart
       // if auto-detection later resolves differently.
       const executorId = thread.executor ?? flight?.selected ?? null;
@@ -2835,7 +2849,7 @@ export default function App() {
         fail(err);
       }
     },
-    [refresh, flight]
+    [refresh, flight, onPickFramingModel]
   );
 
   const onSpec = async () => {

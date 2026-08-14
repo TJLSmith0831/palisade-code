@@ -423,6 +423,58 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
   });
 });
 
+describe("Picking a provider/model before the thread exists", () => {
+  it("remembers the choice instead of silently doing nothing", async () => {
+    // Picking "Go" shows the composer before any thread exists (D20's
+    // deferred empty composer). Its provider/model pickers used to return
+    // early there: the menu closed, the label never changed, and nothing
+    // was written anywhere.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "list_models")
+          return Promise.resolve({
+            configId: "model",
+            current: "opus",
+            models: [
+              { id: "opus", name: "Opus" },
+              { id: "sonnet", name: "Sonnet" },
+            ],
+          });
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    fireEvent.click(await screen.findByTestId("model-btn"));
+    fireEvent.click(await screen.findByTestId("model-opt-sonnet"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("Sonnet")
+    );
+    // Nothing to persist onto yet: the choice rides along and is written
+    // when the thread is created, as the new-thread menu already does.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "set_thread_executor",
+      expect.anything()
+    );
+  });
+});
+
 describe("Resize handles (one per row)", () => {
   it("keeps each handle in its own row, so the sidebar edge is grabbable", async () => {
     render(<App />);
