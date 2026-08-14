@@ -175,6 +175,9 @@ export default function SourceControlPanel({
   const [log, setLog] = useState<LogEntry[]>([]);
   /** `[ahead, behind]` against the upstream, or null when there isn't one. */
   const [aheadBehind, setAheadBehind] = useState<[number, number] | null>(null);
+  /** Distinguishes "level with upstream" from "there is no upstream" —
+   *  both show no counts, but only one is worth explaining. */
+  const [hasUpstream, setHasUpstream] = useState(true);
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -191,8 +194,15 @@ export default function SourceControlPanel({
     api.gitStatus(projectHash).then(setFiles).catch(onError);
     api.gitLog(projectHash, 12).then(setLog).catch(onError);
     // No upstream is a normal state, not an error — no counts, no banner.
-    api.gitAheadBehind(projectHash).then(setAheadBehind, () =>
-      setAheadBehind(null)
+    api.gitAheadBehind(projectHash).then(
+      (value) => {
+        setAheadBehind(value);
+        setHasUpstream(value !== null);
+      },
+      () => {
+        setAheadBehind(null);
+        setHasUpstream(false);
+      }
     );
   }, [projectHash, onError]);
 
@@ -254,6 +264,11 @@ export default function SourceControlPanel({
             >
               Fetch
             </Menu.Item>
+            {!hasUpstream && (
+              <Menu.Item disabled data-testid="sc-no-upstream">
+                No upstream yet — Push will set one
+              </Menu.Item>
+            )}
             <Menu.Item
               onClick={() => act(api.gitPull(projectHash))}
               data-testid="sc-pull"

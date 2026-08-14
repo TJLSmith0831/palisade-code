@@ -152,6 +152,19 @@ describe("SourceControlPanel staging", () => {
     expect(screen.getByTestId("sc-push")).toHaveTextContent("Push 2");
   });
 
+  it("says when there is no upstream rather than showing bare verbs", async () => {
+    // A reviewer read countless Pull/Push as "can't tell if there's
+    // anything to sync". With no upstream there is nothing to count, and
+    // saying so beats leaving them to guess. Push still works: it sets the
+    // upstream on first push.
+    mocked.gitAheadBehind.mockRejectedValue(new Error("no upstream"));
+    render(<SourceControlPanel {...props} />);
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    expect(await screen.findByTestId("sc-no-upstream")).toHaveTextContent(
+      /no upstream/i
+    );
+  });
+
   it("leaves the counts off when the branch is level", async () => {
     render(<SourceControlPanel {...props} />);
     fireEvent.click(await screen.findByLabelText("More actions"));
