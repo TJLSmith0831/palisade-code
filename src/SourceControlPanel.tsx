@@ -13,6 +13,7 @@ import {
 } from "@tabler/icons-react";
 import * as api from "./api";
 import type { FileStatus, LogEntry } from "./api";
+import { relativeTime } from "./SessionList";
 
 // Amendment 7's Source Control panel: the primary git surface, behind the
 // left rail's Source Control icon. Built from mockup.html's #panel-git.
@@ -101,8 +102,25 @@ function FileRow({
   const { name, dir } = splitPath(file.path);
   const chip = statusChip(file.code);
   return (
-    <div className="ds-sc-file" data-testid="sc-file">
-      <button className="ds-sc-file-open" onClick={onOpen} title={file.path}>
+    // The whole row opens the file, not just the filename: the row *looks*
+    // clickable (it has a hover state and a pointer cursor), so a click on
+    // the padding beside the name did nothing and read as unresponsive.
+    <div
+      className="ds-sc-file"
+      data-testid="sc-file"
+      onClick={onOpen}
+      role="presentation"
+    >
+      <button
+        className="ds-sc-file-open"
+        onClick={(event) => {
+          // The row handler already does this; without stopping here it
+          // fires twice.
+          event.stopPropagation();
+          onOpen();
+        }}
+        title={file.path}
+      >
         <span className="ds-sc-file-text">
           <span className="ds-sc-fname">{name}</span>
           <span className="ds-sc-fpath">{dir}</span>
@@ -116,7 +134,11 @@ function FileRow({
           variant="subtle"
           size="sm"
           aria-label={`${action === "stage" ? "Stage" : "Unstage"} ${file.path}`}
-          onClick={onAction}
+          onClick={(event) => {
+            // Staging is not opening — the row handler must not also fire.
+            event.stopPropagation();
+            onAction();
+          }}
           data-testid={`sc-${action}-${file.path}`}
         >
           {action === "stage" ? <IconPlus size={14} /> : <IconMinus size={14} />}
@@ -395,7 +417,10 @@ export default function SourceControlPanel({
                 <div className="ds-sc-commit-dot" />
                 <div className="ds-sc-commit-text">
                   <span className="ds-sc-commit-msg">{entry.subject}</span>
-                  <span className="ds-sc-commit-meta">{entry.author}</span>
+                  <span className="ds-sc-commit-meta">
+                    {entry.author}
+                    {entry.date ? ` · ${relativeTime(entry.date)}` : ""}
+                  </span>
                 </div>
                 {index === 0 && (
                   <span className="ds-sc-branch-badge">

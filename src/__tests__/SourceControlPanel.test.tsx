@@ -71,6 +71,25 @@ describe("SourceControlPanel staging", () => {
     expect(within(changes).getByText("new.ts")).toBeDefined();
   });
 
+  it("opens the file from anywhere on the row, not only the filename", async () => {
+    const onOpenFile = vi.fn();
+    render(<SourceControlPanel {...props} onOpenFile={onOpenFile} />);
+    // The row has a pointer cursor and a hover state, so a click on the
+    // padding beside the name looked live and did nothing.
+    fireEvent.click((await screen.findAllByTestId("sc-file"))[0]);
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("stages without also opening the file", async () => {
+    const onOpenFile = vi.fn();
+    render(<SourceControlPanel {...props} onOpenFile={onOpenFile} />);
+    fireEvent.click(await screen.findByTestId("sc-stage-src/b.ts"));
+    await waitFor(() =>
+      expect(mocked.gitStageFile).toHaveBeenCalledWith("p1", "src/b.ts")
+    );
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+
   it("stages one file", async () => {
     render(<SourceControlPanel {...props} />);
     fireEvent.click(await screen.findByTestId("sc-stage-src/b.ts"));

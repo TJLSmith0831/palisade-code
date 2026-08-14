@@ -231,6 +231,9 @@ pub struct LogEntry {
     pub hash: String,
     pub subject: String,
     pub author: String,
+    /// Author date, ISO-8601. Without it the graph shows a name and nothing
+    /// else — a reviewer looking for recency had to go back to `git log`.
+    pub date: String,
 }
 
 /// The newest `limit` commits on HEAD, newest first.
@@ -249,21 +252,23 @@ pub fn log(bin: &Path, root: &Path, limit: u32) -> Res<Vec<LogEntry>> {
         "log",
         &count,
         "--no-color",
-        "--pretty=format:%H\x1f%s\x1f%an\x1e",
+        "--pretty=format:%H\x1f%s\x1f%an\x1f%aI\x1e",
     ])?;
     Ok(raw
         .split('\x1e')
         .map(str::trim_start)
         .filter(|record| !record.is_empty())
         .filter_map(|record| {
-            // splitn(3): a subject containing US stays whole only because the
-            // author is taken from the *end*, so split from the right.
+            // A subject containing US stays whole only because everything
+            // after it is taken from the *end*, splitting from the right.
             let (hash, rest) = record.split_once('\x1f')?;
+            let (rest, date) = rest.rsplit_once('\x1f')?;
             let (subject, author) = rest.rsplit_once('\x1f')?;
             Some(LogEntry {
                 hash: hash.to_string(),
                 subject: subject.to_string(),
                 author: author.to_string(),
+                date: date.to_string(),
             })
         })
         .collect())
@@ -695,6 +700,13 @@ mod tests {
         assert_eq!(entries[1].subject, "initial");
         assert_eq!(entries[0].author, "Test");
         assert_eq!(entries[0].hash.len(), 40);
+        // The graph shows recency; a name on its own sent a reviewer back
+        // to `git log` to find out when anything happened.
+        assert!(
+            entries[0].date.starts_with("20") && entries[0].date.contains('T'),
+            "{}",
+            entries[0].date
+        );
     }
 
     /// A subject containing the field separator must not split into extra

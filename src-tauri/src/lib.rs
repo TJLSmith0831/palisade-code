@@ -985,14 +985,37 @@ async fn propose(
 /// comes *after* reading a summary of what changed, so refusing to draft
 /// until something is staged makes the button useless in the common case
 /// (raised by a reviewer working exactly that way).
-fn diff_to_describe(staged: &str, working: &str) -> Option<(&'static str, String)> {
+fn diff_to_describe(
+    staged: &str,
+    working: &str,
+    untracked: &[String],
+) -> Option<(&'static str, String)> {
     if !staged.trim().is_empty() {
         return Some(("staged", staged.to_string()));
     }
-    if !working.trim().is_empty() {
-        return Some(("working-tree", working.to_string()));
+    // `git diff` says nothing about untracked files, so a working-tree
+    // fallback built from it alone described 1 of 18 changes in a project
+    // that was mostly new files — and the draft read as confidently as if
+    // it had seen everything. They are listed by name rather than by
+    // content: naming them is honest and cheap, and `git add -N` to make
+    // them diffable would mutate the index behind the user's back.
+    let new_files = if untracked.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nNew files, not yet tracked (no diff available — describe them \
+             by their paths):\n{}",
+            untracked
+                .iter()
+                .map(|path| format!("- {path}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    if working.trim().is_empty() && new_files.is_empty() {
+        return None;
     }
-    None
+    Some(("working-tree", format!("{working}{new_files}")))
 }
 
 /// The prompt behind the Source Control panel's **Generate** button
@@ -1041,7 +1064,12 @@ async fn draft_commit_message(app: tauri::AppHandle, project_hash: String) -> Re
         let bin = git_bin()?;
         let staged = git::staged_diff(&bin, &root)?;
         let working = git::working_tree_diff(&bin, &root)?;
-        let Some((scope, diff)) = diff_to_describe(&staged, &working) else {
+        let untracked: Vec<String> = git::status(&bin, &root)?
+            .into_iter()
+            .filter(|file| file.code.trim() == "??")
+            .map(|file| file.path)
+            .collect();
+        let Some((scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
             return Err("nothing to describe — the working tree is clean".into());
         };
         let (agent, bin) = selected_executor(&app, &harness, &project_hash, None)?;
@@ -1853,23 +1881,44 @@ mod tests {
 
     #[test]
     fn generate_describes_the_staged_diff_when_there_is_one() {
-        let picked = diff_to_describe("+staged line", "+working line").unwrap();
+        let picked = diff_to_describe("+staged line", "+working line", &[]).unwrap();
         assert_eq!(picked.0, "staged");
         assert_eq!(picked.1, "+staged line");
+    }
+
+    #[test]
+    fn the_working_tree_fallback_names_untracked_files_too() {
+        // `git diff` is blind to untracked files: a project of mostly new
+        // files got a draft describing the one tracked edit, stated as
+        // confidently as if it had seen everything.
+        let untracked = vec!["src/new.ts".to_string(), "docs/added.md".to_string()];
+        let (scope, diff) =
+            diff_to_describe("", "+one tracked edit", &untracked).unwrap();
+        assert_eq!(scope, "working-tree");
+        assert!(diff.contains("+one tracked edit"), "{diff}");
+        assert!(diff.contains("src/new.ts"), "{diff}");
+        assert!(diff.contains("docs/added.md"), "{diff}");
+    }
+
+    #[test]
+    fn a_tree_of_only_new_files_still_has_something_to_describe() {
+        let untracked = vec!["a.ts".to_string()];
+        let (_, diff) = diff_to_describe("", "", &untracked).unwrap();
+        assert!(diff.contains("a.ts"), "{diff}");
     }
 
     #[test]
     fn generate_falls_back_to_the_working_tree_when_nothing_is_staged() {
         // Deciding what to stage usually comes after reading the summary —
         // refusing here made the button useless before the first `git add`.
-        let picked = diff_to_describe("   \n", "+working line").unwrap();
+        let picked = diff_to_describe("   \n", "+working line", &[]).unwrap();
         assert_eq!(picked.0, "working-tree");
         assert_eq!(picked.1, "+working line");
     }
 
     #[test]
     fn generate_has_nothing_to_say_about_a_clean_tree() {
-        assert!(diff_to_describe("", "  \n").is_none());
+        assert!(diff_to_describe("", "  \n", &[]).is_none());
     }
 
     #[test]

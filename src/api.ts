@@ -468,7 +468,13 @@ export const gitCommit = (projectHash: string, message: string) =>
   invoke<void>("git_commit", { projectHash, message });
 
 /** One row of the Source Control panel's read-only commit graph. */
-export type LogEntry = { hash: string; subject: string; author: string };
+export type LogEntry = {
+  hash: string;
+  subject: string;
+  author: string;
+  /** Author date, ISO-8601 — the graph shows recency, not just a name. */
+  date: string;
+};
 
 export const gitLog = (projectHash: string, limit = 20) =>
   invoke<LogEntry[]>("git_log", { projectHash, limit });
