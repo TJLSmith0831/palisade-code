@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Floo Network — Onboarding Mockup</title>
+<style>
+  :root {
+    --accent-hue: 145;
+    --bg: oklch(18% 0.005 250);
+    --chrome-bg: oklch(15% 0.004 250);
+    --surface: oklch(22% 0.006 250);
+    --surface-warm: oklch(26% 0.008 250);
+    --fg: oklch(96% 0.003 250);
+    --muted: oklch(66% 0.012 250);
+    --border: oklch(30% 0.01 250);
+    --accent: oklch(88% 0.21 var(--accent-hue));
+    --accent-on: oklch(20% 0.03 var(--accent-hue));
+    --success: oklch(72% 0.15 160);
+    --warn: oklch(76% 0.15 65);
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 9999px;
+    --sp-3: 6px; --sp-4: 8px; --sp-5: 12px; --sp-6: 16px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+    --shadow-raised-lg: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 13px; overflow: hidden; }
+  .ti { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  .ti-sm { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  .ti-lg { width: 22px; height: 22px; stroke-width: 1.6; }
+  button { font-family: var(--sans); }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  .meta-bar { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-3) var(--sp-6); background: #000; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .meta-bar strong { color: var(--fg); font-weight: 600; }
+
+  .titlebar { display: flex; align-items: center; gap: var(--sp-6); height: 36px; flex-shrink: 0; padding: 0 var(--sp-5); background: var(--chrome-bg); border-bottom: 1px solid var(--border); }
+  .traffic { display: flex; gap: var(--sp-4); }
+  .traffic span { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .traffic .r { background: #ff5f57; } .traffic .y { background: #febc2e; } .traffic .g { background: #28c840; }
+  .titlebar-title { font-size: 12px; color: var(--muted); font-weight: 500; }
+
+  .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; }
+  .mark { width: 44px; height: 44px; border-radius: var(--r-md); background: color-mix(in oklab, var(--accent), transparent 84%); border: 1px solid color-mix(in oklab, var(--accent), transparent 55%); display: flex; align-items: center; justify-content: center; color: var(--accent); margin-bottom: var(--sp-6); }
+  .mark .ti-lg { width: 24px; height: 24px; }
+  .headline { font-size: 20px; font-weight: 600; color: var(--fg); margin-bottom: 6px; text-align: center; }
+  .pitch { font-size: 13px; color: var(--muted); max-width: 420px; text-align: center; line-height: 1.55; margin-bottom: 28px; }
+
+  .onboard-composer { width: 100%; max-width: 460px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; margin-bottom: 20px; }
+  .oc-input { color: var(--muted); font-size: 13px; padding: 4px 4px 14px; min-height: 20px; }
+  .oc-controls { display: flex; align-items: center; gap: 6px; }
+  .oc-spacer { flex: 1; }
+  .oc-icon-btn { width: 26px; height: 26px; border-radius: var(--r-sm); border: none; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .oc-icon-btn:hover { color: var(--fg); background: var(--surface-warm); }
+  .oc-pill { display: flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 11px; padding: 5px 10px; border-radius: var(--r-pill); cursor: pointer; }
+  .oc-pill:hover { color: var(--fg); background: var(--surface-warm); }
+  .oc-pill.accent { border-color: color-mix(in oklab, var(--accent), transparent 45%); color: var(--accent); }
+  .oc-send { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); border: none; color: var(--accent-on); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .oc-dir-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .oc-dir-tag { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+  .oc-dir-select { display: flex; align-items: center; gap: 6px; background: transparent; border: none; color: var(--muted); font-size: 11.5px; cursor: pointer; padding: 3px 6px; border-radius: var(--r-sm); }
+  .oc-dir-select:hover { color: var(--fg); background: var(--surface-warm); }
+
+  .agent-status { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 7px 14px; font-size: 11.5px; color: var(--muted); margin-bottom: 24px; }
+  .agent-status .adot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+  .agent-status b { color: var(--fg); font-weight: 600; }
+
+  .primary-actions { display: flex; gap: var(--sp-5); margin-bottom: 28px; }
+  .action-card { width: 190px; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 18px; cursor: pointer; text-align: left; }
+  .action-card:hover { background: var(--surface-warm); border-color: color-mix(in oklab, var(--accent), transparent 60%); }
+  .action-card .ti-lg { color: var(--accent); }
+  .action-card .ac-title { font-size: 13px; font-weight: 600; color: var(--fg); }
+  .action-card .ac-desc { font-size: 11px; color: var(--muted); line-height: 1.5; }
+
+  .recent { width: 100%; max-width: 460px; }
+  .recent-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-4); }
+  .recent-head span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; }
+  .recent-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: var(--r-sm); cursor: pointer; border: 1px solid transparent; }
+  .recent-item:hover { background: var(--surface); border-color: var(--border); }
+  .recent-item .ri-left { display: flex; align-items: center; gap: 10px; }
+  .recent-item .ti { color: var(--muted); }
+  .recent-item .ri-name { font-size: 12.5px; color: var(--fg); }
+  .recent-item .ri-path { font-size: 10.5px; color: var(--muted); font-family: var(--mono); margin-top: 1px; }
+  .recent-item .ri-branch { font-size: 10px; color: var(--muted); font-family: var(--mono); display: flex; align-items: center; gap: 4px; }
+
+  .footnote { margin-top: 32px; font-size: 11px; color: var(--muted); text-align: center; max-width: 380px; line-height: 1.6; }
+  .footnote a { color: var(--accent); text-decoration: none; }
+  .footnote a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+<symbol id="i-sparkles" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6" /></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2" /></symbol>
+<symbol id="i-git-branch" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M7 8l0 8" /><path d="M9 18h6a2 2 0 0 0 2 -2v-5" /><path d="M14 14l3 -3l3 3" /></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12 7v5l3 3" /><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12 5l0 14" /><path d="M5 12l14 0" /></symbol>
+<symbol id="i-ban" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M5.7 5.7l12.6 12.6" /></symbol>
+<symbol id="i-microphone" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M9 5a3 3 0 0 1 3 -3a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3a3 3 0 0 1 -3 -3l0 -5" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M8 21l8 0" /><path d="M12 17l0 4" /></symbol>
+<symbol id="i-send-2" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4.698 4.034l16.302 7.966l-16.302 7.966a.503 .503 0 0 1 -.546 -.124a.555 .555 0 0 1 -.12 -.568l2.468 -7.274l-2.468 -7.274a.555 .555 0 0 1 .12 -.568a.503 .503 0 0 1 .546 -.124" /><path d="M6.5 12h14.5" /></symbol>
+<symbol id="i-device-laptop" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M3 19l18 0" /><path d="M5 7a1 1 0 0 1 1 -1h12a1 1 0 0 1 1 1v8a1 1 0 0 1 -1 1h-12a1 1 0 0 1 -1 -1l0 -8" /></symbol>
+</svg>
+
+<div id="app">
+  <div class="meta-bar">
+    <strong>Floo Network — Onboarding Mockup (secondary variant)</strong>
+    <span>First-run / no project open — see REDESIGN.md Amendment 8</span>
+  </div>
+
+  <div class="titlebar">
+    <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="titlebar-title">Floo Network</div>
+  </div>
+
+  <div class="stage">
+    <div class="mark"><svg class="ti-lg"><use href="#i-sparkles"/></svg></div>
+    <div class="headline">Drive your own coding agent, spec-first</div>
+    <div class="pitch">Floo orchestrates Claude Code or Codex through a Socratic spec-then-build cycle — no bundled model, no per-usage billing. Open a project to get started.</div>
+
+    <div class="onboard-composer">
+      <div class="oc-input" contenteditable="false">Type a request, or select a project below to get started…</div>
+      <div class="oc-controls">
+        <button class="oc-icon-btn" aria-label="Add context"><svg class="ti"><use href="#i-plus"/></svg></button>
+        <button class="oc-pill"><svg class="ti-sm"><use href="#i-ban"/></svg>Bypass Permissions</button>
+        <div class="oc-spacer"></div>
+        <button class="oc-pill accent"><svg class="ti-sm"><use href="#i-sparkles"/></svg>Claude Agent</button>
+        <button class="oc-icon-btn" aria-label="Voice input"><svg class="ti"><use href="#i-microphone"/></svg></button>
+        <button class="oc-send" aria-label="Send"><svg class="ti"><use href="#i-send-2"/></svg></button>
+      </div>
+      <div class="oc-dir-row">
+        <span class="oc-dir-tag"><svg class="ti-sm"><use href="#i-device-laptop"/></svg>Local</span>
+        <button class="oc-dir-select"><svg class="ti-sm"><use href="#i-folder"/></svg>Select a directory…</button>
+      </div>
+    </div>
+
+    <div class="agent-status"><span class="adot"></span>Detected on this machine: <b>Claude Code</b> · switches automatically per machine</div>
+
+    <div class="primary-actions">
+      <div class="action-card" role="button" tabindex="0">
+        <svg class="ti-lg"><use href="#i-folder"/></svg>
+        <div class="ac-title">Open Project</div>
+        <div class="ac-desc">Point Floo at a local folder. Everything stays scoped to that project root.</div>
+      </div>
+      <div class="action-card" role="button" tabindex="0">
+        <svg class="ti-lg"><use href="#i-git-branch"/></svg>
+        <div class="ac-title">Clone Repository</div>
+        <div class="ac-desc">Clone from a URL, then open it as a new project automatically.</div>
+      </div>
+    </div>
+
+    <div class="recent">
+      <div class="recent-head"><span>Recent Projects</span></div>
+      <div class="recent-item" role="button" tabindex="0">
+        <div class="ri-left">
+          <svg class="ti"><use href="#i-folder"/></svg>
+          <div><div class="ri-name">toolsieve</div><div class="ri-path">~/dev/toolsieve</div></div>
+        </div>
+        <div class="ri-branch"><svg class="ti" style="width:11px;height:11px;"><use href="#i-git-branch"/></svg>main</div>
+      </div>
+      <div class="recent-item" role="button" tabindex="0">
+        <div class="ri-left">
+          <svg class="ti"><use href="#i-folder"/></svg>
+          <div><div class="ri-name">floo-network</div><div class="ri-path">~/dev/floo-network</div></div>
+        </div>
+        <div class="ri-branch"><svg class="ti" style="width:11px;height:11px;"><use href="#i-git-branch"/></svg>main</div>
+      </div>
+    </div>
+
+    <div class="footnote">
+      No account, no sign-in — Floo drives the Claude Code or Codex install already
+      on this machine, using your existing subscription. <a href="#">What's the difference from Kiro?</a>
+    </div>
+  </div>
+</div>
+</body>
+</html>

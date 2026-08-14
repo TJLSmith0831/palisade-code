@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { languageExtensionFor } from "../codeLanguage";
+import { languageExtensionFor, languageLabelFor } from "../codeLanguage";
 
 describe("languageExtensionFor", () => {
   it("maps common extensions to a non-empty extension list", () => {
@@ -27,5 +27,25 @@ describe("languageExtensionFor", () => {
 
   it("is case-insensitive on the extension", () => {
     expect(languageExtensionFor("src/Main.RS").length).toBeGreaterThan(0);
+  });
+});
+
+describe("languageLabelFor", () => {
+  it("names the language the status bar shows", () => {
+    expect(languageLabelFor("src/App.tsx")).toBe("TypeScript");
+    expect(languageLabelFor("main.rs")).toBe("Rust");
+    expect(languageLabelFor("a.yml")).toBe("YAML");
+  });
+
+  it("falls back to the extension rather than lying about plain text", () => {
+    expect(languageLabelFor("data.parquet")).toBe("PARQUET");
+  });
+
+  it("calls an extensionless file plain text", () => {
+    expect(languageLabelFor("Makefile")).toBe("Plain text");
+  });
+
+  it("has no label without a file", () => {
+    expect(languageLabelFor(null)).toBeNull();
   });
 });

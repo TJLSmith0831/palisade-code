@@ -33,9 +33,30 @@ export const COMPLETION_SETTINGS_CHANGED_EVENT =
 
 export function loadCompletionSettings(): FimSettings {
   const enabled = localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false";
+  // Tab by default: it is what Cursor, Copilot and every other ghost-text
+  // implementation uses, and reaching for Alt-Tab on a suggestion you are
+  // already looking at is the thing that makes completion feel foreign.
+  // Safe because `acceptGhostText` declines when nothing is suggested, so
+  // Tab falls through to `indentWithTab`.
   const acceptKeybinding =
-    localStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Alt-Tab";
+    localStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Tab";
   return { enabled, acceptKeybinding };
+}
+
+/** Turns FIM on or off everywhere: the stored setting, the backend, and
+ *  every mounted editor (which reconfigures on the change event). The one
+ *  persistence path — Settings and the editor status bar both call this
+ *  rather than each writing their own copy. */
+export async function persistCompletionEnabled(
+  enabled: boolean,
+  sync: (enabled: boolean) => Promise<unknown>
+): Promise<void> {
+  localStorage.setItem(COMPLETION_ENABLED_KEY, String(enabled));
+  window.dispatchEvent(new Event(COMPLETION_SETTINGS_CHANGED_EVENT));
+  await sync(enabled).catch(() => {
+    // Best-effort backend sync: the local setting is what the editor reads,
+    // so a failed round-trip must not leave the toggle lying about its state.
+  });
 }
 
 /** What the sidecar thinks should go in next. */
@@ -101,7 +122,12 @@ export class GhostTextWidget extends WidgetType {
     // Hint first so it sits right after the user's typed text, before the
     // ghost completion — not trailing the whole ghost block.
     const hint = document.createElement("span");
-    hint.textContent = this.keybinding === "Alt-Tab" ? "⌥⇥" : this.keybinding;
+    hint.textContent =
+      this.keybinding === "Alt-Tab"
+        ? "⌥⇥"
+        : this.keybinding === "Tab"
+          ? "⇥"
+          : this.keybinding;
     hint.style.opacity = "0.4";
     hint.style.fontSize = "0.75em";
     hint.style.pointerEvents = "none";
@@ -367,6 +393,7 @@ export function fimCompletion(
     settings.acceptKeybinding === "Alt-Tab"
       ? "Alt-Tab"
       : settings.acceptKeybinding;
+  // Escape dismisses; Tab (or the chosen key) accepts.
 
   return [
     ghostTextState,

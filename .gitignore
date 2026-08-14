@@ -37,3 +37,6 @@ graphify-out/
 # Bundled sidecar and model (build inputs, not source; distribution needs an installer/fetcher in future).
 src-tauri/resources/models/
 src-tauri/llama-server-aarch64-apple-darwin
+
+# Local-only: a symlink to the shared model resources in the main checkout.
+src-tauri/resources

@@ -36,6 +36,42 @@ export function languageExtensionFor(path: string): Extension[] {
   return make ? [make()] : [];
 }
 
+/** Display name for the status bar, e.g. "TypeScript". Falls back to the
+ *  bare extension so an unusual file still says what it is, rather than
+ *  claiming to be plain text when it isn't. */
+export function languageLabelFor(path: string | null): string | null {
+  if (!path) return null;
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const names: Record<string, string> = {
+    ts: "TypeScript",
+    tsx: "TypeScript",
+    mts: "TypeScript",
+    cts: "TypeScript",
+    js: "JavaScript",
+    jsx: "JavaScript",
+    mjs: "JavaScript",
+    cjs: "JavaScript",
+    py: "Python",
+    rs: "Rust",
+    go: "Go",
+    json: "JSON",
+    css: "CSS",
+    scss: "SCSS",
+    html: "HTML",
+    htm: "HTML",
+    yaml: "YAML",
+    yml: "YAML",
+    md: "Markdown",
+    markdown: "Markdown",
+    toml: "TOML",
+    sh: "Shell",
+  };
+  if (names[ext]) return names[ext];
+  // No dot at all (Makefile, Dockerfile) — the filename is the best label.
+  const filename = path.slice(path.lastIndexOf("/") + 1);
+  return filename.includes(".") ? ext.toUpperCase() : "Plain text";
+}
+
 /** Highlighting for everything `languageExtensionFor` doesn't bundle —
  * HTML, YAML, TOML, SQL, shell, C/C++, Java and the rest of CodeMirror's
  * catalogue, each loaded on demand the first time such a file is opened.

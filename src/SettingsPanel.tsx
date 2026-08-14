@@ -4,6 +4,7 @@ import * as api from "./api";
 import {
   COMPLETION_ENABLED_KEY,
   COMPLETION_KEYBINDING_KEY,
+  persistCompletionEnabled,
   COMPLETION_SETTINGS_CHANGED_EVENT,
 } from "./completion/GhostTextPlugin";
 
@@ -424,11 +425,7 @@ export default function SettingsPanel({
 
   const handleCompletionEnabled = (enabled: boolean) => {
     setCompletionEnabledState(enabled);
-    localStorage.setItem(COMPLETION_ENABLED_KEY, String(enabled));
-    void api.setCompletionEnabled(enabled).catch(() => {
-      // best-effort backend sync
-    });
-    window.dispatchEvent(new Event(COMPLETION_SETTINGS_CHANGED_EVENT));
+    void persistCompletionEnabled(enabled, api.setCompletionEnabled);
   };
 
   const handleCompletionKeybinding = (keybinding: string | null) => {

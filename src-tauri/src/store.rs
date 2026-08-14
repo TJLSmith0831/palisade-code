@@ -210,6 +210,11 @@ pub struct ThreadMeta {
     /// turn; re-injected on agent handoff (D11/D12). None on old records.
     #[serde(default)]
     pub spec_type: Option<String>,
+    /// Archived threads stay on disk and stay readable — they just drop out
+    /// of the default History list. Deleting is the destructive option and
+    /// remains separate. Absent on older records, which are not archived.
+    #[serde(default)]
+    pub archived: bool,
 }
 // `executorSessionId` used to live here. It was a provider-private resume
 // handle on a provider-independent entity, and it was written unconditionally
@@ -239,6 +244,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         executor: None,
         model: None,
         spec_type: None,
+        archived: false,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -297,6 +303,12 @@ fn update_thread(home: &Path, hash: &str, id: &str, f: impl FnOnce(&mut ThreadMe
 
 pub fn rename_thread(home: &Path, hash: &str, id: &str, title: &str) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| m.title = title.trim().to_string())
+}
+
+/// Archive (or unarchive) a thread. Nothing is deleted: the log, the
+/// sessions and the metadata all stay exactly where they were.
+pub fn set_thread_archived(home: &Path, hash: &str, id: &str, archived: bool) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| m.archived = archived)
 }
 
 /// Link a thread to the OpenSpec change `/propose` created for it.
@@ -1332,6 +1344,50 @@ mod tests {
             .unwrap();
         flush_session_log_writer().unwrap();
         read_thread(home.path(), &project.hash, &thread.id).unwrap().remove(0)
+    }
+
+    #[test]
+    fn archiving_keeps_the_thread_and_its_messages() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        append_message(home.path(), &project.hash, &thread.id, "user", "go", "hello", None)
+            .unwrap();
+
+        let archived =
+            set_thread_archived(home.path(), &project.hash, &thread.id, true).unwrap();
+        assert!(archived.archived);
+
+        // Archiving is not deleting: it still lists, and still reads back.
+        let listed = list_threads(home.path(), &project.hash).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].archived);
+        assert_eq!(
+            read_thread(home.path(), &project.hash, &thread.id).unwrap().len(),
+            1
+        );
+
+        let restored =
+            set_thread_archived(home.path(), &project.hash, &thread.id, false).unwrap();
+        assert!(!restored.archived);
+    }
+
+    #[test]
+    fn a_thread_written_before_archiving_existed_is_not_archived() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        // Rewrite the metadata without the field, as an older build left it.
+        let path = meta_path(home.path(), &project.hash, &thread.id);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        value.as_object_mut().unwrap().remove("archived");
+        std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        assert!(!list_threads(home.path(), &project.hash).unwrap()[0].archived);
     }
 
     #[test]

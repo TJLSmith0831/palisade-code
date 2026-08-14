@@ -23,6 +23,28 @@ const theme = createTheme({
 // instead of duplicating them as a hex palette — keeps the live accent-hue picker
 // (SettingsPanel's applyAccentHue) and the data-theme light/dark cascade as the single
 // source of truth; Mantine components just inherit from it.
+// `theme.primaryColor` defaults to "blue", and Mantine's variant styles
+// resolve through `--mantine-color-blue-*` rather than the
+// `--mantine-primary-color-*` aliases. Without these, every
+// `variant="light"`/`"outline"`/`"filled"` control renders Mantine blue — a
+// second brand chromatic colour, which DESIGN.md's One Accent Rule forbids.
+// These must also be repeated in the light/dark blocks below: Mantine emits
+// its own colour-scheme-scoped definitions, which outrank a bare `:root`.
+const accentPrimaryRamp = {
+  "--mantine-color-blue-filled": "var(--accent)",
+  "--mantine-color-blue-filled-hover":
+    "color-mix(in oklab, var(--accent), black 8%)",
+  "--mantine-color-blue-light":
+    "color-mix(in oklab, var(--accent), transparent 84%)",
+  "--mantine-color-blue-light-hover":
+    "color-mix(in oklab, var(--accent), transparent 70%)",
+  "--mantine-color-blue-light-color": "var(--accent)",
+  "--mantine-color-blue-outline": "var(--accent)",
+  "--mantine-color-blue-outline-hover":
+    "color-mix(in oklab, var(--accent), transparent 88%)",
+  "--mantine-color-blue-contrast": "var(--accent-on)",
+};
+
 const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {
     "--mantine-color-body": "var(--bg)",
@@ -47,9 +69,10 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
       "color-mix(in oklab, var(--accent), transparent 65%)",
     "--mantine-primary-color-light-color": "var(--accent)",
     "--mantine-primary-color-contrast": "var(--accent-on)",
+    ...accentPrimaryRamp,
   },
-  light: {},
-  dark: {},
+  light: { ...accentPrimaryRamp },
+  dark: { ...accentPrimaryRamp },
 });
 
 // Reuses the app's own theme key/values ("auto" | "light" | "dark") so Mantine's color

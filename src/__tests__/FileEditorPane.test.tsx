@@ -17,6 +17,11 @@ import type { ReactElement } from "react";
 // with one fixed router — same pattern App.test.tsx uses.
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+// The pane listens for `lsp-status` (Amendment 2); without this the real
+// event module reaches for a Tauri runtime that isn't there.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
 
 // Lightweight stand-in for the WYSIWYG Markdown editor — the real one is a
 // heavy dependency that doesn't need to be exercised to verify the pane's

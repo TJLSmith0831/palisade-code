@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1;
@@ -714,6 +714,86 @@ impl Sink for NullSink {
     fn emit(&self, _envelope: &Envelope) {}
 }
 
+// ------------------------------------------------------------- one-shot
+//
+// Amendment 7's Source Control panel needs the agent's answer as a *value*
+// (a drafted commit message goes into the message box), not as chat turns.
+// Every other agent path streams into a thread, so this is the one place
+// that runs a prompt on an ephemeral session and collects the reply.
+
+/// Accumulates assistant text until the turn ends. Split out from the
+/// spawn plumbing so its "which events count" branching is unit-testable
+/// without a live agent.
+#[derive(Default)]
+pub(crate) struct Collected {
+    pub text: String,
+    pub finished: bool,
+    pub error: Option<String>,
+}
+
+impl Collected {
+    /// Deltas are deliberately ignored: each one is followed by the complete
+    /// `Text` event, so counting both would duplicate every fragment.
+    pub(crate) fn accept(&mut self, event: &ExecutorEvent) {
+        match event {
+            ExecutorEvent::Text { text } => self.text.push_str(text),
+            ExecutorEvent::Done => self.finished = true,
+            ExecutorEvent::Crashed { message, .. } => {
+                self.error = Some(message.clone());
+                self.finished = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+struct CollectingSink(Arc<Mutex<Collected>>);
+
+impl Sink for CollectingSink {
+    fn emit(&self, envelope: &Envelope) {
+        if let Ok(mut collected) = self.0.lock() {
+            collected.accept(&envelope.event);
+        }
+    }
+}
+
+/// Run one prompt on a throwaway session and return the assistant's reply.
+///
+/// The session is terminated either way — this is not a thread the user can
+/// see or resume, so leaving it live would leak a child process per click.
+pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result<String, String> {
+    let collected = Arc::new(Mutex::new(Collected::default()));
+    let sink = Arc::new(CollectingSink(collected.clone()));
+    let agent = agent_config(&spawn);
+    let (_id, models, cmd_tx, busy, _acp_id) =
+        start_with_transport(agent, spawn, sink, false)?;
+    let _ = models;
+
+    busy.store(true, Ordering::SeqCst);
+    cmd_tx
+        .send(BridgeCommand::Prompt(prompt.to_string()))
+        .map_err(|_| "agent connection is closed".to_string())?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if collected.lock().map(|c| c.finished).unwrap_or(true) {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = cmd_tx.send(BridgeCommand::Shutdown);
+            return Err("agent did not answer in time".into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = cmd_tx.send(BridgeCommand::Shutdown);
+
+    let collected = collected.lock().map_err(|_| "collector poisoned")?;
+    if let Some(error) = &collected.error {
+        return Err(error.clone());
+    }
+    Ok(collected.text.trim().to_string())
+}
+
 /// The identity fields `AcpSession` mirrors from the spawn, captured before
 /// the spawn is moved onto the bridge thread.
 struct SessionIdentity {
@@ -828,6 +908,51 @@ fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::UnboundedReceiver
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------- one-shot
+
+    #[test]
+    fn collector_joins_text_events_and_finishes_on_done() {
+        let mut collected = Collected::default();
+        collected.accept(&ExecutorEvent::Text { text: "fix: ".into() });
+        collected.accept(&ExecutorEvent::Text { text: "drop the guard".into() });
+        assert!(!collected.finished);
+
+        collected.accept(&ExecutorEvent::Done);
+
+        assert_eq!(collected.text, "fix: drop the guard");
+        assert!(collected.finished);
+        assert!(collected.error.is_none());
+    }
+
+    /// Deltas are followed by the complete `Text` event, so counting both
+    /// would duplicate every fragment into the drafted message.
+    #[test]
+    fn collector_ignores_deltas_and_other_events() {
+        let mut collected = Collected::default();
+        collected.accept(&ExecutorEvent::TextDelta { text: "fix".into() });
+        collected.accept(&ExecutorEvent::Reasoning { text: "thinking".into() });
+        collected.accept(&ExecutorEvent::ToolCall {
+            id: "1".into(),
+            name: "bash".into(),
+            command: "git diff".into(),
+        });
+        collected.accept(&ExecutorEvent::Text { text: "fix: real".into() });
+
+        assert_eq!(collected.text, "fix: real");
+    }
+
+    #[test]
+    fn collector_records_a_crash_as_an_error_and_finishes() {
+        let mut collected = Collected::default();
+        collected.accept(&ExecutorEvent::Crashed {
+            exit_code: Some(1),
+            message: "agent exited".into(),
+        });
+
+        assert!(collected.finished);
+        assert_eq!(collected.error.as_deref(), Some("agent exited"));
+    }
 
     // --------------------------------------------------------- models
 

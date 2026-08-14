@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Floo Network — Shell Redesign Mockup</title>
+<style>
+  :root {
+    --accent-hue: 145;
+    /* Tokens copied verbatim from this repo's DESIGN.md — the "Dragon Fire
+       Workbench" system already in use by the shipping app. This mockup is
+       a layout proposal, not a new visual language: same colors, radii,
+       type scale, and elevation the app already has. */
+    --bg: oklch(18% 0.005 250);
+    --chrome-bg: oklch(15% 0.004 250);
+    --editor-bg: oklch(20% 0.005 250);
+    --surface: oklch(22% 0.006 250);
+    --surface-warm: oklch(26% 0.008 250);
+    --active-row: oklch(24% 0.02 var(--accent-hue));
+    --fg: oklch(96% 0.003 250);
+    --muted: oklch(66% 0.012 250);
+    --border: oklch(30% 0.01 250);
+    --accent: oklch(88% 0.21 var(--accent-hue));
+    --accent-on: oklch(20% 0.03 var(--accent-hue));
+    --twilight-glow: oklch(18% 0.03 var(--accent-hue));
+    --success: oklch(72% 0.15 160);
+    --warn: oklch(76% 0.15 65);
+    --danger: oklch(64% 0.22 25);
+
+    --r-xs: 4px;
+    --r-sm: 6px;
+    --r-md: 8px;
+    --r-lg: 12px;
+    --r-pill: 9999px;
+
+    --sp-1: 2px; --sp-2: 4px; --sp-3: 6px; --sp-4: 8px; --sp-5: 12px; --sp-6: 16px;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+
+    --shadow-raised: 0 4px 20px rgba(0,0,0,0.35);
+    --shadow-raised-lg: 0 8px 24px rgba(0,0,0,0.35);
+    --focus-ring: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+  }
+  /* Light theme — DESIGN.md states light mode exists as "a full
+     token-for-token mirror" but doesn't list the light values in the
+     excerpt available to this mockup. This is a good-faith OKLCH mirror
+     (lightness inverted, hue/chroma intent preserved) — verify against
+     the app's actual light-theme CSS before treating these as final. */
+  html { color-scheme: dark; }
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: oklch(97% 0.004 250);
+    --chrome-bg: oklch(99% 0.002 250);
+    --editor-bg: oklch(98% 0.003 250);
+    --surface: oklch(95% 0.005 250);
+    --surface-warm: oklch(91% 0.007 250);
+    --active-row: oklch(90% 0.05 var(--accent-hue));
+    --fg: oklch(20% 0.01 250);
+    --muted: oklch(45% 0.015 250);
+    --border: oklch(85% 0.008 250);
+    --accent: oklch(55% 0.19 var(--accent-hue));
+    --accent-on: oklch(98% 0.01 var(--accent-hue));
+    --twilight-glow: oklch(92% 0.05 var(--accent-hue));
+    --success: oklch(48% 0.14 160);
+    --warn: oklch(55% 0.15 65);
+    --danger: oklch(50% 0.2 25);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  #icon-defs { display: none; }
+  .ti, .ti-lg, .ti-sm { stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; display: block; }
+  .ti { width: 15px; height: 15px; stroke-width: 1.9; }
+  .ti-lg { width: 17px; height: 17px; stroke-width: 1.8; }
+  .ti-sm { width: 13px; height: 13px; stroke-width: 2; }
+  button { font-family: var(--sans); }
+  button, input, [tabindex] { outline: none; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible, [role="button"]:focus-visible {
+    box-shadow: var(--focus-ring);
+    border-radius: var(--r-xs);
+  }
+
+  /* ---------- Meta bar (mockup-only controls, not part of the app) ---------- */
+  .meta-bar {
+    display: flex; align-items: center; gap: var(--sp-5);
+    padding: var(--sp-3) var(--sp-6);
+    background: #000;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .meta-bar strong { color: var(--fg); font-weight: 600; letter-spacing: 0.01em; }
+  .meta-bar .spacer { flex: 1; }
+  .preset-toggle {
+    display: flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden;
+  }
+  .preset-toggle button {
+    background: var(--surface); color: var(--muted); border: none;
+    padding: var(--sp-2) var(--sp-5); font-size: 11px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .preset-toggle button + button { border-left: 1px solid var(--border); }
+  .preset-toggle button.active { background: color-mix(in oklab, var(--accent), transparent 82%); color: var(--accent); }
+  .preset-toggle button:hover:not(.active) { color: var(--fg); }
+
+  /* ---------- Title bar (DESIGN.md: 36px chrome, native traffic lights) ---------- */
+  .titlebar {
+    display: flex; align-items: center; gap: var(--sp-6);
+    height: 36px; flex-shrink: 0;
+    padding: 0 var(--sp-5);
+    background: var(--chrome-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .traffic { display: flex; gap: var(--sp-4); }
+  .traffic span { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .traffic .r { background: #ff5f57; }
+  .traffic .y { background: #febc2e; }
+  .traffic .g { background: #28c840; }
+  .traffic-note { font-size: 9px; color: var(--muted); font-family: var(--mono); }
+
+  .shell-switch {
+    display: flex; border: 1px solid var(--border); border-radius: var(--r-pill);
+    padding: 2px; gap: 1px; background: var(--surface);
+  }
+  .shell-switch button {
+    border: none; background: transparent; color: var(--muted);
+    padding: 5px var(--sp-6); border-radius: var(--r-pill); font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: background 0.12s, color 0.12s;
+  }
+  .shell-switch button.active { background: var(--accent); color: var(--accent-on); box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+  .shell-switch button:hover:not(.active) { color: var(--fg); }
+
+  .titlebar-spacer { flex: 1; }
+
+  .run-split { display: flex; position: relative; }
+  .run-split .primary {
+    display: flex; align-items: center; gap: var(--sp-3);
+    background: color-mix(in oklab, var(--accent), transparent 86%); color: var(--accent);
+    border: 1px solid color-mix(in oklab, var(--accent), transparent 65%);
+    border-right: none;
+    border-radius: var(--r-sm) 0 0 var(--r-sm);
+    padding: 5px var(--sp-5); font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: background 0.12s;
+  }
+  .run-split .primary:hover { background: color-mix(in oklab, var(--accent), transparent 76%); }
+  .run-split .chevron {
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in oklab, var(--accent), transparent 86%); color: var(--accent);
+    border: 1px solid color-mix(in oklab, var(--accent), transparent 65%);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    padding: 0 var(--sp-4); cursor: pointer;
+    transition: background 0.12s;
+  }
+  .run-split .chevron:hover { background: color-mix(in oklab, var(--accent), transparent 76%); }
+  .run-dropdown {
+    position: absolute; top: 34px; right: 0; z-index: 50;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); min-width: 210px; padding: var(--sp-3);
+    box-shadow: var(--shadow-raised-lg);
+    display: none;
+  }
+  .run-dropdown.open { display: block; }
+  .run-dropdown .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: var(--sp-3) var(--sp-4) var(--sp-2); font-weight: 600; font-family: var(--mono); }
+  .run-dropdown .opt {
+    padding: 7px var(--sp-4); border-radius: var(--r-xs); cursor: pointer; font-size: 12px;
+    display: flex; justify-content: space-between; align-items: center; gap: var(--sp-5);
+  }
+  .run-dropdown .opt:hover { background: var(--surface-warm); }
+  .run-dropdown .opt .cmd { color: var(--muted); font-family: var(--mono); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run-dropdown .opt.selected { color: var(--accent); }
+  .run-dropdown .divider { border-top: 1px solid var(--border); margin: var(--sp-2) 2px; }
+  .run-dropdown .configure { padding: 7px var(--sp-4); font-size: 11.5px; color: var(--muted); cursor: pointer; border-radius: var(--r-xs); display: flex; align-items: center; gap: var(--sp-3); }
+  .run-dropdown .configure:hover { background: var(--surface-warm); color: var(--fg); }
+
+  .titlebar-icons { display: flex; gap: 2px; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: var(--r-sm); border: 1px solid transparent;
+    background: transparent; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s, color 0.12s;
+  }
+  .icon-btn:hover { color: var(--fg); background: var(--surface-warm); }
+
+  /* ---------- Body: rail + content ---------- */
+  .body { flex: 1; display: flex; min-height: 0; position: relative; }
+
+  .rail {
+    width: 48px; flex-shrink: 0;
+    background: var(--chrome-bg);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center;
+    padding: var(--sp-5) 0;
+  }
+  .rail .group { display: flex; flex-direction: column; gap: 3px; }
+  .rail .rail-spacer { flex: 1; }
+  .rail-btn {
+    width: 32px; height: 32px; border-radius: var(--r-sm); border: none;
+    background: transparent; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    transition: background 0.12s, color 0.12s;
+  }
+  .rail-btn:hover { color: var(--fg); background: var(--surface-warm); }
+  .rail-btn.active { color: var(--accent); background: var(--active-row); }
+  .rail-btn.active::before {
+    content: ""; position: absolute; left: -8px; top: 7px; bottom: 7px; width: 2px;
+    background: var(--accent); border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  }
+  .rail-btn .dot {
+    position: absolute; top: 5px; right: 5px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--warn); border: 2px solid var(--chrome-bg);
+  }
+  .rail-label {
+    position: fixed; background: var(--chrome-bg); color: var(--fg); font-size: 11px;
+    padding: 5px 9px; border-radius: var(--r-sm); border: 1px solid var(--border);
+    pointer-events: none; opacity: 0; transition: opacity 0.1s; z-index: 100; white-space: nowrap;
+    box-shadow: var(--shadow-raised);
+  }
+  .rail-label.show { opacity: 1; }
+
+  /* secondary sidebar (Explorer/Search/etc content) — DESIGN.md's left-rail range is
+     160-420px resizable; 230px default gives the richer Source Control panel room */
+  .side-panel {
+    width: 230px; flex-shrink: 0; background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .side-panel.collapsed { display: none; }
+  .side-panel .head {
+    padding: var(--sp-5) var(--sp-5) 9px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); font-weight: 600;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    font-family: var(--mono);
+  }
+  .side-panel .content { flex: 1; overflow-y: auto; padding: var(--sp-3); }
+  .tree-item {
+    padding: 5px var(--sp-4); border-radius: var(--r-xs); cursor: pointer; font-size: 12.5px;
+    display: flex; align-items: center; gap: 7px; color: var(--muted);
+    font-family: var(--mono);
+  }
+  .tree-item .ti { color: var(--muted); }
+  .tree-item:hover { background: var(--surface-warm); }
+  .tree-item.selected { background: var(--active-row); color: var(--fg); }
+  .tree-item.selected .ti { color: var(--accent); }
+  .tree-item.folder { color: var(--fg); font-weight: 500; }
+  .tree-item.folder .ti { color: var(--muted); }
+  .tree-item .indent { width: 12px; flex-shrink: 0; }
+  .git-file {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px var(--sp-4); border-radius: var(--r-xs); font-size: 12px; cursor: pointer;
+  }
+  .git-file:hover { background: var(--surface-warm); }
+  .git-file .name { display: flex; align-items: center; gap: 8px; color: var(--muted); min-width: 0; }
+  .git-file .sc-file-text { display: flex; flex-direction: column; min-width: 0; }
+  .git-file .sc-fname { color: var(--fg); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .git-file .sc-fpath { color: var(--muted); font-size: 10px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .git-file .status { font-size: 10px; width: 16px; text-align: center; font-weight: 700; flex-shrink: 0; }
+  .git-file .status.M { color: var(--warn); }
+  .git-file .status.A { color: var(--success); }
+
+  /* Source Control panel */
+  .sc-head { display: flex; align-items: center; justify-content: space-between; }
+  .sc-icon-btn { background: transparent; border: none; color: var(--muted); width: 22px; height: 22px; border-radius: var(--r-xs); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .sc-icon-btn:hover { color: var(--fg); background: var(--surface-warm); }
+  .sc-row { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-3) var(--sp-4) var(--sp-2); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .sc-row-icons { display: flex; gap: 2px; }
+  .sc-commit-box { position: relative; margin: 0 var(--sp-3) var(--sp-3); }
+  .sc-commit-input { width: 100%; resize: none; background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--fg); font-size: 12px; padding: var(--sp-4); padding-bottom: 28px; font-family: var(--sans); }
+  .sc-commit-input::placeholder { color: var(--muted); }
+  .sc-generate { position: absolute; right: 6px; bottom: 6px; display: flex; align-items: center; gap: 4px; background: color-mix(in oklab, var(--accent), transparent 84%); color: var(--accent); border: none; border-radius: var(--r-xs); padding: 3px 7px; font-size: 10.5px; cursor: pointer; }
+  .sc-generate:hover { background: color-mix(in oklab, var(--accent), transparent 74%); }
+  .sc-commit-btn, .sc-review-btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    width: calc(100% - 12px); margin: 0 var(--sp-3) var(--sp-2);
+    border-radius: var(--r-sm); padding: 7px; font-size: 12px; cursor: pointer;
+  }
+  .sc-commit-btn { background: var(--accent); color: var(--accent-on); border: none; font-weight: 600; }
+  .sc-commit-btn:hover { filter: brightness(1.08); }
+  .sc-review-btn { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  .sc-review-btn:hover { background: var(--surface-warm); }
+  .sc-changes-label { display: flex; align-items: center; gap: 6px; margin-top: var(--sp-3); }
+  .sc-count { background: var(--surface-warm); color: var(--muted); border-radius: var(--r-pill); padding: 0 6px; font-size: 10px; }
+  .sc-graph-label { display: flex; align-items: center; gap: 6px; margin-top: var(--sp-4); border-top: 1px solid var(--border); padding-top: var(--sp-4); }
+  .sc-graph { padding: var(--sp-2) var(--sp-4); position: relative; }
+  .sc-graph::before { content: ""; position: absolute; left: 15px; top: 6px; bottom: 6px; width: 1px; background: var(--border); }
+  .sc-commit { display: flex; align-items: center; gap: 10px; padding: 6px 0; position: relative; font-size: 11px; }
+  .sc-commit-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); border: 2px solid var(--surface); flex-shrink: 0; z-index: 1; }
+  .sc-commit.current .sc-commit-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 75%); }
+  .sc-commit-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .sc-commit-msg { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-commit-meta { color: var(--muted); font-size: 10px; margin-top: 1px; }
+  .sc-branch-badge { display: flex; align-items: center; gap: 3px; background: color-mix(in oklab, var(--accent), transparent 84%); color: var(--accent); border-radius: var(--r-pill); padding: 2px 7px; font-size: 10px; font-weight: 600; flex-shrink: 0; }
+
+  /* Codebase Map (Graphify) — node colors are DESIGN.md's own documented
+     8-slot CVD-safe categorical palette, not new chromatic additions. */
+  .cm-head { display: flex; align-items: center; justify-content: space-between; }
+  .cm-content { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-4); }
+  .cm-canvas { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: grab; }
+  .cm-graph { width: 100%; height: auto; display: block; }
+  .cm-edge { stroke: var(--border); stroke-width: 1; }
+  .cm-node { stroke: var(--surface); stroke-width: 1.5; }
+  .cm-node.n1 { fill: #3987e5; }
+  .cm-node.n2 { fill: #d95926; }
+  .cm-node.n3 { fill: #199e70; }
+  .cm-node.n4 { fill: #c98500; }
+  .cm-hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .section-label { padding: var(--sp-4) var(--sp-4) var(--sp-2); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; font-family: var(--mono); }
+  .git-btn {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11.5px; padding: 7px var(--sp-5); border-radius: var(--r-sm); border: 1px solid var(--border);
+    background: var(--surface-warm); color: var(--fg); cursor: pointer; margin: var(--sp-3);
+    transition: background 0.12s;
+  }
+  .git-btn:hover { background: color-mix(in oklab, var(--surface-warm), white 6%); }
+  .spec-item { padding: var(--sp-4) 9px; border-radius: var(--r-xs); cursor: pointer; margin-bottom: 2px; }
+  .spec-item:hover { background: var(--surface-warm); }
+  .spec-item .name { font-size: 12.5px; font-weight: 500; color: var(--fg); font-family: var(--mono); }
+  .spec-item .status { font-size: 10.5px; color: var(--muted); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+  .spec-item .status .sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .spec-item .status.active .sdot { background: var(--accent); }
+  .run-cfg { padding: 9px; border-radius: var(--r-sm); margin-bottom: 5px; background: var(--surface-warm); border: 1px solid var(--border); }
+  .run-cfg .name { font-size: 12px; font-weight: 600; color: var(--fg); font-family: var(--mono); }
+  .run-cfg .cmd { font-size: 10.5px; font-family: var(--mono); color: var(--muted); margin-top: 2px; }
+
+  /* ---------- Main content: editor + chat ---------- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .work-row { flex: 1; display: flex; min-height: 0; }
+
+  .editor-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--editor-bg); order: 2; }
+  .tab-bar { display: flex; align-items: center; height: 28px; border-bottom: 1px solid var(--border); background: var(--chrome-bg); flex-shrink: 0; padding-top: 4px; }
+  .tab { height: 100%; padding: 0 var(--sp-5); font-size: 11px; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 7px; }
+  .tab.active { color: var(--fg); background: var(--editor-bg); border: 1px solid var(--border); border-bottom: none; border-radius: var(--r-sm) var(--r-sm) 0 0; margin-bottom: -1px; }
+  .tab .ti { color: var(--muted); }
+  .tab .x { color: var(--muted); border-radius: var(--r-xs); padding: 1px; display: flex; }
+  .tab .x:hover { color: var(--fg); background: var(--surface-warm); }
+  .breadcrumb { padding: 6px var(--sp-5); font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); font-family: var(--mono); }
+  .breadcrumb .file { color: var(--accent); }
+
+  .code { flex: 1; overflow: auto; display: flex; font-family: var(--mono); font-size: 12px; line-height: 1.65; }
+  .gutter { padding: var(--sp-5) var(--sp-5); text-align: right; color: var(--muted); user-select: none; background: var(--editor-bg); opacity: 0.55; }
+  .code-body { padding: var(--sp-5) 18px; flex: 1; white-space: pre; }
+  .k { color: #d291e4; } .s { color: #d6a76f; } .c { color: #6a8759; } .f { color: #e0c374; } .n { color: #9fd6a0; }
+  .diag-underline { text-decoration: underline wavy var(--danger); text-underline-offset: 4px; cursor: help; }
+
+  /* status bar */
+  .status-bar {
+    height: 26px; flex-shrink: 0; display: flex; align-items: center;
+    background: var(--accent); color: var(--accent-on);
+    font-size: 11px; padding: 0 var(--sp-4); gap: 2px;
+    font-weight: 500; font-family: var(--mono);
+  }
+  .status-bar .seg { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 3px var(--sp-4); border-radius: var(--r-xs); transition: background 0.12s; }
+  .status-bar .seg .ti { stroke-width: 2.2; }
+  .status-bar .seg:hover { background: color-mix(in oklab, var(--accent-on), transparent 90%); }
+  .status-bar .status-spacer { flex: 1; }
+  .status-bar .fim-icon.off { opacity: 0.45; }
+
+  /* bottom panel */
+  .bottom-panel { height: 190px; flex-shrink: 0; border-top: 1px solid var(--border); background: var(--chrome-bg); display: flex; flex-direction: column; }
+  .bottom-panel.collapsed { height: 0; overflow: hidden; border-top: none; }
+  .bp-tabs { display: flex; align-items: center; border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 var(--sp-3); }
+  .bp-tab { display: flex; align-items: center; gap: 6px; padding: 8px var(--sp-5); font-size: 11px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .bp-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .bp-tab .count { background: var(--danger); color: var(--fg); border-radius: var(--r-pill); padding: 1px 6px; font-size: 9px; font-weight: 700; }
+  .bp-spacer { flex: 1; }
+  .bp-toggle { background: none; border: none; color: var(--muted); cursor: pointer; padding: 6px var(--sp-4); border-radius: var(--r-xs); display: flex; align-items: center; }
+  .bp-toggle:hover { color: var(--fg); background: var(--surface-warm); }
+  .bp-content { flex: 1; overflow-y: auto; padding: var(--sp-4) 14px; font-family: var(--mono); font-size: 11.5px; }
+  .bp-content .line { color: var(--muted); padding: 2px 0; }
+  .bp-content .ok { color: var(--success); display: flex; align-items: center; gap: 6px; }
+  .problem-row { display: flex; gap: 9px; padding: 5px 0; align-items: baseline; }
+  .problem-row .sev { color: var(--danger); flex-shrink: 0; }
+  .problem-row .loc { color: var(--muted); flex-shrink: 0; }
+
+  /* ---------- Chat rail — 300px per DESIGN.md's right-panel default ---------- */
+  .chat-rail { flex-shrink: 0; display: flex; flex-direction: column; background: var(--chrome-bg); border-left: 1px solid var(--border); min-height: 0; order: 3; }
+  .thread-tabs { display: flex; align-items: center; gap: 4px; padding: var(--sp-4) var(--sp-4); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }
+  .thread-tab { display: flex; align-items: center; gap: 6px; padding: 5px var(--sp-4); border-radius: 0 var(--r-sm) var(--r-sm) 0; border-left: 2px solid transparent; font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .thread-tab.active { background: var(--surface-warm); color: var(--fg); border-left-color: var(--accent); }
+  .badge { font-size: 9px; padding: 2px 8px; border-radius: var(--r-pill); font-weight: 700; letter-spacing: 0.03em; font-family: var(--mono); text-transform: uppercase; border: 1px solid; }
+  .badge.spec { background: color-mix(in oklab, var(--accent), transparent 80%); color: var(--accent); border-color: color-mix(in oklab, var(--accent), transparent 55%); }
+  .badge.go { background: var(--surface-warm); color: var(--muted); border-color: var(--border); }
+  .add-thread { color: var(--muted); width: 26px; height: 26px; border-radius: var(--r-sm); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .add-thread:hover { background: var(--surface-warm); color: var(--fg); }
+
+  .chat-body { flex: 1; overflow-y: auto; padding: var(--sp-5) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-5); }
+
+  .new-thread-state { align-items: center; justify-content: center; text-align: center; gap: 6px; padding: var(--sp-6); }
+  .nt-icon { color: var(--accent); margin-bottom: 4px; }
+  .nt-icon .ti-lg { width: 26px; height: 26px; }
+  .nt-heading { font-size: 16px; font-weight: 600; color: var(--fg); }
+  .nt-sub { font-size: 12px; color: var(--muted); max-width: 240px; line-height: 1.5; margin-bottom: var(--sp-4); }
+  .nt-cards { display: flex; flex-direction: column; gap: var(--sp-3); width: 100%; }
+  .nt-card { text-align: left; border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-5); cursor: pointer; color: var(--muted); }
+  .nt-card:hover { background: var(--surface-warm); border-color: color-mix(in oklab, var(--accent), transparent 60%); }
+  .nt-card .ti-lg { color: var(--accent); width: 18px; height: 18px; }
+  .nt-card-title { font-size: 12.5px; font-weight: 600; color: var(--fg); margin: var(--sp-3) 0 3px; }
+  .nt-card-desc { font-size: 11px; line-height: 1.5; color: var(--muted); }
+  .chat-msg { font-size: 12.5px; line-height: 1.6; }
+  .chat-msg.user { align-self: flex-end; background: var(--surface-warm); border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); padding: 9px 13px; max-width: 85%; }
+  .chat-msg.agent { color: var(--muted); }
+
+
+  .switch-banner {
+    margin: 0 var(--sp-5) var(--sp-4); padding: 10px var(--sp-5); border-radius: var(--r-sm);
+    background: color-mix(in oklab, var(--warn), transparent 87%); border: 1px solid color-mix(in oklab, var(--warn), transparent 60%);
+    font-size: 11.5px; color: var(--warn);
+    display: flex; align-items: flex-start; gap: 9px;
+  }
+  .switch-banner .ti { margin-top: 1px; }
+  .switch-banner.hidden { display: none; }
+  .switch-banner .txt { flex: 1; line-height: 1.45; }
+  .switch-banner .txt b { color: var(--fg); font-weight: 600; }
+  .switch-banner .close { cursor: pointer; color: var(--muted); border-radius: var(--r-xs); padding: 2px; }
+  .switch-banner .close:hover { color: var(--fg); background: color-mix(in oklab, var(--warn), var(--bg) 75%); }
+
+  .composer { border-top: 1px solid var(--border); padding: var(--sp-4); flex-shrink: 0; }
+  .composer-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px; }
+  .composer-input { color: var(--muted); font-size: 12.5px; padding: 6px 5px 11px; min-height: 34px; }
+  .composer-controls { display: flex; flex-direction: column; gap: 9px; }
+  .composer-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .composer-left { display: flex; align-items: center; gap: 6px; position: relative; }
+  .pill-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: transparent; border: 1px solid var(--border); color: var(--fg);
+    font-size: 11px; padding: 5px 7px 5px var(--sp-4); border-radius: var(--r-pill); cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .pill-btn .ti-sm { color: var(--muted); }
+  .pill-btn:hover { background: var(--surface-warm); }
+  .pill-btn.selected { border-color: color-mix(in oklab, var(--accent), transparent 45%); color: var(--accent); }
+  .pill-btn.selected .ti-sm { color: var(--accent); }
+  .pill-btn .chev { color: var(--muted); transition: transform 0.12s; }
+  .pill-btn[aria-expanded="true"] .chev { transform: rotate(180deg); }
+
+  /* picker popover — Model / Provider (shared shape) */
+  .picker-pop {
+    position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 60;
+    width: 280px; max-height: 340px; display: none;
+    flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+    box-shadow: var(--shadow-raised-lg); overflow: hidden;
+  }
+  .picker-pop.open { display: flex; }
+  .picker-pop .pp-head { padding: var(--sp-5) var(--sp-5) var(--sp-4); font-size: 13px; font-weight: 600; color: var(--fg); flex-shrink: 0; }
+  .picker-pop .pp-search { margin: 0 var(--sp-5) var(--sp-4); display: flex; align-items: center; gap: 8px; background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 7px var(--sp-5); flex-shrink: 0; }
+  .picker-pop .pp-search .ti { color: var(--muted); }
+  .picker-pop .pp-search input { flex: 1; background: transparent; border: none; outline: none; color: var(--fg); font-size: 12.5px; }
+  .picker-pop .pp-list { overflow-y: auto; padding: 0 var(--sp-4) var(--sp-4); }
+  .pp-opt {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px var(--sp-4); border-radius: var(--r-sm); cursor: pointer;
+    font-size: 12.5px; color: var(--fg);
+    border: 1px solid transparent;
+    border-bottom: 1px solid var(--border);
+  }
+  .pp-opt:last-child { border-bottom: none; }
+  .pp-opt:hover { background: var(--surface-warm); }
+  .pp-opt .ti { color: var(--muted); }
+  .pp-opt .pp-name { flex: 1; }
+  .pp-opt .pp-check { color: var(--accent); }
+  .pp-opt.selected {
+    background: color-mix(in oklab, var(--accent), transparent 88%);
+    border-color: color-mix(in oklab, var(--accent), transparent 55%);
+    color: var(--accent);
+  }
+  .pp-opt.selected .ti { color: var(--accent); }
+  .pp-backdrop { position: fixed; inset: 0; z-index: 55; display: none; }
+  .pp-backdrop.open { display: block; }
+  .mode-seg { display: flex; border: 1px solid color-mix(in oklab, var(--accent), transparent 75%); border-radius: var(--r-pill); padding: 2px; }
+  .mode-seg button { border: none; background: transparent; color: var(--muted); font-size: 11px; padding: 4px var(--sp-5); border-radius: var(--r-pill); cursor: pointer; }
+  .mode-seg button.active { background: var(--accent); color: var(--accent-on); font-weight: 600; }
+  .send-btn { width: 27px; height: 27px; border-radius: 50%; background: var(--accent); border: none; color: var(--accent-on); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: filter 0.12s; }
+  .send-btn:hover { filter: brightness(1.08); }
+  .send-btn .ti { width: 13px; height: 13px; stroke-width: 2.3; }
+
+  /* Vibe-only session list — Devin-style, sits at the true left edge of Vibe mode */
+  .sessions-panel {
+    display: none; flex-direction: column;
+    width: 230px; flex-shrink: 0;
+    background: var(--surface); border-right: 1px solid var(--border);
+    min-height: 0;
+  }
+  .sp-new {
+    display: flex; align-items: center; gap: 8px; margin: var(--sp-4);
+    padding: 8px var(--sp-4); border-radius: var(--r-sm); border: 1px solid var(--border);
+    color: var(--fg); font-size: 12.5px; cursor: pointer; flex-shrink: 0;
+  }
+  .sp-new:hover { background: var(--surface-warm); }
+  .sp-new .ti { color: var(--muted); }
+  .sp-search { display: flex; align-items: center; gap: 8px; margin: 0 var(--sp-4) var(--sp-4); background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 6px var(--sp-4); flex-shrink: 0; }
+  .sp-search .ti { color: var(--muted); }
+  .sp-search input { flex: 1; background: transparent; border: none; outline: none; color: var(--fg); font-size: 12px; }
+  .sp-list { flex: 1; overflow-y: auto; padding: 0 var(--sp-3) var(--sp-4); }
+  .sp-group-head { padding: var(--sp-4) var(--sp-3) var(--sp-2); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; font-family: var(--mono); }
+  .sp-item { position: relative; padding: 7px var(--sp-4); border-radius: var(--r-sm); cursor: pointer; margin-bottom: 1px; }
+  .sp-item:hover { background: var(--surface-warm); }
+  .sp-item.active { background: var(--active-row); }
+  .sp-item-title { font-size: 12px; color: var(--fg); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; padding-right: 12px; }
+  .sp-item-meta { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .sp-dot { position: absolute; top: 9px; right: 9px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  /* preset-specific widths (JS toggles [data-preset] on #app) */
+  #app[data-preset="vibe"] .sessions-panel { display: flex; order: 0; }
+  #app[data-preset="vibe"] .main { order: 1; }
+  #app[data-preset="vibe"] .side-panel { width: 210px; order: 2; }
+  #app[data-preset="vibe"] .rail { order: 3; border-right: none; border-left: 1px solid var(--border); }
+  #app[data-preset="vibe"] .editor-col { flex: 0 0 34%; order: 2; }
+  #app[data-preset="vibe"] .chat-rail { flex: 1 1 auto; width: auto; order: 0; border-left: none; border-right: 1px solid var(--border); }
+
+  #app[data-preset="editor"] .sessions-panel { display: none; }
+  #app[data-preset="editor"] .sessions-toggle { display: none; }
+  #app .sessions-panel.collapsed { display: none; }
+  #app[data-preset="vibe"] .sessions-toggle[aria-pressed="true"] { color: var(--fg); background: var(--surface-warm); }
+  #bottomToggleBtn[aria-pressed="true"], #chatToggleBtn[aria-pressed="true"] { color: var(--fg); background: var(--surface-warm); }
+  #app[data-preset="editor"] .main { order: 1; }
+  #app[data-preset="editor"] .side-panel { order: 0; }
+  #app[data-preset="editor"] .rail { order: -1; }
+  #app[data-preset="editor"] .editor-col { flex: 1 1 auto; order: 1; }
+  #app[data-preset="editor"] .chat-rail { width: 300px; order: 2; }
+
+  /* Chat collapse — Editor mode only; Vibe mode's chat is the primary
+     surface and already has its own session-list toggle, not this one. */
+  #app[data-preset="vibe"] .chat-toggle { display: none; }
+  .chat-rail.collapsed { display: none; }
+</style>
+</head>
+<body>
+<svg id="icon-defs" xmlns="http://www.w3.org/2000/svg">
+<symbol id="i-layout-sidebar" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12" /><path d="M9 4l0 16" /></symbol>
+<symbol id="i-chevron-left" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M15 6l-6 6l6 6" /></symbol>
+<symbol id="i-chevron-right" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M9 6l6 6l-6 6" /></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" /><path d="M21 21l-6 -6" /></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2" /></symbol>
+<symbol id="i-git-branch" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M7 8l0 8" /><path d="M9 18h6a2 2 0 0 0 2 -2v-5" /><path d="M14 14l3 -3l3 3" /></symbol>
+<symbol id="i-clipboard-list" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2" /><path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2" /><path d="M9 12l.01 0" /><path d="M13 12l2 0" /><path d="M9 16l.01 0" /><path d="M13 16l2 0" /></symbol>
+<symbol id="i-player-play" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M7 4v16l13 -8l-13 -8" /></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12 8l0 4l2 2" /><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5" /></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0" /><path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" /></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /></symbol>
+<symbol id="i-sparkles" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6" /></symbol>
+<symbol id="i-chevron-down" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M6 9l6 6l6 -6" /></symbol>
+<symbol id="i-chevron-up" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M6 15l6 -6l6 6" /></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M18 6l-12 12" /><path d="M6 6l12 12" /></symbol>
+<symbol id="i-terminal-2" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M8 9l3 3l-3 3" /><path d="M13 15l3 0" /><path d="M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -12" /></symbol>
+<symbol id="i-alert-triangle" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12 9v4" /><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0" /><path d="M12 16h.01" /></symbol>
+<symbol id="i-send-2" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4.698 4.034l16.302 7.966l-16.302 7.966a.503 .503 0 0 1 -.546 -.124a.555 .555 0 0 1 -.12 -.568l2.468 -7.274l-2.468 -7.274a.555 .555 0 0 1 .12 -.568a.503 .503 0 0 1 .546 -.124" /><path d="M6.5 12h14.5" /></symbol>
+<symbol id="i-microphone" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M9 5a3 3 0 0 1 3 -3a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3a3 3 0 0 1 -3 -3l0 -5" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M8 21l8 0" /><path d="M12 17l0 4" /></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></symbol>
+<symbol id="i-dots" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /></symbol>
+<symbol id="i-circle-dot" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12 5l0 14" /><path d="M5 12l14 0" /></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M14 3v4a1 1 0 0 0 1 1h4" /><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2" /></symbol>
+<symbol id="i-braces" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M7 4a2 2 0 0 0 -2 2v3a2 3 0 0 1 -2 3a2 3 0 0 1 2 3v3a2 2 0 0 0 2 2" /><path d="M17 4a2 2 0 0 1 2 2v3a2 3 0 0 0 2 3a2 3 0 0 0 -2 3v3a2 2 0 0 1 -2 2" /></symbol>
+<symbol id="i-circle-check" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 12l2 2l4 -4" /></symbol>
+<symbol id="i-map-code" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M11 18l-2 -1l-6 3v-13l6 -3l6 3l6 -3v9" /><path d="M9 4v13" /><path d="M15 7v6.5" /><path d="M20 21l2 -2l-2 -2" /><path d="M17 17l-2 2l2 2" /></symbol>
+<symbol id="i-layout-bottombar" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12" /><path d="M4 15l16 0" /></symbol>
+<symbol id="i-layout-sidebar-right" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12" /><path d="M15 4l0 16" /></symbol>
+<symbol id="i-sun-moon" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M9.173 14.83a4 4 0 1 1 5.657 -5.657" /><path d="M11.294 12.707l.174 .247a7.5 7.5 0 0 0 8.845 2.492a9 9 0 0 1 -14.671 2.914" /><path d="M3 12h1" /><path d="M12 3v1" /><path d="M5.6 5.6l.7 .7" /><path d="M3 21l18 -18" /></symbol>
+<symbol id="i-cube" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M21 16.008v-8.018a1.98 1.98 0 0 0 -1 -1.717l-7 -4.008a2.016 2.016 0 0 0 -2 0l-7 4.008c-.619 .355 -1 1.01 -1 1.718v8.018c0 .709 .381 1.363 1 1.717l7 4.008a2.016 2.016 0 0 0 2 0l7 -4.008c.619 -.355 1 -1.01 1 -1.718" /><path d="M12 22v-10" /><path d="M12 12l8.73 -5.04" /><path d="M3.27 6.96l8.73 5.04" /></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 12l5 5l10 -10" /></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" /><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" /></symbol>
+<symbol id="i-message" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M8 9h8" /><path d="M8 13h6" /><path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3h-5l-5 3v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3h12" /></symbol>
+</svg>
+
+<div id="app" data-preset="editor">
+
+  <div class="meta-bar">
+    <strong>Floo Network — Shell Redesign Reference</strong>
+    <span>static mockup using this repo's own DESIGN.md tokens — not the app — see REDESIGN.md / MEGA_PROMPT.md in this folder</span>
+    <div class="spacer"></div>
+    <span>Preview preset:</span>
+    <div class="preset-toggle">
+      <button id="metaVibe" onclick="setPreset('vibe')">Vibe</button>
+      <button id="metaEditor" class="active" onclick="setPreset('editor')">Editor</button>
+    </div>
+  </div>
+
+  <div class="titlebar">
+    <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="shell-switch">
+      <button id="swVibe" onclick="setPreset('vibe')">Vibe</button>
+      <button id="swEditor" class="active" onclick="setPreset('editor')">Editor</button>
+    </div>
+    <button class="icon-btn sessions-toggle" id="sessionsToggleBtn" onclick="toggleSessionsPanel()" title="Toggle session list" aria-label="Toggle session list" aria-pressed="true">
+      <svg class="ti-lg"><use href="#i-layout-sidebar"/></svg>
+    </button>
+    <div class="titlebar-spacer"></div>
+    <div class="run-split">
+      <div class="primary" title="Run last-used command"><svg class="ti"><use href="#i-player-play"/></svg>dev</div>
+      <div class="chevron" onclick="toggleRunMenu()" role="button" tabindex="0"><svg class="ti"><use href="#i-chevron-down"/></svg></div>
+      <div class="run-dropdown" id="runMenu">
+        <div class="label">toolsieve · run</div>
+        <div class="opt selected"><span>dev</span><span class="cmd">npm run dev</span></div>
+        <div class="opt"><span>test</span><span class="cmd">npm test</span></div>
+        <div class="opt"><span>build</span><span class="cmd">npm run build</span></div>
+        <div class="divider"></div>
+        <div class="configure"><svg class="ti ti-sm"><use href="#i-plus"/></svg>Configure…</div>
+      </div>
+    </div>
+    <div class="titlebar-icons">
+      <button class="icon-btn" id="bottomToggleBtn" onclick="toggleBottom()" title="Toggle terminal panel" aria-label="Toggle terminal panel" aria-pressed="true"><svg class="ti-lg"><use href="#i-layout-bottombar"/></svg></button>
+      <button class="icon-btn chat-toggle" id="chatToggleBtn" onclick="toggleChatRail()" title="Toggle chat panel" aria-label="Toggle chat panel" aria-pressed="true"><svg class="ti-lg"><use href="#i-layout-sidebar-right"/></svg></button>
+      <button class="icon-btn" onclick="toggleTheme()" title="Toggle light/dark theme" aria-label="Toggle light/dark theme"><svg class="ti-lg"><use href="#i-sun-moon"/></svg></button>
+      <button class="icon-btn" title="Settings"><svg class="ti-lg"><use href="#i-settings"/></svg></button>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="rail">
+      <div class="group">
+        <button class="rail-btn active" data-panel="explorer" onmouseenter="railTip(event,'Explorer')" onmouseleave="railTip()" onclick="selectRail('explorer')"><svg class="ti-lg"><use href="#i-folder"/></svg></button>
+        <button class="rail-btn" data-panel="search" onmouseenter="railTip(event,'Search')" onmouseleave="railTip()" onclick="selectRail('search')"><svg class="ti-lg"><use href="#i-search"/></svg></button>
+        <button class="rail-btn" data-panel="git" onmouseenter="railTip(event,'Source Control')" onmouseleave="railTip()" onclick="selectRail('git')"><svg class="ti-lg"><use href="#i-git-branch"/></svg><span class="dot"></span></button>
+        <button class="rail-btn" data-panel="specs" onmouseenter="railTip(event,'Specs')" onmouseleave="railTip()" onclick="selectRail('specs')"><svg class="ti-lg"><use href="#i-clipboard-list"/></svg></button>
+        <button class="rail-btn" data-panel="codemap" onmouseenter="railTip(event,'Codebase Map')" onmouseleave="railTip()" onclick="selectRail('codemap')"><svg class="ti-lg"><use href="#i-map-code"/></svg></button>
+        <button class="rail-btn" data-panel="run" onmouseenter="railTip(event,'Run configurations')" onmouseleave="railTip()" onclick="selectRail('run')"><svg class="ti-lg"><use href="#i-player-play"/></svg></button>
+      </div>
+      <div class="rail-spacer"></div>
+      <div class="group">
+        <button class="rail-btn" onmouseenter="railTip(event,'History')" onmouseleave="railTip()"><svg class="ti-lg"><use href="#i-history"/></svg></button>
+        <button class="rail-btn" onmouseenter="railTip(event,'Account')" onmouseleave="railTip()"><svg class="ti-lg"><use href="#i-user"/></svg></button>
+        <button class="rail-btn" onmouseenter="railTip(event,'Settings')" onmouseleave="railTip()"><svg class="ti-lg"><use href="#i-settings"/></svg></button>
+      </div>
+    </div>
+    <div class="rail-label" id="railLabel"></div>
+
+    <!-- Vibe-only: session list, Devin-style. Hidden in Editor preset. -->
+    <div class="sessions-panel">
+      <div class="sp-new"><svg class="ti"><use href="#i-plus"/></svg>New thread</div>
+      <div class="sp-search"><svg class="ti"><use href="#i-search"/></svg><input placeholder="Search threads…" aria-label="Search threads" /></div>
+      <div class="sp-list">
+        <div class="sp-group-head">toolsieve</div>
+        <div class="sp-item active">
+          <div class="sp-item-title">Add a status-bar indicator for LSP server health</div>
+          <div class="sp-item-meta">2m ago</div>
+        </div>
+        <div class="sp-item">
+          <div class="sp-item-title">Fix this: Spec mode denies execute tool calls</div>
+          <div class="sp-item-meta">22h ago</div>
+          <span class="sp-dot"></span>
+        </div>
+        <div class="sp-item">
+          <div class="sp-item-title">Have the chat auto-scroll to the bottom</div>
+          <div class="sp-item-meta">1d ago</div>
+        </div>
+        <div class="sp-group-head">Codebase Architecture Review</div>
+        <div class="sp-item">
+          <div class="sp-item-title">Fix this behavior</div>
+          <div class="sp-item-meta">2d ago</div>
+          <span class="sp-dot"></span>
+        </div>
+        <div class="sp-item">
+          <div class="sp-item-title">Integrate Socrata v1 Flash Autocomplete</div>
+          <div class="sp-item-meta">2d ago</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- side panels: one per rail icon, toggled via JS -->
+    <div class="side-panel" id="panel-explorer">
+      <div class="head">toolsieve</div>
+      <div class="content">
+        <div class="tree-item folder" role="button" tabindex="0"><svg class="ti"><use href="#i-folder"/></svg>toolsieve</div>
+        <div class="tree-item" role="button" tabindex="0"><span class="indent"></span><svg class="ti"><use href="#i-file"/></svg>__init__.py</div>
+        <div class="tree-item selected" role="button" tabindex="0"><span class="indent"></span><svg class="ti"><use href="#i-file"/></svg>demo.py</div>
+        <div class="tree-item" role="button" tabindex="0"><svg class="ti"><use href="#i-file"/></svg>pyproject.toml</div>
+        <div class="tree-item" role="button" tabindex="0"><svg class="ti"><use href="#i-file"/></svg>README.md</div>
+        <div class="tree-item" role="button" tabindex="0"><svg class="ti"><use href="#i-braces"/></svg>toolsieve.config.json</div>
+      </div>
+    </div>
+    <div class="side-panel" id="panel-search" style="display:none;">
+      <div class="head">Search</div>
+      <div class="content" style="padding:9px;">
+        <div style="display:flex; align-items:center; gap:7px; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); padding:6px 9px;">
+          <svg class="ti" style="color:var(--muted);"><use href="#i-search"/></svg>
+          <input placeholder="Search files…" aria-label="Search files" style="flex:1; background:transparent; border:none; outline:none; color:var(--fg); font-size:12px;" />
+        </div>
+      </div>
+    </div>
+    <div class="side-panel" id="panel-git" style="display:none;">
+      <div class="head sc-head">
+        <span>Source Control</span>
+        <button class="sc-icon-btn" aria-label="More actions"><svg class="ti-sm"><use href="#i-dots"/></svg></button>
+      </div>
+      <div class="content">
+        <div class="sc-row">
+          <span>Changes</span>
+          <div class="sc-row-icons">
+            <button class="sc-icon-btn" aria-label="Stage all"><svg class="ti-sm"><use href="#i-check"/></svg></button>
+            <button class="sc-icon-btn" aria-label="Refresh"><svg class="ti-sm"><use href="#i-refresh"/></svg></button>
+            <button class="sc-icon-btn" aria-label="More"><svg class="ti-sm"><use href="#i-dots"/></svg></button>
+          </div>
+        </div>
+        <div class="sc-commit-box">
+          <textarea class="sc-commit-input" placeholder="Message (⌘Enter to commit on main)" aria-label="Commit message" rows="2"></textarea>
+          <button class="sc-generate"><svg class="ti-sm"><use href="#i-sparkles"/></svg>Generate</button>
+        </div>
+        <button class="sc-commit-btn"><svg class="ti-sm"><use href="#i-check"/></svg>Commit</button>
+        <button class="sc-review-btn"><svg class="ti-sm"><use href="#i-sparkles"/></svg>Review Working Changes</button>
+
+        <div class="section-label sc-changes-label">Changes<span class="sc-count">3</span></div>
+        <div class="git-file" role="button" tabindex="0">
+          <span class="name"><svg class="ti"><use href="#i-file"/></svg><span class="sc-file-text"><span class="sc-fname">demo.py</span><span class="sc-fpath">toolsieve</span></span></span>
+          <span class="status M">M</span>
+        </div>
+        <div class="git-file" role="button" tabindex="0">
+          <span class="name"><svg class="ti"><use href="#i-braces"/></svg><span class="sc-file-text"><span class="sc-fname">config.json</span><span class="sc-fpath">toolsieve</span></span></span>
+          <span class="status M">M</span>
+        </div>
+        <div class="git-file" role="button" tabindex="0">
+          <span class="name"><svg class="ti"><use href="#i-file"/></svg><span class="sc-file-text"><span class="sc-fname">lsp.rs</span><span class="sc-fpath">src-tauri/src</span></span></span>
+          <span class="status A">U</span>
+        </div>
+
+        <div class="section-label sc-graph-label"><svg class="ti-sm"><use href="#i-git-branch"/></svg>Graph</div>
+        <div class="sc-graph">
+          <div class="sc-commit current">
+            <div class="sc-commit-dot"></div>
+            <div class="sc-commit-text"><span class="sc-commit-msg">fix(chat): re-arm auto-scroll on thread switch</span><span class="sc-commit-meta">TJLSmith0831</span></div>
+            <span class="sc-branch-badge"><svg class="ti-sm"><use href="#i-git-branch"/></svg>main</span>
+          </div>
+          <div class="sc-commit">
+            <div class="sc-commit-dot"></div>
+            <div class="sc-commit-text"><span class="sc-commit-msg">feat(spec-mode): agent-driven framing menu, deferred thread creation</span><span class="sc-commit-meta">TJLSmith0831</span></div>
+          </div>
+          <div class="sc-commit">
+            <div class="sc-commit-dot"></div>
+            <div class="sc-commit-text"><span class="sc-commit-msg">fix(completion): throttle debounce, add sampling params</span><span class="sc-commit-meta">TJLSmith0831</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="side-panel" id="panel-specs" style="display:none;">
+      <div class="head">Specs</div>
+      <div class="content">
+        <div class="spec-item" role="button" tabindex="0"><div class="name">lsp-integration</div><div class="status active"><span class="sdot"></span>in progress · 0/16 tasks</div></div>
+        <div class="spec-item" role="button" tabindex="0"><div class="name">run-debug-buttons</div><div class="status"><span class="sdot"></span>proposed</div></div>
+        <div class="spec-item" role="button" tabindex="0"><div class="name">shell-redesign</div><div class="status"><span class="sdot"></span>proposed</div></div>
+      </div>
+    </div>
+    <div class="side-panel" id="panel-codemap" style="display:none;">
+      <div class="head cm-head">
+        <span>Codebase Map</span>
+        <button class="sc-icon-btn" title="Expand" aria-label="Expand codebase map"><svg class="ti-sm"><use href="#i-external-link"/></svg></button>
+      </div>
+      <div class="content cm-content">
+        <div class="cm-canvas">
+          <svg class="cm-graph" viewBox="0 0 200 160">
+            <line x1="60" y1="50" x2="100" y2="30" class="cm-edge" />
+            <line x1="100" y1="30" x2="150" y2="55" class="cm-edge" />
+            <line x1="60" y1="50" x2="55" y2="100" class="cm-edge" />
+            <line x1="55" y1="100" x2="110" y2="120" class="cm-edge" />
+            <line x1="100" y1="30" x2="110" y2="120" class="cm-edge" />
+            <line x1="150" y1="55" x2="150" y2="100" class="cm-edge" />
+            <circle cx="60" cy="50" r="7" class="cm-node n1" />
+            <circle cx="100" cy="30" r="9" class="cm-node n2" />
+            <circle cx="150" cy="55" r="6" class="cm-node n3" />
+            <circle cx="55" cy="100" r="5" class="cm-node n1" />
+            <circle cx="110" cy="120" r="8" class="cm-node n2" />
+            <circle cx="150" cy="100" r="5" class="cm-node n4" />
+          </svg>
+        </div>
+        <div class="cm-hint">Force-directed graph, generated by Graphify. Drag to pan, scroll to zoom, double-click a node to open its file.</div>
+      </div>
+    </div>
+    <div class="side-panel" id="panel-run" style="display:none;">
+      <div class="head">Run Configurations</div>
+      <div class="content">
+        <div class="run-cfg"><div class="name">dev</div><div class="cmd">npm run dev</div></div>
+        <div class="run-cfg"><div class="name">test</div><div class="cmd">npm test</div></div>
+        <div class="run-cfg"><div class="name">build</div><div class="cmd">npm run build</div></div>
+        <div class="git-btn" style="justify-content:center;" role="button" tabindex="0"><svg class="ti"><use href="#i-plus"/></svg>Add command</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="work-row">
+        <div class="editor-col">
+          <div class="tab-bar">
+            <div class="tab active"><svg class="ti"><use href="#i-file"/></svg>demo.py<span class="x"><svg class="ti-sm"><use href="#i-x"/></svg></span></div>
+          </div>
+          <div class="breadcrumb">toolsieve / <span class="file">demo.py</span></div>
+          <div class="code">
+            <div class="gutter">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12</div>
+            <div class="code-body"><span class="c">"""One-command demo: aggregate real MCP servers, route, call, print the receipt."""</span>
+
+
+<span class="k">from</span> __future__ <span class="k">import</span> annotations
+
+<span class="k">import</span> asyncio
+<span class="k">import</span> json
+<span class="k">import</span> os
+<span class="k">import</span> sys
+<span class="k">from</span> pathlib <span class="k">import</span> <span class="n diag-underline" title="Cannot find reference 'Path' — pylsp">Path</span>
+
+<span class="k">from</span> fastmcp <span class="k">import</span> <span class="f">Client</span></div>
+          </div>
+        </div>
+        <div class="chat-rail">
+          <div class="thread-tabs">
+            <div class="thread-tab active" onclick="showActiveThread()">Add LSP status <span class="badge spec">Spec</span></div>
+            <div class="thread-tab" onclick="showActiveThread()">Thread 2 <span class="badge go">Go</span></div>
+            <div class="add-thread" title="New thread" role="button" tabindex="0" onclick="showNewThread()"><svg class="ti-sm"><use href="#i-plus"/></svg></div>
+          </div>
+          <div class="chat-body" id="chatActive">
+            <div class="chat-msg agent">I'll ask one question at a time to shape requirements, design, and tasks — nothing gets built until you approve the plan.</div>
+            <div class="chat-msg user">Add a status-bar indicator for LSP server health.</div>
+            <div class="chat-msg agent">Should the indicator show per-language status, or one indicator for whichever file is focused?</div>
+          </div>
+          <div class="chat-body new-thread-state" id="chatNewThread" style="display:none;">
+            <div class="nt-icon"><svg class="ti-lg"><use href="#i-sparkles"/></svg></div>
+            <div class="nt-heading">New thread</div>
+            <div class="nt-sub">Pick how this thread starts. You can switch between Spec and Go later — nothing here is permanent.</div>
+            <div class="nt-cards">
+              <div class="nt-card" role="button" tabindex="0">
+                <svg class="ti-lg"><use href="#i-message"/></svg>
+                <div class="nt-card-title">Spec</div>
+                <div class="nt-card-desc">Socratic interview — one question at a time — until requirements, design, and tasks are agreed. No edits until you approve.</div>
+              </div>
+              <div class="nt-card" role="button" tabindex="0">
+                <svg class="ti-lg"><use href="#i-player-play"/></svg>
+                <div class="nt-card-title">Go</div>
+                <div class="nt-card-desc">Write-enabled from the first message. Best when you already know exactly what to build.</div>
+              </div>
+            </div>
+          </div>
+          <div class="switch-banner" id="switchBanner">
+            <svg class="ti-sm"><use href="#i-alert-triangle"/></svg>
+            <div class="txt"><b>Next session will use Devin.</b> This session continues as Claude Agent — switching hands the conversation off as text context.</div>
+            <div class="close" onclick="document.getElementById('switchBanner').classList.add('hidden')" role="button" tabindex="0"><svg class="ti-sm"><use href="#i-x"/></svg></div>
+          </div>
+          <div class="composer">
+            <div class="composer-box">
+              <div class="composer-input">Message, or /propose</div>
+              <div class="composer-controls">
+                <div class="composer-row">
+                <div class="composer-left">
+                  <div class="pp-backdrop" id="ppBackdrop" onclick="closePickers()"></div>
+                  <button class="pill-btn" id="agentPillBtn" aria-expanded="false" onclick="togglePicker('agent')">
+                    <svg class="ti-sm"><use href="#i-cube"/></svg>Claude Agent<svg class="ti-sm chev"><use href="#i-chevron-down"/></svg>
+                  </button>
+                  <div class="picker-pop" id="agentPicker">
+                    <div class="pp-head">Provider</div>
+                    <div class="pp-list">
+                      <div class="pp-opt selected" onclick="pickAgent(this,'Claude Agent')"><svg class="ti"><use href="#i-cube"/></svg><span class="pp-name">Claude Agent</span><svg class="ti pp-check"><use href="#i-check"/></svg></div>
+                      <div class="pp-opt" onclick="pickAgent(this,'Devin')"><svg class="ti"><use href="#i-cube"/></svg><span class="pp-name">Devin</span></div>
+                      <div class="pp-opt" onclick="pickAgent(this,'OpenCode')"><svg class="ti"><use href="#i-cube"/></svg><span class="pp-name">OpenCode</span></div>
+                    </div>
+                  </div>
+
+                  <button class="pill-btn selected" id="modelPillBtn" aria-expanded="false" onclick="togglePicker('model')">
+                    <svg class="ti-sm"><use href="#i-cube"/></svg>Sonnet<svg class="ti-sm chev"><use href="#i-chevron-down"/></svg>
+                  </button>
+                  <div class="picker-pop" id="modelPicker">
+                    <div class="pp-head">Model</div>
+                    <div class="pp-search"><svg class="ti"><use href="#i-search"/></svg><input placeholder="Search models…" aria-label="Search models" /></div>
+                    <div class="pp-list">
+                      <div class="pp-opt selected" onclick="pickModel(this,'Sonnet')"><svg class="ti"><use href="#i-cube"/></svg><span class="pp-name">Sonnet</span><svg class="ti pp-check"><use href="#i-check"/></svg></div>
+                      <div class="pp-opt" onclick="pickModel(this,'Opus')"><svg class="ti"><use href="#i-cube"/></svg><span class="pp-name">Opus</span></div>
+                      <div class="pp-opt" onclick="pickModel(this,'Haiku 4.5')"><svg class="ti"><use href="#i-cube"/></svg><span class="pp-name">Haiku 4.5</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="composer-row">
+                <div class="mode-seg">
+                  <button class="active">Spec</button>
+                  <button>Go</button>
+                </div>
+                <button class="send-btn" aria-label="Send"><svg class="ti"><use href="#i-send-2"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <div class="bottom-panel" id="bottomPanel">
+        <div class="bp-tabs">
+          <div class="bp-tab active" onclick="bpTab('terminal')" role="button" tabindex="0"><svg class="ti-sm"><use href="#i-terminal-2"/></svg>Terminal</div>
+          <div class="bp-tab" onclick="bpTab('problems')" role="button" tabindex="0"><svg class="ti-sm"><use href="#i-alert-triangle"/></svg>Problems<span class="count">1</span></div>
+          <div class="bp-spacer"></div>
+          <button class="bp-toggle" onclick="toggleBottom()" aria-label="Collapse panel"><svg class="ti-sm"><use href="#i-chevron-down"/></svg></button>
+        </div>
+        <div class="bp-content" id="bpTerminal">
+          <div class="line">$ npm run dev</div>
+          <div class="line ok"><svg class="ti-sm"><use href="#i-circle-check"/></svg>compiled successfully</div>
+          <div class="line">Local:   http://localhost:5173/</div>
+          <div class="line">ready in 312ms</div>
+        </div>
+        <div class="bp-content" id="bpProblems" style="display:none;">
+          <div class="problem-row"><svg class="ti-sm sev"><use href="#i-x"/></svg><span class="loc">demo.py:9:26</span><span>Cannot find reference 'Path' — pylsp</span></div>
+        </div>
+      </div>
+      <div class="status-bar" id="statusBar">
+        <div class="seg lsp-seg" title="LSP server status — click for details" role="button" tabindex="0"><svg class="ti-sm"><use href="#i-circle-dot"/></svg>{} Python · pylsp running</div>
+        <div class="seg fim-icon" title="FIM ghost-text completion: on" role="button" tabindex="0"><svg class="ti-sm"><use href="#i-sparkles"/></svg>FIM on</div>
+        <div class="status-spacer"></div>
+        <div class="seg">Ln 9, Col 26</div>
+        <div class="seg">Spaces: 4</div>
+        <div class="seg">UTF-8</div>
+        <div class="seg">LF</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function setPreset(p) {
+  document.getElementById('app').dataset.preset = p;
+  document.getElementById('swVibe').classList.toggle('active', p === 'vibe');
+  document.getElementById('swEditor').classList.toggle('active', p === 'editor');
+  document.getElementById('metaVibe').classList.toggle('active', p === 'vibe');
+  document.getElementById('metaEditor').classList.toggle('active', p === 'editor');
+}
+function toggleChatRail() {
+  var rail = document.querySelector('.chat-rail');
+  var collapsed = rail.classList.toggle('collapsed');
+  document.getElementById('chatToggleBtn').setAttribute('aria-pressed', String(!collapsed));
+}
+function toggleTheme() {
+  var html = document.documentElement;
+  html.dataset.theme = html.dataset.theme === 'light' ? 'dark' : 'light';
+}
+function showNewThread() {
+  document.getElementById('chatActive').style.display = 'none';
+  document.getElementById('chatNewThread').style.display = 'flex';
+}
+function showActiveThread() {
+  document.getElementById('chatActive').style.display = 'flex';
+  document.getElementById('chatNewThread').style.display = 'none';
+}
+function toggleSessionsPanel() {
+  var panel = document.querySelector('.sessions-panel');
+  var btn = document.getElementById('sessionsToggleBtn');
+  var collapsed = panel.classList.toggle('collapsed');
+  btn.setAttribute('aria-pressed', String(!collapsed));
+}
+function toggleRunMenu() {
+  document.getElementById('runMenu').classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.run-split')) document.getElementById('runMenu').classList.remove('open');
+});
+function closePickers() {
+  document.getElementById('agentPicker').classList.remove('open');
+  document.getElementById('modelPicker').classList.remove('open');
+  document.getElementById('agentPillBtn').setAttribute('aria-expanded', 'false');
+  document.getElementById('modelPillBtn').setAttribute('aria-expanded', 'false');
+  document.getElementById('ppBackdrop').classList.remove('open');
+}
+function togglePicker(which) {
+  var id = which === 'agent' ? 'agentPicker' : 'modelPicker';
+  var btnId = which === 'agent' ? 'agentPillBtn' : 'modelPillBtn';
+  var isOpen = document.getElementById(id).classList.contains('open');
+  closePickers();
+  if (!isOpen) {
+    document.getElementById(id).classList.add('open');
+    document.getElementById(btnId).setAttribute('aria-expanded', 'true');
+    document.getElementById('ppBackdrop').classList.add('open');
+  }
+}
+function pickAgent(el, name) {
+  document.querySelectorAll('#agentPicker .pp-opt').forEach(function(o){ o.classList.remove('selected'); o.querySelector('.pp-check')?.remove(); });
+  el.classList.add('selected');
+  el.insertAdjacentHTML('beforeend', '<svg class="ti pp-check"><use href="#i-check"/></svg>');
+  document.getElementById('agentPillBtn').innerHTML = '<svg class="ti-sm"><use href="#i-cube"/></svg>' + name + '<svg class="ti-sm chev"><use href="#i-chevron-down"/></svg>';
+  closePickers();
+}
+function pickModel(el, name) {
+  document.querySelectorAll('#modelPicker .pp-opt').forEach(function(o){ o.classList.remove('selected'); o.querySelector('.pp-check')?.remove(); });
+  el.classList.add('selected');
+  el.insertAdjacentHTML('beforeend', '<svg class="ti pp-check"><use href="#i-check"/></svg>');
+  document.getElementById('modelPillBtn').innerHTML = '<svg class="ti-sm"><use href="#i-cube"/></svg>' + name + '<svg class="ti-sm chev"><use href="#i-chevron-down"/></svg>';
+  closePickers();
+}
+function selectRail(name) {
+  document.querySelectorAll('.rail-btn').forEach(function(b) { b.classList.toggle('active', b.dataset.panel === name); });
+  document.querySelectorAll('.side-panel').forEach(function(p) { p.style.display = (p.id === 'panel-' + name) ? 'flex' : 'none'; });
+}
+function railTip(e, label) {
+  var el = document.getElementById('railLabel');
+  if (!label) { el.classList.remove('show'); return; }
+  var r = e.currentTarget.getBoundingClientRect();
+  el.textContent = label;
+  el.style.left = (r.right + 8) + 'px';
+  el.style.top = (r.top + 8) + 'px';
+  el.classList.add('show');
+}
+function toggleBottom() {
+  var collapsed = document.getElementById('bottomPanel').classList.toggle('collapsed');
+  document.getElementById('bottomToggleBtn').setAttribute('aria-pressed', String(!collapsed));
+}
+function bpTab(name) {
+  document.querySelectorAll('.bp-tab').forEach(function(t){ t.classList.remove('active'); });
+  event.currentTarget.classList.add('active');
+  document.getElementById('bpTerminal').style.display = name === 'terminal' ? 'block' : 'none';
+  document.getElementById('bpProblems').style.display = name === 'problems' ? 'block' : 'none';
+}
+</script>
+</body>
+</html>

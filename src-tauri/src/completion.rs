@@ -25,6 +25,11 @@ use crate::store::Res;
 const FIM_PREFIX: &str = "<|fim_prefix|>";
 const FIM_SUFFIX: &str = "<|fim_suffix|>";
 const FIM_MIDDLE: &str = "<|fim_middle|>";
+/// Qwen's repo-level separator and end token. Both appear only as *stop*
+/// sequences: the bundled model emits them, and a completion that runs on
+/// past one is a completion that has started writing the next file.
+const FIM_FILE_SEP: &str = "<|file_sep|>";
+const FIM_END: &str = "<|endoftext|>";
 
 const DEFAULT_CTX_SIZE: u32 = 2048;
 const DEFAULT_N_GPU_LAYERS: u32 = 99;
@@ -195,8 +200,8 @@ impl CompletionServer {
     }
 
     /// Sends a FIM prompt and returns the completion text plus model latency.
-    pub fn complete(&self, prefix: &str, suffix: &str) -> Res<CompletionResponse> {
-        let prompt = build_fim_prompt(prefix, suffix);
+    pub fn complete(&self, file_path: &str, prefix: &str, suffix: &str) -> Res<CompletionResponse> {
+        let prompt = build_fim_prompt(file_path, prefix, suffix);
         let body = request_body(&prompt);
 
         let url = format!("http://127.0.0.1:{}/completion", self.port());
@@ -243,7 +248,17 @@ impl Drop for CompletionServer {
     }
 }
 
-pub fn build_fim_prompt(prefix: &str, suffix: &str) -> String {
+/// `file_path` is accepted and deliberately unused in the prompt.
+///
+/// Prefixing the FIM prompt with Qwen's `<|file_sep|>{path}` header is the
+/// obvious way to tell the model what language it is completing, and it was
+/// tried: measured against the bundled Qwen3.5-0.8B on a Python function
+/// body, the header made output *worse* — three repeated docstrings instead
+/// of the coherent 15-line implementation the bare FIM prompt produced.
+/// This checkpoint evidently wasn't trained with a lone separator ahead of
+/// the prefix. Left here so the next person reads this instead of
+/// re-deriving it; add it back only with a measurement that says otherwise.
+pub fn build_fim_prompt(_file_path: &str, prefix: &str, suffix: &str) -> String {
     let trimmed_prefix = trim_prefix(prefix);
     let trimmed_suffix = trim_suffix(suffix);
     format!("{FIM_PREFIX}{trimmed_prefix}{FIM_SUFFIX}{trimmed_suffix}{FIM_MIDDLE}")
@@ -266,12 +281,18 @@ fn trim_suffix(suffix: &str) -> &str {
 }
 
 fn request_body(prompt: &str) -> serde_json::Value {
-    // Add stop sequences for common code patterns to prevent repetition
+    // Stop on the model's own control tokens only. `"\n\n"` used to be in
+    // here to curb repetition, but a blank line is normal *inside* a
+    // completion. Measured against the bundled model on a TypeScript
+    // function body: with `"\n\n"` the suggestion was cut to 2 lines at the
+    // first blank line; without it the same prompt returns the whole
+    // 15-line block. Repetition is handled by `repeat_penalty` + n_predict.
     let stop_tokens = vec![
         FIM_SUFFIX.to_string(),
         FIM_PREFIX.to_string(),
-        "\n\n".to_string(), // Stop at double newlines (end of block)
-        "]\n".to_string(), // Stop at end of list
+        FIM_MIDDLE.to_string(),
+        FIM_FILE_SEP.to_string(),
+        FIM_END.to_string(),
     ];
 
     serde_json::json!({
@@ -494,10 +515,35 @@ mod tests {
 
     #[test]
     fn fim_prompt_contains_control_tokens() {
-        let prompt = build_fim_prompt("def f():", "\n    pass");
+        let prompt = build_fim_prompt("", "def f():", "\n    pass");
         assert!(prompt.starts_with(FIM_PREFIX), "{prompt}");
         assert!(prompt.contains(FIM_SUFFIX), "{prompt}");
         assert!(prompt.ends_with(FIM_MIDDLE), "{prompt}");
+    }
+
+    #[test]
+    fn the_file_path_stays_out_of_the_prompt() {
+        // Measured: a `<|file_sep|>` header degraded this checkpoint's
+        // output. The path is accepted for the day a model wants it.
+        let prompt = build_fim_prompt("src/main.rs", "fn add(", ") {}");
+        assert!(!prompt.contains("src/main.rs"), "{prompt}");
+        assert!(prompt.starts_with(FIM_PREFIX), "{prompt}");
+    }
+
+    #[test]
+    fn a_blank_line_no_longer_stops_the_completion() {
+        // "\n\n" as a stop token cut every multi-line suggestion off at the
+        // first blank line — the exact point a block completion gets useful.
+        let body = request_body("prompt");
+        let stops: Vec<String> = body["stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(!stops.contains(&"\n\n".to_string()), "{stops:?}");
+        assert!(stops.contains(&FIM_SUFFIX.to_string()));
+        assert!(stops.contains(&FIM_END.to_string()));
     }
 
     #[test]
@@ -535,7 +581,7 @@ mod tests {
     fn prefix_and_suffix_are_trimmed_to_budget() {
         let big_prefix = "x".repeat(MAX_PREFIX_CHARS + 50);
         let big_suffix = "y".repeat(MAX_SUFFIX_CHARS + 50);
-        let prompt = build_fim_prompt(&big_prefix, &big_suffix);
+        let prompt = build_fim_prompt("", &big_prefix, &big_suffix);
 
         let prefix_end = prompt.find(FIM_SUFFIX).unwrap();
         let suffix_start = FIM_PREFIX.len();
@@ -555,21 +601,24 @@ mod tests {
     }
 
     #[test]
-    fn request_body_includes_additional_stop_tokens() {
-        let prompt = build_fim_prompt("def f():", "\n    pass");
+    fn request_body_stops_on_control_tokens_only() {
+        let prompt = build_fim_prompt("f.py", "def f():", "\n    pass");
         let body = request_body(&prompt);
 
         let stop = body.get("stop").and_then(|v| v.as_array()).unwrap();
         assert!(stop.iter().any(|s| s.as_str() == Some(FIM_SUFFIX)));
         assert!(stop.iter().any(|s| s.as_str() == Some(FIM_PREFIX)));
-        assert!(stop.iter().any(|s| s.as_str() == Some("\n\n")));
-        assert!(stop.iter().any(|s| s.as_str() == Some("]\n")));
+        assert!(stop.iter().any(|s| s.as_str() == Some(FIM_END)));
+        // Text stop tokens truncated real completions: a blank line is
+        // normal inside a function body, and "]\n" ends any list literal.
+        assert!(!stop.iter().any(|s| s.as_str() == Some("\n\n")));
+        assert!(!stop.iter().any(|s| s.as_str() == Some("]\n")));
     }
 
     #[test]
     fn request_body_includes_sampling_params_to_break_repetition_traps() {
         // D4: repeat_penalty (1.1) + top_p (0.95), temperature stays 0.0.
-        let prompt = build_fim_prompt("def f():", "\n    pass");
+        let prompt = build_fim_prompt("f.py", "def f():", "\n    pass");
         let body = request_body(&prompt);
 
         assert_eq!(
@@ -640,7 +689,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
 
         let server = CompletionServer::default();
         server.spawn(&binary, &model).unwrap();
-        let resp = server.complete("def ", ":\n    pass").unwrap();
+        let resp = server.complete("test.py", "def ", ":\n    pass").unwrap();
 
         assert_eq!(resp.completion, "hello");
         assert!((resp.model_latency_ms - 12.34).abs() < 0.001);
@@ -678,7 +727,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         // We expect spawn to succeed with the fake sidecar (it ignores the model),
         // but complete should work.
         server.spawn(&binary, &model).unwrap();
-        let resp = server.complete("def ", ":\n    pass").unwrap();
+        let resp = server.complete("test.py", "def ", ":\n    pass").unwrap();
         assert_eq!(resp.completion, "hello");
         server.terminate();
     }
@@ -686,7 +735,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
     #[test]
     fn completion_server_complete_fails_when_not_spawned() {
         let server = CompletionServer::default();
-        let result = server.complete("def ", ":\n    pass");
+        let result = server.complete("test.py", "def ", ":\n    pass");
         assert!(result.is_err(), "complete should fail when server is not running");
     }
 

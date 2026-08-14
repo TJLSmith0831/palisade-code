@@ -31,6 +31,18 @@ typography:
     fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace'
     fontSize: "12px"
     fontWeight: 400
+  monoSmall:
+    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace'
+    fontSize: "10px"
+    fontWeight: 400
+  monoMicro:
+    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace'
+    fontSize: "9.5px"
+    fontWeight: 600
+  display:
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    fontSize: "21px"
+    fontWeight: 700
 rounded:
   xs: "4px"
   sm: "6px"
@@ -136,6 +148,13 @@ A dark neutral field with one glowing green accent and three semantic status hue
 
 **Mono — `ui-monospace, SF Mono, JetBrains Mono, Menlo`**: file paths and tree labels, tab labels, line numbers, diff content, the terminal, uppercase section labels (`Staged Changes`, `Turn History`), badges, `<kbd>` hints. Set small (9–12px) since this is a dense, information-forward tool, not an editorial surface.
 
+**Display — 21px, one step, one place.** The first-run screen's headline
+("Drive your own coding agent, spec-first") is the only type in the product
+above the 13px body step. It exists because that screen is the one moment
+Floo has to say what it is to someone who has never seen it; every other
+surface is dense working chrome and stays on the body/mono steps. Adding a
+second display size means asking what the first one was for.
+
 **The Two-Voice Rule.** If it's read as a path, a key, or a label, it's mono; if it's read as a sentence, it's sans. This split predates the IDE pivot and hasn't moved.
 
 **Measured scale (px):** 9 (kbd/tab micro-labels) · 10 · 11 (buttons, badges, tab labels, uppercase section headings) · 12 (mono metadata, body default in dense panels) · 13 (base body, commit box) · 16 (modal input, only place body text gets room to breathe).
@@ -165,6 +184,31 @@ Mostly flat — this is a workbench, not a card deck. Borders (`--border`, the o
 A five-step radius scale, smallest to largest: `4px` (chips, inline inputs) · `5–6px` (buttons, tabs, most controls — used near-interchangeably; treat as one "sm" step) · `8px` (modal command-bar) · `9999px` pill (badges, the scrollbar thumb) · `12px` (the window shell itself, a one-off outer radius). No larger card/panel radius exists — panels, the editor, and the terminal are all square-cornered; roundedness is reserved for controls and the window edge.
 
 ## Components
+
+### Implementation stack (binding)
+
+Every component in this section is built from **Mantine** (`@mantine/core`,
+`@mantine/hooks`) with **Tabler** icons (`@tabler/icons-react`) — these are
+the only two UI libraries in the tree, and no third is added. The tokens
+above are not a parallel system: they are wired through
+`postcss-preset-mantine` and Mantine's CSS-variable theme, so a Mantine
+component inherits `--accent`/`--bg`/`--surface` rather than shipping its
+own palette.
+
+- **Reach for the Mantine component first.** `Button`, `ActionIcon`,
+  `Tabs`, `Modal`, `Menu`, `TextInput`, `Textarea`, `Tooltip`, `Badge`,
+  `ScrollArea`, `SegmentedControl`, `Popover` all exist — a hand-rolled
+  equivalent is a bug, not a style choice. The shell's `Modal` wrapper and
+  `.ds-section-heading` pattern are the local idiom on top of Mantine;
+  reuse them rather than adding a second wrapper.
+- **Every icon is a Tabler icon.** No inline `<svg>`, no emoji-as-icon, no
+  second icon set. Rail, title bar, status bar, status chips, and panel
+  headers all draw from `@tabler/icons-react` at a consistent stroke
+  weight.
+- **Custom CSS is for layout and tokens, not for rebuilding widgets.**
+  Flex/grid arrangement, `order` for the Vibe/Editor preset flip, and
+  token overrides via `styles`/`classNames` are fine; a bespoke
+  dropdown/dialog/tab implementation is not.
 
 ### Icon buttons
 32px square, transparent fill, 1px border, 6px radius, muted icon that lifts to foreground on hover; a `.ok`/`.warn`/`.bad` state variant recolors border+icon (used by the preflight/executor-status button). Shared by every top-chrome utility button and the editor's image zoom controls.
@@ -201,6 +245,7 @@ Pill-radius, 1px `currentColor` border, uppercase 11px mono, text always present
 - **Do** pair color with a second signal (a glyph, text, an icon) for anything status-bearing — never color alone.
 
 ### Don't:
+- **Don't** hand-roll a widget Mantine already ships, and **don't** draw an inline `<svg>` where a Tabler icon exists — see Components §Implementation stack.
 - **Don't** introduce a second brand chromatic color — accent is Dragon Fire Green only; everything else is neutral or semantic status.
 - **Don't** shadow a resting panel, row, or tab — shadows are for floating layers and the active mode button only.
 - **Don't** use a radius outside the documented five steps.

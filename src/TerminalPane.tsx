@@ -111,17 +111,22 @@ export default function TerminalPane({ projectHash, placement, onTogglePlacement
 
   return (
     <div className="ds-terminal-pane" data-testid="terminal-pane">
-      <div className="ds-editor-toolbar">
-        <span className="ds-editor-path">Terminal</span>
-        <span className="ds-editor-spacer" />
-        <button
-          className="ds-editor-save-btn"
-          onClick={onTogglePlacement}
-          data-testid="terminal-placement-toggle"
-        >
-          {placement === "bottom" ? "Move to sidebar" : "Move to bottom"}
-        </button>
-      </div>
+      {/* In the bottom panel the tab strip above already says "Terminal" and
+          carries the placement control — a second header there was pure
+          duplicate chrome. In the sidebar there is no strip, so it stays. */}
+      {placement === "sidebar" && (
+        <div className="ds-editor-toolbar">
+          <span className="ds-editor-path">Terminal</span>
+          <span className="ds-editor-spacer" />
+          <button
+            className="ds-editor-save-btn"
+            onClick={onTogglePlacement}
+            data-testid="terminal-placement-toggle"
+          >
+            Move to bottom
+          </button>
+        </div>
+      )}
       <div className="ds-terminal-host" ref={hostRef} data-testid="terminal-host" />
     </div>
   );

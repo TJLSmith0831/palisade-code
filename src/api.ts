@@ -24,6 +24,8 @@ export type ThreadMeta = {
   model?: string | null;
   /** Spec-type framing (Feature/Bugfix/custom text) picked on spec-mode entry (D11). */
   specType?: string | null;
+  /** Archived threads drop out of the default History list; nothing is lost. */
+  archived?: boolean;
 };
 
 export type Message = {
@@ -39,6 +41,9 @@ export type Message = {
 export const listProjects = () => invoke<Project[]>("list_projects");
 export const addProject = (path: string) =>
   invoke<Project>("add_project", { path });
+/** Clone `url` into `parent`, then register the result as a project. */
+export const cloneRepository = (url: string, parent: string) =>
+  invoke<Project>("clone_repository", { url, parent });
 export const switchProject = (hash: string) =>
   invoke<Project>("switch_project", { hash });
 export const renameProject = (hash: string, displayName: string) =>
@@ -58,6 +63,14 @@ export const setThreadMode = (
   threadId: string,
   mode: Mode
 ) => invoke<ThreadMeta>("set_thread_mode", { projectHash, threadId, mode });
+/** Archived threads keep everything; they just leave the default History
+ *  list. Distinct from deleteThread, which is destructive. */
+export const setThreadArchived = (
+  projectHash: string,
+  threadId: string,
+  archived: boolean
+) =>
+  invoke<ThreadMeta>("set_thread_archived", { projectHash, threadId, archived });
 export const deleteThread = (projectHash: string, threadId: string) =>
   invoke<void>("delete_thread", { projectHash, threadId });
 
@@ -168,7 +181,9 @@ export const setThreadExecutor = (
  * Probe an installed agent for the models it actually offers: spawns it for
  * a throwaway `session/new` and reads its model config option.
  */
-export const listModels = (projectHash: string, agentId: string) =>
+/** `projectHash` is null on the onboarding screen, where no project is open
+ *  yet — the backend probes from the home directory in that case. */
+export const listModels = (projectHash: string | null, agentId: string) =>
   invoke<ModelState>("list_models", { projectHash, agentId });
 export const sendMessage = (
   projectHash: string,
@@ -299,6 +314,49 @@ export const listVerifications = (projectHash: string) =>
 /** `[name, command]` pairs from the project's `.project-settings.json`. */
 export const verifyCommands = (projectHash: string) =>
   invoke<[string, string][]>("verify_commands", { projectHash });
+
+// --------------------------------------------------------- language servers
+
+/** Every state D14 distinguishes, so the status bar never says just "off". */
+export type LspState =
+  | "unsupported"
+  | "notInstalled"
+  | "starting"
+  | "running"
+  | "crashed"
+  | "disabled";
+
+export type LspStatus = {
+  language: string;
+  state: LspState;
+  /** The binary Floo looked for — names what to install when missing. */
+  server: string | null;
+  restarts: number;
+  detail: string | null;
+};
+
+export const lspStart = (projectHash: string, language: string) =>
+  invoke<LspStatus>("lsp_start", { projectHash, language });
+export const lspSend = (projectHash: string, language: string, body: string) =>
+  invoke<void>("lsp_send", { projectHash, language, body });
+export const lspStatus = (projectHash: string, language: string) =>
+  invoke<LspStatus>("lsp_status", { projectHash, language });
+export const lspShutdown = (projectHash: string) =>
+  invoke<void>("lsp_shutdown", { projectHash });
+
+// ------------------------------------------------------------- run commands
+
+/** Amendment 1's `run` map: the title bar runs these, the Run panel edits them. */
+export const runCommands = (projectHash: string) =>
+  invoke<[string, string][]>("run_commands", { projectHash });
+/** Replaces the whole map — a delete is an absent key. */
+export const saveRunCommands = (
+  projectHash: string,
+  commands: [string, string][]
+) => invoke<void>("save_run_commands", { projectHash, commands });
+/** What the project root suggests. A proposal: it writes nothing. */
+export const detectRunCommands = (projectHash: string) =>
+  invoke<[string, string][]>("detect_run_commands", { projectHash });
 export const sessionAttribution = (
   projectHash: string,
   threadId: string,
@@ -402,10 +460,22 @@ export const gitStageHunk = (projectHash: string, patch: string) =>
   invoke<void>("git_stage_hunk", { projectHash, patch });
 export const gitUnstageHunk = (projectHash: string, patch: string) =>
   invoke<void>("git_unstage_hunk", { projectHash, patch });
+export const gitUnstageFile = (projectHash: string, path: string) =>
+  invoke<void>("git_unstage_file", { projectHash, path });
 export const gitStageFile = (projectHash: string, path: string) =>
   invoke<void>("git_stage_file", { projectHash, path });
 export const gitCommit = (projectHash: string, message: string) =>
   invoke<void>("git_commit", { projectHash, message });
+
+/** One row of the Source Control panel's read-only commit graph. */
+export type LogEntry = { hash: string; subject: string; author: string };
+
+export const gitLog = (projectHash: string, limit = 20) =>
+  invoke<LogEntry[]>("git_log", { projectHash, limit });
+
+/** Source Control panel's **Generate**: drafts a message from the staged diff. */
+export const draftCommitMessage = (projectHash: string) =>
+  invoke<string>("draft_commit_message", { projectHash });
 
 export type BranchInfo = {
   name: string;
