@@ -7,8 +7,6 @@ import * as api from "./api";
 
 type Props = {
   projectHash: string;
-  placement: "bottom" | "sidebar";
-  onTogglePlacement: () => void;
 };
 
 // xterm's canvas renderer doesn't accept the app's oklch() custom-property
@@ -26,7 +24,7 @@ function resolveCssColor(varExpr: string): string {
   return resolved;
 }
 
-export default function TerminalPane({ projectHash, placement, onTogglePlacement }: Props) {
+export default function TerminalPane({ projectHash }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -111,22 +109,9 @@ export default function TerminalPane({ projectHash, placement, onTogglePlacement
 
   return (
     <div className="ds-terminal-pane" data-testid="terminal-pane">
-      {/* In the bottom panel the tab strip above already says "Terminal" and
-          carries the placement control — a second header there was pure
-          duplicate chrome. In the sidebar there is no strip, so it stays. */}
-      {placement === "sidebar" && (
-        <div className="ds-editor-toolbar">
-          <span className="ds-editor-path">Terminal</span>
-          <span className="ds-editor-spacer" />
-          <button
-            className="ds-editor-save-btn"
-            onClick={onTogglePlacement}
-            data-testid="terminal-placement-toggle"
-          >
-            Move to bottom
-          </button>
-        </div>
-      )}
+      {/* No header of its own: whichever panel hosts the terminal already
+          names it and carries the placement control. A second bar was pure
+          duplicate chrome. */}
       <div className="ds-terminal-host" ref={hostRef} data-testid="terminal-host" />
     </div>
   );

@@ -1,6 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { relativeTime, filterThreads } from "../SessionList";
+import type { ReactElement } from "react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
+import SessionList, { relativeTime, filterThreads } from "../SessionList";
 import type { ThreadMeta } from "../api";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 // Amendment 3's session list. Grouping is by workspace and rendered from
 // props, but the relative-timestamp formatter and the search filter both
@@ -66,5 +71,49 @@ describe("filterThreads", () => {
 
   it("returns nothing when the query matches no title", () => {
     expect(filterThreads(threads, "zzz")).toEqual([]);
+  });
+});
+
+describe("SessionList row actions", () => {
+  // The Vibe sidebar lost rename/archive when it replaced the old thread
+  // list; the Editor preset's History panel kept them. Same thread, same
+  // two verbs, whichever sidebar you are looking at.
+  const renderList = (over: Partial<ThreadMeta> = {}) => {
+    const onRename = vi.fn();
+    const onArchive = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <SessionList
+        threads={[thread(over)]}
+        projects={[]}
+        activeProject={undefined}
+        activeThread={undefined}
+        liveThreadIds={new Set()}
+        onNewThread={vi.fn()}
+        onSelect={onSelect}
+        onRename={onRename}
+        onArchive={onArchive}
+      />,
+    );
+    return { onRename, onArchive, onSelect };
+  };
+
+  it("renames a thread without also selecting it", () => {
+    const { onRename, onSelect } = renderList();
+    fireEvent.click(screen.getByTestId("session-rename"));
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("archives a thread without also selecting it", () => {
+    const { onArchive, onSelect } = renderList();
+    fireEvent.click(screen.getByTestId("session-archive"));
+    expect(onArchive).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("leaves archived threads out — History is where they are found again", () => {
+    renderList({ archived: true });
+    expect(screen.queryByTestId("session-item")).toBeNull();
   });
 });

@@ -10,12 +10,21 @@ import { MantineProvider } from "@mantine/core";
 import EditorStatusBar from "../EditorStatusBar";
 import type { LspStatus } from "../api";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  invokeMock.mockReset();
+  invokeMock.mockImplementation((cmd: string) =>
+    cmd === "lsp_install_command"
+      ? Promise.resolve("rustup component add rust-analyzer")
+      : Promise.resolve()
+  );
+});
 
 const status = (over: Partial<LspStatus>): LspStatus => ({
   language: "rust",
@@ -34,6 +43,7 @@ describe("EditorStatusBar", () => {
   });
 
   it("says a server is missing, and which one to install", async () => {
+    invokeMock.mockImplementation(() => Promise.resolve(null));
     render(
       <EditorStatusBar
         language="Rust"
@@ -45,6 +55,55 @@ describe("EditorStatusBar", () => {
       "not installed"
     );
     expect(screen.getByText(/Install rust-analyzer/)).toBeDefined();
+  });
+
+  it("installs the missing server on click rather than printing homework", async () => {
+    render(
+      <EditorStatusBar
+        language="Rust"
+        lsp={status({ state: "notInstalled", detail: "`rust-analyzer` is not on PATH" })}
+      />
+    );
+    fireEvent.click(screen.getByTestId("lsp-indicator"));
+
+    const button = await screen.findByTestId("lsp-install");
+    expect(button.textContent).toContain("rustup component add rust-analyzer");
+    fireEvent.click(button);
+
+    await screen.findByText(/installing/i);
+    expect(invokeMock).toHaveBeenCalledWith("lsp_install", {
+      language: "rust",
+    });
+  });
+
+  it("shows the installer's own words when it fails", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "lsp_install_command")
+        return Promise.resolve("rustup component add rust-analyzer");
+      return Promise.reject(new Error("error: no such component"));
+    });
+    render(
+      <EditorStatusBar language="Rust" lsp={status({ state: "notInstalled" })} />
+    );
+    fireEvent.click(screen.getByTestId("lsp-indicator"));
+    fireEvent.click(await screen.findByTestId("lsp-install"));
+
+    expect(
+      (await screen.findByTestId("lsp-install-error")).textContent
+    ).toContain("no such component");
+  });
+
+  it("falls back to naming the server when Floo has no installer for it", async () => {
+    invokeMock.mockImplementation(() => Promise.resolve(null));
+    render(
+      <EditorStatusBar
+        language="Rust"
+        lsp={status({ state: "notInstalled", server: "rust-analyzer" })}
+      />
+    );
+    fireEvent.click(screen.getByTestId("lsp-indicator"));
+    expect(await screen.findByText(/Install rust-analyzer/)).toBeDefined();
+    expect(screen.queryByTestId("lsp-install")).toBeNull();
   });
 
   it("reports a disabled language with its crash count and how to get it back", async () => {

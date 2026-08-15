@@ -156,6 +156,7 @@ function FileRow({
 
 export default function SourceControlPanel({
   projectHash,
+  threadId,
   branch,
   refreshToken,
   onOpenFile,
@@ -163,6 +164,9 @@ export default function SourceControlPanel({
   onError,
 }: {
   projectHash: string;
+  /** The active thread, so Generate drafts with the provider/model the user
+   *  picked in the chat pane rather than whatever was auto-detected. */
+  threadId?: string | null;
   branch: string;
   /** Bumped by the app whenever the working tree may have changed. */
   refreshToken?: number;
@@ -227,7 +231,7 @@ export default function SourceControlPanel({
   const generate = () => {
     setGenerating(true);
     api
-      .draftCommitMessage(projectHash)
+      .draftCommitMessage(projectHash, threadId ?? null)
       .then(setMessage)
       .catch(onError)
       .finally(() => setGenerating(false));

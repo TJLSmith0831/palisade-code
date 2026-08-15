@@ -100,3 +100,31 @@ describe("OnboardingScreen model picker", () => {
     );
   });
 });
+
+describe("OnboardingScreen recent projects", () => {
+  const projects = [
+    { hash: "h1", displayName: "floo-network", root: "/w/floo" },
+    { hash: "h2", displayName: "other", root: "/w/other" },
+  ] as unknown as Project[];
+
+  it("shows the row is opening rather than looking dead while the switch runs", () => {
+    render(<OnboardingScreen {...base} projects={projects} openingHash="h1" />);
+    const rows = screen.getAllByTestId("recent-project");
+    expect(rows[0]).toHaveAttribute("aria-busy", "true");
+    expect(rows[1]).not.toHaveAttribute("aria-busy", "true");
+  });
+
+  it("ignores a second click while one project is already opening", () => {
+    const onSelectProject = vi.fn();
+    render(
+      <OnboardingScreen
+        {...base}
+        projects={projects}
+        openingHash="h1"
+        onSelectProject={onSelectProject}
+      />,
+    );
+    fireEvent.click(screen.getAllByTestId("recent-project")[1]);
+    expect(onSelectProject).not.toHaveBeenCalled();
+  });
+});

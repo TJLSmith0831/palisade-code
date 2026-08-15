@@ -128,4 +128,15 @@ describe("FilePalette", () => {
     expect(onDelete).not.toHaveBeenCalled();
     expect(screen.queryByTestId("file-palette-confirm-delete-yes")).toBeNull();
   });
+
+  it("hovering a row highlights it without opening the file", () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(<FilePalette files={files} onSelect={onSelect} onClose={onClose} {...noopHandlers} />);
+
+    fireEvent.mouseEnter(screen.getAllByTestId("file-palette-result")[1]);
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

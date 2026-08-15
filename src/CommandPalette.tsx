@@ -107,11 +107,11 @@ export default function CommandPalette({ commands, onClose }: Props) {
     <Palette
       title="Run a command"
       items={results}
-      renderItem={(command, { active, onSelect }) => (
+      renderItem={(command, { active, onSelect, onMouseEnter }) => (
         <li
           key={command.id}
           className={active ? "active" : ""}
-          onMouseEnter={onSelect}
+          onMouseEnter={onMouseEnter}
           onClick={onSelect}
           data-testid="command-palette-item"
           data-command={command.id}

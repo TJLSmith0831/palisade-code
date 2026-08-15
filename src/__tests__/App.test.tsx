@@ -587,26 +587,105 @@ describe("Picking a provider/model before the thread exists", () => {
       expect.anything()
     );
   });
+
+  it("writes that choice onto the thread the first send creates", async () => {
+    // The Spec path persisted the framing pick; Go's deferred thread never
+    // did, so a Go turn silently ran on the auto-detected agent's default
+    // model — Sonnet, however loudly the composer said otherwise.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "list_models")
+          return Promise.resolve({
+            configId: "model",
+            current: "opus",
+            models: [
+              { id: "opus", name: "Opus" },
+              { id: "sonnet", name: "Sonnet" },
+            ],
+          });
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        if (cmd === "create_thread")
+          return Promise.resolve({
+            id: "t-new",
+            projectHash: "proj-1",
+            title: "New thread",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "go",
+            openSpecChangeName: null,
+          });
+        if (cmd === "set_thread_mode" || cmd === "set_thread_executor")
+          return Promise.resolve({
+            id: "t-new",
+            projectHash: "proj-1",
+            title: "New thread",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "go",
+            openSpecChangeName: null,
+            executor: "claude",
+            model: "sonnet",
+          });
+        if (cmd === "send_message")
+          return Promise.resolve({
+            seq: 1,
+            role: "user",
+            content: "build it",
+            ts: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    fireEvent.click(await screen.findByTestId("model-btn"));
+    fireEvent.click(await screen.findByTestId("model-opt-sonnet"));
+    await waitFor(() =>
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("Sonnet")
+    );
+
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "build it" },
+    });
+    fireEvent.click(screen.getByTestId("composer-send"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_thread_executor", {
+        projectHash: "proj-1",
+        threadId: "t-new",
+        executor: "claude",
+        model: "sonnet",
+      })
+    );
+  });
 });
 
 describe("Collapsing chat (Cmd+J)", () => {
-  it("hands the reclaimed width to the editor instead of leaving a gap", async () => {
+  it("leaves Vibe's chat alone — it is the primary surface there", async () => {
     render(<App />);
     await openProject();
     fireEvent.click(screen.getByTestId("shell-vibe"));
+    await screen.findByTestId("vibe-shell");
 
-    // Vibe pins the editor to a fixed share so chat stays the subject. With
-    // chat gone there is nothing left to hold that share against, and the
-    // reclaimed width sat empty — DESIGN.md's rule is that a collapsed
-    // panel gives its space back, not that it leaves a hole.
-    fireEvent.click(screen.getByTestId("toggle-chat"));
-    expect(screen.queryByTestId("right-sidebar")).toBeNull();
-    expect(screen.getByTestId("vibe-shell")).toHaveAttribute(
-      "data-chat",
-      "collapsed"
-    );
-
-    fireEvent.click(screen.getByTestId("toggle-chat"));
+    // No toggle to hide it with, and Cmd+J can't either: Vibe without chat
+    // is just Editor with the panels on the wrong side.
+    expect(screen.queryByTestId("toggle-chat")).toBeNull();
+    fireEvent.keyDown(window, { key: "j", metaKey: true });
+    expect(screen.getByTestId("right-sidebar")).toBeDefined();
     expect(screen.getByTestId("vibe-shell")).not.toHaveAttribute("data-chat");
   });
 });
@@ -925,6 +1004,40 @@ describe("Editor chrome (merged-design v2)", () => {
     ).toBeNull();
   });
 
+  it("offers the Go/Spec picker instead of a blank chat when no thread is open", async () => {
+    // Threads exist, none is selected — the state left behind by closing the
+    // last thread tab. "Create a thread to get started." is a dead end here;
+    // the next step is picking a mode, so show that instead.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads")
+          return Promise.resolve([
+            {
+              id: "t1",
+              projectHash: "proj-1",
+              title: "Test Thread",
+              createdAt: "2026-08-06T00:00:00Z",
+              updatedAt: "2026-08-06T00:00:00Z",
+              currentMode: "go",
+              openSpecChangeName: null,
+              executorSessionId: null,
+            },
+          ]);
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+
+    await screen.findByTestId("thread-tab");
+    fireEvent.click(screen.getByTestId("thread-tab-close"));
+
+    await screen.findByTestId("mode-picker");
+    expect(screen.getByTestId("pick-go")).toBeDefined();
+    expect(screen.getByTestId("pick-spec")).toBeDefined();
+    expect(screen.queryByText("Create a thread to get started.")).toBeNull();
+  });
+
   it("shows the diff empty state even when no thread exists", async () => {
     render(<App />);
     await openProject();
@@ -1158,17 +1271,35 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("offers the chat toggle in both presets", async () => {
-    // It used to be Editor-only. Cmd+J collapses chat in either preset, so
-    // hiding the button left a Vibe user with no visible way back — the
-    // shortcut was the only route, and only if you knew it.
+  it("offers the chat toggle in Editor only", async () => {
+    // Vibe's chat is the subject of the preset, not a panel — collapsing it
+    // there leaves the user staring at an editor they came to Vibe to avoid.
     render(<App />);
     await openProject();
     expect(screen.getByTestId("toggle-chat")).toBeDefined();
 
     fireEvent.click(screen.getByTestId("shell-vibe"));
     await screen.findByTestId("vibe-shell");
-    expect(screen.getByTestId("toggle-chat")).toBeDefined();
+    expect(screen.queryByTestId("toggle-chat")).toBeNull();
+  });
+
+  it("sizes Vibe's chat from its own resizable, so the handle actually works", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await screen.findByTestId("vibe-shell");
+
+    const sidebar = screen.getByTestId("right-sidebar");
+    expect(sidebar.style.getPropertyValue("--panel-w")).toBe("520px");
+
+    const handle = screen.getByTestId("resize-right-panel");
+    fireEvent.pointerDown(handle, { clientX: 700 });
+    fireEvent.pointerMove(window, { clientX: 760 });
+    fireEvent.pointerUp(window);
+
+    expect(
+      screen.getByTestId("right-sidebar").style.getPropertyValue("--panel-w")
+    ).toBe("580px");
   });
 });
 
@@ -2930,6 +3061,27 @@ describe("Command palette", () => {
     expect(screen.getByTestId("command-palette-results").textContent).toContain(
       "⌘J"
     );
+  });
+
+  it("hovering a command highlights it without running it", async () => {
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
+    );
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+    await waitFor(() =>
+      expect(screen.getByTestId("command-palette-input")).toBeDefined()
+    );
+
+    fireEvent.change(screen.getByTestId("command-palette-input"), {
+      target: { value: "terminal" },
+    });
+    fireEvent.mouseEnter(screen.getAllByTestId("command-palette-item")[0]);
+
+    // Still open, and the command has not fired.
+    expect(screen.getByTestId("command-palette-input")).toBeDefined();
+    expect(screen.queryByTestId("terminal-pane")).toBeNull();
   });
 
   it("filters as you type and runs the chosen command", async () => {

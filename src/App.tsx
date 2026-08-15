@@ -31,6 +31,7 @@ import {
 import {
   IconAlertTriangle,
   IconArchive,
+  IconBox,
   IconChevronDown,
   IconLayoutSidebarRight,
   IconPlayerPlay,
@@ -1023,14 +1024,20 @@ export const ChatSurface = memo(
           <div className="ds-composer-controls">
             <Menu opened={prefsMenuOpen} onChange={setPrefsMenuOpen}>
               <Menu.Target>
+                {/* Pill, not a bare label: the mockup's composer reads as two
+                    tappable chips (icon · name · chevron), and the flat
+                    text-only buttons read as static labels instead. */}
                 <button
-                  className="ds-icon-btn"
+                  className="ds-composer-picker"
                   data-testid="executor-btn"
                   data-tauri-drag-region-exclude
-                  style={{ fontSize: 12, padding: "4px 8px" }}
                 >
-                  {executorLabel ?? "none detected"}
-                  {threadBypass ? " · bypass" : ""}
+                  <IconBox size={14} />
+                  <span className="ds-composer-picker-label">
+                    {executorLabel ?? "none detected"}
+                    {threadBypass ? " · bypass" : ""}
+                  </span>
+                  <IconChevronDown size={12} />
                 </button>
               </Menu.Target>
               <Menu.Dropdown
@@ -1092,14 +1099,19 @@ export const ChatSurface = memo(
               withinPortal
             >
               <Menu.Target>
+                {/* Accented once a model is actually pinned, so "which model
+                    am I about to spend a turn on" is answerable at a glance. */}
                 <button
-                  className="ds-icon-btn"
+                  className={`ds-composer-picker${
+                    currentModelId ? " selected" : ""
+                  }`}
                   data-testid="model-btn"
                   data-tauri-drag-region-exclude
                   disabled={!executor}
-                  style={{ fontSize: 12, padding: "4px 8px" }}
                 >
-                  {modelLabel}
+                  <IconBox size={14} />
+                  <span className="ds-composer-picker-label">{modelLabel}</span>
+                  <IconChevronDown size={12} />
                 </button>
               </Menu.Target>
               <Menu.Dropdown className="ds-model-menu" data-testid="model-menu">
@@ -1695,6 +1707,8 @@ export default function App() {
   const [pendingMode, setPendingMode] = useState<api.Mode | null>(null);
   // D21: executor/model selected in the framing menu — stored before the
   // thread exists, then persisted on the thread when it's created.
+  // The project being opened, if any — drives the onboarding row's spinner.
+  const [openingProject, setOpeningProject] = useState<string | null>(null);
   const [framingExecutor, setFramingExecutor] = useState<string | null>(null);
   const [framingModel, setFramingModel] = useState<string | null>(null);
   // D1: spec-type framing menu — shown after picking "Spec" from the Vibe/Spec
@@ -2069,6 +2083,10 @@ export default function App() {
 
   const selectProjectNow = useCallback(
     async (next: Project) => {
+      // Switching is several round-trips (switch_project, a read per restored
+      // tab, threads, branches). Announce it so the onboarding row the user
+      // just clicked doesn't sit there looking dead.
+      setOpeningProject(next.hash);
       try {
         const previous = currentProjectRef.current;
         // Applied before the awaits below: anything the user clicks while
@@ -2141,6 +2159,8 @@ export default function App() {
         );
       } catch (err) {
         fail(err);
+      } finally {
+        setOpeningProject(null);
       }
     },
     [selectThread, refreshBranches]
@@ -2388,6 +2408,26 @@ export default function App() {
     setNewThreadPicker(true);
   };
 
+  // The provider/model the user picked before any thread existed (D21's
+  // framing scratch state), written onto the thread the moment one is
+  // created. Both deferred-creation paths — Spec's framing menu and Go's
+  // first send — go through here; when only a model was picked, the
+  // executor falls back to what the button was already displaying (D21),
+  // or the model pick is dropped along with the unset executor.
+  const persistFramingChoice = async (hash: string, threadId: string) => {
+    const pickedExecutor =
+      framingExecutor ?? (framingModel ? flight?.selected : null) ?? null;
+    setFramingExecutor(null);
+    setFramingModel(null);
+    if (!pickedExecutor) return null;
+    return api.setThreadExecutor(
+      hash,
+      threadId,
+      pickedExecutor,
+      framingModel ?? null
+    );
+  };
+
   // D5/D19: spec-type selection creates the thread + fires grill-explore with
   // the spec type as the user turn body. "Other" is handled separately (D6,
   // Group 9) — this handler covers Feature and Bugfix.
@@ -2398,33 +2438,13 @@ export default function App() {
     setSpecTypePicker(false);
     setTransitioning(true);
     setBusy(true);
-    // Capture the framing-menu executor/model before clearing them. The
-    // executor button displays flight.selected as a fallback even when the
-    // user never explicitly opened it (D21) — if they picked a model without
-    // touching the executor dropdown, fall back the same way here, or the
-    // model pick is silently dropped along with the executor (never persisted).
-    // The executor button displays flight.selected as a fallback even when
-    // the user never explicitly opened it (D21) — if they picked a model
-    // without touching the executor dropdown, fall back the same way here,
-    // or the model pick is silently dropped along with the executor (never
-    // persisted, since setThreadExecutor is skipped when pickedExecutor is null).
-    const pickedExecutor =
-      framingExecutor ?? (framingModel ? flight?.selected : null) ?? null;
-    const pickedModel = framingModel;
     try {
       const created = await api.createThread(project.hash, "New thread");
       // Persist the framing-menu executor/model on the thread before
       // specMode fires — ensure_session reads the thread's stored executor
       // to decide which agent to start. Without this, it falls back to
       // auto-detection and ignores the user's framing-menu choice.
-      if (pickedExecutor) {
-        await api.setThreadExecutor(
-          project.hash,
-          created.id,
-          pickedExecutor,
-          pickedModel ?? null
-        );
-      }
+      await persistFramingChoice(project.hash, created.id);
       // Re-read the thread metadata so the executor/model is reflected.
       const threads = await api.listThreads(project.hash);
       const updated = threads.find((t) => t.id === created.id) ?? created;
@@ -2447,8 +2467,6 @@ export default function App() {
       fail(err);
     } finally {
       setTransitioning(false);
-      setFramingExecutor(null);
-      setFramingModel(null);
     }
   };
 
@@ -2965,6 +2983,14 @@ export default function App() {
       try {
         const created = await api.createThread(project.hash, "New thread");
         activeThread = await api.setThreadMode(project.hash, created.id, "go");
+        // Same persistence the Spec path does (see onPickSpecType): without
+        // it the composer's provider/model pick is dropped on the floor and
+        // the turn silently runs on the auto-detected agent's default model.
+        const persisted = await persistFramingChoice(
+          project.hash,
+          created.id
+        );
+        if (persisted) activeThread = persisted;
         setThreads(await api.listThreads(project.hash));
         await selectThread(project.hash, activeThread);
         setPendingMode(null);
@@ -3317,6 +3343,10 @@ export default function App() {
 
   const chatPanel =
     shell.centerShell === "vibe" ? shell.vibeChat : shell.rightPanel;
+  // Vibe is the chat-first preset — collapsing chat there leaves the editor
+  // alone on screen, which is just Editor with the panels on the wrong side.
+  // So the collapse (and its toggle, and Cmd+J) applies to Editor only.
+  const chatCollapsed = shell.centerShell === "editor" && shell.chatCollapsed;
 
   // The strip shows opened threads, not every thread the project has ever
   // had — a hundred threads is a hundred tabs otherwise. The active thread
@@ -3409,7 +3439,10 @@ export default function App() {
     onPickFramingModel,
     onPickComposerSpecType,
     onComposerSpecTypeBack,
-    showEmptyModePicker: threads.length === 0 && !thread,
+    // Any "no thread on screen" state, not just a brand-new project: the
+    // next step is always picking a mode, so offer it rather than telling
+    // the user to create a thread and leaving them to find how.
+    showEmptyModePicker: !thread,
     onPickMode,
     onOpenSpec: (name: string) => tabs.openSpec(name),
     threadBypass: threadPrefs.bypass,
@@ -3458,7 +3491,9 @@ export default function App() {
         return (
           <SearchPanel
             projectHash={project.hash}
-            onOpenMatch={(path) => selectFile(path)}
+            /* Pass the line through: the sidebar search's whole point is
+               landing on the match, not the top of the file. */
+            onOpenMatch={selectFile}
             onError={fail}
           />
         );
@@ -3466,6 +3501,7 @@ export default function App() {
         return (
           <SourceControlPanel
             projectHash={project.hash}
+            threadId={thread?.id ?? null}
             branch={branches.find((b) => b.isCurrent)?.name ?? "HEAD"}
             refreshToken={diffRefreshToken}
             onOpenFile={openDiffFor}
@@ -3687,10 +3723,8 @@ export default function App() {
               </button>
             </Tooltip>
             )}
-            {/* Both presets: Cmd+J collapses chat in either, and gating the
-                button to Editor left a Vibe user staring at the reclaimed
-                space with no visible way back. */}
-            {project && (
+            {/* Editor only: in Vibe chat is the subject, not a panel. */}
+            {project && shell.centerShell === "editor" && (
               <Tooltip label="Toggle chat panel (Cmd+J)">
                 <button
                   className="ds-icon-btn"
@@ -3813,6 +3847,7 @@ export default function App() {
               onOpenProject={onAddProject}
               onCloneRepository={onCloneRepository}
               onSelectProject={selectProject}
+              openingHash={openingProject}
             />
           ) : (
             // ONE shell, two arrangements (Governing Rule). The same children
@@ -3825,7 +3860,7 @@ export default function App() {
           <div
             className="ds-shell-contents"
             data-preset={shell.centerShell}
-            data-chat={shell.chatCollapsed ? "collapsed" : undefined}
+            data-chat={chatCollapsed ? "collapsed" : undefined}
             data-testid={
               shell.centerShell === "vibe" ? "vibe-shell" : "editor-shell"
             }
@@ -3841,6 +3876,8 @@ export default function App() {
                 liveThreadIds={busyThreads}
                 onNewThread={onNewThread}
                 onSelect={onSelectVibeThread}
+                onRename={onRenameThread}
+                onArchive={onArchiveThread}
               />
             )}
 
@@ -3979,7 +4016,7 @@ export default function App() {
                   )}
                 </main>
 
-                {!shell.chatCollapsed && (
+                {!chatCollapsed && (
                   <>
                     {/* The Governing Rule allows the two presets to differ
                         by default width, and they must: a 520px chat is the
@@ -4097,11 +4134,7 @@ export default function App() {
                       className="ds-bp-pane"
                       hidden={shell.bottomTab !== "terminal"}
                     >
-                      <TerminalPane
-                        projectHash={project.hash}
-                        placement="bottom"
-                        onTogglePlacement={shell.toggleTerminalPlacement}
-                      />
+                      <TerminalPane projectHash={project.hash} />
                     </div>
                   )}
                   {shell.bottomTab === "problems" && (

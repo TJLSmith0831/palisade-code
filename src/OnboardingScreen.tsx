@@ -3,6 +3,7 @@ import {
   ActionIcon,
   Box,
   Button,
+  Loader,
   Menu,
   TextInput,
   Textarea,
@@ -40,6 +41,7 @@ export default function OnboardingScreen({
   onOpenProject,
   onCloneRepository,
   onSelectProject,
+  openingHash = null,
 }: {
   projects: Project[];
   flight: Preflight | null;
@@ -52,6 +54,9 @@ export default function OnboardingScreen({
   onOpenProject: () => void;
   onCloneRepository: () => void;
   onSelectProject: (project: Project) => void;
+  /** Hash of the project currently being opened, if any. Switching a project
+   *  is several round-trips; without this the row looked dead on click. */
+  openingHash?: string | null;
 }) {
   const [draft, setDraft] = useState("");
   const [modelQuery, setModelQuery] = useState("");
@@ -301,33 +306,53 @@ export default function OnboardingScreen({
           <>
             <h2 className="ds-section-heading">Recent Projects</h2>
             <div className="ds-onboarding-recent">
-              {projects.map((p) => (
-                <div
-                  key={p.hash}
-                  className="ds-onboarding-recent-row"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelectProject(p)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onSelectProject(p);
+              {projects.map((p) => {
+                const opening = openingHash === p.hash;
+                // One at a time: a second switch mid-flight would race the
+                // first one's tab restore.
+                const pick = () => {
+                  if (!openingHash) onSelectProject(p);
+                };
+                return (
+                  <div
+                    key={p.hash}
+                    className={`ds-onboarding-recent-row${
+                      opening ? " opening" : ""
+                    }`}
+                    role="button"
+                    tabIndex={0}
+                    aria-busy={opening || undefined}
+                    aria-disabled={
+                      openingHash && !opening ? true : undefined
                     }
-                  }}
-                  data-testid="recent-project"
-                >
-                  <IconFolder size={15} />
-                  <span className="ds-onboarding-recent-text">
-                    <span className="ds-onboarding-recent-name">
-                      {p.displayName}
+                    onClick={pick}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        pick();
+                      }
+                    }}
+                    data-testid="recent-project"
+                  >
+                    <IconFolder size={15} />
+                    <span className="ds-onboarding-recent-text">
+                      <span className="ds-onboarding-recent-name">
+                        {p.displayName}
+                      </span>
+                      <span className="ds-onboarding-recent-path">
+                        {opening ? "Opening…" : p.root}
+                      </span>
                     </span>
-                    <span className="ds-onboarding-recent-path">{p.root}</span>
-                  </span>
-                  <span className="ds-onboarding-recent-branch">
-                    <IconGitBranch size={12} />
-                  </span>
-                </div>
-              ))}
+                    <span className="ds-onboarding-recent-branch">
+                      {opening ? (
+                        <Loader size={12} />
+                      ) : (
+                        <IconGitBranch size={12} />
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </>
         )}

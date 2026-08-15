@@ -1055,9 +1055,16 @@ fn cap_diff(diff: &str) -> String {
 ///
 /// Runs on a throwaway session rather than the thread's own: the draft is a
 /// value returned to the commit box, and routing it through a live thread
-/// would dump an unrelated turn into the user's conversation.
+/// would dump an unrelated turn into the user's conversation. It still
+/// borrows that thread's *choice* of provider and model — drafting on the
+/// auto-detected agent's default model is a dead end on a machine where that
+/// agent isn't installed, or where the user is over its usage limit.
 #[tauri::command]
-async fn draft_commit_message(app: tauri::AppHandle, project_hash: String) -> Res<String> {
+async fn draft_commit_message(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: Option<String>,
+) -> Res<String> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let root = project_root(&project_hash)?;
@@ -1072,7 +1079,11 @@ async fn draft_commit_message(app: tauri::AppHandle, project_hash: String) -> Re
         let Some((scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
             return Err("nothing to describe — the working tree is clean".into());
         };
-        let (agent, bin) = selected_executor(&app, &harness, &project_hash, None)?;
+        let (agent, bin) = selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?;
+        let model = thread_id
+            .as_deref()
+            .and_then(|id| thread_meta(&project_hash, id))
+            .and_then(|meta| meta.model);
         let spawn = acp_client::AcpSpawn {
             agent_id: agent.id.clone(),
             agent_name: agent.name.clone(),
@@ -1084,7 +1095,7 @@ async fn draft_commit_message(app: tauri::AppHandle, project_hash: String) -> Re
             thread_id: String::new(),
             mode: "spec".into(),
             bypass: false,
-            model: None,
+            model,
             floo_home: floo_home(),
         };
         acp_client::agent_oneshot(
@@ -1419,6 +1430,24 @@ async fn lsp_status(
 ) -> Res<lsp::LspStatus> {
     let servers = app.state::<lsp::SharedLsp>().inner().clone();
     Ok(servers.status(&project_hash, &language))
+}
+
+/// The install command Floo would run for `language`, or None when it knows
+/// none or the tool that would run it isn't on this machine. The status bar
+/// uses this to decide whether to offer the button at all.
+#[tauri::command]
+async fn lsp_install_command(language: String) -> Res<Option<String>> {
+    Ok(lsp::install_command(&language).map(|argv| argv.join(" ")))
+}
+
+/// Install the language server for `language` on the user's say-so, using the
+/// toolchain already on the machine. Floo still bundles nothing (D6) — this
+/// is the one-click version of the instruction the status bar used to print.
+#[tauri::command]
+async fn lsp_install(language: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || lsp::install(&language))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Kills every server for a project — the frontend calls this on project
@@ -1786,6 +1815,8 @@ pub fn run() {
             lsp_start,
             lsp_send,
             lsp_status,
+            lsp_install,
+            lsp_install_command,
             lsp_shutdown,
             run_commands,
             save_run_commands,

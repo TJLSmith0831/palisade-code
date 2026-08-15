@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -48,7 +47,7 @@ describe("TerminalPane", () => {
   });
 
   it("spawns a terminal for the project on mount", async () => {
-    render(<TerminalPane projectHash="proj-1" placement="bottom" onTogglePlacement={vi.fn()} />);
+    render(<TerminalPane projectHash="proj-1" />);
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", { projectHash: "proj-1" }),
     );
@@ -56,13 +55,13 @@ describe("TerminalPane", () => {
 
   it("re-attaches (calls spawn again) rather than creating a second xterm instance in one mount when reopened", async () => {
     const { unmount } = render(
-      <TerminalPane projectHash="proj-1" placement="bottom" onTogglePlacement={vi.fn()} />,
+      <TerminalPane projectHash="proj-1" />,
     );
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", { projectHash: "proj-1" }));
     expect(termInstances).toHaveLength(1);
     unmount();
 
-    render(<TerminalPane projectHash="proj-1" placement="bottom" onTogglePlacement={vi.fn()} />);
+    render(<TerminalPane projectHash="proj-1" />);
     await waitFor(() => {
       const calls = invokeMock.mock.calls.filter(
         ([cmd, args]) => cmd === "terminal_spawn" && (args as { projectHash: string }).projectHash === "proj-1",
@@ -75,22 +74,10 @@ describe("TerminalPane", () => {
     expect(termInstances).toHaveLength(2);
   });
 
-  it("has no header of its own in the bottom panel — the tab strip is the header", () => {
+  it("has no header of its own — the panel that hosts it is the header", () => {
     // Two rows both saying "Terminal", stacked, was duplicate chrome.
-    render(<TerminalPane projectHash="proj-1" placement="bottom" onTogglePlacement={vi.fn()} />);
+    render(<TerminalPane projectHash="proj-1" />);
     expect(screen.queryByTestId("terminal-placement-toggle")).toBeNull();
     expect(screen.queryByText("Terminal")).toBeNull();
-  });
-
-  it("keeps its header in the sidebar, where nothing else labels it", async () => {
-    const user = userEvent.setup();
-    const onToggle = vi.fn();
-    render(
-      <TerminalPane projectHash="proj-1" placement="sidebar" onTogglePlacement={onToggle} />
-    );
-    const toggle = screen.getByTestId("terminal-placement-toggle");
-    expect(toggle.textContent).toMatch(/move to bottom/i);
-    await user.click(toggle);
-    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

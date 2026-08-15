@@ -507,6 +507,48 @@ describe("FileEditorPane", () => {
       expect(screen.queryByTestId("file-conflict-banner")).toBeNull();
     });
 
+    it("keeps the cursor put when the change is Floo's own save", async () => {
+      const { rerender } = render(
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={null}
+        />
+      );
+      await waitFor(() =>
+        expect(document.querySelector(".cm-content")?.textContent).toContain(
+          "line one"
+        )
+      );
+
+      const view = viewFromDom();
+      act(() => {
+        view.dispatch({ selection: { anchor: view.state.doc.length } });
+      });
+      const before = view.state.selection.main.head;
+      expect(before).toBeGreaterThan(0);
+
+      // Saving writes the file, which trips the watcher — disk now matches
+      // the buffer, so there is nothing to reload and nothing to reset.
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      rerender(
+        <FileEditorPane
+          projectHash="abc"
+          path="src/foo.ts"
+          externalChange={{ path: "src/foo.ts", at: 1 }}
+        />
+      );
+
+      await waitFor(() =>
+        expect(
+          invokeMock.mock.calls.filter((c) => c[0] === "read_file_content")
+            .length
+        ).toBeGreaterThan(1)
+      );
+      expect(viewFromDom()).toBe(view);
+      expect(view.state.selection.main.head).toBe(before);
+    });
+
     it("ignores a change to a different file", async () => {
       const { rerender } = render(
         <FileEditorPane

@@ -343,6 +343,14 @@ export const lspStatus = (projectHash: string, language: string) =>
   invoke<LspStatus>("lsp_status", { projectHash, language });
 export const lspShutdown = (projectHash: string) =>
   invoke<void>("lsp_shutdown", { projectHash });
+/** The command Floo would run to install this language's server, or null when
+ *  it knows none or the tool that would run it isn't on this machine. */
+export const lspInstallCommand = (language: string) =>
+  invoke<string | null>("lsp_install_command", { language });
+/** Installs the language server, using the toolchain already on the machine.
+ *  Rejects with the installer's own output when it fails. */
+export const lspInstall = (language: string) =>
+  invoke<void>("lsp_install", { language });
 
 // ------------------------------------------------------------- run commands
 
@@ -479,9 +487,13 @@ export type LogEntry = {
 export const gitLog = (projectHash: string, limit = 20) =>
   invoke<LogEntry[]>("git_log", { projectHash, limit });
 
-/** Source Control panel's **Generate**: drafts a message from the staged diff. */
-export const draftCommitMessage = (projectHash: string) =>
-  invoke<string>("draft_commit_message", { projectHash });
+/** Source Control panel's **Generate**: drafts a message from the staged diff.
+ *  `threadId` names the thread whose provider/model to draft with — the one
+ *  the user picked in the chat pane. Without it the draft ran on whatever
+ *  auto-detection found, on that agent's default model, which is a dead end
+ *  on a machine where that agent isn't installed or is over its usage limit. */
+export const draftCommitMessage = (projectHash: string, threadId: string | null) =>
+  invoke<string>("draft_commit_message", { projectHash, threadId });
 
 export type BranchInfo = {
   name: string;

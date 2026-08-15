@@ -140,13 +140,13 @@ export default function FilePalette({
     <Palette
       title="File palette"
       items={items}
-      renderItem={(item, { active, onSelect }) => {
+      renderItem={(item, { active, onMouseEnter }) => {
         if (item.kind === "create") {
           return (
             <li
               key={`create:${item.path}`}
               className={`file-palette-create ${active ? "active" : ""}`}
-              onMouseEnter={onSelect}
+              onMouseEnter={onMouseEnter}
               onClick={() => runCreate(item.path)}
               data-testid="file-palette-create"
             >
@@ -212,7 +212,7 @@ export default function FilePalette({
           <li
             key={path}
             className={active ? "active" : ""}
-            onMouseEnter={onSelect}
+            onMouseEnter={onMouseEnter}
             onClick={() => select(path)}
             data-testid="file-palette-result"
           >

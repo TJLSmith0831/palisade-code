@@ -188,4 +188,25 @@ describe("TextSearchPalette", () => {
     expect(onClose).toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it("hovering a result highlights it without opening it", async () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const matches: TextMatch[] = [{ path: "src/api.ts", line: 12, text: "export const foo = 1;" }];
+    render(
+      <TextSearchPalette
+        files={files}
+        onSearchText={vi.fn().mockResolvedValue({ matches, truncated: false })}
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("text-search-input"), { target: { value: "foo" } });
+    await waitFor(() => expect(screen.getByTestId("text-search-text-result")).toBeDefined());
+
+    fireEvent.mouseEnter(screen.getByTestId("text-search-text-result"));
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

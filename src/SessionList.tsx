@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Button, TextInput } from "@mantine/core";
-import { IconPlus, IconSearch } from "@tabler/icons-react";
+import { IconArchive, IconPencil, IconPlus, IconSearch } from "@tabler/icons-react";
 import type { Project, ThreadMeta } from "./api";
 
 // Amendment 3's Vibe-only session list: the browse/search surface, distinct
@@ -21,10 +21,14 @@ export function relativeTime(iso: string, now = Date.now()): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** Live threads matching `query`. Archived ones are out of this list by
+ *  design — it is the browse surface, and the History panel is where an
+ *  archived thread is found again and brought back. */
 export function filterThreads(threads: ThreadMeta[], query: string) {
+  const live = threads.filter((t) => !t.archived);
   const needle = query.trim().toLowerCase();
-  if (!needle) return threads;
-  return threads.filter((t) => t.title.toLowerCase().includes(needle));
+  if (!needle) return live;
+  return live.filter((t) => t.title.toLowerCase().includes(needle));
 }
 
 export default function SessionList({
@@ -35,6 +39,8 @@ export default function SessionList({
   liveThreadIds,
   onNewThread,
   onSelect,
+  onRename,
+  onArchive,
 }: {
   threads: ThreadMeta[];
   projects: Project[];
@@ -44,6 +50,8 @@ export default function SessionList({
   liveThreadIds: Set<string>;
   onNewThread: () => void;
   onSelect: (thread: ThreadMeta) => void;
+  onRename: (thread: ThreadMeta) => void;
+  onArchive: (thread: ThreadMeta) => void;
 }) {
   const [query, setQuery] = useState("");
   const visible = useMemo(() => filterThreads(threads, query), [threads, query]);
@@ -115,6 +123,34 @@ export default function SessionList({
                 <div className="ds-session-title">{thread.title}</div>
                 <div className="ds-session-meta">
                   {relativeTime(thread.updatedAt)}
+                </div>
+                {/* Same two verbs the Editor preset's History panel offers.
+                    stopPropagation, or the row's own click selects too. */}
+                <div className="ds-thread-actions">
+                  <button
+                    className="ds-thread-action"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRename(thread);
+                    }}
+                    title="Rename thread"
+                    aria-label="Rename thread"
+                    data-testid="session-rename"
+                  >
+                    <IconPencil size={13} />
+                  </button>
+                  <button
+                    className="ds-thread-action"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onArchive(thread);
+                    }}
+                    title="Archive thread"
+                    aria-label="Archive thread"
+                    data-testid="session-archive"
+                  >
+                    <IconArchive size={13} />
+                  </button>
                 </div>
                 {liveThreadIds.has(thread.id) && (
                   <span

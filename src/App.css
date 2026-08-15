@@ -2747,20 +2747,16 @@ details.graph-report-wrap > summary {
   border-right: none;
   border-left: 1px solid var(--border);
 }
-/* Vibe is chat-first: chat takes the reclaimed width, the editor a fixed
-   third, mirroring the mockup's 34% split. */
+/* Vibe is chat-first: chat is the sized element (a wide default, from its
+   own resizable) and the editor takes what's left. Chat used to be
+   `flex: 1 1 auto` here, which meant its --panel-w was ignored and the drag
+   handle moved nothing. */
 [data-preset="vibe"] .ds-chat-rail {
   order: -1;
-  width: auto;
-  flex: 1 1 auto;
   border-left: none;
   border-right: 1px solid var(--border);
 }
-[data-preset="vibe"] .ds-editor-col { order: 1; flex: 0 0 38%; }
-/* Vibe pins the editor to a fixed share so chat stays the subject. With
-   chat collapsed there is nothing to hold that share against, and the
-   reclaimed width sat empty — a collapsed panel gives its space back. */
-[data-preset="vibe"][data-chat="collapsed"] .ds-editor-col { flex: 1 1 auto; }
+[data-preset="vibe"] .ds-editor-col { order: 1; flex: 1 1 auto; }
 
 /* --- Vibe session list --------------------------------------------------- */
 
@@ -2798,6 +2794,19 @@ details.graph-report-wrap > summary {
 .ds-session-item.active {
   background: var(--active-row);
   border-left-color: var(--accent);
+}
+
+/* Rename/archive, same as the History panel's rows: pinned to the row's
+   right edge and revealed on hover, so a browse list stays a browse list. */
+.ds-session-item .ds-thread-actions {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+}
+
+.ds-session-item:hover .ds-thread-actions,
+.ds-session-item:focus-within .ds-thread-actions {
+  opacity: 1;
 }
 
 .ds-session-title {
@@ -3230,6 +3239,18 @@ details.graph-report-wrap > summary {
   color: var(--muted);
 }
 
+/* While one project is opening, the row says so and the rest stop inviting
+   a click that would race the switch already in flight. */
+.ds-onboarding-recent-row.opening {
+  background: var(--surface-warm);
+  cursor: progress;
+}
+
+.ds-onboarding-recent-row[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .ds-onboarding-recent-row:hover,
 .ds-onboarding-recent-row:focus-visible {
   background: var(--surface-warm);
@@ -3488,19 +3509,53 @@ details.graph-report-wrap > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: 6px;
   width: 100%;
   min-height: 32px;
 }
 
-.ds-composer-controls > [data-testid="executor-btn"],
-.ds-composer-controls > [data-testid="model-btn"] {
+/* The composer's two chips: icon · name · chevron, matching the mockup.
+   Only the name truncates — an icon-less, chevron-less stub reads as a
+   label rather than something you can open. */
+.ds-composer-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
   max-width: 45%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 120ms ease-out;
+}
+
+.ds-composer-picker-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ds-composer-picker:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
+.ds-composer-picker:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A pinned model is the one thing in this row worth reading first. */
+.ds-composer-picker.selected {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent), transparent 55%);
 }
 
 .ds-bp-count {

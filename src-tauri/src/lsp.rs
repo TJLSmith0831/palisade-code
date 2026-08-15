@@ -75,6 +75,72 @@ pub struct LspStatus {
     pub detail: Option<String>,
 }
 
+/// How to install a server Floo can't find, per language. First candidate
+/// whose installer is itself on PATH wins — a machine with `pipx` and one
+/// with `uv` both need python-lsp-server, and neither should have to know
+/// which of the two Floo happened to hardcode.
+///
+/// Deliberately still not a package manager (D6): this is one command per
+/// language, run on the user's say-so, using the toolchain they already have.
+/// Floo bundles nothing.
+const INSTALLERS: &[(&str, &[&[&str]])] = &[
+    (
+        "typescript",
+        &[&["npm", "install", "-g", "typescript-language-server", "typescript"]],
+    ),
+    (
+        "javascript",
+        &[&["npm", "install", "-g", "typescript-language-server", "typescript"]],
+    ),
+    (
+        "python",
+        &[
+            &["uv", "tool", "install", "python-lsp-server"],
+            &["pipx", "install", "python-lsp-server"],
+            &["python3", "-m", "pip", "install", "--user", "python-lsp-server"],
+        ],
+    ),
+    ("rust", &[&["rustup", "component", "add", "rust-analyzer"]]),
+];
+
+/// The install command Floo would run for `language`, given what's on PATH.
+/// None when Floo knows no installer, or knows one but its tool is missing —
+/// offering `pipx install …` on a machine without pipx is a dead button.
+fn installer_for(language: &str, on_path: &dyn Fn(&str) -> bool) -> Option<Vec<String>> {
+    let (_, candidates) = INSTALLERS.iter().find(|(lang, _)| *lang == language)?;
+    candidates
+        .iter()
+        .find(|argv| on_path(argv[0]))
+        .map(|argv| argv.iter().map(|part| part.to_string()).collect())
+}
+
+/// The install command for `language`, resolved against the real PATH.
+pub fn install_command(language: &str) -> Option<Vec<String>> {
+    installer_for(language, &|bin| which(bin).is_some())
+}
+
+/// Run the install command for `language` and wait for it. Errors carry the
+/// tool's own output — "npm ERR! EACCES" tells the user what to do next in a
+/// way "install failed" never will.
+pub fn install(language: &str) -> Res<()> {
+    let argv = install_command(language)
+        .ok_or_else(|| format!("no installer available for {language} on this machine"))?;
+    let output = Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()
+        .map_err(|err| format!("{}: {err}", argv[0]))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    Err(if detail.is_empty() {
+        format!("{} exited with {}", argv.join(" "), output.status)
+    } else {
+        detail.to_string()
+    })
+}
+
 /// The server command for a language, if Floo knows one.
 fn server_for(language: &str) -> Option<(&'static str, &'static [&'static str])> {
     SERVERS
@@ -535,5 +601,40 @@ mod tests {
     fn sending_to_a_language_with_no_server_is_an_error_not_a_silent_drop() {
         let servers = LspServers::new();
         assert!(servers.send("p", "rust", "{}").is_err());
+    }
+
+    /// The four languages the product promises out of the box (D6 amended:
+    /// Floo still installs nothing on its own, but it must know how).
+    #[test]
+    fn knows_how_to_install_the_baseline_languages() {
+        let everything = |_: &str| true;
+        for language in ["rust", "typescript", "javascript", "python"] {
+            assert!(
+                installer_for(language, &everything).is_some(),
+                "no installer for {language}"
+            );
+        }
+    }
+
+    #[test]
+    fn picks_the_first_installer_actually_on_path() {
+        let only_pipx = |bin: &str| bin == "pipx";
+        assert_eq!(
+            installer_for("python", &only_pipx),
+            Some(vec![
+                "pipx".to_string(),
+                "install".to_string(),
+                "python-lsp-server".to_string()
+            ])
+        );
+    }
+
+    /// A button offering `pipx install …` on a machine with no pipx is worse
+    /// than no button: it fails in a way the user can do nothing about.
+    #[test]
+    fn offers_nothing_when_no_installer_is_available() {
+        let nothing = |_: &str| false;
+        assert_eq!(installer_for("python", &nothing), None);
+        assert_eq!(installer_for("go", &|_: &str| true), None);
     }
 }

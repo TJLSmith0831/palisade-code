@@ -515,11 +515,31 @@ export default function FileEditorPane({
   dirtyRef.current = dirty;
   useEffect(() => {
     if (!externalChange || !path || externalChange.path !== path) return;
-    // Nothing of the user's to lose, so take the new version silently —
-    // this is also what makes an agent's edit show up while you watch.
-    if (!dirtyRef.current) reload();
-    else setConflict(true);
-  }, [externalChange, path, reload]);
+    if (dirtyRef.current) {
+      setConflict(true);
+      return;
+    }
+    // Floo's own save trips the watcher too, and a reload rebuilds the view
+    // from scratch — which threw the cursor and scroll position back to the
+    // top of the file on every save. Only rebuild when disk actually differs
+    // from what's on screen; that also skips no-op writes from anyone else.
+    let cancelled = false;
+    api
+      .readFileContent(projectHash, path)
+      .then((text) => {
+        if (cancelled) return;
+        // Nothing of the user's to lose, so take the new version silently —
+        // this is also what makes an agent's edit show up while you watch.
+        if (text !== viewRef.current?.state.doc.toString()) reload();
+      })
+      .catch(() => {
+        // A read that fails here is the watcher's problem, not the user's:
+        // leave the buffer alone rather than blanking it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [externalChange, path, projectHash, reload]);
 
   // Make a session available for `path`: restored from cache when this file
   // has been open before, otherwise read from disk.

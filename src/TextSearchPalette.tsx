@@ -298,13 +298,13 @@ export default function TextSearchPalette({
     <Palette
       title="Find in files"
       items={items}
-      renderItem={(item, { active, onSelect }) => {
+      renderItem={(item, { active, onSelect, onMouseEnter }) => {
         if (item.kind === "file") {
           return (
             <li
               key={item.path}
               className={active ? "active" : ""}
-              onMouseEnter={onSelect}
+              onMouseEnter={onMouseEnter}
               onClick={onSelect}
               data-testid="text-search-file-result"
               style={{
@@ -364,7 +364,7 @@ export default function TextSearchPalette({
           <li
             key={`${match.path}:${match.line}`}
             className={active ? "active" : ""}
-            onMouseEnter={onSelect}
+            onMouseEnter={onMouseEnter}
             onClick={onSelect}
             data-testid="text-search-text-result"
             style={{
