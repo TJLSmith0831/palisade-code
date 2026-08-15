@@ -201,7 +201,7 @@ pub struct AcpSpawn {
 // ------------------------------------------------------------- bridge
 
 /// Commands the sync side sends to the bridge thread.
-enum BridgeCommand {
+pub(crate) enum BridgeCommand {
     Prompt(String),
     Shutdown,
 }
@@ -878,7 +878,7 @@ fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
 
 /// A session handle for tests that never touch a transport.
 #[cfg(test)]
-fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>) {
+pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>) {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     (
         AcpSession {

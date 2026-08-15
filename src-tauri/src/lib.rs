@@ -610,8 +610,12 @@ fn start_session(
 /// When the thread's executor choice no longer matches the live session's
 /// agent, the old session is closed (`switched`) and the new agent starts
 /// fresh — the previous turns ride along as a raw-text transcript prepended
-/// to the first prompt (D6/D7). The returned `Option` is that transcript
-/// prefix, when a handoff happened.
+/// to the first prompt (D6/D7).
+///
+/// That transcript is parked on the new session (`pending_prefix`) and drained
+/// by `send_to`, rather than returned to the caller. `/go` brings a session up
+/// without sending a prompt, so a returned prefix was simply dropped there and
+/// the next turn reached the new agent with no history at all.
 fn ensure_session(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
@@ -620,7 +624,7 @@ fn ensure_session(
     mode: &str,
     model: Option<String>,
     bypass: bool,
-) -> Res<(String, Option<String>)> {
+) -> Res<String> {
     let (agent, _) = selected_executor(app, harness, project_hash, Some(thread_id))?;
     if let Some(id) = find_live_session(harness, thread_id, mode) {
         let matches = harness
@@ -630,7 +634,7 @@ fn ensure_session(
             .get(&id)
             .is_some_and(|s| s.agent_id == agent.id);
         if matches {
-            return Ok((id, None));
+            return Ok(id);
         }
         // Agent changed under a live session: hand off (D6). The transcript
         // budget is a fixed default until the new agent reports its context
@@ -663,16 +667,23 @@ fn ensure_session(
         // handoff, so the new agent doesn't lose the framing if the original
         // turn was truncated by the 100k budget. Only when spec_type is set
         // and no open change exists. Prepended to the transcript prefix.
+        //
+        // Spec-mode only: the reinjection carries the grill-explore skill, and
+        // pushing that into a go-mode handoff told an agent mid-build to start
+        // interviewing the user about the concept instead.
         let reinjection = thread_meta(project_hash, thread_id)
-            .and_then(|m| spec_type_reinjection(&m));
+            .and_then(|m| spec_type_reinjection(mode, &m));
         let prefix = match (reinjection, transcript_prefix) {
             (Some(reinjection), Some(tp)) => Some(format!("{reinjection}\n\n{tp}")),
             (Some(reinjection), None) => Some(reinjection),
             (None, tp) => tp,
         };
-        return Ok((new_id, prefix));
+        if let Some(prefix) = prefix {
+            harness.pending_prefix.lock().unwrap().insert(new_id.clone(), prefix);
+        }
+        return Ok(new_id);
     }
-    Ok((start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?, None))
+    start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)
 }
 
 /// Whether starting a session here collides with one Floo can't coordinate.
@@ -706,6 +717,7 @@ fn collision_warning(
 
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
+    harness.pending_prefix.lock().unwrap().remove(session_id);
     if let Some(mut session) = harness.acp_sessions.lock().unwrap().remove(session_id) {
         session.terminate();
         let head_after = git_bin()
@@ -771,30 +783,33 @@ async fn send_message(
             // Chat-only mode: the turn is still recorded, nothing answers it.
             return Ok(message);
         }
-        let (id, handoff) =
+        let id =
             ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
-        let content = match handoff {
-            Some(prefix) => format!("{prefix}\n\n{content}"),
-            None => content,
-        };
-        send_to(&app, &harness, &project_hash, &id, &content)?;
+        send_to(&harness, &project_hash, &id, &content)?;
         Ok(message)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// Send one turn to a named live session.
+/// Send one turn to a named live session, carrying any handoff transcript
+/// parked on it by `ensure_session`. Draining here — rather than at each call
+/// site — is what keeps a caller that starts a session without prompting
+/// (`/go`) from silently discarding the conversation so far.
 fn send_to(
-    _app: &tauri::AppHandle,
-    harness: &tauri::State<'_, Harness>,
+    harness: &Harness,
     _project_hash: &str,
     session_id: &str,
     content: &str,
 ) -> Res<()> {
-    let sessions = harness.acp_sessions.lock().unwrap();
-    let session = sessions.get(session_id).ok_or("executor session is not running")?;
-    acp_client::send_acp_prompt(session, content)
+    let prefixed = harness.with_pending_prefix(session_id, content);
+    {
+        let sessions = harness.acp_sessions.lock().unwrap();
+        let session = sessions.get(session_id).ok_or("executor session is not running")?;
+        acp_client::send_acp_prompt(session, &prefixed)?;
+    }
+    harness.clear_pending_prefix(session_id);
+    Ok(())
 }
 
 /// `/go`: bring up a write-enabled session on this thread.
@@ -841,7 +856,12 @@ fn framed_spec_body(spec_type: &str) -> String {
 /// prepend to the handoff prefix. None when conditions aren't met — and
 /// `ensure_session` only calls this in the handoff path (same-agent restart
 /// returns None prefix, so no reinjection happens there).
-fn spec_type_reinjection(meta: &store::ThreadMeta) -> Option<String> {
+fn spec_type_reinjection(mode: &str, meta: &store::ThreadMeta) -> Option<String> {
+    // The reinjection is the grill-explore skill; go-mode injects no skill
+    // (D19), and handing it to a go session mid-build restarts the interview.
+    if mode != "spec" {
+        return None;
+    }
     match (&meta.spec_type, &meta.open_spec_change_name) {
         (Some(spec_type), None) => Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type))),
         _ => None,
@@ -886,12 +906,8 @@ async fn spec_mode(
         };
         if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
-                let (id, handoff) =
+                let id =
                     ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
-                let full_prompt = match handoff {
-                    Some(prefix) => format!("{prefix}\n\n{prompt}"),
-                    None => prompt,
-                };
                 // Persist only the spec type as the visible user message —
                 // the skill instructions are sent to the agent but not shown
                 // in the chat. The user sees "Feature" (or "Bugfix", etc.),
@@ -905,7 +921,7 @@ async fn spec_mode(
                     &spec_type,
                     Some(&id),
                 )?;
-                send_to(&app, &harness, &project_hash, &id, &full_prompt)?;
+                send_to(&harness, &project_hash, &id, &prompt)?;
             }
         }
         Ok(meta)
@@ -986,13 +1002,9 @@ async fn propose(
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let root = project_root(&project_hash)?;
-        let (id, handoff) =
+        let id =
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
         let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
-        let full_prompt = match handoff {
-            Some(prefix) => format!("{prefix}\n\n{prompt}"),
-            None => prompt,
-        };
 
         *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
             project_hash: project_hash.clone(),
@@ -1012,7 +1024,7 @@ async fn propose(
             "grill-propose",
             Some(&id),
         )?;
-        send_to(&app, &harness, &project_hash, &id, &full_prompt)
+        send_to(&harness, &project_hash, &id, &prompt)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1173,13 +1185,9 @@ async fn apply_skill(
         let change = meta
             .open_spec_change_name
             .ok_or("no open spec change — apply requires a proposal")?;
-        let (id, handoff) =
+        let id =
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
         let prompt = apply_skill_prompt(&change);
-        let full_prompt = match handoff {
-            Some(prefix) => format!("{prefix}\n\n{prompt}"),
-            None => prompt,
-        };
         // Persist only the short label — the skill content goes to the agent
         // but is not shown in the chat.
         store::append_message(
@@ -1191,7 +1199,7 @@ async fn apply_skill(
             &format!("grill-apply {change}"),
             Some(&id),
         )?;
-        send_to(&app, &harness, &project_hash, &id, &full_prompt)
+        send_to(&harness, &project_hash, &id, &prompt)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2154,7 +2162,7 @@ mod tests {
     #[test]
     fn spec_type_reinjection_with_stored_type_and_no_change_returns_framing() {
         let meta = thread_meta_with_spec_type(None, Some("Feature"));
-        let reinjection = spec_type_reinjection(&meta).unwrap();
+        let reinjection = spec_type_reinjection("spec", &meta).unwrap();
         // The grill-explore skill content is prepended.
         assert!(reinjection.contains("grill-explore"));
         assert!(reinjection.contains("---"));
@@ -2166,20 +2174,89 @@ mod tests {
         );
     }
 
+    /// A handoff prefix parked by `ensure_session` must survive a caller that
+    /// starts the session without prompting (`/go`) and ride along with the
+    /// next turn instead. Without the parking, `/go` dropped the transcript
+    /// and the new agent answered the next question with "NO CONTEXT".
+    #[test]
+    fn parked_handoff_prefix_rides_along_with_the_next_turn() {
+        let harness = Harness::default();
+        harness
+            .pending_prefix
+            .lock()
+            .unwrap()
+            .insert("s1".into(), "TRANSCRIPT".into());
+
+        // What `send_to` hands the agent.
+        assert_eq!(harness.with_pending_prefix("s1", "hello"), "TRANSCRIPT\n\nhello");
+        // Still parked until the send succeeds — a failed send must not eat it.
+        assert_eq!(harness.with_pending_prefix("s1", "retry"), "TRANSCRIPT\n\nretry");
+        harness.clear_pending_prefix("s1");
+        // Sent once, not re-sent on every later turn.
+        assert_eq!(harness.with_pending_prefix("s1", "next"), "next");
+        // A session with nothing parked is untouched.
+        assert_eq!(harness.with_pending_prefix("s2", "plain"), "plain");
+    }
+
+    /// The bytes the agent actually receives. `/go` performs the handoff but
+    /// sends no prompt of its own, so the transcript has to survive until the
+    /// user's next turn — this asserts on what reaches the transport, not on
+    /// what a model says about it.
+    #[test]
+    fn the_agent_receives_the_handoff_transcript_on_the_turn_after_go() {
+        let (session, mut rx) = acp_client::stub_session(false);
+        let harness = Harness::default();
+        let id = session.id.clone();
+        harness.acp_sessions.lock().unwrap().insert(id.clone(), session);
+        // What ensure_session parks when /go hands off to a new agent.
+        harness
+            .pending_prefix
+            .lock()
+            .unwrap()
+            .insert(id.clone(), "This conversation was handed off. Transcript:\n\nUser: use notes_index.py".into());
+
+        send_to(&harness, "p1", &id, "carry on").unwrap();
+
+        let sent = match rx.try_recv().expect("a prompt reached the transport") {
+            acp_client::BridgeCommand::Prompt(text) => text,
+            _ => panic!("expected a prompt"),
+        };
+        assert!(sent.contains("notes_index.py"), "the transcript must ride along: {sent}");
+        assert!(sent.ends_with("carry on"), "the user's turn must be last: {sent}");
+
+        // …and only on that turn: once sent, it is no longer parked, so the
+        // next turn goes out bare. (A second send here would be rejected as
+        // mid-turn — that is `send_acp_prompt`'s busy guard, not this path.)
+        assert!(
+            harness.pending_prefix.lock().unwrap().is_empty(),
+            "a delivered transcript must not be re-sent on the next turn"
+        );
+    }
+
+    /// A go-mode handoff must not re-inject the grill-explore framing: the
+    /// reinjection carries the skill, and a mid-build agent that receives it
+    /// stops building and restarts the interview.
+    #[test]
+    fn spec_type_reinjection_is_spec_mode_only() {
+        let meta = thread_meta_with_spec_type(None, Some("Feature"));
+        assert!(spec_type_reinjection("spec", &meta).is_some());
+        assert_eq!(spec_type_reinjection("go", &meta), None);
+    }
+
     /// RED→GREEN D12: on same-agent restart (no handoff), `ensure_session`
     /// returns None prefix — no reinjection. The pure function also returns
     /// None when a change is open, so even if called it wouldn't inject.
     #[test]
     fn spec_type_reinjection_with_open_change_is_none() {
         let meta = thread_meta_with_spec_type(Some("my-change"), Some("Feature"));
-        assert_eq!(spec_type_reinjection(&meta), None);
+        assert_eq!(spec_type_reinjection("spec", &meta), None);
     }
 
     /// RED→GREEN D12: no stored spec_type → no reinjection (nothing to re-inject).
     #[test]
     fn spec_type_reinjection_without_stored_type_is_none() {
         let meta = thread_meta_with_spec_type(None, None);
-        assert_eq!(spec_type_reinjection(&meta), None);
+        assert_eq!(spec_type_reinjection("spec", &meta), None);
     }
 
     // --------------------------------------------------- 6a.2: apply_skill one-shot

@@ -396,6 +396,11 @@ pub struct Harness {
     /// Every live ACP session, keyed by its own id.
     pub acp_sessions: Mutex<HashMap<String, AcpSession>>,
     pub preflight: Mutex<Option<crate::acp_preflight::Preflight>>,
+    /// Handoff transcripts waiting to ride along with a session's next prompt,
+    /// keyed by session id. `ensure_session` parks the prefix here rather than
+    /// handing it back, because a caller that starts a session without sending
+    /// a prompt (`/go`) would otherwise drop it and lose the conversation.
+    pub pending_prefix: Mutex<HashMap<String, String>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
     pub watch: Mutex<Option<crate::integrations::Watcher>>,
     pub terminal: Mutex<Option<(String, crate::terminal::Terminal)>>,
@@ -420,6 +425,7 @@ impl Default for Harness {
         Self {
             acp_sessions: Default::default(),
             preflight: Default::default(),
+            pending_prefix: Default::default(),
             pending_propose: Default::default(),
             watch: Default::default(),
             terminal: Default::default(),
@@ -435,6 +441,22 @@ impl Default for Harness {
 }
 
 impl Harness {
+    /// The text to actually send on a session: any handoff transcript parked
+    /// for it rides along with this turn. Peeks rather than drains — a send
+    /// that fails (session gone, agent mid-turn) must leave the transcript
+    /// parked for the next attempt instead of eating it.
+    pub fn with_pending_prefix(&self, session_id: &str, content: &str) -> String {
+        match self.pending_prefix.lock().unwrap().get(session_id) {
+            Some(prefix) => format!("{prefix}\n\n{content}"),
+            None => content.to_string(),
+        }
+    }
+
+    /// Drop a session's parked transcript, once it has actually been sent.
+    pub fn clear_pending_prefix(&self, session_id: &str) {
+        self.pending_prefix.lock().unwrap().remove(session_id);
+    }
+
     /// Whether *any* of a thread's sessions is mid-turn. A thread can hold
     /// several at once, so checking only the most recent one would let a
     /// delete land on files a live turn is about to append to.
