@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -99,7 +99,14 @@ pub fn run_format_on_save(settings: &ProjectSettings, project_root: &Path, relat
         .map(|(_, command)| command)?;
 
     let full_command = format!("{command} {}", shell_quote(relative_path));
-    let output = Command::new("sh").arg("-c").arg(&full_command).current_dir(project_root).output();
+    // No stdin: a command that reads it (`npx` confirming a fetch, a formatter
+    // defaulting to stdin) would otherwise block the save forever.
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&full_command)
+        .current_dir(project_root)
+        .stdin(Stdio::null())
+        .output();
     Some(match output {
         Ok(output) => {
             let body = String::from_utf8_lossy(if output.status.success() {
@@ -196,6 +203,7 @@ pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -
         .arg("-c")
         .arg(&command)
         .current_dir(project_root)
+        .stdin(Stdio::null())
         .output()
         .map_err(|err| format!("{command} failed to start: {err}"))?;
 
