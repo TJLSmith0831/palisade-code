@@ -1326,7 +1326,15 @@ async fn run_verify(
         }
 
         std::thread::spawn(move || {
-            let head = git_bin().ok().and_then(|bin| git::rev_parse_head(&bin, &root));
+            // `-dirty` follows git-describe: a run against an uncommitted tree
+            // cannot claim the commit it started from, or the evidence is a lie.
+            let head = git_bin().ok().and_then(|bin| {
+                let head = git::rev_parse_head(&bin, &root)?;
+                Some(match git::porcelain_snapshot(&bin, &root).is_empty() {
+                    true => head,
+                    false => format!("{head}-dirty"),
+                })
+            });
             let outcome = settings::run_verify(&settings, &root, &name);
             let run = match outcome {
                 Ok(outcome) => store::VerificationRun {

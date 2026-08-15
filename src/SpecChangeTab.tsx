@@ -48,7 +48,8 @@ const emptyArtifact: ArtifactState = {
   error: null,
 };
 
-const shortCommit = (head: string | null) => head?.slice(0, 7) ?? "no commit";
+const shortCommit = (head: string | null) =>
+  head ? head.slice(0, 7) + (head.endsWith("-dirty") ? "-dirty" : "") : "no commit";
 
 /** Parses `- [ ]` and `- [x]` checkboxes from `tasks.md` into a structured
  * list. Tasks outside checkbox lines are ignored — the task list is the

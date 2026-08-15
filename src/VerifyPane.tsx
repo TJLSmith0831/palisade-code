@@ -22,7 +22,8 @@ type Props = {
   threadId?: string | null;
 };
 
-const shortCommit = (head: string | null) => head?.slice(0, 7) ?? "no commit";
+const shortCommit = (head: string | null) =>
+  head ? head.slice(0, 7) + (head.endsWith("-dirty") ? "-dirty" : "") : "no commit";
 
 /**
  * What has actually been verified, and nothing more.
