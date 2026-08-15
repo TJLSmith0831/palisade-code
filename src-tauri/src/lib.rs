@@ -495,7 +495,7 @@ fn selected_executor(
     project_hash: &str,
     thread_id: Option<&str>,
 ) -> Res<(acp_preflight::AgentStatus, PathBuf)> {
-    let flight = {
+    let mut flight = {
         let mut cached = harness.preflight.lock().unwrap();
         if cached.is_none() {
             *cached = Some(acp_preflight::preflight(
@@ -511,6 +511,14 @@ fn selected_executor(
             .ok()
             .and_then(|root| settings::load(&root).0.executor_override)
     });
+    // Preflight is a launch-time snapshot, so an agent installed while Floo is
+    // running reads as missing. Re-detect once before warning about an override.
+    if let Some(id) = &override_id {
+        if flight.agent(id).is_none_or(|a| a.path.is_none()) {
+            flight = acp_preflight::preflight(&store::floo_home(), &|bin| executor::find_on_path(bin));
+            *harness.preflight.lock().unwrap() = Some(flight.clone());
+        }
+    }
     let (agent, warning) = resolve_executor(&flight, override_id)?;
     if let Some(message) = warning {
         let _ = app.emit("harness-warning", message);
