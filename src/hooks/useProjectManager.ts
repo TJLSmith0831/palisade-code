@@ -52,6 +52,16 @@ export function useProjectManager() {
     [thread?.id]
   );
 
+  /** Archive/unarchive in place — the row stays in `threads`, it just
+   *  drops out of the default History list. */
+  const setThreadArchived = useCallback(
+    async (projectHash: string, threadId: string, archived: boolean) => {
+      const updated = await api.setThreadArchived(projectHash, threadId, archived);
+      setThreads((prev) => prev.map((t) => (t.id === threadId ? updated : t)));
+    },
+    []
+  );
+
   const setThreadMode = useCallback(
     async (projectHash: string, threadId: string, mode: Mode) => {
       const updated = await api.setThreadMode(projectHash, threadId, mode);
@@ -104,6 +114,7 @@ export function useProjectManager() {
       createThread,
       renameThread,
       deleteThread,
+      setThreadArchived,
       setThreadMode,
       setThreadExecutor,
     }),
@@ -119,6 +130,7 @@ export function useProjectManager() {
       createThread,
       renameThread,
       deleteThread,
+      setThreadArchived,
       setThreadMode,
       setThreadExecutor,
     ]

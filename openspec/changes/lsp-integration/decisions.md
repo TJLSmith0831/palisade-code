@@ -101,3 +101,34 @@
 - **Decision**: Riskiest part is Rust LSP server process management and WebSocket bridge (new lsp.rs module) because it involves process spawning, stdio communication, and WebSocket protocol handling - areas where bugs can cause hangs or crashes. It's the foundation everything else builds on.
 - **Why**: Process lifecycle bugs (leaked processes, zombie processes) are particularly hard to debug. We should implement and test this with a single LSP server (e.g., typescript-language-server) before expanding to multiple languages.
 - **Source**: recommended-accepted
+
+## D12 revision — Tauri IPC transport instead of a WebSocket bridge
+
+**Decision (implementation, shell-redesign Phase 4):** the frontend talks to
+the Rust-managed language servers over Tauri's existing command + event
+channel (`lsp_send` / `lsp-message`), not over a WebSocket bridge.
+
+**Rationale:** D12 chose WebSockets because "the frontend can't spawn
+processes due to Tauri security". That premise is unchanged and still
+correct — the servers are still spawned and owned by Rust
+(`src-tauri/src/lsp.rs`). What changed is the observation that
+`@codemirror/lsp-client`'s `Transport` is three methods
+(`send`/`subscribe`/`unsubscribe`), which the existing IPC channel already
+satisfies. Adding a WebSocket server would introduce dynamic port
+allocation, a second framing layer and a second transport to keep alive —
+three of the five risks D12's own risk list names — to reach the same
+interface. Content-Length framing on the servers' stdio is still handled in
+Rust, which is where it belongs.
+
+**Unchanged by this:** server lifecycle (D15, per language per project),
+detection (D5/D13, PATH only), failure handling (D14, restart ×3 with
+backoff then disable), and language coverage (D4).
+
+**Verified live** (2026-08-14, Tauri MCP against a debug build): a real
+`typescript-language-server` initialized and published diagnostics into the
+Problems tab; a deliberately broken `rust-analyzer` shim produced
+crash → restart(1/3) → crash → restart(2/3) → crash → disabled, each state
+visible in the editor status bar, with syntax highlighting intact
+throughout.
+
+> > > > > > > shell-redesign-and-mvp-finalization

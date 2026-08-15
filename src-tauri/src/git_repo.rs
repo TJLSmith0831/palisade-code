@@ -140,7 +140,7 @@ impl GitRepo for ShellGitRepo {
     }
 
     fn porcelain_snapshot(&self, root: &Path) -> Vec<String> {
-        let mut paths: Vec<String> = run_git(root, &["status", "--porcelain=v1"])
+        let mut paths: Vec<String> = run_git(root, &["status", "--porcelain=v1", "-uall"])
             .unwrap_or_default()
             .lines()
             .filter(|line| line.len() > 3)
@@ -156,7 +156,10 @@ impl GitRepo for ShellGitRepo {
     }
 
     fn status(&self, root: &Path) -> Res<Vec<FileStatus>> {
-        let raw = run_git_res(root, &["status", "--porcelain=v1"])?;
+        // `-uall` lists untracked *files* rather than collapsing a new
+        // directory into one row: a row that names a directory is a row the
+        // user can't open, diff, or stage meaningfully.
+        let raw = run_git_res(root, &["status", "--porcelain=v1", "-uall"])?;
         Ok(raw
             .lines()
             .filter(|line| line.len() > 3)

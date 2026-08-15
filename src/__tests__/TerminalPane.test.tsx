@@ -75,20 +75,22 @@ describe("TerminalPane", () => {
     expect(termInstances).toHaveLength(2);
   });
 
-  it("shows a toggle labeled for the current placement and calls onTogglePlacement on click", async () => {
-    const user = userEvent.setup();
-    const onToggle = vi.fn();
-    render(<TerminalPane projectHash="proj-1" placement="bottom" onTogglePlacement={onToggle} />);
-
-    const toggle = screen.getByTestId("terminal-placement-toggle");
-    expect(toggle.textContent).toMatch(/move to sidebar/i);
-
-    await user.click(toggle);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+  it("has no header of its own in the bottom panel — the tab strip is the header", () => {
+    // Two rows both saying "Terminal", stacked, was duplicate chrome.
+    render(<TerminalPane projectHash="proj-1" placement="bottom" onTogglePlacement={vi.fn()} />);
+    expect(screen.queryByTestId("terminal-placement-toggle")).toBeNull();
+    expect(screen.queryByText("Terminal")).toBeNull();
   });
 
-  it("labels the toggle the other way when placed in the sidebar", () => {
-    render(<TerminalPane projectHash="proj-1" placement="sidebar" onTogglePlacement={vi.fn()} />);
-    expect(screen.getByTestId("terminal-placement-toggle").textContent).toMatch(/move to bottom/i);
+  it("keeps its header in the sidebar, where nothing else labels it", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <TerminalPane projectHash="proj-1" placement="sidebar" onTogglePlacement={onToggle} />
+    );
+    const toggle = screen.getByTestId("terminal-placement-toggle");
+    expect(toggle.textContent).toMatch(/move to bottom/i);
+    await user.click(toggle);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

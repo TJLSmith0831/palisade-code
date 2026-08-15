@@ -1,6 +1,11 @@
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render as rtlRender, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 
@@ -98,40 +103,7 @@ describe("DiffPane", () => {
     expect(screen.queryByTestId("staged-section")).toBeNull();
   });
 
-  it("commit button is disabled with an empty message or nothing staged, enabled once both are satisfied", async () => {
-    const user = userEvent.setup();
-    mockGit((cmd) => {
-      if (cmd === "git_staged_diff") return Promise.resolve(ONE_HUNK_DIFF);
-      if (cmd === "git_commit") return Promise.resolve();
-      return undefined;
-    });
 
-    render(<DiffPane projectHash="proj-1" />);
-    await waitFor(() => expect(screen.getByTestId("staged-section")).toBeDefined());
-
-    const commitBtn = screen.getByTestId("commit-btn") as HTMLButtonElement;
-    expect(commitBtn.disabled).toBe(true); // nothing typed yet
-
-    await user.type(screen.getByTestId("commit-message"), "a real message");
-    expect(commitBtn.disabled).toBe(false);
-
-    await user.click(commitBtn);
-    expect(invokeMock).toHaveBeenCalledWith(
-      "git_commit",
-      expect.objectContaining({ projectHash: "proj-1", message: "a real message" }),
-    );
-  });
-
-  it("commit button stays disabled when there is nothing staged, even with a message typed", async () => {
-    const user = userEvent.setup();
-    mockGit(() => undefined);
-
-    render(<DiffPane projectHash="proj-1" />);
-    await waitFor(() => expect(screen.getByText(/working tree clean/i)).toBeDefined());
-
-    await user.type(screen.getByTestId("commit-message"), "a real message");
-    expect((screen.getByTestId("commit-btn") as HTMLButtonElement).disabled).toBe(true);
-  });
 
   it("shows Initialize Repository instead of the diff UI when the project isn't a git repo", async () => {
     mockGit((cmd) => {
@@ -165,29 +137,6 @@ describe("DiffPane", () => {
     expect(invokeMock).toHaveBeenCalledWith("git_init", expect.objectContaining({ projectHash: "proj-1" }));
   });
 
-  it("Pull and Push show ahead/behind counts and call the right commands", async () => {
-    const user = userEvent.setup();
-    mockGit((cmd) => {
-      if (cmd === "git_ahead_behind") return Promise.resolve([2, 3]);
-      if (cmd === "git_pull") return Promise.resolve("");
-      if (cmd === "git_push") return Promise.resolve("");
-      if (cmd === "git_fetch") return Promise.resolve();
-      return undefined;
-    });
-
-    render(<DiffPane projectHash="proj-1" />);
-    await waitFor(() => expect(screen.getByTestId("pull-btn").textContent).toContain("3"));
-    expect(screen.getByTestId("push-btn").textContent).toContain("2");
-
-    await user.click(screen.getByTestId("fetch-btn"));
-    expect(invokeMock).toHaveBeenCalledWith("git_fetch", expect.objectContaining({ projectHash: "proj-1" }));
-
-    await user.click(screen.getByTestId("pull-btn"));
-    expect(invokeMock).toHaveBeenCalledWith("git_pull", expect.objectContaining({ projectHash: "proj-1" }));
-
-    await user.click(screen.getByTestId("push-btn"));
-    expect(invokeMock).toHaveBeenCalledWith("git_push", expect.objectContaining({ projectHash: "proj-1" }));
-  });
 
   it("discarding a file's changes asks for confirmation before calling git_discard_file", async () => {
     const user = userEvent.setup();
@@ -225,10 +174,56 @@ describe("DiffPane", () => {
     expect(screen.queryByRole("heading", { level: 4 })).toBeNull();
   });
 
-  it("labels the commit message textarea, not just its placeholder", async () => {
+
+  it("is a diff viewer, not a second commit surface", async () => {
+    // The Source Control panel owns commit, fetch/pull/push (Amendment 7).
+    // This pane used to carry its own copies, which sat right beside the
+    // panel's when a change was clicked open.
     mockGit(() => undefined);
-    render(<DiffPane projectHash="proj-1" />);
-    await waitFor(() => expect(screen.getByTestId("commit-message")).toBeDefined());
-    expect(screen.getByLabelText(/commit message/i)).toBe(screen.getByTestId("commit-message"));
+    render(<DiffPane projectHash="p1" />);
+    await screen.findByTestId("diff-pane");
+    expect(screen.queryByTestId("commit-btn")).toBeNull();
+    expect(screen.queryByTestId("commit-message")).toBeNull();
+    expect(screen.queryByTestId("fetch-btn")).toBeNull();
+    expect(screen.queryByTestId("pull-btn")).toBeNull();
+    expect(screen.queryByTestId("push-btn")).toBeNull();
+  });
+
+  it("shows one file when focused, and everything again when cleared", async () => {
+    const onClearFocus = vi.fn();
+    mockGit((cmd) => {
+      if (cmd === "git_status")
+        return [
+          { path: "a.ts", code: " M" },
+          { path: "b.ts", code: " M" },
+        ];
+      if (cmd === "git_working_diff")
+        return [
+          "diff --git a/a.ts b/a.ts",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +1 @@",
+          "-one",
+          "+ONE",
+          "diff --git a/b.ts b/b.ts",
+          "--- a/b.ts",
+          "+++ b/b.ts",
+          "@@ -1 +1 @@",
+          "-two",
+          "+TWO",
+        ].join("\n");
+      return undefined;
+    });
+
+    render(
+      <DiffPane projectHash="p1" focusPath="a.ts" onClearFocus={onClearFocus} />
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId("diff-file")).toHaveLength(1)
+    );
+    expect(screen.getByTestId("diff-focus-bar").textContent).toContain("a.ts");
+
+    fireEvent.click(screen.getByTestId("diff-show-all"));
+    expect(onClearFocus).toHaveBeenCalled();
   });
 });

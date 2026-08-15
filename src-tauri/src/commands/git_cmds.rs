@@ -53,9 +53,28 @@ pub async fn git_stage_file(project_hash: String, path: String) -> Res<()> {
 }
 
 #[tauri::command]
+pub async fn git_unstage_file(project_hash: String, path: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::unstage_file(&git_bin()?, &project_root(&project_hash)?, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn git_commit(project_hash: String, message: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         git::commit(&git_bin()?, &project_root(&project_hash)?, &message)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Amendment 7's read-only commit graph.
+#[tauri::command]
+pub async fn git_log(project_hash: String, limit: u32) -> Res<Vec<git::LogEntry>> {
+    tokio::task::spawn_blocking(move || {
+        git::log(&git_bin()?, &project_root(&project_hash)?, limit)
     })
     .await
     .map_err(|e| e.to_string())?

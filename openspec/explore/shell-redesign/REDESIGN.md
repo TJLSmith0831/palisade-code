@@ -3,7 +3,7 @@
 **Audience: an Opus-model coding agent working this in an isolated git
 worktree.** This doc is the condensed decision record. `MEGA_PROMPT.md` in
 this directory is the instruction set — read it first, it's the thing you
-execute. This doc is *why* those instructions say what they say, plus the
+execute. This doc is _why_ those instructions say what they say, plus the
 task list and the quality gate you run before calling any of it done.
 `mockup.html` in this directory is the visual reference — open it in a
 browser before writing any shell-layout code. Treat disagreement between
@@ -71,12 +71,12 @@ Not a spec written from imagination. Produced across one conversation via:
 
 ## Competitive research summary
 
-| Tool | Left rail / activity bar | Chat/agent surface | Diagnostics | Debugger emphasis |
-|---|---|---|---|---|
-| Zed | Left/right/bottom "docks", user-repositionable, icon-driven | Editor+agent, agent optional | — | Not a differentiator |
-| Cursor | VS Code-style vertical rail (most users revert from default horizontal) | Right sidebar / Agent Tabs | — | Not a differentiator |
-| Windsurf | Left: Explorer/Search/Source Control/Extensions | Right: Cascade panel | **Bottom dock Problems tab** | Not a differentiator |
-| Kiro | Same spine + **own custom icon** for Specs/Steering/Hooks/MCP | Chat, Vibe/Spec modes | — | Not a differentiator |
+| Tool     | Left rail / activity bar                                                | Chat/agent surface           | Diagnostics                  | Debugger emphasis    |
+| -------- | ----------------------------------------------------------------------- | ---------------------------- | ---------------------------- | -------------------- |
+| Zed      | Left/right/bottom "docks", user-repositionable, icon-driven             | Editor+agent, agent optional | —                            | Not a differentiator |
+| Cursor   | VS Code-style vertical rail (most users revert from default horizontal) | Right sidebar / Agent Tabs   | —                            | Not a differentiator |
+| Windsurf | Left: Explorer/Search/Source Control/Extensions                         | Right: Cascade panel         | **Bottom dock Problems tab** | Not a differentiator |
+| Kiro     | Same spine + **own custom icon** for Specs/Steering/Hooks/MCP           | Chat, Vibe/Spec modes        | —                            | Not a differentiator |
 
 Takeaways this redesign is built on:
 
@@ -86,8 +86,7 @@ Takeaways this redesign is built on:
    precedent for Floo's own "Specs" rail icon — not scope creep.
 3. Windsurf's Problems-tab-in-bottom-dock independently validates this
    redesign's Amendment 2 placement.
-4. **No competitor treats step-through debugging as a differentiator in
-   2026.** Skipping DAP (run-debug-buttons' original Non-Goal) is not a
+4. **No competitor treats step-through debugging as a differentiator in 2026.** Skipping DAP (run-debug-buttons' original Non-Goal) is not a
    competitive gap — don't second-guess that decision.
 5. Cursor's ghost-text completion is the bar for FIM quality; Floo's model
    is already competitive — the gap this redesign closes is **visibility**
@@ -112,15 +111,15 @@ other lacks.
 
 ## Rejected mockup elements (do not reintroduce)
 
-| Element | Why rejected |
-|---|---|
-| `SPEC`/`PLAN`/`CHAT` thread badges | Doesn't exist in code; CLAUDE.md is explicit: two modes only |
-| Generic extensions/puzzle-piece icon | `lsp-integration` D6 rules out an extension ecosystem; superseded by the Specs rail icon |
-| Title-bar "Auto" dropdown | Undefined in both proposals, in the mockup, and in the live app (no tooltip) — do not invent functionality for it |
-| DAP/breakpoint UI | No competitor treats it as a differentiator; explicit Non-Goal in `run-debug-buttons/design.md` |
-| Run button in TabBar (design.md's original D4) | Superseded — see Amendment 1, now title bar + rail |
+| Element                                                | Why rejected                                                                                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SPEC`/`PLAN`/`CHAT` thread badges                     | Doesn't exist in code; CLAUDE.md is explicit: two modes only                                                                                        |
+| Generic extensions/puzzle-piece icon                   | `lsp-integration` D6 rules out an extension ecosystem; superseded by the Specs rail icon                                                            |
+| Title-bar "Auto" dropdown                              | Undefined in both proposals, in the mockup, and in the live app (no tooltip) — do not invent functionality for it                                   |
+| DAP/breakpoint UI                                      | No competitor treats it as a differentiator; explicit Non-Goal in `run-debug-buttons/design.md`                                                     |
+| Run button in TabBar (design.md's original D4)         | Superseded — see Amendment 1, now title bar + rail                                                                                                  |
 | Standalone "Spec Mode" banner pill above the chat body | Redundant with Amendment 6's socratic framing now living in the agent's own first message — two places saying the same thing is chrome, not clarity |
-| Per-message avatar circles on agent chat turns | Tried during this redesign, explicitly rejected by the user as unnecessary decoration — alignment/color already distinguishes agent from user turns |
+| Per-message avatar circles on agent chat turns         | Tried during this redesign, explicitly rejected by the user as unnecessary decoration — alignment/color already distinguishes agent from user turns |
 
 ## Task list
 
@@ -131,11 +130,13 @@ branch or state transition, Ponytail's ladder before writing code, and
 `/ponytail-review` on each phase's diff before starting the next phase.
 
 ### Phase 0 — housekeeping
+
 - [ ] Fix CLAUDE.md's stale `KNOWN_AGENTS` reference (Amendment 5).
 - [ ] Confirm `.agents/skills/run-floo-network/SKILL.md` Tauri MCP flow
       still works before relying on it for every later verification step.
 
 ### Phase 1 — shared shell skeleton (blocks everything else)
+
 - [ ] Build the left icon rail component (Explorer, Search, Source
       Control, Specs, Codebase Map, Run, History, Account, Settings) —
       shared by both shells, mounted once, not duplicated per shell.
@@ -170,6 +171,7 @@ branch or state transition, Ponytail's ladder before writing code, and
 - [ ] Add the New Thread empty state (Spec/Go picker cards) per Amendment 3.
 
 ### Phase 7 — onboarding (Amendment 8)
+
 - [ ] Build the first-run/no-project screen per `mockup-onboarding.html`:
       pitch copy from PRODUCT.md, composer input + directory row,
       executor-detection status pill, Open Project / Clone Repository
@@ -181,6 +183,7 @@ branch or state transition, Ponytail's ladder before writing code, and
       component.
 
 ### Phase 8 — title-bar utility cluster (Amendment 9)
+
 - [ ] Terminal toggle icon, wired to the same collapsed state as the
       bottom panel's own inline chevron (one state, two controls).
 - [ ] Chat toggle icon, Editor preset only, collapses the chat rail.
@@ -190,12 +193,14 @@ branch or state transition, Ponytail's ladder before writing code, and
       computed styles, not just a render).
 
 ### Phase 2 — bottom panel
+
 - [ ] Add the toggleable bottom panel (Terminal + Problems tabs).
 - [ ] Relocate `TerminalPane.tsx` into the Terminal tab.
 - [ ] Problems tab can ship empty/stubbed until Phase 4 (LSP diagnostics)
       lands — build the shell now so Phase 4 has a home to write into.
 
 ### Phase 3 — run commands (Amendment 1)
+
 - [ ] `run` field on `ProjectSettings` (`HashMap<String, String>`),
       `#[serde(default)]` for backward compat.
 - [ ] Project-file detection for the onboarding default (package.json /
@@ -209,6 +214,7 @@ branch or state transition, Ponytail's ladder before writing code, and
 - [ ] Output lands in the Phase 2 Terminal tab.
 
 ### Phase 4 — LSP integration (Amendment 2)
+
 - [ ] `src-tauri/src/lsp.rs`: process management, stdio transport, per the
       existing `lsp-integration/design.md` (unchanged architecture).
 - [ ] WebSocket bridge via Tauri WebSocket plugin.
@@ -221,14 +227,16 @@ branch or state transition, Ponytail's ladder before writing code, and
       bar, confirm editor keeps basic syntax highlighting throughout.
 
 ### Phase 5 — FIM visibility (Amendment 4)
+
 - [ ] Status bar icon next to the LSP indicator, on/off state, click
       toggles via the existing `api.setCompletionEnabled` path.
 - [ ] No changes to `GhostTextPlugin.ts`'s model/debounce/scoring logic.
 
 ### Phase 6 — executor-switch fix (Amendment 5)
+
 - [ ] Persistent, dismissible banner in the chat area (not the menu) when
       switching agents during a live session.
-- [ ] Verify it does *not* appear when switching with no live session
+- [ ] Verify it does _not_ appear when switching with no live session
       (that path already works and needs no extra UI).
 
 ## UI/UX Quality Gate — run this loop, not just `tsc`/`cargo test`
@@ -283,19 +291,19 @@ mockup without anyone noticing until an audit caught it.
 
 ## User Personas — Quality Gate
 
-The loop above catches drift from *this document*. It cannot catch "this is
+The loop above catches drift from _this document_. It cannot catch "this is
 technically correct and still confusing to a real person," because you
 wrote the document — you can't audit your own blind spots with your own
 checklist. That's what this gate is for: five fixed personas, each a
 `general-purpose` sub-agent briefed with a distinct background and a
-distinct thing they're primed to notice, reviewing the *built and running*
+distinct thing they're primed to notice, reviewing the _built and running_
 shell (drive it live via the Tauri MCP bridge, per the loop above — not the
 static `mockup.html`, which only proves layout, not behavior). Run this
 after Phase 6 is complete and the UI/UX Quality Gate above is clean.
 
 ### The personas
 
-Spawn each as a separate sub-agent. Give each the *same* briefing shape:
+Spawn each as a separate sub-agent. Give each the _same_ briefing shape:
 who they are, what they've used before, what they're trying to do right
 now, and the one question to answer at the end: **"Would you switch to
 this over what you use today — and if not, what's the first thing that
@@ -363,3 +371,27 @@ would.
 - Whether mid-session executor handoff should ever become immediate rather
   than next-session-only — explicitly deferred, see `MEGA_PROMPT.md`
   Amendment 5's out-of-scope note.
+
+## Implementation notes — deliberate deviations from `mockup.html`
+
+Recorded per the UI/UX Quality Gate's step 10, so the next reader knows
+these were decisions, not drift.
+
+- **Status bar omits `Spaces: 4 · UTF-8 · LF`.** The mockup's right-hand
+  cluster shows indent width, encoding and line endings. Floo tracks none
+  of these — there is no indent setting, no encoding selector, and no
+  line-ending conversion. Rendering them would be three fabricated facts
+  on a bar whose entire job is reporting real state. `Ln, Col` is shown
+  because it _is_ real, and the LSP/FIM indicators are the two the
+  amendments actually asked for.
+- **`SPEC`/`GO` are the only thread-tab badges.** The mockup also showed
+  `PLAN` and `CHAT`; MEGA_PROMPT's out-of-scope list already rules those
+  out as a mockup fabrication, and CLAUDE.md fixes the mode set at two.
+- **The Settings rail icon opens the existing Settings modal**, not a
+  tenth side panel. It is the ninth rail icon as specified; only its
+  surface differs, and duplicating Settings into a panel would have meant
+  two settings UIs.
+- **LSP transport is Tauri IPC, not a WebSocket bridge** — see
+  `openspec/changes/lsp-integration/decisions.md` for the full rationale.
+
+> > > > > > > shell-redesign-and-mvp-finalization

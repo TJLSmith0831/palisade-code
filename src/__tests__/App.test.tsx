@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   fireEvent,
   render as rtlRender,
   screen,
@@ -17,6 +18,27 @@ import "../App.css";
 // exercise behavior, not the app's real theme/token bridge (that lives in main.tsx).
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
+
+// The app now boots to the onboarding screen with nothing open — opening a
+// project is the user's explicit act, the way every other IDE behaves. Most
+// tests below exercise the shell, so they open the first recent project
+// first. Tests that are *about* the onboarding screen use `render` alone.
+const openProject = async () => {
+  const rows = await screen.findAllByTestId("recent-project");
+  fireEvent.click(rows[0]);
+  await screen.findByTestId("shell-toggle");
+};
+
+// The workspace picker moved out of the right rail and behind the Workspace
+// icon on the shared left rail (Amendment 3 — the right rail is chat +
+// threads only now). Idempotent so repeated calls in one test don't toggle
+// the panel back shut.
+const openWorkspacePanel = () => {
+  if (!screen.queryByTestId("project-picker")) {
+    fireEvent.click(screen.getByTestId("rail-workspace"));
+  }
+  return screen.getByTestId("project-picker");
+};
 
 // Mock Tauri APIs before importing App
 vi.mock("@tauri-apps/api/event", () => ({
@@ -73,11 +95,13 @@ vi.mock("../GraphPane", () => ({
 }));
 
 import App from "../App";
+import { clearDiagnostics, publishDiagnostics } from "../lspClients";
 
-beforeEach(() => {
-  invokeMock.mockReset();
-  invokeMock.mockImplementation(
-    (cmd: string, args?: Record<string, unknown>) => {
+// The baseline IPC responses every test starts from. Tests that need one
+// command to answer differently override just that command and delegate the
+// rest here — a bare `Promise.resolve([])` fallback breaks the shell, since
+// `preflight` and `switch_project` must return objects for App to render.
+const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "list_projects") {
         return Promise.resolve([
           {
@@ -149,11 +173,17 @@ beforeEach(() => {
       if (cmd === "write_file_content") return Promise.resolve();
       if (cmd === "read_thread") return Promise.resolve([]);
       return Promise.resolve([]);
-    }
-  );
+};
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(defaultInvoke);
 });
 
 afterEach(() => {
+  // The diagnostics store is module-level, so one test's problems would
+  // otherwise show up in the next test's Problems tab.
+  clearDiagnostics();
   localStorage.clear();
   delete document.documentElement.dataset.theme;
 });
@@ -166,13 +196,15 @@ describe("Window shell (merged-design v2)", () => {
     expect(backdrop).toBeDefined();
   });
 
-  it("renders the .ds-window shell", () => {
+  it("renders the .ds-window shell", async () => {
     render(<App />);
+    await openProject();
     expect(screen.getByTestId("window-shell")).toBeDefined();
   });
 
-  it("has 12px border-radius on the window shell", () => {
+  it("has 12px border-radius on the window shell", async () => {
     render(<App />);
+    await openProject();
     const shell = screen.getByTestId("window-shell");
     const style = getComputedStyle(shell);
     expect(style.borderRadius).toBe("12px");
@@ -180,8 +212,9 @@ describe("Window shell (merged-design v2)", () => {
 });
 
 describe("Top chrome (merged-design v2)", () => {
-  it("renders at 36px height", () => {
+  it("renders at 36px height", async () => {
     render(<App />);
+    await openProject();
     const chrome = screen.getByTestId("top-chrome");
     expect(getComputedStyle(chrome).height).toBe("36px");
   });
@@ -189,26 +222,6 @@ describe("Top chrome (merged-design v2)", () => {
   it("has Spec/Go mode toggle in the chat composer", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
         if (cmd === "list_threads")
           return Promise.resolve([
             {
@@ -222,53 +235,11 @@ describe("Top chrome (merged-design v2)", () => {
               executorSessionId: null,
             },
           ]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: "/usr/local/bin/claude",
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: true,
-            grillApply: false,
-            ponytail: true,
-            graphify: true,
-            ready: true,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_file_content") return Promise.resolve("");
-        if (cmd === "get_file_info") return Promise.resolve(null);
-        if (cmd === "git_branches") return Promise.resolve([]);
-        return Promise.resolve([]);
+        return defaultInvoke(cmd, args);
       }
     );
     const { unmount } = render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
     // The single thread auto-selects on load, so chat (and its composer) is
     // already visible in the Editor shell's right rail — no interaction needed.
     const modeSelector = await screen.findByTestId("mode-selector");
@@ -281,15 +252,17 @@ describe("Top chrome (merged-design v2)", () => {
     unmount();
   });
 
-  it("does not show an executor badge in the utility cluster", () => {
+  it("does not show an executor badge in the utility cluster", async () => {
     render(<App />);
+    await openProject();
     expect(screen.queryByTestId("preflight-status")).toBeNull();
   });
 
-  it("starts dragging on a single mousedown, and toggles maximize on double-click, on the top chrome", () => {
+  it("starts dragging on a single mousedown, and toggles maximize on double-click, on the top chrome", async () => {
     mockWindow.startDragging.mockClear();
     mockWindow.toggleMaximize.mockClear();
     render(<App />);
+    await openProject();
     const chrome = screen.getByTestId("top-chrome");
 
     fireEvent.mouseDown(chrome, { button: 0, detail: 1 });
@@ -300,10 +273,11 @@ describe("Top chrome (merged-design v2)", () => {
     expect(mockWindow.toggleMaximize).toHaveBeenCalledTimes(1);
   });
 
-  it("does not drag/maximize when mousedown originates on an excluded chrome button", () => {
+  it("does not drag/maximize when mousedown originates on an excluded chrome button", async () => {
     mockWindow.startDragging.mockClear();
     render(<App />);
-    fireEvent.mouseDown(screen.getByTestId("toggle-left-sidebar"), {
+    await openProject();
+    fireEvent.mouseDown(screen.getByTestId("toggle-terminal"), {
       button: 0,
       detail: 1,
     });
@@ -312,2267 +286,584 @@ describe("Top chrome (merged-design v2)", () => {
 
   it("shows a hover tooltip on top-chrome icon buttons instead of a native title attribute", async () => {
     render(<App />);
-    const button = screen.getByTestId("toggle-left-sidebar");
+    await openProject();
+    const button = screen.getByTestId("toggle-terminal");
     expect(button).not.toHaveAttribute("title");
 
     await userEvent.hover(button);
     expect(
-      await screen.findByRole("tooltip", { name: /toggle left sidebar/i })
+      await screen.findByRole("tooltip", { name: /toggle terminal panel/i })
     ).toBeInTheDocument();
   });
 });
 
-describe("Navigation rail — File Explorer only (D57)", () => {
-  it("renders at 193px width by default and is resizable", () => {
-    render(<App />);
-    const rail = screen.getByTestId("nav-rail");
-    expect(rail.style.getPropertyValue("--rail-w")).toBe("193px");
-    expect(screen.getByTestId("resize-left-rail")).toBeDefined();
-  });
-
-  it("has a visible toggle button that collapses/restores it", async () => {
-    const { unmount } = render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+describe("Run split button (shell-redesign Amendment 1)", () => {
+  const withRun = (commands: [string, string][]) =>
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "run_commands") return Promise.resolve(commands);
+        if (cmd === "detect_run_commands") return Promise.resolve([]);
+        if (cmd === "terminal_input") return Promise.resolve();
+        return defaultInvoke(cmd, args);
+      }
     );
-    const rail = screen.getByTestId("nav-rail");
-    const toggle = screen.getByTestId("toggle-left-sidebar");
 
-    fireEvent.click(toggle);
-    expect(rail.style.marginLeft).not.toBe("0px");
-    expect(screen.queryByTestId("resize-left-rail")).toBeNull();
+  it("runs the first configured command from the title bar, in the bottom panel's terminal", async () => {
+    withRun([
+      ["dev", "pnpm start"],
+      ["test", "cargo test"],
+    ]);
+    render(<App />);
+    await openProject();
 
-    fireEvent.click(toggle);
-    expect(rail.style.marginLeft).toBe("0px");
-    expect(screen.getByTestId("resize-left-rail")).toBeDefined();
-    unmount();
+    const button = await screen.findByTestId("run-primary");
+    expect(button.textContent).toContain("dev");
+    fireEvent.click(button);
+
+    // The command reaches the shell, and the panel it prints into is open.
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("terminal_input", {
+        data: "pnpm start\n",
+      })
+    );
+    expect(screen.getByTestId("bottom-panel")).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("bp-tab-terminal")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
   });
 
-  it("contains only the file tree — no Workspace picker or Threads list", async () => {
+  it("spawns the terminal before writing, so the first run is not swallowed", async () => {
+    const order: string[] = [];
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "run_commands")
+          return Promise.resolve([["dev", "pnpm start"]]);
+        if (cmd === "detect_run_commands") return Promise.resolve([]);
+        if (cmd === "terminal_spawn" || cmd === "terminal_input") {
+          order.push(cmd);
+          return Promise.resolve(null);
+        }
+        return defaultInvoke(cmd, args);
+      }
+    );
     render(<App />);
-    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
-    const rail = screen.getByTestId("nav-rail");
-    expect(rail.querySelector('[data-testid="file-tree"]')).not.toBeNull();
-    expect(rail.querySelector('[data-testid="project-picker"]')).toBeNull();
-    expect(rail.querySelector('[data-testid="thread-list"]')).toBeNull();
-    expect(rail.querySelector('[data-testid="new-thread"]')).toBeNull();
+    await openProject();
+    fireEvent.click(await screen.findByTestId("run-primary"));
+
+    // Writing into a pty that hasn't been spawned yet errors with
+    // "no terminal running" and the command is silently lost.
+    await waitFor(() => expect(order).toContain("terminal_input"));
+    expect(order.indexOf("terminal_spawn")).toBeLessThan(
+      order.indexOf("terminal_input")
+    );
+  });
+
+  it("remembers the command picked from the dropdown as the next primary action", async () => {
+    withRun([
+      ["dev", "pnpm start"],
+      ["test", "cargo test"],
+    ]);
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("run-menu"));
+    fireEvent.click(await screen.findByTestId("run-opt-test"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("terminal_input", {
+        data: "cargo test\n",
+      })
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("run-primary").textContent).toContain("test")
+    );
+  });
+
+  it("is absent when the project has no run commands — nothing to run, no button", async () => {
+    withRun([]);
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(screen.queryByTestId("run-primary")).toBeNull());
+  });
+
+  it("shows the split button as soon as the Run panel adds the first command", async () => {
+    const saved: [string, string][][] = [];
+    let configured: [string, string][] = [];
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "run_commands") return Promise.resolve(configured);
+        if (cmd === "detect_run_commands")
+          return Promise.resolve([["dev", "pnpm run dev"]]);
+        if (cmd === "save_run_commands") {
+          configured = args?.commands as [string, string][];
+          saved.push(configured);
+          return Promise.resolve();
+        }
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+    expect(screen.queryByTestId("run-primary")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("rail-run"));
+    fireEvent.click(await screen.findByTestId("run-accept-dev"));
+
+    // The title bar reads the same config; adding one there must not need a
+    // reload to show up here.
+    expect(await screen.findByTestId("run-primary")).toBeDefined();
+  });
+
+  it("opens run configuration from the rail's Run icon", async () => {
+    withRun([["dev", "pnpm start"]]);
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-run"));
+    expect(await screen.findByTestId("run-row-dev")).toBeDefined();
   });
 });
 
-describe("Right sidebar — Workspace + Threads (D57)", () => {
-  it("has workspace selector with project picker", () => {
-    render(<App />);
-    expect(screen.getByTestId("project-picker")).toBeDefined();
-  });
-
-  it("has a New Thread button, reachable by opening the Threads & Codebase Map disclosure", () => {
-    render(<App />);
-    expect(screen.queryByTestId("new-thread")).toBeNull();
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    expect(screen.getByTestId("new-thread")).toBeDefined();
-  });
-
-  it("has a thread list, reachable by opening the Threads & Codebase Map disclosure", () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    expect(screen.getByTestId("thread-list")).toBeDefined();
-  });
-
-  it("defaults to the Threads tab inside the disclosure, and keeps Workspace visible when switching tabs", async () => {
-    render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
-    // Disclosure is collapsed by default (editor-collapsible-rail spec).
-    expect(screen.queryByTestId("rail-disclosure-body")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    expect(screen.getByTestId("tab-threads")).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
-    expect(screen.getByTestId("thread-list")).toBeDefined();
-    expect(screen.getByTestId("new-thread")).toBeDefined();
-
-    fireEvent.click(screen.getByTestId("tab-codemap"));
-    expect(screen.getByTestId("tab-codemap")).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
-    // Workspace stays pinned above the disclosure regardless of which inner tab is active;
-    // New Thread lives inside the Threads pane itself, so it hides with it.
-    expect(screen.getByTestId("project-picker")).toBeDefined();
-    expect(screen.queryByTestId("new-thread")).toBeNull();
-  });
-
-  // D20: thread creation is deferred to the first message for BOTH modes.
-  it("picking Go from the Vibe/Spec picker shows an empty composer without creating a thread", async () => {
-    const createCalls: Record<string, unknown>[] = [];
+describe("New thread always starts a new thread", () => {
+  const withThreads = () =>
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "go",
-            openSpecChangeName: null,
-          });
-        }
         if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
+        if (cmd === "preflight")
           return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-go"));
-
-    // The empty composer renders — no thread created, no sidebar entry.
-    await waitFor(() =>
-      expect(screen.getByTestId("composer-input")).toBeDefined()
-    );
-    expect(screen.queryByTestId("mode-picker")).toBeNull();
-    expect(createCalls.length).toBe(0);
-    expect(screen.getByTestId("thread-title")).toHaveTextContent("New thread");
-  });
-
-  it("sending the first message in the go-mode empty composer creates the thread, sets go mode, and sends", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    const setModeCalls: Record<string, unknown>[] = [];
-    const sendCalls: Record<string, unknown>[] = [];
-    let threadCreated = false;
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          threadCreated = true;
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "go",
-            openSpecChangeName: null,
-          });
-        }
-        if (cmd === "set_thread_mode") {
-          setModeCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "go",
-            openSpecChangeName: null,
-          });
-        }
-        if (cmd === "send_message") {
-          sendCalls.push(args ?? {});
-          return Promise.resolve({
-            seq: 1,
-            ts: "2026-08-06T00:00:00Z",
-            role: "user",
-            mode: "go",
-            content: String(args?.content ?? ""),
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve(
-            threadCreated
-              ? [
-                  {
-                    id: "thread-new",
-                    projectHash: "proj-1",
-                    title: "New thread",
-                    createdAt: "2026-08-06T00:00:00Z",
-                    updatedAt: "2026-08-06T00:00:00Z",
-                    currentMode: "go",
-                    openSpecChangeName: null,
-                  },
-                ]
-              : []
-          );
-        }
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-go"));
-    await waitFor(() =>
-      expect(screen.getByTestId("composer-input")).toBeDefined()
-    );
-    expect(createCalls.length).toBe(0);
-
-    fireEvent.change(screen.getByTestId("composer-input"), {
-      target: { value: "Hello world" },
-    });
-    fireEvent.keyDown(screen.getByTestId("composer-input"), { key: "Enter" });
-
-    await waitFor(() => expect(createCalls.length).toBe(1));
-    expect(setModeCalls).toEqual([
-      { projectHash: "proj-1", threadId: "thread-new", mode: "go" },
-    ]);
-    await waitFor(() => expect(sendCalls.length).toBe(1));
-    expect(sendCalls[0]).toEqual({
-      projectHash: "proj-1",
-      threadId: "thread-new",
-      content: "Hello world",
-      mode: "go",
-      model: null,
-      bypass: false,
-    });
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent("New thread")
-    );
-  });
-
-  it("sending a message in the go-mode thread sends the message", async () => {
-    const sendCalls: Record<string, unknown>[] = [];
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve([
-            {
-              id: "thread-go",
-              projectHash: "proj-1",
-              title: "Go thread",
-              createdAt: "2026-08-06T00:00:00Z",
-              updatedAt: "2026-08-06T00:00:00Z",
-              currentMode: "go",
-              openSpecChangeName: null,
-            },
-          ]);
-        }
-        if (cmd === "send_message") {
-          sendCalls.push(args ?? {});
-          return Promise.resolve({
-            seq: 1,
-            ts: "2026-08-06T00:00:00Z",
-            role: "user",
-            mode: "go",
-            content: String(args?.content ?? ""),
-          });
-        }
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    // The go-mode thread auto-selects.
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent("Go thread")
-    );
-
-    // Type and send a message.
-    fireEvent.change(screen.getByTestId("composer-input"), {
-      target: { value: "Hello world" },
-    });
-    fireEvent.click(screen.getByTestId("composer-send"));
-
-    await waitFor(() => expect(sendCalls.length).toBe(1));
-    expect(sendCalls[0]).toMatchObject({
-      projectHash: "proj-1",
-      threadId: "thread-go",
-      content: "Hello world",
-      mode: "go",
-    });
-  });
-
-  it("picking Spec from the Vibe/Spec picker shows the spec-type framing menu instead of creating a thread", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-
-    // D1/D19: picking Spec shows the framing menu, not a thread.
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    expect(createCalls).toEqual([]);
-    expect(screen.getByTestId("spec-type-feature")).toBeDefined();
-    expect(screen.getByTestId("spec-type-bugfix")).toBeDefined();
-    expect(screen.getByTestId("spec-type-other")).toBeDefined();
-  });
-
-  it("the spec-type framing menu shows provider and model pickers (D21)", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    // The framing picker row is present between the question and the cards.
-    expect(screen.getByTestId("framing-picker-row")).toBeDefined();
-    expect(screen.getByTestId("framing-executor-btn")).toBeDefined();
-    expect(screen.getByTestId("framing-model-btn")).toBeDefined();
-    // Provider is auto-selected, so cards are not disabled.
-    expect(screen.getByTestId("spec-type-feature")).not.toBeDisabled();
-  });
-
-  it("the spec-type cards are disabled when no provider is selected (D21)", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    // No provider selected — cards are disabled.
-    expect(screen.getByTestId("spec-type-feature")).toBeDisabled();
-    expect(screen.getByTestId("spec-type-bugfix")).toBeDisabled();
-    expect(screen.getByTestId("spec-type-other")).toBeDisabled();
-  });
-
-  it("the spec-type framing menu cards show the correct copy (D14)", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    // D14: bold title + one-line description for each card.
-    expect(screen.getByTestId("spec-type-feature")).toHaveTextContent(
-      "Feature"
-    );
-    expect(screen.getByTestId("spec-type-feature")).toHaveTextContent(
-      "Build something new"
-    );
-    expect(screen.getByTestId("spec-type-bugfix")).toHaveTextContent("Bugfix");
-    expect(screen.getByTestId("spec-type-bugfix")).toHaveTextContent(
-      "Diagnose and fix"
-    );
-    expect(screen.getByTestId("spec-type-other")).toHaveTextContent("Other");
-    expect(screen.getByTestId("spec-type-other")).toHaveTextContent(
-      "Open-ended"
-    );
-  });
-
-  it("the Back button on the spec-type framing menu returns to the Vibe/Spec picker", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    // D13: Back button returns to the Vibe/Spec picker.
-    fireEvent.click(screen.getByTestId("spec-type-back"));
-    await waitFor(() =>
-      expect(screen.getByTestId("mode-picker")).toBeDefined()
-    );
-    expect(screen.queryByTestId("spec-type-picker")).toBeNull();
-  });
-
-  it("picking Feature from the framing menu creates a thread and fires spec_mode with Feature", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    const specModeCalls: Record<string, unknown>[] = [];
-    let threadCreated = false;
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          threadCreated = true;
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Feature",
-          });
-        }
-        if (cmd === "spec_mode") {
-          specModeCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Feature",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve(
-            threadCreated
-              ? [
-                  {
-                    id: "thread-new",
-                    projectHash: "proj-1",
-                    title: "New thread",
-                    createdAt: "2026-08-06T00:00:00Z",
-                    updatedAt: "2026-08-06T00:00:00Z",
-                    currentMode: "spec",
-                    openSpecChangeName: null,
-                    specType: "Feature",
-                  },
-                ]
-              : []
-          );
-        }
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("spec-type-feature"));
-
-    await waitFor(() => expect(createCalls.length).toBe(1));
-    expect(createCalls[0]).toEqual({
-      projectHash: "proj-1",
-      title: "New thread",
-    });
-    expect(specModeCalls).toEqual([
-      {
-        projectHash: "proj-1",
-        threadId: "thread-new",
-        specType: "Feature",
-        bypass: false,
-      },
-    ]);
-  });
-
-  // Regression: the executor button shows the auto-detected default provider
-  // (flight.selected) without the user ever clicking it (D21 display
-  // fallback), and onNewThread doesn't clear the currently selected thread
-  // (the sidebar keeps showing it underneath the picker). Together those
-  // meant: with a thread already selected, opening the new-thread framing
-  // menu and picking only a model (never touching the executor dropdown)
-  // silently mutated the OLD thread's executor/model via onPickModel —
-  // the framingExecutor/framingModel scratch state for the thread about to
-  // be created was never touched, and the model pick vanished.
-  it("picking a model in the framing menu, with an existing thread already selected, persists onto the NEW thread — not the old one", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    const setExecutorCalls: Record<string, unknown>[] = [];
-    let threadCreated = false;
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          threadCreated = true;
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Feature",
-          });
-        }
-        if (cmd === "set_thread_executor") {
-          setExecutorCalls.push(args ?? {});
-          return Promise.resolve({
-            id: (args as { threadId: string }).threadId,
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            executor: "claude",
-            model: "big-pickle",
-            specType: "Feature",
-          });
-        }
-        if (cmd === "spec_mode") {
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            executor: "claude",
-            model: "big-pickle",
-            specType: "Feature",
-          });
-        }
-        if (cmd === "list_models") {
-          return Promise.resolve({
-            configId: "model",
-            current: null,
-            models: [{ id: "big-pickle", name: "Big Pickle" }],
-          });
-        }
-        if (cmd === "list_threads") {
-          const base = {
-            id: "thread-old",
-            projectHash: "proj-1",
-            title: "Old thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "go",
-            openSpecChangeName: null,
-            executor: "claude",
-            model: "sonnet",
-          };
-          return Promise.resolve(
-            threadCreated
-              ? [
-                  base,
-                  {
-                    id: "thread-new",
-                    projectHash: "proj-1",
-                    title: "New thread",
-                    createdAt: "2026-08-06T00:00:00Z",
-                    updatedAt: "2026-08-06T00:00:00Z",
-                    currentMode: "spec",
-                    openSpecChangeName: null,
-                    executor: "claude",
-                    model: "big-pickle",
-                    specType: "Feature",
-                  },
-                ]
-              : [base]
-          );
-        }
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    // The app auto-selects the one existing thread on load.
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent(
-        "Old thread"
-      )
-    );
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-
-    // Open the model dropdown and pick a model — without ever clicking the
-    // executor dropdown, even though it displays "claude" as its label.
-    fireEvent.click(screen.getByTestId("framing-model-btn"));
-    await waitFor(() =>
-      expect(screen.getByTestId("framing-model-opt-big-pickle")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("framing-model-opt-big-pickle"));
-
-    fireEvent.click(screen.getByTestId("spec-type-feature"));
-
-    await waitFor(() => expect(createCalls.length).toBe(1));
-    await waitFor(() => expect(setExecutorCalls.length).toBe(1));
-    // Must land on the newly created thread, not the old selected one.
-    expect(setExecutorCalls[0]).toEqual({
-      projectHash: "proj-1",
-      threadId: "thread-new",
-      executor: "claude",
-      model: "big-pickle",
-    });
-  });
-
-  it("picking Bugfix from the framing menu creates a thread and fires spec_mode with Bugfix", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    const specModeCalls: Record<string, unknown>[] = [];
-    let threadCreated = false;
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          threadCreated = true;
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Bugfix",
-          });
-        }
-        if (cmd === "spec_mode") {
-          specModeCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Bugfix",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve(
-            threadCreated
-              ? [
-                  {
-                    id: "thread-new",
-                    projectHash: "proj-1",
-                    title: "New thread",
-                    createdAt: "2026-08-06T00:00:00Z",
-                    updatedAt: "2026-08-06T00:00:00Z",
-                    currentMode: "spec",
-                    openSpecChangeName: null,
-                    specType: "Bugfix",
-                  },
-                ]
-              : []
-          );
-        }
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("spec-type-bugfix"));
-
-    await waitFor(() => expect(createCalls.length).toBe(1));
-    expect(specModeCalls).toEqual([
-      {
-        projectHash: "proj-1",
-        threadId: "thread-new",
-        specType: "Bugfix",
-        bypass: false,
-      },
-    ]);
-  });
-
-  it("picking Other from the framing menu reveals a TextInput with the correct placeholder", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("spec-type-other"));
-
-    // D6/D15: picking Other reveals a TextInput with the correct placeholder.
-    await waitFor(() =>
-      expect(screen.getByTestId("other-spec-input")).toBeDefined()
-    );
-    expect(screen.getByTestId("other-spec-input")).toHaveAttribute(
-      "placeholder",
-      "Describe what you'd like to spec out..."
-    );
-  });
-
-  it("submitting non-empty Other text creates a thread and fires spec_mode with the typed text", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    const specModeCalls: Record<string, unknown>[] = [];
-    let threadCreated = false;
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          threadCreated = true;
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Refactor the auth module",
-          });
-        }
-        if (cmd === "spec_mode") {
-          specModeCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Refactor the auth module",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve(
-            threadCreated
-              ? [
-                  {
-                    id: "thread-new",
-                    projectHash: "proj-1",
-                    title: "New thread",
-                    createdAt: "2026-08-06T00:00:00Z",
-                    updatedAt: "2026-08-06T00:00:00Z",
-                    currentMode: "spec",
-                    openSpecChangeName: null,
-                    specType: "Refactor the auth module",
-                  },
-                ]
-              : []
-          );
-        }
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("spec-type-other"));
-    await waitFor(() =>
-      expect(screen.getByTestId("other-spec-input")).toBeDefined()
-    );
-    // Type custom framing text and press Enter.
-    fireEvent.change(screen.getByTestId("other-spec-input"), {
-      target: { value: "Refactor the auth module" },
-    });
-    fireEvent.keyDown(screen.getByTestId("other-spec-input"), {
-      key: "Enter",
-      shiftKey: false,
-    });
-
-    await waitFor(() => expect(createCalls.length).toBe(1));
-    expect(specModeCalls).toEqual([
-      {
-        projectHash: "proj-1",
-        threadId: "thread-new",
-        specType: "Refactor the auth module",
-        bypass: false,
-      },
-    ]);
-  });
-
-  it("empty Other submission is disabled — no create_thread or spec_mode call", async () => {
-    const createCalls: Record<string, unknown>[] = [];
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "create_thread") {
-          createCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-new",
-            projectHash: "proj-1",
-            title: "New thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("spec-type-other"));
-    await waitFor(() =>
-      expect(screen.getByTestId("other-spec-input")).toBeDefined()
-    );
-    // D17: pressing Enter with empty text does NOT create a thread.
-    fireEvent.keyDown(screen.getByTestId("other-spec-input"), {
-      key: "Enter",
-      shiftKey: false,
-    });
-    // Give the async handler a chance to run (it shouldn't).
-    await new Promise((r) => setTimeout(r, 50));
-    expect(createCalls).toEqual([]);
-  });
-
-  it("the 'or pick a different type' link hides the Other TextInput and shows the cards again", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "read_thread") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    await waitFor(() => expect(screen.getByTestId("new-thread")).toBeDefined());
-    fireEvent.click(screen.getByTestId("new-thread"));
-    fireEvent.click(screen.getByTestId("pick-spec"));
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-    fireEvent.click(screen.getByTestId("spec-type-other"));
-    await waitFor(() =>
-      expect(screen.getByTestId("other-spec-input")).toBeDefined()
-    );
-    // D15: the escape link hides the TextInput and shows the cards again.
-    fireEvent.click(screen.getByTestId("other-spec-escape"));
-    await waitFor(() =>
-      expect(screen.queryByTestId("other-spec-input")).toBeNull()
-    );
-    expect(screen.getByTestId("spec-type-feature")).toBeDefined();
-    expect(screen.getByTestId("spec-type-bugfix")).toBeDefined();
-    expect(screen.getByTestId("spec-type-other")).toBeDefined();
-  });
-
-  it("toggling an existing thread to spec mode with no open change shows the framing menu", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve([
-            {
-              id: "thread-1",
-              projectHash: "proj-1",
-              title: "Existing thread",
-              createdAt: "2026-08-06T00:00:00Z",
-              updatedAt: "2026-08-06T00:00:00Z",
-              currentMode: "go",
-              openSpecChangeName: null,
-              specType: null,
-            },
-          ]);
-        }
-        if (cmd === "read_thread") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent(
-        "Existing thread"
-      )
-    );
-    // Toggle to spec mode via the composer Spec/Go toggle.
-    const ms = screen.getByTestId("mode-selector");
-    fireEvent.click(within(ms).getByRole("radio", { name: /Spec/ }));
-    // D9: the framing menu appears (no open change, no stored spec_type).
-    await waitFor(() =>
-      expect(screen.getByTestId("spec-type-picker")).toBeDefined()
-    );
-  });
-
-  it("toggling to spec mode with a stored spec_type reuses it (no framing menu)", async () => {
-    const specModeCalls: Record<string, unknown>[] = [];
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve([
-            {
-              id: "thread-1",
-              projectHash: "proj-1",
-              title: "Existing thread",
-              createdAt: "2026-08-06T00:00:00Z",
-              updatedAt: "2026-08-06T00:00:00Z",
-              currentMode: "go",
-              openSpecChangeName: null,
-              specType: "Feature",
-            },
-          ]);
-        }
-        if (cmd === "spec_mode") {
-          specModeCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-1",
-            projectHash: "proj-1",
-            title: "Existing thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: null,
-            specType: "Feature",
-          });
-        }
-        if (cmd === "read_thread") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent(
-        "Existing thread"
-      )
-    );
-    const ms = screen.getByTestId("mode-selector");
-    fireEvent.click(within(ms).getByRole("radio", { name: /Spec/ }));
-    // D11: stored spec_type is reused — no framing menu, spec_mode called directly.
-    await waitFor(() => expect(specModeCalls.length).toBe(1));
-    expect(specModeCalls[0]).toMatchObject({
-      projectHash: "proj-1",
-      threadId: "thread-1",
-      specType: "Feature",
-    });
-    expect(screen.queryByTestId("spec-type-picker")).toBeNull();
-  });
-
-  it("toggling to spec mode with an open change does NOT show the framing menu", async () => {
-    const specModeCalls: Record<string, unknown>[] = [];
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve([
-            {
-              id: "thread-1",
-              projectHash: "proj-1",
-              title: "Existing thread",
-              createdAt: "2026-08-06T00:00:00Z",
-              updatedAt: "2026-08-06T00:00:00Z",
-              currentMode: "go",
-              openSpecChangeName: "my-change",
-              specType: null,
-            },
-          ]);
-        }
-        if (cmd === "spec_mode") {
-          specModeCalls.push(args ?? {});
-          return Promise.resolve({
-            id: "thread-1",
-            projectHash: "proj-1",
-            title: "Existing thread",
-            createdAt: "2026-08-06T00:00:00Z",
-            updatedAt: "2026-08-06T00:00:00Z",
-            currentMode: "spec",
-            openSpecChangeName: "my-change",
-            specType: null,
-          });
-        }
-        if (cmd === "read_thread") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent(
-        "Existing thread"
-      )
-    );
-    const ms = screen.getByTestId("mode-selector");
-    fireEvent.click(within(ms).getByRole("radio", { name: /Spec/ }));
-    // Open change → no framing menu, spec_mode called directly.
-    await waitFor(() => expect(specModeCalls.length).toBe(1));
-    expect(screen.queryByTestId("spec-type-picker")).toBeNull();
-  });
-
-  it("does NOT show a 'Proceed to proposal' button during exploration (D21)", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve([
-            {
-              id: "thread-1",
-              projectHash: "proj-1",
-              title: "Spec thread",
-              createdAt: "2026-08-06T00:00:00Z",
-              updatedAt: "2026-08-06T00:00:00Z",
-              currentMode: "spec",
-              openSpecChangeName: null,
-              specType: "Feature",
-            },
-          ]);
-        }
-        if (cmd === "read_thread") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
             selected: "claude",
             openspec: true,
             grillApply: true,
-            ponytail: false,
-            graphify: false,
-            ready: true,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        return Promise.resolve([]);
-      }
-    );
-
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent(
-        "Spec thread"
-      )
-    );
-    // D21: the "Proceed to proposal?" button is removed — the agent emits
-    // [READY_TO_PROPOSE] and Floo auto-fires propose (D22).
-    expect(screen.queryByTestId("proceed-to-proposal")).toBeNull();
-  });
-
-  it("has add project button", () => {
-    render(<App />);
-    expect(screen.getByTestId("add-project")).toBeDefined();
-  });
-
-  it("has no standalone /propose button, but /propose still works as a composer slash command", async () => {
-    invokeMock.mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") {
-          return Promise.resolve([
-            {
-              id: "t1",
-              projectHash: "proj-1",
-              title: "Thread A",
-              createdAt: "2026-08-06T00:00:00Z",
-              updatedAt: "2026-08-06T00:00:00Z",
-              currentMode: "spec",
-              openSpecChangeName: null,
-              executorSessionId: null,
-            },
-          ]);
-        }
-        if (cmd === "read_thread") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: "/usr/local/bin/claude",
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: "claude",
-            openspec: true,
-            grillApply: false,
             ponytail: true,
             graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
-        if (cmd === "list_directory") return Promise.resolve([]);
-        if (cmd === "propose") return Promise.resolve();
-        return Promise.resolve([]);
+        return defaultInvoke(cmd, args);
       }
     );
 
+  it("returns to the mode picker after Go was picked but nothing was sent", async () => {
+    withThreads();
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    await openProject();
+
+    // Pick Go: the composer opens, no thread created yet.
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    expect(await screen.findByTestId("composer-input")).toBeDefined();
+
+    // New thread must start over. It used to do nothing at all here: the
+    // leftover pending mode outranked the picker in the render condition,
+    // so every "New thread" button looked broken.
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    expect(await screen.findByTestId("mode-picker")).toBeDefined();
+  });
+
+  it("picking Go on a new thread does not reopen the thread you were reading", async () => {
+    // The picker used to render *over* the selected thread without
+    // deselecting it, so Go fell straight through to that thread's history —
+    // the new draft vanished and an older conversation took its place.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads")
+          return Promise.resolve([
+            {
+              id: "t1",
+              projectHash: "proj-1",
+              title: "Older conversation",
+              createdAt: "2026-08-06T00:00:00Z",
+              updatedAt: "2026-08-06T00:00:00Z",
+              currentMode: "go",
+              openSpecChangeName: null,
+            },
+          ]);
+        if (cmd === "read_thread")
+          return Promise.resolve([
+            {
+              seq: 1,
+              ts: "2026-08-06T00:00:00Z",
+              role: "user",
+              mode: "go",
+              content: "what did we do yesterday",
+            },
+          ]);
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
     );
-    expect(screen.queryByTestId("propose")).toBeNull();
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent(
+        "Older conversation"
+      )
+    );
 
-    fireEvent.change(screen.getByTestId("composer-input"), {
-      target: { value: "/propose" },
-    });
-    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    fireEvent.click(await screen.findByTestId("pick-go"));
+
+    // An empty composer for a thread that doesn't exist yet — not the old
+    // thread's messages.
+    expect(await screen.findByTestId("composer-input")).toBeDefined();
+    expect(screen.queryByText("what did we do yesterday")).toBeNull();
+    expect(screen.getByTestId("thread-title")).toHaveTextContent("New thread");
+  });
+
+  it("returns to the mode picker after Spec's framing menu was opened", async () => {
+    withThreads();
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-spec"));
+    expect(await screen.findByTestId("spec-type-picker")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    expect(await screen.findByTestId("mode-picker")).toBeDefined();
+  });
+});
+
+describe("Picking a provider/model before the thread exists", () => {
+  it("remembers the choice instead of silently doing nothing", async () => {
+    // Picking "Go" shows the composer before any thread exists (D20's
+    // deferred empty composer). Its provider/model pickers used to return
+    // early there: the menu closed, the label never changed, and nothing
+    // was written anywhere.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "list_models")
+          return Promise.resolve({
+            configId: "model",
+            current: "opus",
+            models: [
+              { id: "opus", name: "Opus" },
+              { id: "sonnet", name: "Sonnet" },
+            ],
+          });
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    fireEvent.click(await screen.findByTestId("model-btn"));
+    fireEvent.click(await screen.findByTestId("model-opt-sonnet"));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("propose", {
-        projectHash: "proj-1",
-        threadId: "t1",
-        model: null,
-        bypass: false,
-      })
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("Sonnet")
+    );
+    // Nothing to persist onto yet: the choice rides along and is written
+    // when the thread is created, as the new-thread menu already does.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "set_thread_executor",
+      expect.anything()
     );
   });
 });
 
-describe("Editor chrome (merged-design v2)", () => {
-  it("renders editor tabs", () => {
+describe("Collapsing chat (Cmd+J)", () => {
+  it("hands the reclaimed width to the editor instead of leaving a gap", async () => {
     render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+
+    // Vibe pins the editor to a fixed share so chat stays the subject. With
+    // chat gone there is nothing left to hold that share against, and the
+    // reclaimed width sat empty — DESIGN.md's rule is that a collapsed
+    // panel gives its space back, not that it leaves a hole.
+    fireEvent.click(screen.getByTestId("toggle-chat"));
+    expect(screen.queryByTestId("right-sidebar")).toBeNull();
+    expect(screen.getByTestId("vibe-shell")).toHaveAttribute(
+      "data-chat",
+      "collapsed"
+    );
+
+    fireEvent.click(screen.getByTestId("toggle-chat"));
+    expect(screen.getByTestId("vibe-shell")).not.toHaveAttribute("data-chat");
+  });
+});
+
+describe("Resize handles (one per row)", () => {
+  it("keeps each handle in its own row, so the sidebar edge is grabbable", async () => {
+    render(<App />);
+    await openProject();
+    const sidebarHandle = screen.getByTestId("resize-left-rail");
+    const chatHandle = screen.getByTestId("resize-right-panel");
+
+    // Ordering every `.ds-resize-handle-x` together stacked the chat handle
+    // on top of the sidebar's, so dragging the sidebar edge resized chat.
+    expect(sidebarHandle.parentElement).toHaveClass("ds-shell-contents");
+    expect(chatHandle.parentElement).toHaveClass("ds-work-row");
+    expect(sidebarHandle.parentElement).not.toBe(chatHandle.parentElement);
+  });
+});
+
+describe("Status bar (mockup parity)", () => {
+  it("spans the shell, below the bottom panel, in both presets", async () => {
+    render(<App />);
+    await openProject();
+    const bar = screen.getByTestId("editor-status-bar");
+    // Outside the editor column: it reports on the whole window, and the
+    // mockup puts it under the bottom panel, full width.
+    expect(bar.closest(".ds-editor-col")).toBeNull();
+    expect(bar.closest(".ds-window")).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    expect(screen.getByTestId("editor-status-bar")).toBeDefined();
+  });
+
+  it("shows the cursor position once a file is open, and nothing before", async () => {
+    render(<App />);
+    await openProject();
+    expect(screen.queryByTestId("cursor-position")).toBeNull();
+
+    fireEvent.click(await screen.findByText("AGENTS.md"));
+    expect(await screen.findByTestId("cursor-position")).toHaveTextContent(
+      /Ln \d+, Col \d+/
+    );
+  });
+});
+
+describe("Chat column width per preset (Governing Rule)", () => {
+  const chatWidth = () =>
+    screen.getByTestId("right-sidebar").style.getPropertyValue("--panel-w");
+
+  it("gives Vibe a wide chat and Editor a narrow one", async () => {
+    render(<App />);
+    await openProject();
+    // Editor: the code is the subject, chat is the sidekick.
+    expect(chatWidth()).toBe("300px");
+
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    // Vibe: the conversation is the subject.
+    expect(chatWidth()).toBe("520px");
+
+    fireEvent.click(screen.getByTestId("shell-editor"));
+    expect(chatWidth()).toBe("300px");
+  });
+
+  it("remembers each preset's width separately", async () => {
+    localStorage.setItem(
+      "floo:layout:proj-1:right",
+      JSON.stringify({ size: 340, collapsed: false })
+    );
+    localStorage.setItem(
+      "floo:layout:proj-1:vibe-chat",
+      JSON.stringify({ size: 700, collapsed: false })
+    );
+    render(<App />);
+    await openProject();
+    expect(chatWidth()).toBe("340px");
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    expect(chatWidth()).toBe("700px");
+  });
+});
+
+describe("Bottom panel (shell-redesign Phase 2)", () => {
+  it("starts collapsed and opens on the chrome toggle, with Terminal active", async () => {
+    render(<App />);
+    await openProject();
+    expect(screen.getByTestId("bottom-panel")).toHaveAttribute("hidden");
+
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    expect(screen.getByTestId("bottom-panel")).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("bp-tab-terminal")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    expect(await screen.findByTestId("terminal-pane")).toBeDefined();
+  });
+
+  it("counts problems on the tab, so a diagnostic is visible without opening it", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    expect(screen.queryByTestId("bp-problem-count")).toBeNull();
+
+    act(() =>
+      publishDiagnostics("file:///p/a.ts", [
+        {
+          path: "a.ts",
+          line: 1,
+          severity: "error",
+          message: "boom",
+          source: null,
+        },
+      ])
+    );
+    expect(screen.getByTestId("bp-problem-count")).toHaveTextContent("1");
+  });
+
+  it("keeps the terminal alive while the Problems tab is showing", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    await screen.findByTestId("terminal-pane");
+
+    fireEvent.click(screen.getByTestId("bp-tab-problems"));
+    expect(screen.getByTestId("problems-empty")).toBeDefined();
+    // Unmounting would kill the shell process and everything running in it.
+    expect(screen.getByTestId("terminal-pane")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("bp-tab-terminal"));
+    expect(screen.queryByTestId("problems-empty")).toBeNull();
+    expect(screen.getByTestId("terminal-pane")).toBeDefined();
+  });
+
+  it("collapses again from the panel's own chevron", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    fireEvent.click(screen.getByTestId("bp-collapse"));
+    expect(screen.getByTestId("bottom-panel")).toHaveAttribute("hidden");
+  });
+});
+
+describe("Left icon rail (shell-redesign Amendment 3)", () => {
+  it("mounts the rail with all nine panel icons", async () => {
+    render(<App />);
+    await openProject();
+    const rail = screen.getByTestId("nav-rail");
+    for (const id of [
+      "explorer",
+      "search",
+      "git",
+      "specs",
+      "codemap",
+      "run",
+      "history",
+      "workspace",
+      "settings",
+    ]) {
+      expect(within(rail).getByTestId(`rail-${id}`)).toBeDefined();
+    }
+  });
+
+  it("opens the Explorer panel by default and closes it on a second click", async () => {
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    expect(screen.getByTestId("side-panel")).toHaveAttribute(
+      "data-panel",
+      "explorer"
+    );
+
+    fireEvent.click(screen.getByTestId("rail-explorer"));
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("swaps panels rather than stacking them", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+    expect(screen.getByTestId("side-panel")).toHaveAttribute(
+      "data-panel",
+      "git"
+    );
+    expect(screen.queryByTestId("file-tree")).toBeNull();
+  });
+
+  // Governing Rule: the panel inventory is identical in both presets, so an
+  // open panel survives a preset switch instead of resetting.
+  it("keeps the open panel when switching Vibe/Editor", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-specs"));
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() =>
+      expect(screen.getByTestId("side-panel")).toHaveAttribute(
+        "data-panel",
+        "specs"
+      )
+    );
+    fireEvent.click(screen.getByTestId("shell-editor"));
+    expect(screen.getByTestId("side-panel")).toHaveAttribute(
+      "data-panel",
+      "specs"
+    );
+  });
+
+  it("shows a rail dot on Source Control when the tree is dirty", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "git_status")
+          return Promise.resolve([{ path: "a.ts", code: " M" }]);
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("rail-git").querySelector(".ds-rail-dot")
+      ).not.toBeNull()
+    );
+  });
+});
+
+describe("Right rail — chat only (shell-redesign Amendment 3)", () => {
+  it("holds the chat surface and no file explorer or specs list", async () => {
+    render(<App />);
+    await openProject();
+    const chat = screen.getByTestId("right-sidebar");
+    expect(within(chat).queryByTestId("file-tree")).toBeNull();
+    expect(within(chat).queryByTestId("project-picker")).toBeNull();
+    expect(within(chat).queryByTestId("spec-pane")).toBeNull();
+  });
+
+  it("reaches the workspace picker from the Account rail icon", async () => {
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(openWorkspacePanel()).toHaveValue("proj-1"));
+  });
+
+  it("reaches the thread list and New Thread from the History rail icon", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-history"));
+    expect(screen.getByTestId("thread-list")).toBeDefined();
+    expect(screen.getByTestId("new-thread")).toBeDefined();
+  });
+});
+
+describe("Editor chrome (merged-design v2)", () => {
+  it("renders editor tabs", async () => {
+    render(<App />);
+    await openProject();
     expect(screen.getByTestId("editor-tabs")).toBeDefined();
   });
 
-  it("reaches the diff through a button, not a tab competing with the open files", () => {
+  it("reaches the diff through a button, not a tab competing with the open files", async () => {
     render(<App />);
+    await openProject();
     // The tab strip belongs to the files being edited; the diff is a view
     // you toggle into from the far right of it.
     expect(screen.getByTestId("toggle-diff")).toBeDefined();
@@ -2580,8 +871,9 @@ describe("Editor chrome (merged-design v2)", () => {
     expect(screen.queryByTestId("tab-chat")).toBeNull();
   });
 
-  it("starts on the editor with the diff toggle unpressed and no files open", () => {
+  it("starts on the editor with the diff toggle unpressed and no files open", async () => {
     render(<App />);
+    await openProject();
     expect(screen.getByTestId("toggle-diff")).toHaveAttribute(
       "aria-pressed",
       "false"
@@ -2591,6 +883,7 @@ describe("Editor chrome (merged-design v2)", () => {
 
   it("renders breadcrumbs", async () => {
     render(<App />);
+    await openProject();
     // Breadcrumbs live in the editor toolbar, so they appear once a file is
     // open — the leading segment is the project name.
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
@@ -2602,13 +895,15 @@ describe("Editor chrome (merged-design v2)", () => {
     );
   });
 
-  it("has no leftover status bar", () => {
+  it("has no leftover status bar", async () => {
     render(<App />);
+    await openProject();
     expect(screen.queryByTestId("status-bar")).toBeNull();
   });
 
   it("shows the file editor even when no thread exists", async () => {
     render(<App />);
+    await openProject();
 
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
     // The tree container mounts before its root listing resolves, so wait
@@ -2632,6 +927,7 @@ describe("Editor chrome (merged-design v2)", () => {
 
   it("shows the diff empty state even when no thread exists", async () => {
     render(<App />);
+    await openProject();
 
     await waitFor(() =>
       expect(screen.getByTestId("editor-tabs")).toBeDefined()
@@ -2652,8 +948,9 @@ describe("Editor chrome (merged-design v2)", () => {
 describe("Settings panel (D14/D15)", () => {
   it("opens the settings panel with color scheme and font controls", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.click(screen.getByTestId("open-settings"));
 
@@ -2722,8 +1019,9 @@ describe("Settings panel (D14/D15)", () => {
     );
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.click(screen.getByTestId("open-settings"));
     fireEvent.click(screen.getByTestId("open-project-settings"));
@@ -2799,8 +1097,9 @@ describe("Settings panel (D14/D15)", () => {
     );
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.click(screen.getByTestId("open-settings"));
     fireEvent.click(screen.getByTestId("open-project-settings"));
@@ -2817,53 +1116,66 @@ describe("Settings panel (D14/D15)", () => {
 });
 
 describe("Right sidebar (merged-design v2)", () => {
-  it("renders right sidebar", () => {
+  it("renders right sidebar", async () => {
     render(<App />);
+    await openProject();
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("has Threads and Code Map tabs inside the disclosure, and no leftover Notes tab", () => {
+  it("has no leftover right-rail tab strip — each panel is its own rail icon", async () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
-    expect(screen.getByTestId("tab-threads")).toBeDefined();
-    expect(screen.getByTestId("tab-codemap")).toBeDefined();
+    await openProject();
+    expect(screen.queryByTestId("tab-threads")).toBeNull();
+    expect(screen.queryByTestId("tab-codemap")).toBeNull();
     expect(screen.queryByTestId("tab-notes")).toBeNull();
   });
 
-  it("has no leftover Files tab (superseded by the file explorer column)", () => {
+  it("has no leftover Files tab (superseded by the file explorer column)", async () => {
     render(<App />);
+    await openProject();
     expect(screen.queryByTestId("tab-files")).toBeNull();
   });
 
-  it("is open by default at 300px (D57 — Workspace + Threads are load-bearing, not optional)", () => {
+  it("is open by default at 300px (D57 — Workspace + Threads are load-bearing, not optional)", async () => {
     render(<App />);
+    await openProject();
     const sidebar = screen.getByTestId("right-sidebar");
-    expect(sidebar.style.marginRight).toBe("0px");
     expect(sidebar.style.getPropertyValue("--panel-w")).toBe("300px");
     expect(screen.getByTestId("resize-right-panel")).toBeDefined();
   });
 
-  it("collapses via the toggle and restores on a second click", () => {
+  // Amendment 9: the chat toggle is Editor-preset only — Vibe's chat is the
+  // primary surface and already has the session-list toggle.
+  it("collapses the chat rail via the toggle and restores on a second click", async () => {
     render(<App />);
-    const sidebar = screen.getByTestId("right-sidebar");
-    const toggle = screen.getByTestId("toggle-right-sidebar");
+    await openProject();
+    const toggle = screen.getByTestId("toggle-chat");
 
     fireEvent.click(toggle);
-    expect(sidebar.style.marginRight).not.toBe("0px");
-    expect(screen.queryByTestId("resize-right-panel")).toBeNull();
+    expect(screen.queryByTestId("right-sidebar")).toBeNull();
 
     fireEvent.click(toggle);
-    expect(sidebar.style.marginRight).toBe("0px");
-    expect(screen.getByTestId("resize-right-panel")).toBeDefined();
+    expect(screen.getByTestId("right-sidebar")).toBeDefined();
+  });
+
+  it("offers the chat toggle in both presets", async () => {
+    // It used to be Editor-only. Cmd+J collapses chat in either preset, so
+    // hiding the button left a Vibe user with no visible way back — the
+    // shortcut was the only route, and only if you knew it.
+    render(<App />);
+    await openProject();
+    expect(screen.getByTestId("toggle-chat")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await screen.findByTestId("vibe-shell");
+    expect(screen.getByTestId("toggle-chat")).toBeDefined();
   });
 });
 
 describe("Resizable layout persistence", () => {
-  it("persists left rail width via drag and rehydrates on remount", async () => {
+  it("persists side-panel width via drag and rehydrates on remount", async () => {
     const { unmount } = render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
 
     fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), {
       clientX: 200,
@@ -2871,23 +1183,22 @@ describe("Resizable layout persistence", () => {
     fireEvent.pointerMove(window, { clientX: 260 });
     fireEvent.pointerUp(window);
     expect(
-      screen.getByTestId("nav-rail").style.getPropertyValue("--rail-w")
+      screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
     ).toBe("253px");
 
     unmount();
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
     expect(
-      screen.getByTestId("nav-rail").style.getPropertyValue("--rail-w")
+      screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
     ).toBe("253px");
   });
 
   it("disables text selection on the body while dragging a handle, restores it on release", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     expect(document.body.style.userSelect).not.toBe("none");
@@ -2904,25 +1215,19 @@ describe("Resizable layout persistence", () => {
     expect(document.body.style.userSelect).not.toBe("none");
   });
 
-  it("collapses and restores the left rail via Cmd+\\, persisted across remount", async () => {
-    const { unmount } = render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+  // Cmd+\\ and the rail icon drive the same `activePanel` state — there is
+  // deliberately no second "collapsed" flag to fall out of sync.
+  it("closes and reopens the side panel via Cmd+\\", async () => {
+    render(<App />);
+    await openProject();
+    expect(screen.getByTestId("side-panel")).toBeDefined();
 
     fireEvent.keyDown(window, { key: "\\", metaKey: true });
-    expect(screen.getByTestId("nav-rail").style.marginLeft).not.toBe("0px");
+    expect(screen.queryByTestId("side-panel")).toBeNull();
     expect(screen.queryByTestId("resize-left-rail")).toBeNull();
 
-    unmount();
-    render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
-    expect(screen.getByTestId("nav-rail").style.marginLeft).not.toBe("0px");
-
     fireEvent.keyDown(window, { key: "\\", metaKey: true });
-    expect(screen.getByTestId("nav-rail").style.marginLeft).toBe("0px");
+    expect(screen.getByTestId("side-panel")).toBeDefined();
     expect(screen.getByTestId("resize-left-rail")).toBeDefined();
   });
 });
@@ -3010,7 +1315,8 @@ describe("Keyboard navigation (accessibility)", () => {
     );
 
     render(<App />);
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle"));
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-history"));
     const threadList = screen.getByTestId("thread-list");
     // Scoped to the thread list: the selected thread's title also appears in the always-visible chat header below.
     await waitFor(() =>
@@ -3021,9 +1327,9 @@ describe("Keyboard navigation (accessibility)", () => {
 
     fireEvent.keyDown(rowB, { key: "Enter" });
 
-    // Selecting a thread collapses the disclosure (editor-collapsible-rail spec)
-    // and the chat header below reflects the newly-selected thread.
-    await waitFor(() => expect(screen.queryByTestId("thread-list")).toBeNull());
+    // The History panel stays open after a selection — rail panels are pinned
+    // by their icon, not dismissed by picking a row. The chat header below
+    // reflects the newly-selected thread.
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread B")
     );
@@ -3099,8 +1405,9 @@ describe("Keyboard navigation (accessibility)", () => {
     });
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
     fireEvent.click(screen.getByTestId("branch-indicator"));
 
@@ -3186,8 +1493,9 @@ describe("Keyboard navigation (accessibility)", () => {
     });
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
     fireEvent.click(screen.getByTestId("branch-indicator"));
     await waitFor(() =>
@@ -3285,6 +1593,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
     );
 
     render(<App />);
+    await openProject();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -3395,6 +1704,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
     );
 
     render(<App />);
+    await openProject();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -3415,7 +1725,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
 
     // Switching projects closes every tab at once — the expensive version of
     // the mistake the file-open path has guarded against for a while.
-    fireEvent.change(screen.getByTestId("project-picker"), {
+    fireEvent.change(openWorkspacePanel(), {
       target: { value: "proj-2" },
     });
 
@@ -3499,6 +1809,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
     );
 
     render(<App />);
+    await openProject();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -3596,6 +1907,7 @@ describe("Labeled inputs (accessibility)", () => {
     });
 
     render(<App />);
+    await openProject();
     // The single thread auto-selects on load, so the composer is already visible.
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
@@ -3673,8 +1985,9 @@ describe("Labeled inputs (accessibility)", () => {
     });
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
     fireEvent.click(screen.getByTestId("branch-indicator"));
 
@@ -3757,8 +2070,9 @@ describe("Error banner provenance", () => {
     });
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("branch-indicator")).toBeDefined()
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
     );
 
     fireEvent.click(screen.getByTestId("branch-indicator"));
@@ -3780,8 +2094,9 @@ describe("Error banner provenance", () => {
 describe("Find in files (Cmd+Shift+F)", () => {
   it("opens the find-in-files palette on Cmd+Shift+F and closes on Escape", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.keyDown(window, { key: "f", metaKey: true, shiftKey: true });
@@ -3802,80 +2117,125 @@ describe("Theme toggle", () => {
     delete document.documentElement.dataset.theme;
   });
 
-  it("cycles auto -> light -> dark -> auto and stamps data-theme on <html>", () => {
+  it("cycles auto -> light -> dark -> auto and stamps data-theme on <html>", async () => {
     render(<App />);
+    await openProject();
     const toggle = screen.getByTestId("theme-toggle");
-    expect(toggle.textContent).toBe("Auto");
+    expect(toggle).toHaveAttribute("aria-label", "Theme: auto");
     expect(document.documentElement.dataset.theme).toBeUndefined();
 
     fireEvent.click(toggle);
-    expect(toggle.textContent).toBe("Light");
+    expect(toggle).toHaveAttribute("aria-label", "Theme: light");
     expect(document.documentElement.dataset.theme).toBe("light");
 
     fireEvent.click(toggle);
-    expect(toggle.textContent).toBe("Dark");
+    expect(toggle).toHaveAttribute("aria-label", "Theme: dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
 
     fireEvent.click(toggle);
-    expect(toggle.textContent).toBe("Auto");
+    expect(toggle).toHaveAttribute("aria-label", "Theme: auto");
     expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 });
 
 describe("First-run onboarding", () => {
-  it("shows an explanation and a prominent Add Project action when there are no projects yet, instead of a bare sentence", async () => {
-    invokeMock.mockReset();
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "list_projects") return Promise.resolve([]);
-      if (cmd === "preflight") {
-        return Promise.resolve({
-          agents: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              path: null,
-              skillsOk: true,
-              pluginOk: true,
-            },
-            {
-              id: "codex",
-              label: "Codex",
-              path: null,
-              skillsOk: true,
-              pluginOk: true,
-            },
-          ],
-          selected: null,
-          openspec: false,
-          grillApply: false,
-          ponytail: false,
-          graphify: false,
-          ready: false,
-          warnings: [],
-          checkedAt: "2026-08-06T00:00:00Z",
-        });
+  it("explains what Floo is and offers a prominent Open Project action when there are no projects yet", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_projects") return Promise.resolve([]);
+        return defaultInvoke(cmd, args);
       }
-      return Promise.resolve([]);
-    });
+    );
 
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("onboarding-empty")).toBeDefined()
-    );
+    await screen.findByTestId("onboarding");
+    // The pitch, not a bare "no projects" sentence.
     expect(
-      screen.getByRole("heading", { level: 2, name: /floo network/i })
+      screen.getByRole("heading", { level: 2, name: /spec-first/i })
     ).toBeDefined();
+    // With no project there is nothing to recall.
+    expect(screen.queryByTestId("recent-project")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /add a project/i }));
+    fireEvent.click(screen.getByTestId("add-project"));
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({ directory: true })
     );
   });
+
+  it("surfaces executor detection on the first screen, before any project is open", async () => {
+    render(<App />);
+    const detect = await screen.findByTestId("onboarding-detect");
+    expect(detect.textContent).toMatch(/no coding agent found/i);
+  });
+
+  it("lets the provider and the model be swapped before a project is open", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [
+              { id: "claude", name: "Claude Code", label: "Claude Code" },
+              { id: "codex", name: "Codex", label: "Codex" },
+            ],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        if (cmd === "list_models")
+          return Promise.resolve({
+            models: [
+              { id: "m-fast", name: "Fast" },
+              { id: "m-deep", name: "Deep" },
+            ],
+            selected: "m-fast",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+
+    render(<App />);
+    const providerPill = await screen.findByTestId("onboarding-agent-pill");
+    expect(providerPill.textContent).toMatch(/Claude Code/);
+    fireEvent.click(providerPill);
+    fireEvent.click(await screen.findByTestId("onboarding-executor-opt-codex"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("onboarding-agent-pill").textContent
+      ).toMatch(/Codex/)
+    );
+
+    const modelPill = screen.getByTestId("onboarding-model-pill");
+    fireEvent.click(modelPill);
+    fireEvent.click(await screen.findByTestId("onboarding-model-opt-m-deep"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("onboarding-model-pill").textContent
+      ).toMatch(/Deep/)
+    );
+  });
+
+  it("opens a recent project on click instead of auto-entering it on launch", async () => {
+    render(<App />);
+    // Launch lands on onboarding even though a recent project exists — the
+    // user opens it themselves, the way every other IDE behaves.
+    await screen.findByTestId("onboarding");
+    expect(screen.queryByTestId("shell-toggle")).toBeNull();
+
+    fireEvent.click((await screen.findAllByTestId("recent-project"))[0]);
+    await screen.findByTestId("shell-toggle");
+    expect(screen.queryByTestId("onboarding")).toBeNull();
+  });
 });
 
 describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
-  it("renders a Vibe/Editor toggle in the top chrome, with Editor active by default", () => {
+  it("renders a Vibe/Editor toggle in the top chrome, with Editor active by default", async () => {
     render(<App />);
+    await openProject();
     const chrome = screen.getByTestId("top-chrome");
     const toggle = within(chrome).getByTestId("shell-toggle");
     expect(within(toggle).getByTestId("shell-editor").className).toMatch(
@@ -3888,8 +2248,9 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
 
   it("switching to Vibe renders the Vibe shell in place of the Editor shell, preserving the active project", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     expect(screen.getByTestId("editor-shell")).toBeDefined();
     expect(screen.queryByTestId("vibe-shell")).toBeNull();
@@ -3898,7 +2259,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
 
     expect(screen.queryByTestId("editor-shell")).toBeNull();
     expect(screen.getByTestId("vibe-shell")).toBeDefined();
-    expect(screen.getByTestId("project-picker")).toHaveValue("proj-1");
+    expect(openWorkspacePanel()).toHaveValue("proj-1");
   });
 
   it("picking Go from the Vibe shell's empty mode picker shows the empty composer (not the picker again)", async () => {
@@ -4009,6 +2370,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     );
 
     render(<App />);
+    await openProject();
 
     // Switch to the Vibe shell (which uses showEmptyModePicker, not newThreadPicker).
     fireEvent.click(screen.getByTestId("shell-vibe"));
@@ -4094,6 +2456,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     );
 
     render(<App />);
+    await openProject();
 
     fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
@@ -4216,6 +2579,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     );
 
     render(<App />);
+    await openProject();
 
     // Switch to the Vibe shell (uses showEmptyModePicker, not newThreadPicker).
     fireEvent.click(screen.getByTestId("shell-vibe"));
@@ -4333,6 +2697,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     );
 
     render(<App />);
+    await openProject();
 
     // Switch to the Vibe shell.
     fireEvent.click(screen.getByTestId("shell-vibe"));
@@ -4437,8 +2802,9 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
       }
     );
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.click(screen.getByTestId("shell-editor"));
@@ -4450,127 +2816,72 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     );
   });
 
-  it("Vibe shell renders no Codebase Map control anywhere", () => {
+  it("Vibe shell renders no Codebase Map control anywhere", async () => {
     render(<App />);
+    await openProject();
     fireEvent.click(screen.getByTestId("shell-vibe"));
     expect(screen.queryByTestId("tab-codemap")).toBeNull();
     expect(screen.queryByTestId("graph-pane")).toBeNull();
   });
 });
 
-describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
+describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
+  const toVibe = async () => {
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await screen.findByTestId("vibe-shell");
+  };
+
   it("shows the Spec/Go picker centered in Vibe when there are no threads", async () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
+    await toVibe();
 
     const picker = screen.getByTestId("mode-picker");
-    expect(picker).toBeDefined();
     expect(picker.className).toContain("ds-vibe-empty-picker");
     expect(screen.getByTestId("pick-go")).toBeDefined();
     expect(screen.getByTestId("pick-spec")).toBeDefined();
-    expect(screen.queryByText("Create a thread to get started.")).toBeNull();
   });
 
-  it("renders chat as the main column, not a tab", async () => {
+  // Governing Rule: same children in both presets, rearranged by CSS order.
+  // Vibe adds the session list and moves the rail to the trailing edge; it
+  // does not gain or lose a panel.
+  it("renders the same panel inventory as Editor, plus the session list", async () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
+    await toVibe();
 
-    expect(screen.getByTestId("vibe-chat-column")).toBeDefined();
-    // No Editor/Diff-style tab bar gates the chat column — it's always the main view.
-    expect(screen.queryByTestId("editor-tabs")).toBeNull();
+    expect(screen.getByTestId("session-list")).toBeDefined();
+    expect(screen.getByTestId("nav-rail")).toBeDefined();
+    expect(screen.getByTestId("editor-col")).toBeDefined();
+    expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("has an Edited Files column showing diff/turn-history content", async () => {
+  it("hides the session list in the Editor preset", async () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
+    await toVibe();
+    expect(screen.getByTestId("session-list")).toBeDefined();
 
-    expect(screen.getByTestId("col-files")).toBeDefined();
-    expect(screen.getByTestId("vibe-files-content")).toBeDefined();
+    fireEvent.click(screen.getByTestId("shell-editor"));
+    await screen.findByTestId("editor-shell");
+    expect(screen.queryByTestId("session-list")).toBeNull();
   });
 
-  it("renders the file tree inside a collapsed-by-default File Explorer disclosure in the right rail", async () => {
+  it("collapses and restores the session list from the title bar", async () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
+    await toVibe();
 
-    expect(screen.getByTestId("vibe-explorer-toggle")).toBeDefined();
-    expect(screen.queryByTestId("vibe-explorer-body")).toBeNull();
-    expect(screen.queryByTestId("file-tree")).toBeNull();
+    fireEvent.click(screen.getByTestId("toggle-session-list"));
+    expect(screen.queryByTestId("session-list")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("vibe-explorer-toggle"));
-    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    fireEvent.click(screen.getByTestId("toggle-session-list"));
+    expect(screen.getByTestId("session-list")).toBeDefined();
   });
 
-  it("opening a file from the File Explorer shows it in the Edited Files column", async () => {
+  it("opens a file from the Explorer panel into the shared editor column", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "list_projects") {
-          return Promise.resolve([
-            {
-              hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
-              createdAt: "2026-08-06T00:00:00Z",
-              lastAccessedAt: "2026-08-06T00:00:00Z",
-            },
-          ]);
-        }
-        if (cmd === "switch_project") {
-          return Promise.resolve({
-            hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
-            createdAt: "2026-08-06T00:00:00Z",
-            lastAccessedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "list_threads") return Promise.resolve([]);
-        if (cmd === "preflight") {
-          return Promise.resolve({
-            agents: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-              {
-                id: "codex",
-                label: "Codex",
-                path: null,
-                skillsOk: true,
-                pluginOk: true,
-              },
-            ],
-            selected: null,
-            openspec: false,
-            grillApply: false,
-            ponytail: false,
-            graphify: false,
-            ready: false,
-            warnings: [],
-            checkedAt: "2026-08-06T00:00:00Z",
-          });
-        }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") {
           const relativePath = String(args?.relativePath ?? "");
           if (relativePath === "")
@@ -4580,84 +2891,31 @@ describe("Vibe shell layout (vibe-editor-shell-redesign)", () => {
           return Promise.resolve([]);
         }
         if (cmd === "read_file_content") return Promise.resolve("content\n");
-        return Promise.resolve([]);
+        return defaultInvoke(cmd, args);
       }
     );
 
     render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
+    await toVibe();
 
-    fireEvent.click(screen.getByTestId("vibe-explorer-toggle"));
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
 
-    // Vibe shows the active file rather than a full tab strip, and now
-    // lands on the file instead of on the changes view.
-    await waitFor(() =>
-      expect(screen.getByTestId("vibe-active-file")).toBeDefined()
-    );
-    expect(screen.getByTestId("vibe-toggle-diff")).toHaveAttribute(
-      "aria-pressed",
-      "false"
-    );
     await waitFor(() =>
       expect(document.querySelector(".cm-content")?.textContent).toContain(
         "content"
       )
     );
   });
-
-  it("renders the chat column at 520px by default with a resizer", async () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
-
-    const chat = screen.getByTestId("vibe-chat-column");
-    expect(chat.style.getPropertyValue("--vibe-chat-w")).toBe("520px");
-    expect(screen.getByTestId("resize-vibe-chat")).toBeDefined();
-  });
-
-  it("drags the resizer to resize the chat column and persists the width", async () => {
-    const { unmount } = render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
-
-    const handle = screen.getByTestId("resize-vibe-chat");
-    fireEvent.pointerDown(handle, { clientX: 500 });
-    fireEvent.pointerMove(window, { clientX: 560 });
-    fireEvent.pointerUp(window);
-    expect(
-      screen
-        .getByTestId("vibe-chat-column")
-        .style.getPropertyValue("--vibe-chat-w")
-    ).toBe("580px");
-
-    unmount();
-    render(<App />);
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
-    expect(
-      screen
-        .getByTestId("vibe-chat-column")
-        .style.getPropertyValue("--vibe-chat-w")
-    ).toBe("580px");
-  });
 });
 
 describe("Command palette", () => {
   it("opens on Cmd+Shift+P and lists commands with their shortcuts", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
@@ -4676,8 +2934,9 @@ describe("Command palette", () => {
 
   it("filters as you type and runs the chosen command", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     await waitFor(() =>
@@ -4702,8 +2961,9 @@ describe("Command palette", () => {
 
   it("says so when nothing matches", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     await waitFor(() =>
@@ -4718,8 +2978,9 @@ describe("Command palette", () => {
 
   it("does not also open the file palette, which is one Shift away", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
@@ -4807,6 +3068,7 @@ describe("Session restore", () => {
     invokeMock.mockImplementation(router());
 
     render(<App />);
+    await openProject();
 
     await waitFor(() =>
       expect(screen.getAllByTestId("file-tab")).toHaveLength(2)
@@ -4827,6 +3089,7 @@ describe("Session restore", () => {
     invokeMock.mockImplementation(router(["deleted.ts"]));
 
     render(<App />);
+    await openProject();
 
     await waitFor(() =>
       expect(screen.getAllByTestId("file-tab")).toHaveLength(1)
@@ -4845,6 +3108,7 @@ describe("Session restore", () => {
     invokeMock.mockImplementation(router());
 
     render(<App />);
+    await openProject();
 
     await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
   });
@@ -4852,6 +3116,7 @@ describe("Session restore", () => {
   it("records what is open so the next launch can restore it", async () => {
     invokeMock.mockImplementation(router());
     render(<App />);
+    await openProject();
 
     fireEvent.click(await screen.findByText("b.ts"));
     await waitFor(() =>
@@ -4871,8 +3136,9 @@ describe("Session restore", () => {
 describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
   it("renders the file tree on the left and Editor/Diff tabs in the center", async () => {
     render(<App />);
+    await openProject();
     await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
+      expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
     expect(screen.getByTestId("nav-rail")).toBeDefined();
     expect(screen.getByTestId("editor-tabs")).toBeDefined();
@@ -4955,6 +3221,7 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
     });
 
     render(<App />);
+    await openProject();
     expect(screen.queryByTestId("rail-disclosure-body")).toBeNull();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
@@ -5049,11 +3316,12 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
     });
 
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
 
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle")); // click 1: open
+    fireEvent.click(screen.getByTestId("rail-history")); // click 1: open
     const rowB = within(screen.getByTestId("thread-list"))
       .getByText("Thread B")
       .closest("li")!;
@@ -5066,29 +3334,23 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
     expect(screen.queryByTestId("rail-disclosure-body")).toBeNull();
   });
 
-  it("reaches Codebase Map in 2 clicks: open disclosure, then the Codebase Map tab", async () => {
+  it("reaches Codebase Map in one click from the rail", async () => {
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle")); // click 1: open
-    fireEvent.click(screen.getByTestId("tab-codemap")); // click 2: select
-    expect(screen.getByTestId("graph-pane")).toBeDefined();
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-codemap"));
+    expect(await screen.findByTestId("graph-pane")).toBeDefined();
   });
 
-  it("reaches Codebase Map in 3 clicks from the Vibe shell: switch to Editor, open disclosure, Codebase Map tab", async () => {
+  // Same one click in Vibe — the rail is shared, so the map is not further
+  // away in one preset than the other.
+  it("reaches Codebase Map in one click from the Vibe preset too", async () => {
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("project-picker")).toHaveValue("proj-1")
-    );
+    await openProject();
     fireEvent.click(screen.getByTestId("shell-vibe"));
-    expect(screen.queryByTestId("graph-pane")).toBeNull();
+    await screen.findByTestId("vibe-shell");
 
-    fireEvent.click(screen.getByTestId("shell-editor")); // click 1
-    fireEvent.click(screen.getByTestId("rail-disclosure-toggle")); // click 2
-    fireEvent.click(screen.getByTestId("tab-codemap")); // click 3
-
-    expect(screen.getByTestId("graph-pane")).toBeDefined();
+    fireEvent.click(screen.getByTestId("rail-codemap"));
+    expect(await screen.findByTestId("graph-pane")).toBeDefined();
   });
 });
 
@@ -5172,6 +3434,7 @@ describe("Project switching", () => {
 
   it("unassociates the open file from the previous project when the project switches", async () => {
     render(<App />);
+    await openProject();
 
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
@@ -5182,10 +3445,13 @@ describe("Project switching", () => {
       screen.getByText("a.ts", { selector: ".ds-editor-path" })
     ).toBeDefined();
 
-    fireEvent.change(screen.getByTestId("project-picker"), {
+    fireEvent.change(openWorkspacePanel(), {
       target: { value: projB.hash },
     });
 
+    // Rail panels are exclusive — the Account panel took the Explorer's slot,
+    // so come back to it to see the new project's tree.
+    fireEvent.click(screen.getByTestId("rail-explorer"));
     await waitFor(() => expect(screen.getByText("b.ts")).toBeDefined());
     expect(screen.queryByTestId("file-editor")).toBeNull();
     expect(screen.getByText(/select a file/i)).toBeDefined();
@@ -5266,6 +3532,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   it("shows the current executor in the composer and opens a menu on click", async () => {
     setupWithThread("claude");
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5281,6 +3548,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   it("shows discovered ACP agents in the executor dropdown", async () => {
     setupWithThread("claude");
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5293,6 +3561,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   it("clicking a provider persists it on the thread and clears the model", async () => {
     setupWithThread("claude");
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5307,6 +3576,34 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         model: null,
       })
     );
+  });
+
+  it("leaves a banner behind after the menu closes, when a session is live", async () => {
+    setupWithThread("claude");
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      // A live session for this thread is what makes the switch ambiguous.
+      if (cmd === "executor_status")
+        return Promise.resolve([
+          { threadId: "t1", sessionId: "s1", busy: true, agentId: "claude" },
+        ]);
+      return base(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.click(screen.getByTestId("executor-btn"));
+    fireEvent.click(await screen.findByTestId("executor-opt-codex"));
+
+    // The menu is gone; the explanation is not.
+    await waitFor(() =>
+      expect(screen.queryByTestId("executor-menu")).toBeNull()
+    );
+    const banner = screen.getByTestId("executor-switch-banner");
+    expect(banner.textContent).toContain("Codex");
   });
 
   it("feeds the model menu from the selected provider's probed models", async () => {
@@ -5325,6 +3622,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       return baseImpl?.(cmd) ?? Promise.resolve([]);
     });
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5358,6 +3656,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       return baseImpl?.(cmd) ?? Promise.resolve([]);
     });
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5388,6 +3687,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       return baseImpl?.(cmd) ?? Promise.resolve([]);
     });
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5414,6 +3714,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       return baseImpl?.(cmd) ?? Promise.resolve([]);
     });
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5425,6 +3726,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   it("has a bypass-permissions toggle, default off, that flips on and persists across menu reopen", async () => {
     setupWithThread("claude");
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5458,6 +3760,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       return baseImpl?.(cmd) ?? Promise.resolve([]);
     });
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5481,6 +3784,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       }
     );
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5505,6 +3809,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   it("passes bypass to sendMessage", async () => {
     setupWithThread("claude");
     render(<App />);
+    await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
@@ -5612,14 +3917,14 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
     });
 
     render(<App />);
+    await openProject();
     fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("vibe-spec-launcher")).toBeInTheDocument()
-    );
 
-    // Click the spec row in the launcher
-    const row = await screen.findByTestId("vibe-spec-row");
-    fireEvent.click(row);
+    // The Specs rail panel replaced the Vibe-only launcher — one panel
+    // inventory, both presets (the governing rule).
+    fireEvent.click(screen.getByTestId("rail-specs"));
+    const row = await screen.findByTestId("spec-change");
+    fireEvent.click(within(row).getByText("vibe-spec-tabs"));
 
     // The spec tab should now be active in the files column
     await waitFor(() => {
@@ -5706,6 +4011,7 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
     });
 
     render(<App />);
+    await openProject();
     fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() =>
       expect(screen.getByTestId("change-chip")).toBeInTheDocument()
@@ -5804,13 +4110,12 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
     );
 
     render(<App />);
+    await openProject();
     fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("vibe-spec-launcher")).toBeInTheDocument()
-    );
 
-    const row = await screen.findByTestId("vibe-spec-row");
-    fireEvent.click(row);
+    fireEvent.click(screen.getByTestId("rail-specs"));
+    const row = await screen.findByTestId("spec-change");
+    fireEvent.click(within(row).getByText("vibe-spec-tabs"));
     await waitFor(() => {
       expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
     });

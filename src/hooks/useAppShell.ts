@@ -13,13 +13,32 @@ export const nextTheme = (t: Theme): Theme =>
 
 type RightTab = "threads" | "codemap" | "specs" | "verify" | "terminal";
 
+/// The left icon rail's panel inventory. Identical in both presets — the
+/// Governing Rule is that Vibe and Editor share one panel set and differ
+/// only in arrangement, so this list is deliberately not per-shell.
+export const PANEL_IDS = [
+  "explorer",
+  "search",
+  "git",
+  "specs",
+  "codemap",
+  "run",
+  "history",
+  "workspace",
+  "settings",
+] as const;
+
+export type PanelId = (typeof PANEL_IDS)[number];
+
+/// Bottom-panel tabs (Amendment 3). Problems is populated by LSP diagnostics
+/// once Phase 4 lands; the tab exists from Phase 2 so it has a home.
+export type BottomTab = "terminal" | "problems";
+
 export function useAppShell(projectHash: string | undefined) {
   const layoutHash = projectHash ?? "default";
   const { setColorScheme: setMantineColorScheme } = useMantineColorScheme();
 
   const [diffOpen, setDiffOpen] = useState(false);
-  const [editorRailOpen, setEditorRailOpen] = useState(false);
-  const [vibeExplorerOpen, setVibeExplorerOpen] = useState(false);
 
   const [centerShell, setCenterShellState] = useState<"vibe" | "editor">(
     "editor"
@@ -28,6 +47,42 @@ export function useAppShell(projectHash: string | undefined) {
   const setCenterShell = useCallback((shell: "vibe" | "editor") => {
     shellChosenRef.current = true;
     setCenterShellState(shell);
+  }, []);
+
+  // Which left-rail panel is open, or null for "rail only, no panel". Held
+  // once for both presets so switching Vibe/Editor never resets it.
+  const [activePanel, setActivePanel] = useState<PanelId | null>("explorer");
+  const selectPanel = useCallback((id: PanelId) => {
+    setActivePanel((current) => (current === id ? null : id));
+  }, []);
+
+  // Vibe-only browse surface (Amendment 3); Editor gets the thread-tab strip
+  // alone, so this state is simply not read in that preset.
+  const [sessionListOpen, setSessionListOpen] = useState(true);
+  const toggleSessionList = useCallback(
+    () => setSessionListOpen((open) => !open),
+    []
+  );
+
+  // Editor-only chat collapse (Amendment 9). Hidden in Vibe, where chat is
+  // the primary surface and the session-list toggle already reclaims width.
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const toggleChat = useCallback(
+    () => setChatCollapsed((collapsed) => !collapsed),
+    []
+  );
+
+  const [bottomTab, setBottomTab] = useState<BottomTab>("terminal");
+
+  // Which threads have a tab in the chat strip. Like editor tabs: selecting
+  // a thread opens one, closing removes it, and the thread itself is
+  // untouched either way (History still lists every thread).
+  const [openThreadIds, setOpenThreadIds] = useState<string[]>([]);
+  const openThread = useCallback((id: string) => {
+    setOpenThreadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }, []);
+  const closeThread = useCallback((id: string) => {
+    setOpenThreadIds((prev) => prev.filter((existing) => existing !== id));
   }, []);
 
   const [rightTab, setRightTab] = useState<RightTab>("threads");
@@ -115,13 +170,20 @@ export function useAppShell(projectHash: string | undefined) {
     () => ({
       diffOpen,
       setDiffOpen,
-      editorRailOpen,
-      setEditorRailOpen,
-      vibeExplorerOpen,
-      setVibeExplorerOpen,
       centerShell,
       setCenterShell,
       shellChosenRef,
+      activePanel,
+      selectPanel,
+      sessionListOpen,
+      toggleSessionList,
+      chatCollapsed,
+      toggleChat,
+      bottomTab,
+      setBottomTab,
+      openThreadIds,
+      openThread,
+      closeThread,
       rightTab,
       setRightTab,
       terminalPlacement,
@@ -138,9 +200,17 @@ export function useAppShell(projectHash: string | undefined) {
     }),
     [
       diffOpen,
-      editorRailOpen,
-      vibeExplorerOpen,
       centerShell,
+      activePanel,
+      selectPanel,
+      sessionListOpen,
+      toggleSessionList,
+      chatCollapsed,
+      toggleChat,
+      bottomTab,
+      openThreadIds,
+      openThread,
+      closeThread,
       rightTab,
       terminalPlacement,
       theme,

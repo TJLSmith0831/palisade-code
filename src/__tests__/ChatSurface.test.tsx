@@ -43,6 +43,13 @@ const flight: Preflight = {
       path: null,
       cmd: "claude",
     },
+    {
+      id: "codex",
+      name: "Codex",
+      version: null,
+      path: null,
+      cmd: "codex",
+    },
   ],
   selected: "claude",
   openspec: false,
@@ -106,6 +113,9 @@ const renderSurface = (overrides: SurfaceOverrides = {}) => {
     flight,
     flightSelected: true,
     models: null,
+    onSelectThread: vi.fn(),
+    onCloseThread: vi.fn(),
+    onNewThread: vi.fn(),
     onPickExecutor: vi.fn(),
     onPickModel: vi.fn(),
     onProbeModels: vi.fn(),
@@ -209,5 +219,92 @@ describe("ChatSurface auto-scroll", () => {
     expect(screen.getByTestId("messages").getAttribute("data-autoscroll")).toBe(
       "true"
     );
+  });
+});
+
+describe("executor switch during a live session (Amendment 5)", () => {
+  // `prefsMenuOpen` is App state, so the menu is opened by prop here; the
+  // App-level test covers the real open-then-close path.
+  const pick = async (id: string) =>
+    fireEvent.click(await screen.findByTestId(`executor-opt-${id}`));
+
+  it("explains that the switch applies to the next session, outside the menu", async () => {
+    renderSurface({ hasLiveSession: true, busy: true, prefsMenuOpen: true });
+    await pick("codex");
+
+    // The menu — and the hint inside it — is gone by now; the banner is what
+    // survives, which is the entire point of the fix.
+    const banner = screen.getByTestId("executor-switch-banner");
+    expect(banner.textContent).toContain("Codex");
+    expect(banner.textContent).toContain("Claude Code");
+  });
+
+  it("says nothing when there is no live session to be confused about", async () => {
+    renderSurface({ hasLiveSession: false, prefsMenuOpen: true });
+    await pick("codex");
+    expect(screen.queryByTestId("executor-switch-banner")).toBeNull();
+  });
+
+  it("says nothing when the picked agent is the one already selected", async () => {
+    renderSurface({ hasLiveSession: true, prefsMenuOpen: true });
+    await pick("claude");
+    expect(screen.queryByTestId("executor-switch-banner")).toBeNull();
+  });
+
+  it("can be dismissed, and stays dismissed", async () => {
+    renderSurface({ hasLiveSession: true, prefsMenuOpen: true });
+    await pick("codex");
+    fireEvent.click(screen.getByTestId("executor-switch-dismiss"));
+    expect(screen.queryByTestId("executor-switch-banner")).toBeNull();
+  });
+
+  it("still calls through to the picker — the banner is an explanation, not a gate", async () => {
+    const { props } = renderSurface({ hasLiveSession: true, prefsMenuOpen: true });
+    await pick("codex");
+    expect(props.onPickExecutor).toHaveBeenCalledWith("codex");
+  });
+});
+
+describe("thread tab strip (mockup parity)", () => {
+  const threads: ThreadMeta[] = [
+    { ...thread, id: "t1", title: "Add LSP status", currentMode: "spec" },
+    { ...thread, id: "t2", title: "Thread 2", currentMode: "go" },
+  ];
+
+  it("lists the project's threads with their mode, marking the active one", () => {
+    renderSurface({ threads, thread: threads[0] });
+    const tabs = screen.getAllByTestId("thread-tab");
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0].textContent).toContain("Add LSP status");
+    // The badge maps onto the real spec/go state machine — no third mode.
+    expect(tabs[0].textContent?.toLowerCase()).toContain("spec");
+    expect(tabs[1].textContent?.toLowerCase()).toContain("go");
+    expect(tabs[0]).toHaveAttribute("aria-current", "true");
+    expect(tabs[1]).not.toHaveAttribute("aria-current", "true");
+  });
+
+  it("switches threads from the strip", () => {
+    const { props } = renderSurface({ threads, thread: threads[0] });
+    fireEvent.click(screen.getAllByTestId("thread-tab")[1]);
+    expect(props.onSelectThread).toHaveBeenCalledWith(threads[1]);
+  });
+
+  it("closes a thread from its tab, like any other tab", () => {
+    const { props } = renderSurface({ threads, thread: threads[0] });
+    fireEvent.click(screen.getAllByTestId("thread-tab-close")[1]);
+    expect(props.onCloseThread).toHaveBeenCalledWith(threads[1]);
+    // Closing a tab is not selecting it.
+    expect(props.onSelectThread).not.toHaveBeenCalled();
+  });
+
+  it("starts a new thread from the strip's +", () => {
+    const { props } = renderSurface({ threads, thread: threads[0] });
+    fireEvent.click(screen.getByTestId("thread-tab-new"));
+    expect(props.onNewThread).toHaveBeenCalled();
+  });
+
+  it("is not rendered when the project has no threads yet", () => {
+    renderSurface({ threads: [], thread: null });
+    expect(screen.queryByTestId("thread-tab")).toBeNull();
   });
 });

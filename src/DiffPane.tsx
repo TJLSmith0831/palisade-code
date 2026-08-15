@@ -11,6 +11,11 @@ import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
 
 type Props = {
   projectHash: string;
+  /** Show only this file's diff — set when a row in the Source Control
+   *  panel is clicked, so "click a change" lands on that change rather
+   *  than on the whole working tree. */
+  focusPath?: string | null;
+  onClearFocus?: () => void;
   /** Bumped when something outside this pane changed the working tree — an
    * agent turn finishing, or a save. Without it the diff is whatever it was
    * when the pane mounted, which is stale the moment the agent writes. */
@@ -62,15 +67,18 @@ function FileDiff({
   );
 }
 
-export default function DiffPane({ projectHash, refreshToken }: Props) {
+export default function DiffPane({
+  projectHash,
+  refreshToken,
+  focusPath,
+  onClearFocus,
+}: Props) {
   const [isRepo, setIsRepo] = useState(true);
   const [status, setStatus] = useState<FileStatus[]>([]);
   const [workingFiles, setWorkingFiles] = useState<StructuredPatch[]>([]);
   const [stagedFiles, setStagedFiles] = useState<StructuredPatch[]>([]);
-  const [aheadBehind, setAheadBehind] = useState<[number, number] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState<{ path: string; untracked: boolean } | null>(null);
 
   const refresh = useCallback(async () => {
@@ -81,20 +89,17 @@ export default function DiffPane({ projectHash, refreshToken }: Props) {
         setStatus([]);
         setWorkingFiles([]);
         setStagedFiles([]);
-        setAheadBehind(null);
         setError(null);
         return;
       }
-      const [nextStatus, working, staged, ab] = await Promise.all([
+      const [nextStatus, working, staged] = await Promise.all([
         api.gitStatus(projectHash),
         api.gitWorkingDiff(projectHash),
         api.gitStagedDiff(projectHash),
-        api.gitAheadBehind(projectHash),
       ]);
       setStatus(nextStatus);
       setWorkingFiles(parseFilePatches(working));
       setStagedFiles(parseFilePatches(staged));
-      setAheadBehind(ab);
       setError(null);
     } catch (err) {
       setError(describeError(err));
@@ -119,12 +124,6 @@ export default function DiffPane({ projectHash, refreshToken }: Props) {
     },
     [refresh],
   );
-
-  const commit = () =>
-    run(async () => {
-      await api.gitCommit(projectHash, message);
-      setMessage("");
-    });
 
   const discard = () => {
     if (!confirmDiscard) return;
@@ -159,10 +158,16 @@ export default function DiffPane({ projectHash, refreshToken }: Props) {
     );
   }
 
+  const focused = <T extends StructuredPatch>(files: T[]) =>
+    focusPath ? files.filter((f) => pathFromPatch(f) === focusPath) : files;
+  const shownWorking = focused(workingFiles);
+  const shownStaged = focused(stagedFiles);
   const untracked = status.filter((f) => f.code === "??");
-  const hasStaged = stagedFiles.length > 0;
-  const isClean = workingFiles.length === 0 && stagedFiles.length === 0 && untracked.length === 0;
-  const [ahead, behind] = aheadBehind ?? [0, 0];
+  const shownUntracked = focusPath
+    ? untracked.filter((f) => f.path === focusPath)
+    : untracked;
+  const isClean =
+    workingFiles.length === 0 && stagedFiles.length === 0 && untracked.length === 0;
 
   return (
     <div className="diff-pane" data-testid="diff-pane">
@@ -178,51 +183,22 @@ export default function DiffPane({ projectHash, refreshToken }: Props) {
         </Alert>
       )}
 
-      <div className="diff-sticky-controls">
-        <div className="diff-sync-bar">
-          <button onClick={() => run(() => api.gitFetch(projectHash))} disabled={busy} data-testid="fetch-btn">
-            Fetch
-          </button>
-          <button
-            onClick={() => run(async () => void (await api.gitPull(projectHash)))}
-            disabled={busy}
-            data-testid="pull-btn"
-          >
-            Pull{aheadBehind && behind > 0 ? ` (${behind})` : ""}
-          </button>
-          <button
-            onClick={() => run(async () => void (await api.gitPush(projectHash)))}
-            disabled={busy}
-            data-testid="push-btn"
-          >
-            Push{aheadBehind && ahead > 0 ? ` (${ahead})` : ""}
-          </button>
-        </div>
-
-        <div className="diff-commit-box">
-          <textarea
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Commit message"
-            aria-label="Commit message"
-            data-testid="commit-message"
-          />
-          <button
-            onClick={commit}
-            disabled={busy || !message.trim() || !hasStaged}
-            data-testid="commit-btn"
-          >
-            Commit
-          </button>
-        </div>
-      </div>
-
       {isClean && !error && <p className="empty">Nothing to commit — working tree clean.</p>}
 
-      {hasStaged && (
+      {focusPath && (
+        <div className="diff-focus-bar" data-testid="diff-focus-bar">
+          <span className="diff-file-path">{focusPath}</span>
+          <span className="diff-spacer" />
+          <button onClick={onClearFocus} data-testid="diff-show-all">
+            Show all changes
+          </button>
+        </div>
+      )}
+
+      {shownStaged.length > 0 && (
         <section className="diff-section" data-testid="staged-section">
           <h2 className="ds-section-heading">Staged Changes</h2>
-          {stagedFiles.map((file) => (
+          {shownStaged.map((file) => (
             <FileDiff
               key={pathFromPatch(file)}
               file={file}
@@ -234,10 +210,10 @@ export default function DiffPane({ projectHash, refreshToken }: Props) {
         </section>
       )}
 
-      {(workingFiles.length > 0 || untracked.length > 0) && (
+      {(shownWorking.length > 0 || shownUntracked.length > 0) && (
         <section className="diff-section" data-testid="changes-section">
           <h2 className="ds-section-heading">Changes</h2>
-          {workingFiles.map((file) => (
+          {shownWorking.map((file) => (
             <FileDiff
               key={pathFromPatch(file)}
               file={file}
@@ -248,7 +224,7 @@ export default function DiffPane({ projectHash, refreshToken }: Props) {
               busy={busy}
             />
           ))}
-          {untracked.map((entry) => (
+          {shownUntracked.map((entry) => (
             <div key={entry.path} className="diff-file" data-testid="diff-untracked-file">
               <div className="diff-file-head">
                 <span className="diff-file-path">{entry.path}</span>

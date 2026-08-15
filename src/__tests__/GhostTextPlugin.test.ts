@@ -6,6 +6,7 @@ const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
+  loadCompletionSettings,
   PREFIX_BUDGET_CHARS,
   SUFFIX_BUDGET_CHARS,
   acceptGhostText,
@@ -400,5 +401,35 @@ describe("GhostTextPlugin", () => {
       expect(a.eq(diffText)).toBe(false);
       expect(a.eq(diffKey)).toBe(false);
     });
+  });
+});
+
+describe("accepting with Tab (Cursor parity)", () => {
+  it("defaults to Tab, the key every other editor uses for this", () => {
+    localStorage.removeItem("floo:completionKeybinding");
+    expect(loadCompletionSettings().acceptKeybinding).toBe("Tab");
+  });
+
+  it("still honours an explicitly chosen keybinding", () => {
+    localStorage.setItem("floo:completionKeybinding", "Alt-Tab");
+    expect(loadCompletionSettings().acceptKeybinding).toBe("Alt-Tab");
+    localStorage.removeItem("floo:completionKeybinding");
+  });
+
+  it("declines Tab when nothing is suggested, so indenting still works", () => {
+    // Returning false is what lets the later `indentWithTab` handler run;
+    // swallowing Tab unconditionally would break indentation everywhere.
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "hello",
+        selection: { anchor: 5 },
+        extensions: fimCompletion(
+          { enabled: true, acceptKeybinding: "Tab" },
+          "abc",
+          "src/foo.ts"
+        ),
+      }),
+    });
+    expect(acceptGhostText(view)).toBe(false);
   });
 });

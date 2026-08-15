@@ -11,6 +11,7 @@ mod fswatch;
 mod git;
 mod git_repo;
 mod integrations;
+mod lsp;
 mod pidguard;
 mod session_log_writer;
 mod openspec_cache;
@@ -68,6 +69,18 @@ async fn add_project(path: String) -> Res<Project> {
     tokio::task::spawn_blocking(move || store::add_project(&floo_home(), Path::new(&path)))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Amendment 8's Clone Repository card: clone, then register the result as
+/// a project in one step.
+#[tauri::command]
+async fn clone_repository(url: String, parent: String) -> Res<Project> {
+    tokio::task::spawn_blocking(move || {
+        let target = git::clone(&git_bin()?, &url, Path::new(&parent))?;
+        store::add_project(&floo_home(), &target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -245,6 +258,19 @@ async fn set_thread_mode(
 
 /// Refused while this thread has an executor turn in flight — deleting the
 /// files a live turn is about to append to would corrupt or orphan state.
+#[tauri::command]
+async fn set_thread_archived(
+    project_hash: String,
+    thread_id: String,
+    archived: bool,
+) -> Res<store::ThreadMeta> {
+    tokio::task::spawn_blocking(move || {
+        store::set_thread_archived(&floo_home(), &project_hash, &thread_id, archived)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
@@ -880,7 +906,7 @@ async fn set_thread_executor(
 #[tauri::command]
 async fn list_models(
     app: tauri::AppHandle,
-    project_hash: String,
+    project_hash: Option<String>,
     agent_id: String,
 ) -> Res<acp_client::ModelState> {
     tokio::task::spawn_blocking(move || {
@@ -890,11 +916,24 @@ async fn list_models(
             .agent(&agent_id)
             .ok_or_else(|| format!("unknown or unavailable agent `{agent_id}`"))?;
         let path = agent.path.clone().ok_or("agent has no path")?;
-        let root = project_root(&project_hash)?;
+        // The onboarding screen offers a provider/model picker before any
+        // project is open (Amendment 8), and a model probe only needs *a*
+        // working directory — fall back to home rather than refusing.
+        let root = match project_hash.as_deref() {
+            Some(hash) => project_root(hash)?,
+            None => dirs_home(),
+        };
         acp_client::probe_models(PathBuf::from(path), agent.args.clone(), root)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The user's home directory, or the current directory if it can't be read.
+fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// `/propose`: run `grill-propose` in the live spec-mode executor.
@@ -936,6 +975,123 @@ async fn propose(
             Some(&id),
         )?;
         send_to(&app, &harness, &project_hash, &id, &full_prompt)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Which diff Generate should describe: whatever is staged, or — when
+/// nothing is staged — the working tree. Deciding what to stage usually
+/// comes *after* reading a summary of what changed, so refusing to draft
+/// until something is staged makes the button useless in the common case
+/// (raised by a reviewer working exactly that way).
+fn diff_to_describe(
+    staged: &str,
+    working: &str,
+    untracked: &[String],
+) -> Option<(&'static str, String)> {
+    if !staged.trim().is_empty() {
+        return Some(("staged", staged.to_string()));
+    }
+    // `git diff` says nothing about untracked files, so a working-tree
+    // fallback built from it alone described 1 of 18 changes in a project
+    // that was mostly new files — and the draft read as confidently as if
+    // it had seen everything. They are listed by name rather than by
+    // content: naming them is honest and cheap, and `git add -N` to make
+    // them diffable would mutate the index behind the user's back.
+    let new_files = if untracked.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nNew files, not yet tracked (no diff available — describe them \
+             by their paths):\n{}",
+            untracked
+                .iter()
+                .map(|path| format!("- {path}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    if working.trim().is_empty() && new_files.is_empty() {
+        return None;
+    }
+    Some(("working-tree", format!("{working}{new_files}")))
+}
+
+/// The prompt behind the Source Control panel's **Generate** button
+/// (Amendment 7). A real summarisation of the diff through the project's
+/// executor — deliberately not a canned template.
+fn commit_message_prompt(scope: &str, diff: &str) -> String {
+    format!(
+        "Write a git commit message for the {scope} diff below.\n\n\
+         Rules:\n\
+         - Conventional-commits subject line, imperative mood, <= 72 chars.\n\
+         - Then a blank line and 1-3 short bullets on *why*, only if the diff \
+           is not self-explanatory.\n\
+         - Describe only what this diff actually changes. Do not invent scope.\n\
+         - Reply with the commit message and nothing else: no preamble, no \
+           code fences, no commentary.\n\n\
+         ```diff\n{diff}\n```"
+    )
+}
+
+/// Cap on the diff handed to the agent. A staged diff can be megabytes
+/// (lockfiles, generated code); past this the tail adds nothing a subject
+/// line will mention and just burns the agent's context.
+const COMMIT_DIFF_CAP: usize = 48 * 1024;
+
+fn cap_diff(diff: &str) -> String {
+    if diff.len() <= COMMIT_DIFF_CAP {
+        return diff.to_string();
+    }
+    let mut end = COMMIT_DIFF_CAP;
+    while end > 0 && !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n… [diff truncated]", &diff[..end])
+}
+
+/// Draft a commit message from the staged diff via the project's executor.
+///
+/// Runs on a throwaway session rather than the thread's own: the draft is a
+/// value returned to the commit box, and routing it through a live thread
+/// would dump an unrelated turn into the user's conversation.
+#[tauri::command]
+async fn draft_commit_message(app: tauri::AppHandle, project_hash: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let root = project_root(&project_hash)?;
+        let bin = git_bin()?;
+        let staged = git::staged_diff(&bin, &root)?;
+        let working = git::working_tree_diff(&bin, &root)?;
+        let untracked: Vec<String> = git::status(&bin, &root)?
+            .into_iter()
+            .filter(|file| file.code.trim() == "??")
+            .map(|file| file.path)
+            .collect();
+        let Some((scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
+            return Err("nothing to describe — the working tree is clean".into());
+        };
+        let (agent, bin) = selected_executor(&app, &harness, &project_hash, None)?;
+        let spawn = acp_client::AcpSpawn {
+            agent_id: agent.id.clone(),
+            agent_name: agent.name.clone(),
+            bin,
+            cmd: agent.cmd.clone(),
+            args: agent.args.clone(),
+            project_root: root,
+            project_hash: project_hash.clone(),
+            thread_id: String::new(),
+            mode: "spec".into(),
+            bypass: false,
+            model: None,
+            floo_home: floo_home(),
+        };
+        acp_client::agent_oneshot(
+            spawn,
+            &commit_message_prompt(scope, &cap_diff(&diff)),
+            std::time::Duration::from_secs(90),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1167,6 +1323,154 @@ async fn list_verifications(project_hash: String) -> Res<Vec<store::Verification
         .map_err(|e| e.to_string())?
 }
 
+// -------------------------------------------------------- language servers
+
+/// Starts (or re-uses) the language server for `language` in this project.
+/// Every message it emits comes back as an `lsp-message` event; the frontend
+/// feeds those to `@codemirror/lsp-client`'s transport.
+#[tauri::command]
+async fn lsp_start(
+    app: tauri::AppHandle,
+    project_hash: String,
+    language: String,
+) -> Res<lsp::LspStatus> {
+    tokio::task::spawn_blocking(move || start_language_server(&app, &project_hash, &language))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Spawns the server and wires its two callbacks. Recursive by design: the
+/// exit callback calls this again after a backoff, which is how D14's
+/// "restart up to 3 times" actually restarts. Routing that through a
+/// frontend event would make the restart depend on a window being open.
+fn start_language_server(
+    app: &tauri::AppHandle,
+    project_hash: &str,
+    language: &str,
+) -> Res<lsp::LspStatus> {
+    let servers = app.state::<lsp::SharedLsp>().inner().clone();
+    let root = project_root(project_hash)?;
+
+    let out_app = app.clone();
+    let out_lang = language.to_string();
+    let exit_app = app.clone();
+    let exit_servers = servers.clone();
+    let (exit_hash, exit_lang) = (project_hash.to_string(), language.to_string());
+
+    servers.ensure(
+        project_hash,
+        language,
+        &root,
+        move |body| {
+            let _ = out_app.emit(
+                "lsp-message",
+                serde_json::json!({ "language": out_lang, "body": body }),
+            );
+        },
+        move || {
+            // A crash the user can't see is a crash they'll blame the editor
+            // for, so every transition is announced before anything is retried.
+            let state = exit_servers.record_exit(&exit_hash, &exit_lang);
+            let status = exit_servers.status(&exit_hash, &exit_lang);
+            let _ = exit_app.emit("lsp-status", &status);
+            if state != lsp::LspState::Crashed {
+                return;
+            }
+            let delay = lsp::LspServers::backoff_ms(status.restarts);
+            let app = exit_app.clone();
+            let (hash, lang) = (exit_hash.clone(), exit_lang.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+                let restarted = start_language_server(&app, &hash, &lang);
+                let _ = app.emit(
+                    "lsp-status",
+                    restarted.unwrap_or_else(|err| lsp::LspStatus {
+                        language: lang.clone(),
+                        state: lsp::LspState::Disabled,
+                        server: None,
+                        restarts: status.restarts,
+                        detail: Some(err),
+                    }),
+                );
+            });
+        },
+    )
+}
+
+/// One JSON-RPC body, framed and written to the server's stdin.
+#[tauri::command]
+async fn lsp_send(
+    app: tauri::AppHandle,
+    project_hash: String,
+    language: String,
+    body: String,
+) -> Res<()> {
+    let servers = app.state::<lsp::SharedLsp>().inner().clone();
+    tokio::task::spawn_blocking(move || servers.send(&project_hash, &language, &body))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn lsp_status(
+    app: tauri::AppHandle,
+    project_hash: String,
+    language: String,
+) -> Res<lsp::LspStatus> {
+    let servers = app.state::<lsp::SharedLsp>().inner().clone();
+    Ok(servers.status(&project_hash, &language))
+}
+
+/// Kills every server for a project — the frontend calls this on project
+/// switch so nothing is left running against a directory nobody has open.
+#[tauri::command]
+async fn lsp_shutdown(app: tauri::AppHandle, project_hash: String) -> Res<()> {
+    let servers = app.state::<lsp::SharedLsp>().inner().clone();
+    tokio::task::spawn_blocking(move || servers.shutdown_project(&project_hash))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------------------ run commands
+
+/// Amendment 1: the project's `run` map, sorted, for the title-bar split
+/// button and the rail's Run panel — two views of one config.
+#[tauri::command]
+async fn run_commands(project_hash: String) -> Res<Vec<(String, String)>> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let mut commands: Vec<(String, String)> = settings::load(&root).0.run.into_iter().collect();
+        commands.sort();
+        Ok(commands)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Replaces the project's `run` map. The whole map, not one entry: the panel
+/// edits a list and saves it, so a delete is just an absent key.
+#[tauri::command]
+async fn save_run_commands(project_hash: String, commands: Vec<(String, String)>) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        settings::save_run(&root, commands.into_iter().collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// What the project root suggests running. A proposal the user confirms —
+/// this never writes anything.
+#[tauri::command]
+async fn detect_run_commands(project_hash: String) -> Res<Vec<(String, String)>> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        Ok(settings::detect_run(&root))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The names a project has configured, so the UI can offer them.
 #[tauri::command]
 async fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
@@ -1331,7 +1635,7 @@ fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()
 async fn complete_code(
     app: tauri::AppHandle,
     _project_hash: String,
-    _file_path: String,
+    file_path: String,
     prefix: String,
     suffix: String,
 ) -> Res<completion::CompletionResponse> {
@@ -1347,7 +1651,7 @@ async fn complete_code(
         let server = guard
             .as_ref()
             .ok_or("completion server is not running")?;
-        server.complete(&prefix, &suffix)
+        server.complete(&file_path, &prefix, &suffix)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1442,6 +1746,7 @@ pub fn run() {
             Ok(())
         })
         .manage(Harness::default())
+        .manage(lsp::SharedLsp::new(lsp::LspServers::new()))
         .invoke_handler(tauri::generate_handler![
             complete_code,
             set_completion_enabled,
@@ -1450,6 +1755,7 @@ pub fn run() {
             flush_completion_telemetry,
             list_projects,
             add_project,
+            clone_repository,
             switch_project,
             rename_project,
             create_thread,
@@ -1459,6 +1765,7 @@ pub fn run() {
             set_thread_executor,
             list_models,
             delete_thread,
+            set_thread_archived,
             append_message,
             read_thread,
             preflight,
@@ -1466,6 +1773,7 @@ pub fn run() {
             go_mode,
             spec_mode,
             propose,
+            draft_commit_message,
             apply_skill,
             change_status,
             stop_executor,
@@ -1475,6 +1783,13 @@ pub fn run() {
             run_verify,
             list_verifications,
             verify_commands,
+            lsp_start,
+            lsp_send,
+            lsp_status,
+            lsp_shutdown,
+            run_commands,
+            save_run_commands,
+            detect_run_commands,
             session_attribution,
             commands::openspec_cmds::list_spec_changes,
             commands::openspec_cmds::show_spec_change,
@@ -1494,7 +1809,9 @@ pub fn run() {
             commands::git_cmds::git_stage_hunk,
             commands::git_cmds::git_unstage_hunk,
             commands::git_cmds::git_stage_file,
+            commands::git_cmds::git_unstage_file,
             commands::git_cmds::git_commit,
+            commands::git_cmds::git_log,
             commands::git_cmds::git_branches,
             commands::git_cmds::git_checkout_branch,
             commands::git_cmds::git_create_branch,
@@ -1561,6 +1878,55 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn generate_describes_the_staged_diff_when_there_is_one() {
+        let picked = diff_to_describe("+staged line", "+working line", &[]).unwrap();
+        assert_eq!(picked.0, "staged");
+        assert_eq!(picked.1, "+staged line");
+    }
+
+    #[test]
+    fn the_working_tree_fallback_names_untracked_files_too() {
+        // `git diff` is blind to untracked files: a project of mostly new
+        // files got a draft describing the one tracked edit, stated as
+        // confidently as if it had seen everything.
+        let untracked = vec!["src/new.ts".to_string(), "docs/added.md".to_string()];
+        let (scope, diff) =
+            diff_to_describe("", "+one tracked edit", &untracked).unwrap();
+        assert_eq!(scope, "working-tree");
+        assert!(diff.contains("+one tracked edit"), "{diff}");
+        assert!(diff.contains("src/new.ts"), "{diff}");
+        assert!(diff.contains("docs/added.md"), "{diff}");
+    }
+
+    #[test]
+    fn a_tree_of_only_new_files_still_has_something_to_describe() {
+        let untracked = vec!["a.ts".to_string()];
+        let (_, diff) = diff_to_describe("", "", &untracked).unwrap();
+        assert!(diff.contains("a.ts"), "{diff}");
+    }
+
+    #[test]
+    fn generate_falls_back_to_the_working_tree_when_nothing_is_staged() {
+        // Deciding what to stage usually comes after reading the summary —
+        // refusing here made the button useless before the first `git add`.
+        let picked = diff_to_describe("   \n", "+working line", &[]).unwrap();
+        assert_eq!(picked.0, "working-tree");
+        assert_eq!(picked.1, "+working line");
+    }
+
+    #[test]
+    fn generate_has_nothing_to_say_about_a_clean_tree() {
+        assert!(diff_to_describe("", "  \n", &[]).is_none());
+    }
+
+    #[test]
+    fn the_prompt_names_which_diff_it_is_describing() {
+        assert!(commit_message_prompt("working-tree", "+x").contains("working-tree diff"));
+        assert!(commit_message_prompt("staged", "+x").contains("staged diff"));
+    }
+
     use super::*;
 
     /// Builds an ACP preflight snapshot from named agent ids.
@@ -1636,6 +2002,7 @@ mod tests {
             executor: None,
             model: None,
             spec_type: None,
+            archived: false,
         }
     }
 

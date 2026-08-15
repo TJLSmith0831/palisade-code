@@ -111,6 +111,15 @@ pub fn stage_file(bin: &Path, root: &Path, path: &str) -> Res<()> {
     run(bin, root, &["add", "--", path]).map(|_| ())
 }
 
+/// Unstage a whole file. `restore --staged` handles a file already in HEAD;
+/// a newly-added file needs `rm --cached`, which `restore` cannot express.
+pub fn unstage_file(bin: &Path, root: &Path, path: &str) -> Res<()> {
+    if run(bin, root, &["restore", "--staged", "--", path]).is_ok() {
+        return Ok(());
+    }
+    run(bin, root, &["rm", "--cached", "--", path]).map(|_| ())
+}
+
 pub fn commit(bin: &Path, root: &Path, message: &str) -> Res<()> {
     run(bin, root, &["commit", "-m", message]).map(|_| ())
 }
@@ -188,6 +197,81 @@ pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res
     } else {
         run(bin, root, &["checkout", "--", path]).map(|_| ())
     }
+}
+
+/// The folder name `git clone <url>` would produce, without asking git.
+fn clone_dir_name(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    let last = trimmed.rsplit(['/', ':']).next().unwrap_or("");
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() {
+        "repository".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Clone `url` into `parent`, returning the created directory.
+///
+/// Amendment 8's Clone Repository card. Refuses rather than overwrites when
+/// the target already exists — silently cloning into an occupied directory
+/// is how someone loses uncommitted work.
+pub fn clone(bin: &Path, url: &str, parent: &Path) -> Res<std::path::PathBuf> {
+    let target = parent.join(clone_dir_name(url));
+    if target.exists() {
+        return Err(format!("{} already exists", target.display()));
+    }
+    run(bin, parent, &["clone", url, target.to_str().ok_or("bad path")?])?;
+    Ok(target)
+}
+
+/// One row of Amendment 7's read-only commit graph.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LogEntry {
+    pub hash: String,
+    pub subject: String,
+    pub author: String,
+    /// Author date, ISO-8601. Without it the graph shows a name and nothing
+    /// else — a reviewer looking for recency had to go back to `git log`.
+    pub date: String,
+}
+
+/// The newest `limit` commits on HEAD, newest first.
+///
+/// Fields are separated by US (0x1f) and records by RS (0x1e) rather than a
+/// printable delimiter, so a commit subject containing the separator can't
+/// split into phantom fields. A repo with no commits yet yields an empty log
+/// rather than an error — `git log` exits non-zero there, and the panel has
+/// to render on a freshly-`init`ed project.
+pub fn log(bin: &Path, root: &Path, limit: u32) -> Res<Vec<LogEntry>> {
+    if rev_parse_head(bin, root).is_none() {
+        return Ok(vec![]);
+    }
+    let count = format!("-{limit}");
+    let raw = run(bin, root, &[
+        "log",
+        &count,
+        "--no-color",
+        "--pretty=format:%H\x1f%s\x1f%an\x1f%aI\x1e",
+    ])?;
+    Ok(raw
+        .split('\x1e')
+        .map(str::trim_start)
+        .filter(|record| !record.is_empty())
+        .filter_map(|record| {
+            // A subject containing US stays whole only because everything
+            // after it is taken from the *end*, splitting from the right.
+            let (hash, rest) = record.split_once('\x1f')?;
+            let (rest, date) = rest.rsplit_once('\x1f')?;
+            let (subject, author) = rest.rsplit_once('\x1f')?;
+            Some(LogEntry {
+                hash: hash.to_string(),
+                subject: subject.to_string(),
+                author: author.to_string(),
+                date: date.to_string(),
+            })
+        })
+        .collect())
 }
 
 pub fn is_git_repo(_bin: &Path, root: &Path) -> bool {
@@ -435,6 +519,65 @@ mod tests {
     }
 
     #[test]
+    fn unstaging_puts_a_modified_file_back_in_the_working_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(git(), dir.path()).unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one").unwrap();
+        stage_file(git(), dir.path(), "a.txt").unwrap();
+        commit(git(), dir.path(), "add a").unwrap();
+
+        std::fs::write(dir.path().join("a.txt"), "two").unwrap();
+        stage_file(git(), dir.path(), "a.txt").unwrap();
+        assert!(staged_diff(git(), dir.path()).unwrap().contains("two"));
+
+        unstage_file(git(), dir.path(), "a.txt").unwrap();
+        assert!(staged_diff(git(), dir.path()).unwrap().trim().is_empty());
+        assert!(working_tree_diff(git(), dir.path()).unwrap().contains("two"));
+    }
+
+    #[test]
+    fn unstaging_a_newly_added_file_makes_it_untracked_again() {
+        // `git restore --staged` cannot express this case for a file that
+        // has never been committed — it needs `rm --cached`.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(git(), dir.path()).unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one").unwrap();
+        stage_file(git(), dir.path(), "a.txt").unwrap();
+        commit(git(), dir.path(), "first").unwrap();
+
+        std::fs::write(dir.path().join("new.txt"), "hello").unwrap();
+        stage_file(git(), dir.path(), "new.txt").unwrap();
+        unstage_file(git(), dir.path(), "new.txt").unwrap();
+
+        let codes: Vec<String> = status(git(), dir.path())
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.path == "new.txt")
+            .map(|f| f.code)
+            .collect();
+        assert_eq!(codes, vec!["??".to_string()]);
+        // Unstaging must never delete the file itself.
+        assert!(dir.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn an_untracked_directory_is_listed_as_its_files_not_as_the_directory() {
+        // A row naming a directory can't be opened, diffed or staged — the
+        // UI showed "cannot read file: Is a directory" when one was clicked.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(git(), dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("newdir/nested")).unwrap();
+        std::fs::write(dir.path().join("newdir/a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("newdir/nested/b.txt"), "b").unwrap();
+
+        let paths: Vec<String> =
+            status(git(), dir.path()).unwrap().into_iter().map(|f| f.path).collect();
+        assert!(paths.contains(&"newdir/a.txt".to_string()), "{paths:?}");
+        assert!(paths.contains(&"newdir/nested/b.txt".to_string()), "{paths:?}");
+        assert!(!paths.iter().any(|p| p.ends_with('/')), "{paths:?}");
+    }
+
+    #[test]
     fn push_auto_sets_upstream_on_first_push_to_a_new_branch() {
         let (dir, _remote, _tracked) = init_repo_with_remote();
         let root = dir.path();
@@ -506,6 +649,89 @@ mod tests {
 
         assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "line one\nline two\nline three\n");
         assert_eq!(working_tree_diff(git(), root).unwrap(), "");
+    }
+
+    // --------------------------------------------------------------- clone
+
+    #[test]
+    fn clone_creates_a_directory_named_after_the_repo() {
+        let (source, _) = init_test_repo();
+        let parent = tempfile::tempdir().unwrap();
+
+        let cloned = clone(git(), source.path().to_str().unwrap(), parent.path()).unwrap();
+
+        assert!(cloned.join(".git").exists());
+        assert!(cloned.join("tracked.txt").exists());
+        assert_eq!(cloned.parent().unwrap(), parent.path());
+    }
+
+    /// A trailing `.git` and trailing slashes must not leak into the folder
+    /// name — `…/repo.git/` should clone to `repo`, not `repo.git`.
+    #[test]
+    fn clone_target_name_strips_dot_git_and_trailing_slashes() {
+        assert_eq!(clone_dir_name("https://example.com/x/repo.git"), "repo");
+        assert_eq!(clone_dir_name("https://example.com/x/repo.git/"), "repo");
+        assert_eq!(clone_dir_name("git@example.com:x/repo.git"), "repo");
+        assert_eq!(clone_dir_name("https://example.com/x/repo"), "repo");
+    }
+
+    #[test]
+    fn clone_target_name_falls_back_rather_than_returning_empty() {
+        assert_eq!(clone_dir_name("///"), "repository");
+        assert_eq!(clone_dir_name(""), "repository");
+    }
+
+    // ----------------------------------------------------------------- log
+
+    /// Amendment 7's commit graph reads newest-first and carries the subject
+    /// and author it renders — a parser, so it gets a test.
+    #[test]
+    fn log_returns_newest_first_with_subject_and_author() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "second revision\n").unwrap();
+        run(git(), root, &["add", "-A"]).unwrap();
+        run(git(), root, &["commit", "-q", "-m", "second commit"]).unwrap();
+
+        let entries = log(git(), root, 10).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].subject, "second commit");
+        assert_eq!(entries[1].subject, "initial");
+        assert_eq!(entries[0].author, "Test");
+        assert_eq!(entries[0].hash.len(), 40);
+        // The graph shows recency; a name on its own sent a reviewer back
+        // to `git log` to find out when anything happened.
+        assert!(
+            entries[0].date.starts_with("20") && entries[0].date.contains('T'),
+            "{}",
+            entries[0].date
+        );
+    }
+
+    /// A subject containing the field separator must not split into extra
+    /// fields — the classic naive-split bug.
+    #[test]
+    fn log_keeps_a_subject_that_contains_the_field_separator_intact() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "third\n").unwrap();
+        run(git(), root, &["add", "-A"]).unwrap();
+        run(git(), root, &["commit", "-q", "-m", "fix: a\x1fb separator"]).unwrap();
+
+        let entries = log(git(), root, 1).unwrap();
+
+        assert_eq!(entries[0].subject, "fix: a\x1fb separator");
+    }
+
+    /// A repo with no commits yet has an empty log, not an error — the panel
+    /// renders on a fresh `git init` project.
+    #[test]
+    fn log_is_empty_in_a_repo_with_no_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(git(), dir.path()).unwrap();
+
+        assert_eq!(log(git(), dir.path(), 10).unwrap(), vec![]);
     }
 
     // --------------------------------------------------------- init / repo

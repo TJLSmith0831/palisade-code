@@ -12,11 +12,9 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  Accordion,
   Menu,
   Modal as MantineModal,
   Switch,
-  Tabs,
   Tooltip,
   Textarea,
   TextInput,
@@ -31,12 +29,17 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import {
+  IconAlertTriangle,
+  IconArchive,
+  IconChevronDown,
+  IconLayoutSidebarRight,
+  IconPlayerPlay,
   IconGitBranch,
-  IconGitCompare,
-  IconLayoutSidebarFilled,
+  IconLayoutBottombar,
+  IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
-  IconMarkdown,
   IconSettings,
+  IconSunMoon,
   IconTerminal2,
 } from "@tabler/icons-react";
 import { useDebouncedCallback } from "@mantine/hooks";
@@ -73,7 +76,7 @@ import FileEditorPane, {
   evictEditorSession,
   evictProjectSessions,
 } from "./FileEditorPane";
-import TabBar, { basename } from "./TabBar";
+import TabBar from "./TabBar";
 import { isMarkdownPath, tabKey, useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
@@ -85,8 +88,16 @@ import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
+import RunPanel from "./RunPanel";
+import ProblemsPane from "./ProblemsPane";
+import EditorStatusBar from "./EditorStatusBar";
+import { languageLabelFor } from "./codeLanguage";
+import {
+  DIAGNOSTICS_CHANGED,
+  allDiagnostics,
+  disposeProject,
+} from "./lspClients";
 import SpecChangeTab from "./SpecChangeTab";
-import VibeSpecLauncher from "./VibeSpecLauncher";
 import VerifyPane from "./VerifyPane";
 import SettingsPanel, {
   applyAccentHue,
@@ -95,6 +106,12 @@ import SettingsPanel, {
   loadAppearance,
 } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
+import OnboardingScreen from "./OnboardingScreen";
+import NavRail from "./NavRail";
+import SessionList from "./SessionList";
+import SearchPanel from "./SearchPanel";
+import SourceControlPanel from "./SourceControlPanel";
+import type { PanelId } from "./hooks/useAppShell";
 import { enableModernWindowStyle } from "./macRoundedCorners";
 import { type UseResizableResult } from "./useResizable";
 import "./App.css";
@@ -166,6 +183,15 @@ type ChatSurfaceProps = {
   prefsMenuOpen: boolean;
   setPrefsMenuOpen: (open: boolean) => void;
   hasLiveSession: boolean;
+  /** Every thread in the project — the strip is the in-conversation
+   *  switcher (Amendment 3); the session list is the browse surface. */
+  threads?: ThreadMeta[];
+  onSelectThread?: (thread: ThreadMeta) => void;
+  /** Removes the thread from the strip. The thread itself is untouched —
+   *  History still lists it, the same way closing a file tab keeps the
+   *  file. */
+  onCloseThread?: (thread: ThreadMeta) => void;
+  onNewThread?: () => void;
 };
 
 export const ChatSurface = memo(
@@ -214,6 +240,10 @@ export const ChatSurface = memo(
     prefsMenuOpen,
     setPrefsMenuOpen,
     hasLiveSession,
+    threads = [],
+    onSelectThread,
+    onCloseThread,
+    onNewThread,
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
@@ -229,6 +259,16 @@ export const ChatSurface = memo(
     const [autoScroll, setAutoScroll] = useState(true);
     useEffect(() => {
       setAutoScroll(true);
+    }, [thread?.id]);
+
+    // Amendment 5's banner. Per thread: a warning about a session in one
+    // thread means nothing in another.
+    const [switchNotice, setSwitchNotice] = useState<{
+      next: string;
+      current: string;
+    } | null>(null);
+    useEffect(() => {
+      setSwitchNotice(null);
     }, [thread?.id]);
     const executorLabel = executor
       ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
@@ -278,7 +318,8 @@ export const ChatSurface = memo(
     useEffect(() => {
       if (!modelMenuOpen) setModelQuery("");
     }, [modelMenuOpen]);
-    const currentModelId = thread?.model ?? modelState?.current ?? null;
+    const currentModelId =
+      thread?.model ?? framingModel ?? modelState?.current ?? null;
     const modelLabel =
       models === "loading"
         ? "…"
@@ -499,8 +540,14 @@ export const ChatSurface = memo(
               >
                 <strong>Spec</strong>
                 <span>
-                  Plan first — reach shared understanding with the agent before
-                  it writes any code.
+                  {/* Amendment 6: lead with what the mode does — a structured
+                      interview — not with what it forbids. "Read-only
+                      planning" was accurate and told a first-time user
+                      nothing about the questions they're about to be
+                      asked. */}
+                  Write the spec together — the agent asks one question at a
+                  time to shape requirements, design and tasks. Nothing gets
+                  built until you approve the plan.
                 </span>
               </button>
             </div>
@@ -522,8 +569,20 @@ export const ChatSurface = memo(
             <strong>New thread</strong>
           </div>
           <div className="ds-new-thread-picker" data-testid="spec-type-picker">
-            <p className="hint" style={{ marginBottom: 12 }}>
+            {/* Picking a card starts the interview immediately (D1). Said
+                out loud, because a card that looks like navigation and
+                actually spends an agent turn is the kind of surprise that
+                costs trust — a first-run reviewer flagged exactly this. */}
+            <p className="hint" style={{ marginBottom: 4 }}>
               What would you like to spec out today?
+            </p>
+            <p
+              className="hint"
+              style={{ marginBottom: 12, fontSize: 11.5 }}
+              data-testid="spec-type-note"
+            >
+              Picking one starts the interview — the agent asks its first
+              question straight away.
             </p>
             {framingPickerRow}
             {!providerSelected && (
@@ -634,8 +693,20 @@ export const ChatSurface = memo(
             <strong data-testid="thread-title">{thread.title}</strong>
           </div>
           <div className="ds-new-thread-picker" data-testid="spec-type-picker">
-            <p className="hint" style={{ marginBottom: 12 }}>
+            {/* Picking a card starts the interview immediately (D1). Said
+                out loud, because a card that looks like navigation and
+                actually spends an agent turn is the kind of surprise that
+                costs trust — a first-run reviewer flagged exactly this. */}
+            <p className="hint" style={{ marginBottom: 4 }}>
               What would you like to spec out today?
+            </p>
+            <p
+              className="hint"
+              style={{ marginBottom: 12, fontSize: 11.5 }}
+              data-testid="spec-type-note"
+            >
+              Picking one starts the interview — the agent asks its first
+              question straight away.
             </p>
             {framingPickerRow}
             {!providerSelected && (
@@ -754,6 +825,56 @@ export const ChatSurface = memo(
 
     return (
       <>
+        {/* Thread tabs: the quick in-conversation switcher, in both presets.
+            The badge is the thread's real mode — spec or go, the only two
+            that exist. */}
+        {threads.length > 0 && (
+          <div className="ds-thread-tabs" data-testid="thread-tabs">
+            {threads.map((t) => (
+              <button
+                key={t.id}
+                className={`ds-thread-tab${t.id === thread?.id ? " active" : ""}`}
+                aria-current={t.id === thread?.id ? "true" : undefined}
+                onClick={() => onSelectThread?.(t)}
+                data-testid="thread-tab"
+                title={t.title}
+              >
+                <span className="ds-thread-tab-title">{t.title}</span>
+                <span className="ds-thread-tab-mode">
+                  {t.currentMode === "spec" ? "SPEC" : "GO"}
+                </span>
+                <span
+                  className="ds-thread-tab-close"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Close ${t.title}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseThread?.(t);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onCloseThread?.(t);
+                    }
+                  }}
+                  data-testid="thread-tab-close"
+                >
+                  ×
+                </span>
+              </button>
+            ))}
+            <button
+              className="ds-thread-tab-new"
+              aria-label="New thread"
+              onClick={() => onNewThread?.()}
+              data-testid="thread-tab-new"
+            >
+              +
+            </button>
+          </div>
+        )}
         <div className="pane-head">
           <strong data-testid="thread-title">
             {thread?.title ?? "New thread"}
@@ -780,6 +901,30 @@ export const ChatSurface = memo(
           )}
           <div className="spacer" />
         </div>
+        {/* Amendment 5: switching agents mid-session used to be explained
+            only by a hint inside the dropdown, which closes the instant you
+            choose — the explanation vanished exactly when it was needed.
+            This lives in the chat area and stays until dismissed. */}
+        {switchNotice && (
+          <Alert
+            color="var(--warn)"
+            variant="light"
+            m="8px 12px 0"
+            data-testid="executor-switch-banner"
+          >
+            Next session will use <strong>{switchNotice.next}</strong>. This
+            session continues as <strong>{switchNotice.current}</strong>.
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              ml={8}
+              onClick={() => setSwitchNotice(null)}
+              data-testid="executor-switch-dismiss"
+            >
+              Dismiss
+            </Button>
+          </Alert>
+        )}
         <div
           className="messages"
           data-testid="messages"
@@ -872,17 +1017,10 @@ export const ChatSurface = memo(
             }}
           />
 
-          {/* Bottom controls */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 6,
-              width: "100%",
-              minHeight: 32,
-            }}
-          >
+          {/* Bottom controls. Class, not inline styles: at the Editor
+              preset's 300px default the row has to wrap and its labels have
+              to truncate, and neither is expressible here. */}
+          <div className="ds-composer-controls">
             <Menu opened={prefsMenuOpen} onChange={setPrefsMenuOpen}>
               <Menu.Target>
                 <button
@@ -907,6 +1045,12 @@ export const ChatSurface = memo(
                     data-testid={`executor-opt-${a.id}`}
                     onClick={() => {
                       if (a.id !== executor) {
+                        if (hasLiveSession) {
+                          setSwitchNotice({
+                            next: a.name,
+                            current: executorLabel ?? "the current agent",
+                          });
+                        }
                         onPickExecutor(a.id);
                       }
                       setPrefsMenuOpen(false);
@@ -1273,6 +1417,7 @@ type ThreadRowProps = {
   onSelect: (thread: ThreadMeta) => void;
   onRename: (thread: ThreadMeta) => void;
   onDelete: (thread: ThreadMeta) => void;
+  onArchive: (thread: ThreadMeta) => void;
 };
 
 const ThreadRow = memo(function ThreadRow({
@@ -1281,6 +1426,7 @@ const ThreadRow = memo(function ThreadRow({
   onSelect,
   onRename,
   onDelete,
+  onArchive,
 }: ThreadRowProps) {
   const handleSelect = useCallback(() => onSelect(thread), [onSelect, thread]);
   return (
@@ -1304,6 +1450,20 @@ const ThreadRow = memo(function ThreadRow({
             data-testid="rename-thread-item"
           >
             <RenameIcon />
+          </button>
+          {/* Archive is the reversible one and comes first; delete stays
+              separate and destructive. */}
+          <button
+            className="ds-thread-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onArchive(thread);
+            }}
+            title={thread.archived ? "Unarchive thread" : "Archive thread"}
+            aria-label={thread.archived ? "Unarchive thread" : "Archive thread"}
+            data-testid="archive-thread"
+          >
+            <IconArchive size={13} />
           </button>
           <button
             className="ds-thread-action delete"
@@ -1339,6 +1499,7 @@ type ThreadListProps = {
   onSelect: (thread: ThreadMeta) => void;
   onRename: (thread: ThreadMeta) => void;
   onDelete: (thread: ThreadMeta) => void;
+  onArchive: (thread: ThreadMeta) => void;
 };
 
 const ThreadList = memo(function ThreadList({
@@ -1350,8 +1511,12 @@ const ThreadList = memo(function ThreadList({
   onSelect,
   onRename,
   onDelete,
+  onArchive,
 }: ThreadListProps) {
   void variant;
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedCount = threads.filter((t) => t.archived).length;
+  const shown = showArchived ? threads : threads.filter((t) => !t.archived);
   return (
     <div className="ds-threads-panel">
       <button
@@ -1363,7 +1528,7 @@ const ThreadList = memo(function ThreadList({
         + New Thread
       </button>
       <ul data-testid="thread-list">
-        {threads.map((t) => (
+        {shown.map((t) => (
           <ThreadRow
             key={t.id}
             thread={t}
@@ -1371,9 +1536,21 @@ const ThreadList = memo(function ThreadList({
             onSelect={onSelect}
             onRename={onRename}
             onDelete={onDelete}
+            onArchive={onArchive}
           />
         ))}
       </ul>
+      {archivedCount > 0 && (
+        <button
+          className="ds-thread-archive-toggle"
+          onClick={() => setShowArchived((v) => !v)}
+          data-testid="toggle-archived"
+        >
+          {showArchived
+            ? "Hide archived"
+            : `Show ${archivedCount} archived`}
+        </button>
+      )}
     </div>
   );
 });
@@ -1721,6 +1898,76 @@ export default function App() {
   // that forever.
   const [diffRefreshToken, setDiffRefreshToken] = useState(0);
 
+  // Drives the Source Control rail icon's uncommitted-changes dot. Follows
+  // the same refresh token the diff pane uses, so it never goes stale after
+  // an agent turn or a save.
+  const [dirtyCount, setDirtyCount] = useState(0);
+  useEffect(() => {
+    if (!project) {
+      setDirtyCount(0);
+      return;
+    }
+    api
+      .gitStatus(project.hash)
+      .then((files) => setDirtyCount(files.length))
+      // Not every project is a git repo — no dot is the right answer here,
+      // not an error banner.
+      .catch(() => setDirtyCount(0));
+  }, [project?.hash, diffRefreshToken]);
+
+  // Clicking a change in the Source Control panel opens that file's diff —
+  // what every other IDE does, and what the old behaviour (open the file
+  // itself) failed at outright for an untracked directory.
+  const [diffFocusPath, setDiffFocusPath] = useState<string | null>(null);
+  const openDiffFor = useCallback(
+    (path: string) => {
+      setDiffFocusPath(path);
+      shell.setDiffOpen(true);
+    },
+    [shell.setDiffOpen]
+  );
+
+  // Amendment 1: the project's run commands, shared by the title bar's split
+  // button and the rail's Run panel. `runLast` is the split button's primary
+  // action — the last thing you ran is what you almost always want next.
+  const [runList, setRunList] = useState<[string, string][]>([]);
+  const [runLast, setRunLast] = useState<string | null>(null);
+  const [runReloadToken, setRunReloadToken] = useState(0);
+  useEffect(() => {
+    if (!project) {
+      setRunList([]);
+      setRunLast(null);
+      return;
+    }
+    api.runCommands(project.hash).then(setRunList, () => setRunList([]));
+  }, [project?.hash, runReloadToken]);
+
+  const runCommand = useCallback(
+    (name: string, command: string) => {
+      setRunLast(name);
+      // Output belongs in the bottom panel's Terminal tab (Amendment 1), so
+      // open it before writing — otherwise the command runs somewhere the
+      // user can't see.
+      shell.setBottomTab("terminal");
+      if (shell.terminalPanel.collapsed) shell.toggleTerminal();
+      if (!project) return;
+      // Spawn first: on the very first run the panel has only just opened,
+      // and writing to a pty that doesn't exist yet fails with "no terminal
+      // running" — the command would vanish with no output and no error.
+      // `terminal_spawn` is a no-op when one is already running.
+      api
+        .terminalSpawn(project.hash)
+        .then(() => api.terminalInput(`${command}\n`))
+        .catch(fail);
+    },
+    [
+      project?.hash,
+      shell.setBottomTab,
+      shell.terminalPanel.collapsed,
+      shell.toggleTerminal,
+    ]
+  );
+
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
       setFileEdits((prev) => [...prev, edit]);
@@ -1798,7 +2045,6 @@ export default function App() {
   const onSelectEditorThread = useCallback(
     (t: ThreadMeta) => {
       if (project) selectThread(project.hash, t);
-      shell.setEditorRailOpen(false);
     },
     [project, selectThread]
   );
@@ -1839,8 +2085,12 @@ export default function App() {
         setProject(refreshed);
         // Editing sessions are per-project; keeping them would leak memory
         // and let a stale document reappear if the project came back.
-        if (previous && previous !== refreshed.hash)
+        if (previous && previous !== refreshed.hash) {
           evictProjectSessions(previous);
+          // D15: servers live per project. Leaving them running would keep
+          // a rust-analyzer indexing a directory nobody has open.
+          void disposeProject(previous);
+        }
         currentProjectRef.current = refreshed.hash;
         tabsRef.current.closeAll();
         setFileEdits([]);
@@ -1923,13 +2173,13 @@ export default function App() {
     [selectProjectNow]
   );
 
-  // Restore the most recently used project on launch.
+  // Launch lands on the onboarding screen with nothing open, the way every
+  // other IDE starts — opening a project is the user's explicit act, not
+  // something restored behind their back. The recent list is loaded so that
+  // screen can offer it; nothing is selected from it.
   useEffect(() => {
-    api.listProjects().then((found) => {
-      setProjects(found);
-      if (found.length > 0) selectProject(found[0]);
-    }, fail);
-  }, [selectProject]);
+    api.listProjects().then(setProjects, fail);
+  }, []);
 
   // -------------------------------------------------------------- projects
 
@@ -1943,6 +2193,32 @@ export default function App() {
     } catch (err) {
       fail(err);
     }
+  };
+
+  // Amendment 8's Clone Repository card. Clones into a directory the user
+  // picks, then opens the result as a project — the same add path, with a
+  // `git clone` in front of it.
+  const onCloneRepository = () => {
+    setBar({
+      kind: "input",
+      label: "Repository URL to clone",
+      value: "",
+      submit: async (url) => {
+        setBar(null);
+        try {
+          const parent = await open({
+            directory: true,
+            title: "Clone into…",
+          });
+          if (typeof parent !== "string") return;
+          const added = await api.cloneRepository(url, parent);
+          setProjects(await api.listProjects());
+          await selectProject(added);
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
   };
 
   const onRenameProject = () => {
@@ -2067,10 +2343,25 @@ export default function App() {
 
   const onNewThread = () => {
     if (!project) return;
+    // Starting a new thread means starting over: clear the half-finished
+    // states from the last attempt. Each of these outranks the picker in
+    // the chat's render condition, so leaving one set made every "New
+    // thread" button silently do nothing — pick Go, don't send, and the
+    // app had no way back to the picker.
+    setPendingMode(null);
+    setSpecTypePicker(false);
+    setComposerSpecTypePicker(false);
+    setTransitioning(false);
+    // Deselect the thread you were reading. The picker renders *over* the
+    // chat, so leaving it selected meant picking Go fell straight through
+    // to that thread's history — the new draft vanished and an older
+    // conversation took its place. (Spec looked fine only because its
+    // framing menu has its own branch above that fall-through.)
+    setThread(null);
+    // …and the messages that were on screen with it, or the new thread's
+    // empty composer renders under the old thread's transcript.
+    setMessages([]);
     setNewThreadPicker(true);
-    // Collapse the Editor shell's disclosure so the picker (mounted in the
-    // always-visible chat area below it) is immediately visible.
-    shell.setEditorRailOpen(false);
   };
 
   // Vibe/Spec is a friendlier front door onto the two modes that already
@@ -2181,6 +2472,11 @@ export default function App() {
         }
       },
     });
+  };
+
+  const onArchiveThread = (target: ThreadMeta) => {
+    if (!project) return;
+    pm.setThreadArchived(project.hash, target.id, !target.archived).catch(fail);
   };
 
   const onDeleteThread = (target: ThreadMeta) => {
@@ -2473,7 +2769,6 @@ export default function App() {
 
   const probeAgentModels = useCallback(async (agentId: string) => {
     const { project } = current.current;
-    if (!project) return;
     const existing = modelsRef.current[agentId];
     // Cached success or in-flight probe: don't re-probe. Errors retry —
     // the agent may just have been authed.
@@ -2482,7 +2777,9 @@ export default function App() {
     modelsRef.current = { ...modelsRef.current, [agentId]: "loading" };
     setModelsByAgent(modelsRef.current);
     try {
-      const state = await api.listModels(project.hash, agentId);
+      // Null before a project is open (onboarding) — the backend probes
+      // from the home directory in that case.
+      const state = await api.listModels(project?.hash ?? null, agentId);
       modelsRef.current = { ...modelsRef.current, [agentId]: state };
     } catch (err) {
       modelsRef.current = {
@@ -2519,7 +2816,16 @@ export default function App() {
   const onPickExecutor = useCallback(
     async (agentId: string) => {
       const { project, thread } = current.current;
-      if (!project || !thread) return;
+      // No thread yet (the chat's "New thread" state, or every tab closed):
+      // there is nothing to persist onto, so the choice goes to the same
+      // scratch state the new-thread flow uses and is written when the
+      // thread is created. It used to return here — menu closed, label
+      // unchanged, nothing written anywhere.
+      if (!thread) {
+        onPickFramingExecutor(agentId);
+        return;
+      }
+      if (!project) return;
       try {
         // Picking a provider clears the model — the old model id means
         // nothing to the new agent.
@@ -2530,13 +2836,17 @@ export default function App() {
       }
       probeAgentModels(agentId);
     },
-    [refresh, probeAgentModels]
+    [refresh, probeAgentModels, onPickFramingExecutor]
   );
 
   const onPickModel = useCallback(
     async (modelId: string) => {
       const { project, thread } = current.current;
-      if (!project || !thread) return;
+      if (!thread) {
+        onPickFramingModel(modelId);
+        return;
+      }
+      if (!project) return;
       // Pin the provider alongside the model, so the pair can't drift apart
       // if auto-detection later resolves differently.
       const executorId = thread.executor ?? flight?.selected ?? null;
@@ -2553,7 +2863,7 @@ export default function App() {
         fail(err);
       }
     },
-    [refresh, flight]
+    [refresh, flight, onPickFramingModel]
   );
 
   const onSpec = async () => {
@@ -2690,6 +3000,37 @@ export default function App() {
       fail(err);
     }
   };
+
+  // Amendment 7's **Review Working Changes**. Unlike Generate — whose answer
+  // is a value for the commit box — a review is prose the user reads, so it
+  // goes through the ordinary send path and lands in the conversation.
+  const onReviewWorkingChanges = useCallback(async () => {
+    if (!project || !thread) return;
+    try {
+      const diff = await api.gitWorkingDiff(project.hash);
+      if (!diff.trim()) {
+        fail("No working changes to review.");
+        return;
+      }
+      setBusy(true);
+      const prefs = resolvePrefs(project.hash, thread.id);
+      const sent = await api.sendMessage(
+        project.hash,
+        thread.id,
+        "Review my working changes. Point out correctness bugs, then anything " +
+          "over-built. Be specific about file and line; skip praise.",
+        thread.currentMode,
+        prefs.bypass
+      );
+      setMessages((prev) =>
+        prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
+      );
+      if (!flight?.selected) setBusy(false);
+    } catch (err) {
+      setBusy(false);
+      fail(err);
+    }
+  }, [project, thread, flight?.selected]);
 
   // Cached per project hash so reopening a palette doesn't re-walk the tree.
   // Shared by the file palette (⌘P) and find-in-files (⌘⇧F) — both need the
@@ -2866,17 +3207,20 @@ export default function App() {
       {
         id: "view.rightPanel",
         group: "View",
-        label: "Toggle right panel",
+        label: "Toggle chat panel",
         chord: "Mod+J",
-        run: () => shell.rightPanel.toggleCollapsed(),
+        run: () => shell.toggleChat(),
       },
       {
+        // One state, two entry points: this and the rail icon both drive
+        // `activePanel` — a separate "collapsed" flag would be a second
+        // source of truth for the same thing.
         id: "view.leftRail",
         group: "View",
-        label: "Toggle file tree",
+        label: "Toggle side panel",
         chord: "Mod+Backslash",
-        keywords: "explorer sidebar",
-        run: () => shell.leftRail.toggleCollapsed(),
+        keywords: "explorer sidebar files",
+        run: () => shell.selectPanel(shell.activePanel ?? "explorer"),
       },
       {
         id: "view.terminal",
@@ -2911,7 +3255,9 @@ export default function App() {
       openFilePalette,
       openTextSearch,
       shell.rightPanel.toggleCollapsed,
-      shell.leftRail.toggleCollapsed,
+      shell.toggleChat,
+      shell.selectPanel,
+      shell.activePanel,
       shell.toggleTerminal,
       shell.setCenterShell,
     ]
@@ -2956,6 +3302,261 @@ export default function App() {
     }
   };
 
+  // Settings and Account open their existing surfaces rather than a panel;
+  // History has no panel of its own yet and falls through to the thread list.
+  const onSelectPanel = useCallback(
+    (id: PanelId) => {
+      if (id === "settings") {
+        setSettingsOpen(true);
+        return;
+      }
+      shell.selectPanel(id);
+    },
+    [shell.selectPanel]
+  );
+
+  const chatPanel =
+    shell.centerShell === "vibe" ? shell.vibeChat : shell.rightPanel;
+
+  // The strip shows opened threads, not every thread the project has ever
+  // had — a hundred threads is a hundred tabs otherwise. The active thread
+  // is always in the strip, however it was selected.
+  useEffect(() => {
+    if (thread) shell.openThread(thread.id);
+  }, [thread?.id, shell.openThread]);
+  const openThreads = threads.filter(
+    (t) => shell.openThreadIds.includes(t.id) && !t.archived
+  );
+  const onCloseThreadTab = useCallback(
+    (target: ThreadMeta) => {
+      shell.closeThread(target.id);
+      if (target.id !== thread?.id) return;
+      // Closing the visible tab moves to its neighbour, the way an editor
+      // tab does — never to a blank screen with tabs still showing.
+      const remaining = openThreads.filter((t) => t.id !== target.id);
+      const next = remaining[remaining.length - 1] ?? null;
+      if (next && project) selectThread(project.hash, next);
+      else setThread(null);
+    },
+    [shell.closeThread, thread?.id, openThreads, project, selectThread, setThread]
+  );
+
+  // The status bar spans the shell (mockup parity), so the two things it
+  // reports on — the open file's cursor and its language server — are
+  // reported up from the editor pane rather than owned by it.
+  const [cursorPosition, setCursorPosition] = useState<{
+    line: number;
+    col: number;
+  } | null>(null);
+  const [lspStatus, setLspStatus] = useState<api.LspStatus | null>(null);
+  // The count belongs on the tab: a diagnostic nobody opens the tab to see
+  // may as well not have been reported.
+  const [problemCount, setProblemCount] = useState(0);
+  useEffect(() => {
+    const refresh = () => setProblemCount(allDiagnostics().length);
+    window.addEventListener(DIAGNOSTICS_CHANGED, refresh);
+    refresh();
+    return () => window.removeEventListener(DIAGNOSTICS_CHANGED, refresh);
+  }, []);
+  useEffect(() => {
+    if (!selectedFile) {
+      setCursorPosition(null);
+      setLspStatus(null);
+    }
+  }, [selectedFile]);
+
+  // Mounted ONCE and handed to the single ChatSurface. Previously these
+  // props were spelled out twice — once per shell branch — which is exactly
+  // how the two shells drifted apart in the first place.
+  const activeExecutor =
+    thread?.executor ?? framingExecutor ?? flight?.selected ?? null;
+  const chatProps = {
+    project,
+    thread,
+    messages,
+    live,
+    busy,
+    showThinking,
+    executor: activeExecutor,
+    models: activeExecutor ? (modelsByAgent[activeExecutor] ?? null) : null,
+    onPickExecutor,
+    onPickModel,
+    onProbeModels: () => {
+      if (activeExecutor) probeAgentModels(activeExecutor);
+    },
+    flightSelected: !!flight?.selected,
+    flight,
+    draft,
+    setDraft,
+    onSend,
+    onStop,
+    onRenameThread,
+    onSpec,
+    onGo,
+    onApply,
+    stage,
+    dragActive,
+    newThreadPicker,
+    pendingMode,
+    specTypePicker,
+    onSpecTypeBack,
+    onPickSpecType,
+    composerSpecTypePicker,
+    transitioning,
+    framingExecutor,
+    framingModel,
+    onPickFramingExecutor,
+    onPickFramingModel,
+    onPickComposerSpecType,
+    onComposerSpecTypeBack,
+    showEmptyModePicker: threads.length === 0 && !thread,
+    onPickMode,
+    onOpenSpec: (name: string) => tabs.openSpec(name),
+    threadBypass: threadPrefs.bypass,
+    onToggleBypass: onToggleBypassDefault,
+    prefsMenuOpen,
+    setPrefsMenuOpen: openPrefsMenu,
+    hasLiveSession,
+    threads: openThreads,
+    onSelectThread: onSelectVibeThread,
+    onCloseThread: onCloseThreadTab,
+    onNewThread,
+  };
+
+  // The nine rail panels. Identical in both presets by construction — this
+  // function is called from the one shared shell tree, not per branch.
+  const renderSidePanel = () => {
+    if (!project) return null;
+    switch (shell.activePanel) {
+      case "explorer":
+        // FileTree heads itself with the project name; the panel name goes
+        // above it, as in VS Code. Every other panel already announces what
+        // it is, and three first-run reviewers in a row read the icon rail
+        // as unlabelled glyphs — clicking one should teach you its name.
+        return (
+          <>
+            <div className="ds-panel-head">Explorer</div>
+            <div className="ds-panel-body">
+              <FileTree
+                projectHash={project.hash}
+                projectName={project.displayName}
+                onSelectFile={selectFile}
+                activePath={selectedFile}
+                refreshToken={fileTreeRefreshToken}
+                initialExpanded={session?.expandedDirs}
+                onExpandedChange={rememberExpandedDirs}
+                initialIncludeHidden={session?.includeHidden}
+                onIncludeHiddenChange={rememberIncludeHidden}
+                onPathRenamed={onTreePathRenamed}
+                onPathDeleted={onTreePathDeleted}
+                onFilesChanged={onTreeFilesChanged}
+              />
+            </div>
+          </>
+        );
+      case "search":
+        return (
+          <SearchPanel
+            projectHash={project.hash}
+            onOpenMatch={(path) => selectFile(path)}
+            onError={fail}
+          />
+        );
+      case "git":
+        return (
+          <SourceControlPanel
+            projectHash={project.hash}
+            branch={branches.find((b) => b.isCurrent)?.name ?? "HEAD"}
+            refreshToken={diffRefreshToken}
+            onOpenFile={openDiffFor}
+            onReviewWorkingChanges={onReviewWorkingChanges}
+            onError={fail}
+          />
+        );
+      case "specs":
+        return (
+          <>
+            <div className="ds-panel-head">Specs</div>
+            <div className="ds-panel-body">
+              <SpecPane
+                projectHash={project.hash}
+                linkedChange={thread?.openSpecChangeName}
+                onOpenSpec={(name) => tabs.openSpec(name)}
+              />
+            </div>
+          </>
+        );
+      case "codemap":
+        return (
+          <>
+            <div className="ds-panel-head">Codebase Map</div>
+            <div className="ds-panel-body">
+              <Suspense fallback={<div style={{ padding: 12 }}>Loading map…</div>}>
+                <GraphPane projectHash={project.hash} />
+              </Suspense>
+            </div>
+          </>
+        );
+      case "run":
+        return (
+          <>
+            <RunPanel
+              projectHash={project.hash}
+              onRun={runCommand}
+              onChanged={() => setRunReloadToken((n) => n + 1)}
+              onError={fail}
+            />
+            {/* Verify commands are a different thing (evidence a spec is
+                green, not a shortcut) but they are still project commands,
+                so they share the panel rather than a tenth rail icon. */}
+            <div className="ds-panel-body">
+              <h2 className="ds-section-heading">Verification</h2>
+              <VerifyPane projectHash={project.hash} threadId={thread?.id} />
+            </div>
+          </>
+        );
+      case "history":
+        return (
+          <>
+            <div className="ds-panel-head">History</div>
+            <div className="ds-panel-body">
+              <ThreadList
+                variant="editor"
+                threads={threads}
+                activeThread={thread}
+                project={project}
+                onNewThread={onNewThread}
+                onSelect={onSelectEditorThread}
+                onRename={onRenameThread}
+                onDelete={onDeleteThread}
+                onArchive={onArchiveThread}
+              />
+            </div>
+          </>
+        );
+      case "workspace":
+        // WorkspacePicker carries its own "Workspace" heading.
+        return (
+          <>
+            <div className="ds-panel-body">
+              <WorkspacePicker
+                variant="editor"
+                project={project}
+                projects={projects}
+                branches={branches}
+                onSelectProject={selectProject}
+                onAddProject={onAddProject}
+                onRenameProject={onRenameProject}
+                onOpenBranchPicker={onOpenBranchPicker}
+              />
+            </div>
+          </>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="ds-window" data-testid="window-shell">
       <div className="app" data-color-mode="dark">
@@ -2965,75 +3566,153 @@ export default function App() {
           onMouseDown={onTitlebarMouseDown}
         >
           <h1 className="sr-only">Floo Network</h1>
-          <div
-            className="ds-shell-toggle"
-            data-testid="shell-toggle"
-            data-tauri-drag-region-exclude
-          >
-            <button
-              className={shell.centerShell === "vibe" ? "active" : ""}
-              onClick={() => shell.setCenterShell("vibe")}
-              data-testid="shell-vibe"
-            >
-              Vibe
-            </button>
-            <button
-              className={shell.centerShell === "editor" ? "active" : ""}
-              onClick={() => shell.setCenterShell("editor")}
-              data-testid="shell-editor"
-            >
-              Editor
-            </button>
-          </div>
-          <Tooltip label="Toggle left sidebar (Cmd+\)">
-            <button
-              className="ds-icon-btn"
-              onClick={() => shell.leftRail.toggleCollapsed()}
-              aria-label="Toggle left sidebar"
-              data-testid="toggle-left-sidebar"
+          {/* Amendment 8: no shell switch before a project is open — there
+              is nothing for either preset to arrange yet. */}
+          {project && (
+            <div
+              className="ds-shell-toggle"
+              data-testid="shell-toggle"
               data-tauri-drag-region-exclude
             >
-              <IconLayoutSidebarFilled size={14} />
-            </button>
-          </Tooltip>
+              {/* "Vibe" and "Editor" say nothing to someone who has never
+                  used this app — a first-run reviewer listed both as
+                  unexplained jargon. The names stay (they're the product's
+                  own), the tooltip explains the difference. */}
+              <Tooltip label="Vibe — chat first, code alongside it">
+                <button
+                  className={shell.centerShell === "vibe" ? "active" : ""}
+                  onClick={() => shell.setCenterShell("vibe")}
+                  aria-label="Vibe layout: chat first, code alongside it"
+                  data-testid="shell-vibe"
+                >
+                  Vibe
+                </button>
+              </Tooltip>
+              <Tooltip label="Editor — code first, chat alongside it">
+                <button
+                  className={shell.centerShell === "editor" ? "active" : ""}
+                  onClick={() => shell.setCenterShell("editor")}
+                  aria-label="Editor layout: code first, chat alongside it"
+                  data-testid="shell-editor"
+                >
+                  Editor
+                </button>
+              </Tooltip>
+            </div>
+          )}
+          {/* Vibe preset only: chat is the primary surface there, so the
+              reclaimable width is the session list's, not the chat rail's. */}
+          {project && shell.centerShell === "vibe" && (
+            <Tooltip label="Toggle session list">
+              <button
+                className="ds-icon-btn"
+                onClick={shell.toggleSessionList}
+                aria-label="Toggle session list"
+                aria-pressed={shell.sessionListOpen}
+                data-testid="toggle-session-list"
+                data-tauri-drag-region-exclude
+              >
+                <IconLayoutSidebar size={14} />
+              </button>
+            </Tooltip>
+          )}
           <div className="ds-chrome-utils">
-            <Tooltip label="Theme: click to cycle auto → light → dark">
-              <button
-                className="ds-icon-btn"
-                onClick={() => {
-                  const next = shell.nextTheme(shell.theme);
-                  shell.setTheme(next);
-                }}
-                data-testid="theme-toggle"
-                data-tauri-drag-region-exclude
-              >
-                {shell.theme === "auto"
-                  ? "Auto"
-                  : shell.theme === "light"
-                    ? "Light"
-                    : "Dark"}
-              </button>
-            </Tooltip>
-            <Tooltip label="Toggle right sidebar (Cmd+J)">
-              <button
-                className="ds-icon-btn"
-                onClick={() => shell.rightPanel.toggleCollapsed()}
-                aria-label="Toggle right sidebar"
-                data-testid="toggle-right-sidebar"
-                data-tauri-drag-region-exclude
-              >
-                <IconLayoutSidebarRightFilled size={14} />
-              </button>
-            </Tooltip>
-            <Tooltip label="Toggle terminal (Cmd+`)">
+            {/* Amendment 1's split button: project-scoped, not file-scoped.
+                Primary action is the last command run (first configured
+                until you run one); the chevron lists them all. Nothing
+                configured means no button — the Run panel is where an empty
+                project sets one up. */}
+            {project && runList.length > 0 && (
+              <div className="ds-run-split" data-tauri-drag-region-exclude>
+                {(() => {
+                  const [name, command] =
+                    runList.find(([n]) => n === runLast) ?? runList[0];
+                  return (
+                    <Tooltip label={`Run ${command}`}>
+                      <button
+                        className="ds-icon-btn ds-run-primary"
+                        onClick={() => runCommand(name, command)}
+                        data-testid="run-primary"
+                      >
+                        <IconPlayerPlay size={13} />
+                        {name}
+                      </button>
+                    </Tooltip>
+                  );
+                })()}
+                <Menu withinPortal position="bottom-end">
+                  <Menu.Target>
+                    <button
+                      className="ds-icon-btn ds-run-chevron"
+                      aria-label="Run commands"
+                      data-testid="run-menu"
+                    >
+                      <IconChevronDown size={12} />
+                    </button>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    <Menu.Label>Run</Menu.Label>
+                    {runList.map(([name, command]) => (
+                      <Menu.Item
+                        key={name}
+                        onClick={() => runCommand(name, command)}
+                        data-testid={`run-opt-${name}`}
+                      >
+                        {name}
+                        <span className="ds-run-command"> {command}</span>
+                      </Menu.Item>
+                    ))}
+                    <Menu.Divider />
+                    <Menu.Item onClick={() => shell.selectPanel("run")}>
+                      Configure…
+                    </Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
+              </div>
+            )}
+            {/* Amendment 9: one state, two entry points — this and the
+                bottom panel's own inline chevron both call toggleTerminal.
+                Both panel toggles need a project to have a panel at all. */}
+            {project && (
+            <Tooltip label="Toggle terminal panel (Cmd+`)">
               <button
                 className="ds-icon-btn"
                 onClick={shell.toggleTerminal}
-                aria-label="Toggle terminal"
+                aria-label="Toggle terminal panel"
+                aria-pressed={!shell.terminalPanel.collapsed}
                 data-testid="toggle-terminal"
                 data-tauri-drag-region-exclude
               >
-                <IconTerminal2 size={14} />
+                <IconLayoutBottombar size={14} />
+              </button>
+            </Tooltip>
+            )}
+            {/* Both presets: Cmd+J collapses chat in either, and gating the
+                button to Editor left a Vibe user staring at the reclaimed
+                space with no visible way back. */}
+            {project && (
+              <Tooltip label="Toggle chat panel (Cmd+J)">
+                <button
+                  className="ds-icon-btn"
+                  onClick={shell.toggleChat}
+                  aria-label="Toggle chat panel"
+                  aria-pressed={!shell.chatCollapsed}
+                  data-testid="toggle-chat"
+                  data-tauri-drag-region-exclude
+                >
+                  <IconLayoutSidebarRightFilled size={14} />
+                </button>
+              </Tooltip>
+            )}
+            <Tooltip label="Theme: click to cycle auto → light → dark">
+              <button
+                className="ds-icon-btn"
+                onClick={() => shell.setTheme(shell.nextTheme(shell.theme))}
+                aria-label={`Theme: ${shell.theme}`}
+                data-testid="theme-toggle"
+                data-tauri-drag-region-exclude
+              >
+                <IconSunMoon size={14} />
               </button>
             </Tooltip>
             <Tooltip label="Settings">
@@ -3114,744 +3793,337 @@ export default function App() {
         ))}
 
         <div className="body">
-          {shell.centerShell === "editor" ? (
-            <div className="ds-shell-contents" data-testid="editor-shell">
-              <nav
-                className="ds-nav-rail"
-                data-testid="nav-rail"
-                style={
-                  {
-                    "--rail-w": `${shell.leftRail.size}px`,
-                    marginLeft: shell.leftRail.collapsed
-                      ? -shell.leftRail.size
-                      : 0,
-                  } as CSSProperties
-                }
-              >
-                {project && (
-                  <FileTree
-                    projectHash={project.hash}
-                    projectName={project.displayName}
-                    onSelectFile={selectFile}
-                    activePath={selectedFile}
-                    refreshToken={fileTreeRefreshToken}
-                    initialExpanded={session?.expandedDirs}
-                    onExpandedChange={rememberExpandedDirs}
-                    initialIncludeHidden={session?.includeHidden}
-                    onIncludeHiddenChange={rememberIncludeHidden}
-                    onPathRenamed={onTreePathRenamed}
-                    onPathDeleted={onTreePathDeleted}
-                    onFilesChanged={onTreeFilesChanged}
-                  />
-                )}
-              </nav>
-
-              {!shell.leftRail.collapsed && (
-                <div
-                  className="ds-resize-handle ds-resize-handle-x"
-                  data-testid="resize-left-rail"
-                  onPointerDown={bindDrag(
-                    shell.leftRail.handleProps,
-                    "col-resize"
-                  )}
-                />
-              )}
-
-              <main className="main" data-testid="main-pane">
-                <TabBar
-                  tabs={tabs.tabs}
-                  activePath={selectedFile}
-                  onSelect={(path) => {
-                    shell.setDiffOpen(false);
-                    tabs.open(path);
-                  }}
-                  onClose={closeTab}
-                  diffOpen={shell.diffOpen}
-                  onToggleDiff={() => shell.setDiffOpen((open) => !open)}
-                  activeMdPreview={tabs.activeMdPreview}
-                  onToggleMdPreview={toggleMdPreview}
-                />
-                {!shell.diffOpen ? (
-                  tabs.activeTab?.type === "spec" ? (
-                    project &&
-                    tabs.activeTab.type === "spec" &&
-                    (() => {
-                      const specName = tabs.activeTab!.specName;
-                      return (
-                        <SpecChangeTab
-                          projectHash={project.hash}
-                          specName={specName}
-                          verifyPins={verifyPins[specName]}
-                          onAddPin={(cmd) => addVerifyPin(specName, cmd)}
-                          onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}
-                        />
-                      );
-                    })()
-                  ) : project ? (
-                    <FileEditorPane
-                      projectHash={project.hash}
-                      path={selectedFile}
-                      projectName={project.displayName}
-                      onSave={handleFileSave}
-                      onDirtyChange={tabs.setDirty}
-                      externalChange={externalChange}
-                      revealLine={revealLine}
-                      initialCursor={
-                        selectedFile
-                          ? session?.cursors[selectedFile]
-                          : undefined
-                      }
-                      onCursorChange={rememberCursor}
-                      mdPreview={tabs.activeMdPreview}
-                      onToggleMdPreview={toggleMdPreview}
-                    />
-                  ) : (
-                    <div
-                      className="ds-onboarding-empty"
-                      data-testid="onboarding-empty"
-                    >
-                      <h2>Floo Network</h2>
-                      <p>
-                        Drive Claude Code or Codex against a real project — file
-                        tree, editor, git diff, and a live codebase map, with
-                        the agent working alongside you in the same files.
-                      </p>
-                      <button onClick={onAddProject}>
-                        + Add a project to get started
-                      </button>
-                    </div>
-                  )
-                ) : (
-                  <div className="messages" data-testid="messages">
-                    {project && (
-                      <DiffPane
-                        projectHash={project.hash}
-                        refreshToken={diffRefreshToken}
-                      />
-                    )}
-                    {(() => {
-                      const threadEdits = thread
-                        ? filterForTab(
-                            [
-                              ...itemsFromMessages(messages),
-                              ...mergeDeltas(live),
-                            ],
-                            "diff"
-                          )
-                        : [];
-                      const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                        kind: "fileEdit" as const,
-                        id: `manual-${i}`,
-                        path: e.path,
-                        before: e.before,
-                        after: e.after,
-                      }));
-                      const allEdits = [...threadEdits, ...manualEdits];
-                      return (
-                        <section
-                          className="diff-section"
-                          data-testid="turn-history-section"
-                        >
-                          <h2 className="ds-section-heading">Turn History</h2>
-                          {allEdits.length === 0 && (
-                            <p className="empty">No file changes yet.</p>
-                          )}
-                          <EventList
-                            items={allEdits}
-                            showThinking={showThinking}
-                            executor={flight?.selected ?? null}
-                          />
-                        </section>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                {shell.terminalPlacement === "bottom" &&
-                  !shell.terminalPanel.collapsed && (
-                    <div
-                      className="ds-resize-handle ds-resize-handle-y"
-                      data-testid="resize-terminal-panel"
-                      onPointerDown={bindDrag(
-                        shell.terminalPanel.handleProps,
-                        "row-resize"
-                      )}
-                    />
-                  )}
-                {/* Hidden rather than unmounted while collapsed: unmounting
-                    disposes the xterm instance, so every collapse threw away
-                    the scrollback and re-spawned the shell on reopen. */}
-                {shell.terminalPlacement === "bottom" &&
-                  terminalEverOpened.current && (
-                    <div
-                      className="ds-terminal-panel"
-                      data-testid="terminal-panel"
-                      hidden={shell.terminalPanel.collapsed}
-                      style={
-                        {
-                          "--terminal-h": `${shell.terminalPanel.size}px`,
-                          display: shell.terminalPanel.collapsed
-                            ? "none"
-                            : undefined,
-                        } as CSSProperties
-                      }
-                    >
-                      {project && (
-                        <TerminalPane
-                          projectHash={project.hash}
-                          placement={shell.terminalPlacement}
-                          onTogglePlacement={shell.toggleTerminalPlacement}
-                        />
-                      )}
-                    </div>
-                  )}
-              </main>
-
-              {!shell.rightPanel.collapsed && (
-                <div
-                  className="ds-resize-handle ds-resize-handle-x"
-                  data-testid="resize-right-panel"
-                  onPointerDown={bindDrag(
-                    shell.rightPanel.handleProps,
-                    "col-resize"
-                  )}
-                />
-              )}
-
-              <aside
-                className="ds-right-sidebar"
-                data-testid="right-sidebar"
-                style={
-                  {
-                    "--panel-w": `${shell.rightPanel.size}px`,
-                    marginRight: shell.rightPanel.collapsed
-                      ? -shell.rightPanel.size
-                      : 0,
-                  } as CSSProperties
-                }
-              >
-                <WorkspacePicker
-                  variant="editor"
-                  project={project}
-                  projects={projects}
-                  branches={branches}
-                  onSelectProject={selectProject}
-                  onAddProject={onAddProject}
-                  onRenameProject={onRenameProject}
-                  onOpenBranchPicker={onOpenBranchPicker}
-                />
-                <div className="ds-right-panes">
-                  {shell.rightTab === "terminal" &&
-                  shell.terminalPlacement === "sidebar" ? (
-                    project && (
-                      <TerminalPane
-                        projectHash={project.hash}
-                        placement={shell.terminalPlacement}
-                        onTogglePlacement={shell.toggleTerminalPlacement}
-                      />
-                    )
-                  ) : (
-                    <Accordion
-                      value={shell.editorRailOpen ? "threads-map" : null}
-                      onChange={(value) =>
-                        shell.setEditorRailOpen(value !== null)
-                      }
-                      keepMounted={false}
-                      transitionDuration={0}
-                      chevronPosition="left"
-                    >
-                      <Accordion.Item value="threads-map">
-                        <Accordion.Control
-                          className="ds-rail-disclosure"
-                          data-testid="rail-disclosure-toggle"
-                        >
-                          Threads &amp; Codebase Map
-                        </Accordion.Control>
-                        <Accordion.Panel
-                          className="ds-rail-disclosure-body"
-                          data-testid="rail-disclosure-body"
-                        >
-                          <Tabs
-                            value={shell.rightTab}
-                            onChange={(value) =>
-                              value &&
-                              shell.setRightTab(
-                                value as
-                                  "threads" | "codemap" | "specs" | "verify"
-                              )
-                            }
-                          >
-                            <Tabs.List className="ds-right-tabs">
-                              <Tabs.Tab
-                                value="threads"
-                                data-testid="tab-threads"
-                              >
-                                Threads
-                              </Tabs.Tab>
-                              <Tabs.Tab
-                                value="codemap"
-                                data-testid="tab-codemap"
-                              >
-                                Codebase Map
-                              </Tabs.Tab>
-                              <Tabs.Tab value="specs" data-testid="tab-specs">
-                                Specs
-                              </Tabs.Tab>
-                              <Tabs.Tab value="verify" data-testid="tab-verify">
-                                Verify
-                              </Tabs.Tab>
-                            </Tabs.List>
-                          </Tabs>
-                          {shell.rightTab === "threads" && (
-                            <ThreadList
-                              variant="editor"
-                              threads={threads}
-                              activeThread={thread}
-                              project={project}
-                              onNewThread={onNewThread}
-                              onSelect={onSelectEditorThread}
-                              onRename={onRenameThread}
-                              onDelete={onDeleteThread}
-                            />
-                          )}
-                          {shell.rightTab === "codemap" && project && (
-                            <Suspense
-                              fallback={
-                                <div style={{ padding: 12 }}>Loading map…</div>
-                              }
-                            >
-                              <GraphPane projectHash={project.hash} />
-                            </Suspense>
-                          )}
-                          {shell.rightTab === "specs" && project && (
-                            <SpecPane
-                              projectHash={project.hash}
-                              linkedChange={thread?.openSpecChangeName}
-                            />
-                          )}
-                          {shell.rightTab === "verify" && project && (
-                            <VerifyPane
-                              projectHash={project.hash}
-                              threadId={thread?.id}
-                            />
-                          )}
-                        </Accordion.Panel>
-                      </Accordion.Item>
-                    </Accordion>
-                  )}
-
-                  {!(
-                    shell.rightTab === "terminal" &&
-                    shell.terminalPlacement === "sidebar"
-                  ) && (
-                    <ChatSurface
-                      project={project}
-                      thread={thread}
-                      messages={messages}
-                      live={live}
-                      busy={busy}
-                      showThinking={showThinking}
-                      executor={
-                        thread?.executor ??
-                        framingExecutor ??
-                        flight?.selected ??
-                        null
-                      }
-                      models={
-                        (thread?.executor ??
-                        framingExecutor ??
-                        flight?.selected)
-                          ? (modelsByAgent[
-                              (thread?.executor ??
-                                framingExecutor ??
-                                flight?.selected)!
-                            ] ?? null)
-                          : null
-                      }
-                      onPickExecutor={onPickExecutor}
-                      onPickModel={onPickModel}
-                      onProbeModels={() => {
-                        const id =
-                          thread?.executor ??
-                          framingExecutor ??
-                          flight?.selected;
-                        if (id) probeAgentModels(id);
-                      }}
-                      flightSelected={!!flight?.selected}
-                      flight={flight}
-                      draft={draft}
-                      setDraft={setDraft}
-                      onSend={onSend}
-                      onStop={onStop}
-                      onRenameThread={onRenameThread}
-                      onSpec={onSpec}
-                      onGo={onGo}
-                      onApply={onApply}
-                      stage={stage}
-                      dragActive={dragActive}
-                      newThreadPicker={newThreadPicker}
-                      pendingMode={pendingMode}
-                      specTypePicker={specTypePicker}
-                      onSpecTypeBack={onSpecTypeBack}
-                      onPickSpecType={onPickSpecType}
-                      composerSpecTypePicker={composerSpecTypePicker}
-                      transitioning={transitioning}
-                      framingExecutor={framingExecutor}
-                      framingModel={framingModel}
-                      onPickFramingExecutor={onPickFramingExecutor}
-                      onPickFramingModel={onPickFramingModel}
-                      onPickComposerSpecType={onPickComposerSpecType}
-                      onComposerSpecTypeBack={onComposerSpecTypeBack}
-                      onPickMode={onPickMode}
-                      threadBypass={threadPrefs.bypass}
-                      onToggleBypass={onToggleBypassDefault}
-                      prefsMenuOpen={prefsMenuOpen}
-                      setPrefsMenuOpen={openPrefsMenu}
-                      hasLiveSession={hasLiveSession}
-                    />
-                  )}
-                </div>
-              </aside>
-            </div>
+          {/* Amendment 8: with no project open there is nothing for either
+              preset to arrange, so this screen stands outside the Governing
+              Rule entirely rather than rendering an empty shell. */}
+          {!project ? (
+            <OnboardingScreen
+              projects={projects}
+              flight={flight}
+              /* Reuses the framing-menu state (D21) — the same "chosen
+                 before a thread exists" slot, so the pick carries into the
+                 first thread instead of being a throwaway. */
+              executor={framingExecutor}
+              model={framingModel}
+              models={
+                modelsByAgent[framingExecutor ?? flight?.selected ?? ""]
+              }
+              onPickExecutor={onPickFramingExecutor}
+              onPickModel={onPickFramingModel}
+              onOpenProject={onAddProject}
+              onCloneRepository={onCloneRepository}
+              onSelectProject={selectProject}
+            />
           ) : (
-            <div className="ds-shell-contents" data-testid="vibe-shell">
-              <section
-                className="ds-vibe-chat"
-                data-testid="vibe-chat-column"
+            // ONE shell, two arrangements (Governing Rule). The same children
+            // are mounted in both presets; `data-preset` flips their CSS
+            // `order` so the rail and its panel sit at the right edge in Vibe
+            // and the left edge in Editor. There is deliberately no
+            // Vibe-only or Editor-only panel — the only preset-conditional
+            // children are the session list and the chat-collapse control,
+            // which are affordances, not panels.
+          <div
+            className="ds-shell-contents"
+            data-preset={shell.centerShell}
+            data-chat={shell.chatCollapsed ? "collapsed" : undefined}
+            data-testid={
+              shell.centerShell === "vibe" ? "vibe-shell" : "editor-shell"
+            }
+          >
+            {shell.centerShell === "vibe" && shell.sessionListOpen && (
+              <SessionList
+                threads={threads}
+                projects={projects}
+                activeProject={project ?? undefined}
+                activeThread={thread ?? undefined}
+                /* `busyThreads` is already exactly "threads with a live
+                   session" — no second derivation of the same state. */
+                liveThreadIds={busyThreads}
+                onNewThread={onNewThread}
+                onSelect={onSelectVibeThread}
+              />
+            )}
+
+            <NavRail
+              activePanel={shell.activePanel}
+              onSelect={onSelectPanel}
+              dirtyGit={dirtyCount > 0}
+            />
+
+            {shell.activePanel && (
+              <div
+                className="ds-side-panel"
+                data-testid="side-panel"
+                data-panel={shell.activePanel}
                 style={
                   {
-                    "--vibe-chat-w": `${shell.vibeChat.size}px`,
+                    "--panel-w": `${shell.leftRail.size}px`,
                   } as CSSProperties
                 }
               >
-                <ChatSurface
-                  project={project}
-                  thread={thread}
-                  messages={messages}
-                  live={live}
-                  busy={busy}
-                  showThinking={showThinking}
-                  executor={
-                    thread?.executor ??
-                    framingExecutor ??
-                    flight?.selected ??
-                    null
-                  }
-                  models={
-                    (thread?.executor ?? framingExecutor ?? flight?.selected)
-                      ? (modelsByAgent[
-                          (thread?.executor ??
-                            framingExecutor ??
-                            flight?.selected)!
-                        ] ?? null)
-                      : null
-                  }
-                  onPickExecutor={onPickExecutor}
-                  onPickModel={onPickModel}
-                  onProbeModels={() => {
-                    const id =
-                      thread?.executor ?? framingExecutor ?? flight?.selected;
-                    if (id) probeAgentModels(id);
-                  }}
-                  flightSelected={!!flight?.selected}
-                  flight={flight}
-                  draft={draft}
-                  setDraft={setDraft}
-                  onSend={onSend}
-                  onStop={onStop}
-                  onRenameThread={onRenameThread}
-                  onSpec={onSpec}
-                  onGo={onGo}
-                  onApply={onApply}
-                  stage={stage}
-                  dragActive={dragActive}
-                  newThreadPicker={newThreadPicker}
-                  pendingMode={pendingMode}
-                  specTypePicker={specTypePicker}
-                  onSpecTypeBack={onSpecTypeBack}
-                  onPickSpecType={onPickSpecType}
-                  composerSpecTypePicker={composerSpecTypePicker}
-                  transitioning={transitioning}
-                  framingExecutor={framingExecutor}
-                  framingModel={framingModel}
-                  onPickFramingExecutor={onPickFramingExecutor}
-                  onPickFramingModel={onPickFramingModel}
-                  onPickComposerSpecType={onPickComposerSpecType}
-                  onComposerSpecTypeBack={onComposerSpecTypeBack}
-                  showEmptyModePicker={threads.length === 0 && !thread}
-                  onPickMode={onPickMode}
-                  onOpenSpec={(name) => tabs.openSpec(name)}
-                  threadBypass={threadPrefs.bypass}
-                  onToggleBypass={onToggleBypassDefault}
-                  prefsMenuOpen={prefsMenuOpen}
-                  setPrefsMenuOpen={openPrefsMenu}
-                  hasLiveSession={hasLiveSession}
-                />
-              </section>
+                {renderSidePanel()}
+              </div>
+            )}
 
+            {shell.activePanel && (
               <div
                 className="ds-resize-handle ds-resize-handle-x"
-                data-testid="resize-vibe-chat"
+                data-testid="resize-left-rail"
                 onPointerDown={bindDrag(
-                  shell.vibeChat.handleProps,
+                  shell.leftRail.handleProps,
                   "col-resize"
                 )}
               />
+            )}
 
-              <section className="ds-vibe-files" data-testid="col-files">
-                {/* Vibe is chat-first and shares its width with the
-                    conversation, so it shows the active file rather than a
-                    full tab strip. Tab state is shared, so switching to the
-                    Editor shell finds everything still open. */}
-                <div className="ds-file-tabs" data-testid="vibe-file-tabs">
-                  {selectedFile ? (
-                    <span
-                      className="ds-tab active"
-                      data-testid="vibe-active-file"
-                    >
-                      {tabs.activeIsDirty && (
-                        <span className="ds-tab-dirty">●</span>
-                      )}
-                      {tabs.activeTab?.type === "spec"
-                        ? tabs.activeTab.specName
-                        : basename(selectedFile)}
-                    </span>
-                  ) : (
-                    <span className="hint">No file open</span>
-                  )}
-                  {tabs.tabs.length > 1 && (
-                    <Tooltip
-                      label={`${tabs.tabs.length - 1} more open — open the Editor shell`}
-                      withinPortal
-                    >
-                      <Button
-                        variant="subtle"
-                        size="compact-xs"
-                        onClick={() => shell.setCenterShell("editor")}
-                        data-testid="vibe-more-tabs"
-                      >
-                        +{tabs.tabs.length - 1}
-                      </Button>
-                    </Tooltip>
-                  )}
-                  {isMarkdownPath(selectedFile) && (
-                    <Tooltip
-                      label={
-                        tabs.activeMdPreview ? "Hide preview" : "Show preview"
-                      }
-                      withinPortal
-                    >
-                      <ActionIcon
-                        variant={tabs.activeMdPreview ? "filled" : "subtle"}
-                        aria-label={
-                          tabs.activeMdPreview ? "Hide preview" : "Show preview"
-                        }
-                        aria-pressed={tabs.activeMdPreview}
-                        onClick={toggleMdPreview}
-                        data-testid="vibe-toggle-md-preview"
-                        ml="auto"
-                      >
-                        <IconMarkdown size={16} />
-                      </ActionIcon>
-                    </Tooltip>
-                  )}
-                  <Tooltip
-                    label={shell.diffOpen ? "Back to editor" : "Review changes"}
-                    withinPortal
-                  >
-                    <ActionIcon
-                      variant={shell.diffOpen ? "filled" : "subtle"}
-                      aria-label={
-                        shell.diffOpen ? "Back to editor" : "Review changes"
-                      }
-                      aria-pressed={shell.diffOpen}
-                      onClick={() => shell.setDiffOpen((open) => !open)}
-                      data-testid="vibe-toggle-diff"
-                      ml={isMarkdownPath(selectedFile) ? undefined : "auto"}
-                    >
-                      <IconGitCompare size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                </div>
-                {!shell.diffOpen && tabs.activeTab?.type === "spec" ? (
-                  project &&
-                  tabs.activeTab.type === "spec" &&
-                  (() => {
-                    const specName = tabs.activeTab!.specName;
-                    return (
-                      <SpecChangeTab
-                        projectHash={project.hash}
-                        specName={specName}
-                        verifyPins={verifyPins[specName]}
-                        onAddPin={(cmd) => addVerifyPin(specName, cmd)}
-                        onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}
-                      />
-                    );
-                  })()
-                ) : !shell.diffOpen && selectedFile ? (
-                  project && (
-                    <FileEditorPane
-                      projectHash={project.hash}
-                      path={selectedFile}
-                      projectName={project.displayName}
-                      onSave={handleFileSave}
-                      onDirtyChange={tabs.setDirty}
-                      externalChange={externalChange}
-                      revealLine={revealLine}
-                      initialCursor={
-                        selectedFile
-                          ? session?.cursors[selectedFile]
-                          : undefined
-                      }
-                      onCursorChange={rememberCursor}
-                      mdPreview={tabs.activeMdPreview}
-                      onToggleMdPreview={toggleMdPreview}
-                    />
-                  )
-                ) : (
-                  <div className="messages" data-testid="vibe-files-content">
-                    {project && (
-                      <DiffPane
-                        projectHash={project.hash}
-                        refreshToken={diffRefreshToken}
-                      />
-                    )}
-                    {(() => {
-                      const threadEdits = thread
-                        ? filterForTab(
-                            [
-                              ...itemsFromMessages(messages),
-                              ...mergeDeltas(live),
-                            ],
-                            "diff"
-                          )
-                        : [];
-                      const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                        kind: "fileEdit" as const,
-                        id: `manual-${i}`,
-                        path: e.path,
-                        before: e.before,
-                        after: e.after,
-                      }));
-                      const allEdits = [...threadEdits, ...manualEdits];
-                      return (
-                        <section
-                          className="diff-section"
-                          data-testid="turn-history-section"
-                        >
-                          <h2 className="ds-section-heading">Turn History</h2>
-                          {allEdits.length === 0 && (
-                            <p className="empty">No file changes yet.</p>
-                          )}
-                          <EventList
-                            items={allEdits}
-                            showThinking={showThinking}
-                            executor={flight?.selected ?? null}
+            <div className="ds-main" data-testid="main-pane">
+              <div className="ds-work-row">
+                <main className="ds-editor-col" data-testid="editor-col">
+                  <TabBar
+                    tabs={tabs.tabs}
+                    activePath={selectedFile}
+                    onSelect={(path) => {
+                      shell.setDiffOpen(false);
+                      tabs.open(path);
+                    }}
+                    onClose={closeTab}
+                    diffOpen={shell.diffOpen}
+                    onToggleDiff={() => shell.setDiffOpen((open) => !open)}
+                    activeMdPreview={tabs.activeMdPreview}
+                    onToggleMdPreview={toggleMdPreview}
+                  />
+                  {!shell.diffOpen ? (
+                    tabs.activeTab?.type === "spec" && project ? (
+                      (() => {
+                        const specName = tabs.activeTab.specName;
+                        return (
+                          <SpecChangeTab
+                            projectHash={project.hash}
+                            specName={specName}
+                            verifyPins={verifyPins[specName]}
+                            onAddPin={(cmd) => addVerifyPin(specName, cmd)}
+                            onRemovePin={(cmd) =>
+                              removeVerifyPin(specName, cmd)
+                            }
                           />
-                        </section>
-                      );
-                    })()}
-                  </div>
-                )}
-              </section>
-
-              {!shell.rightPanel.collapsed && (
-                <div
-                  className="ds-resize-handle ds-resize-handle-x"
-                  data-testid="resize-right-panel"
-                  onPointerDown={bindDrag(
-                    shell.rightPanel.handleProps,
-                    "col-resize"
+                        );
+                      })()
+                    ) : project ? (
+                      <FileEditorPane
+                        projectHash={project.hash}
+                        path={selectedFile}
+                        projectName={project.displayName}
+                        projectRoot={project.root}
+                        onSave={handleFileSave}
+                        onDirtyChange={tabs.setDirty}
+                        externalChange={externalChange}
+                        revealLine={revealLine}
+                        initialCursor={
+                          selectedFile
+                            ? session?.cursors[selectedFile]
+                            : undefined
+                        }
+                        onCursorChange={rememberCursor}
+                        onCursorPosition={setCursorPosition}
+                        onLspStatus={setLspStatus}
+                        mdPreview={tabs.activeMdPreview}
+                        onToggleMdPreview={toggleMdPreview}
+                      />
+                    ) : null
+                  ) : (
+                    <div className="messages" data-testid="messages">
+                      {project && (
+                        <DiffPane
+                          projectHash={project.hash}
+                          refreshToken={diffRefreshToken}
+                          focusPath={diffFocusPath}
+                          onClearFocus={() => setDiffFocusPath(null)}
+                        />
+                      )}
+                      {(() => {
+                        const threadEdits = thread
+                          ? filterForTab(
+                              [
+                                ...itemsFromMessages(messages),
+                                ...mergeDeltas(live),
+                              ],
+                              "diff"
+                            )
+                          : [];
+                        const manualEdits: Item[] = fileEdits.map((e, i) => ({
+                          kind: "fileEdit" as const,
+                          id: `manual-${i}`,
+                          path: e.path,
+                          before: e.before,
+                          after: e.after,
+                        }));
+                        const allEdits = [...threadEdits, ...manualEdits];
+                        return (
+                          <section
+                            className="diff-section"
+                            data-testid="turn-history-section"
+                          >
+                            <h2 className="ds-section-heading">Turn History</h2>
+                            {allEdits.length === 0 && (
+                              <p className="empty">No file changes yet.</p>
+                            )}
+                            <EventList
+                              items={allEdits}
+                              showThinking={showThinking}
+                              executor={flight?.selected ?? null}
+                            />
+                          </section>
+                        );
+                      })()}
+                    </div>
                   )}
-                />
-              )}
+                </main>
 
-              <aside
-                className="ds-right-sidebar"
-                data-testid="right-sidebar"
+                {!shell.chatCollapsed && (
+                  <>
+                    {/* The Governing Rule allows the two presets to differ
+                        by default width, and they must: a 520px chat is the
+                        subject in Vibe and swamps the editor in Editor.
+                        Two resizables, so a drag in one preset doesn't
+                        resize the other. */}
+                    <div
+                      className="ds-resize-handle ds-resize-handle-x"
+                      data-testid="resize-right-panel"
+                      onPointerDown={bindDrag(
+                        chatPanel.handleProps,
+                        "col-resize"
+                      )}
+                    />
+                    <aside
+                      className="ds-chat-rail"
+                      data-testid="right-sidebar"
+                      style={
+                        {
+                          "--panel-w": `${chatPanel.size}px`,
+                        } as CSSProperties
+                      }
+                    >
+                      <ChatSurface {...chatProps} />
+                    </aside>
+                  </>
+                )}
+              </div>
+
+              {/* Hidden rather than unmounted while collapsed: unmounting
+                  disposes the xterm instance, so every collapse threw away
+                  the scrollback and re-spawned the shell on reopen. */}
+              <div
+                className="ds-bottom-panel"
+                data-testid="bottom-panel"
+                hidden={shell.terminalPanel.collapsed}
                 style={
                   {
-                    "--panel-w": `${shell.rightPanel.size}px`,
-                    marginRight: shell.rightPanel.collapsed
-                      ? -shell.rightPanel.size
-                      : 0,
+                    "--terminal-h": `${shell.terminalPanel.size}px`,
+                    display: shell.terminalPanel.collapsed ? "none" : undefined,
                   } as CSSProperties
                 }
               >
-                <WorkspacePicker
-                  variant="vibe"
-                  project={project}
-                  projects={projects}
-                  branches={branches}
-                  onSelectProject={selectProject}
-                  onAddProject={onAddProject}
-                  onRenameProject={onRenameProject}
-                  onOpenBranchPicker={onOpenBranchPicker}
+                <div
+                  className="ds-resize-handle ds-resize-handle-y"
+                  data-testid="resize-terminal-panel"
+                  onPointerDown={bindDrag(
+                    shell.terminalPanel.handleProps,
+                    "row-resize"
+                  )}
                 />
-                <ThreadList
-                  variant="vibe"
-                  threads={threads}
-                  activeThread={thread}
-                  project={project}
-                  onNewThread={onNewThread}
-                  onSelect={onSelectVibeThread}
-                  onRename={onRenameThread}
-                  onDelete={onDeleteThread}
-                />
-                {project && (
-                  <VibeSpecLauncher
-                    projectHash={project.hash}
-                    linkedChange={thread?.openSpecChangeName}
-                    onOpenSpec={(name) => tabs.openSpec(name)}
-                  />
-                )}
-                <div className="ds-vibe-explorer">
-                  <Accordion
-                    value={shell.vibeExplorerOpen ? "file-explorer" : null}
-                    onChange={(value) =>
-                      shell.setVibeExplorerOpen(value !== null)
-                    }
-                    keepMounted={false}
-                    transitionDuration={0}
-                    chevronPosition="left"
+                <div className="ds-bp-tabs">
+                  <button
+                    className={`ds-bp-tab${
+                      shell.bottomTab === "terminal" ? " active" : ""
+                    }`}
+                    onClick={() => shell.setBottomTab("terminal")}
+                    aria-pressed={shell.bottomTab === "terminal"}
+                    data-testid="bp-tab-terminal"
                   >
-                    <Accordion.Item value="file-explorer">
-                      <Accordion.Control
-                        className="ds-rail-disclosure"
-                        data-testid="vibe-explorer-toggle"
+                    <IconTerminal2 size={13} />
+                    Terminal
+                  </button>
+                  <button
+                    className={`ds-bp-tab${
+                      shell.bottomTab === "problems" ? " active" : ""
+                    }`}
+                    onClick={() => shell.setBottomTab("problems")}
+                    aria-pressed={shell.bottomTab === "problems"}
+                    data-testid="bp-tab-problems"
+                  >
+                    <IconAlertTriangle size={13} />
+                    Problems
+                    {problemCount > 0 && (
+                      <span
+                        className="ds-bp-count"
+                        data-testid="bp-problem-count"
                       >
-                        File Explorer
-                      </Accordion.Control>
-                      <Accordion.Panel
-                        className="ds-rail-disclosure-body"
-                        data-testid="vibe-explorer-body"
+                        {problemCount}
+                      </span>
+                    )}
+                  </button>
+                  <div className="ds-bp-spacer" />
+                  {shell.bottomTab === "terminal" && (
+                    <Tooltip label="Move terminal to the sidebar" withinPortal>
+                      <ActionIcon
+                        variant="subtle"
+                        size="sm"
+                        aria-label="Move terminal to the sidebar"
+                        onClick={shell.toggleTerminalPlacement}
+                        data-testid="terminal-placement-toggle"
                       >
-                        {project && (
-                          <FileTree
-                            projectHash={project.hash}
-                            projectName={project.displayName}
-                            // `selectFile` already leaves the diff, so
-                            // picking a file in Vibe lands on that file.
-                            onSelectFile={selectFile}
-                            activePath={selectedFile}
-                            refreshToken={fileTreeRefreshToken}
-                            initialExpanded={session?.expandedDirs}
-                            onExpandedChange={rememberExpandedDirs}
-                            initialIncludeHidden={session?.includeHidden}
-                            onIncludeHiddenChange={rememberIncludeHidden}
-                            onPathRenamed={onTreePathRenamed}
-                            onPathDeleted={onTreePathDeleted}
-                            onFilesChanged={onTreeFilesChanged}
-                          />
-                        )}
-                      </Accordion.Panel>
-                    </Accordion.Item>
-                  </Accordion>
+                        <IconLayoutSidebarRight size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                  <Tooltip label="Collapse panel" withinPortal>
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      aria-label="Collapse panel"
+                      onClick={shell.toggleTerminal}
+                      data-testid="bp-collapse"
+                    >
+                      <IconChevronDown size={14} />
+                    </ActionIcon>
+                  </Tooltip>
                 </div>
-              </aside>
+                <div className="ds-bp-content">
+                  {/* The terminal is hidden, never unmounted: unmounting
+                      disposes the pty and kills whatever is running in it,
+                      so a glance at Problems would end your test run. */}
+                  {project && terminalEverOpened.current && (
+                    <div
+                      className="ds-bp-pane"
+                      hidden={shell.bottomTab !== "terminal"}
+                    >
+                      <TerminalPane
+                        projectHash={project.hash}
+                        placement="bottom"
+                        onTogglePlacement={shell.toggleTerminalPlacement}
+                      />
+                    </div>
+                  )}
+                  {shell.bottomTab === "problems" && (
+                    <ProblemsPane onOpen={selectFile} />
+                  )}
+                </div>
+              </div>
             </div>
+          </div>
           )}
         </div>
+
+        {/* Outside `.body` (a flex row) so it spans the window rather than
+            becoming another column — full width, under everything, in both
+            presets (mockup parity). */}
+        {project && (
+          <EditorStatusBar
+            language={languageLabelFor(selectedFile)}
+            lsp={lspStatus}
+            cursor={cursorPosition}
+          />
+        )}
 
         {paletteOpen && (
           <FilePalette

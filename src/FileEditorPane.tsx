@@ -40,6 +40,7 @@ import {
   searchKeymap,
   highlightSelectionMatches,
 } from "@codemirror/search";
+import { listen } from "@tauri-apps/api/event";
 import * as api from "./api";
 import {
   languageExtensionFor,
@@ -48,6 +49,8 @@ import {
   mimeTypeFor,
 } from "./codeLanguage";
 import { describeError } from "./errors";
+import { documentLanguageId, fileUri, languageForPath } from "./lsp";
+import { clientFor } from "./lspClients";
 import { isMarkdownPath } from "./openTabs";
 import {
   EDITOR_FONT_CHANGED_EVENT,
@@ -62,6 +65,8 @@ type Props = {
   path: string | null;
   /** Shown as the leading breadcrumb segment in the toolbar. */
   projectName?: string;
+  /** Absolute project root — the language server speaks in `file://` URIs. */
+  projectRoot?: string;
   onSave?: (edit: { path: string; before: string; after: string }) => void;
   /** Tagged with the path because the tab list, not this pane, owns which
    * files have unsaved edits. */
@@ -76,6 +81,11 @@ type Props = {
    * first read from disk, never over an in-memory session. */
   initialCursor?: number;
   onCursorChange?: (path: string, offset: number) => void;
+  /** 1-based line/column for the shell's status bar. */
+  onCursorPosition?: (position: { line: number; col: number }) => void;
+  /** Language-server state for the shell's status bar. The pane owns the
+   *  editor view the server is attached to, so it is what knows. */
+  onLspStatus?: (status: api.LspStatus | null) => void;
   /** Whether to show the Markdown preview pane alongside the WYSIWYG editor.
    * Only honored for `.md`/`.markdown` files; ignored otherwise. */
   mdPreview?: boolean;
@@ -165,6 +175,73 @@ const editorFontTheme = () =>
     ".cm-scroller": { fontFamily: loadEditorFont(), lineHeight: "1.55" },
   });
 
+// Every popup CodeMirror draws — LSP hover cards, completion lists, the
+// lint tooltip, the search panel — is themed off the app's own tokens.
+// Untouched they render in CodeMirror's default light styling regardless of
+// the app theme, so a hover card in dark mode came back white-on-white.
+const popupTheme = EditorView.theme({
+  ".cm-tooltip": {
+    background: "var(--surface)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: "6px",
+    boxShadow: "0 4px 20px rgba(0, 0, 0, 0.35)",
+    fontSize: "12px",
+  },
+  ".cm-tooltip .cm-tooltip-arrow:before": {
+    borderTopColor: "var(--border)",
+    borderBottomColor: "var(--border)",
+  },
+  ".cm-tooltip .cm-tooltip-arrow:after": {
+    borderTopColor: "var(--surface)",
+    borderBottomColor: "var(--surface)",
+  },
+  ".cm-tooltip-autocomplete > ul > li": {
+    color: "var(--fg)",
+    fontFamily: "var(--mono)",
+  },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    background: "var(--active-row)",
+    color: "var(--fg)",
+  },
+  ".cm-completionDetail": { color: "var(--muted)" },
+  ".cm-completionInfo": {
+    background: "var(--surface)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+  },
+  ".cm-tooltip code, .cm-tooltip pre": {
+    background: "var(--surface-warm)",
+    color: "var(--code-text)",
+    borderRadius: "4px",
+  },
+  ".cm-tooltip a": { color: "var(--accent)" },
+  ".cm-diagnostic": {
+    background: "var(--surface)",
+    color: "var(--fg)",
+    borderLeftColor: "var(--danger)",
+  },
+  ".cm-diagnostic-warning": { borderLeftColor: "var(--warn)" },
+  ".cm-diagnostic-info": { borderLeftColor: "var(--muted)" },
+  ".cm-panels, .cm-panel": {
+    background: "var(--chrome-bg)",
+    color: "var(--fg)",
+    borderColor: "var(--border)",
+  },
+  ".cm-panel input, .cm-panel button": {
+    background: "var(--surface)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: "4px",
+  },
+  ".cm-searchMatch": {
+    background: "color-mix(in oklab, var(--warn), transparent 65%)",
+  },
+  ".cm-searchMatch-selected": {
+    background: "color-mix(in oklab, var(--accent), transparent 55%)",
+  },
+});
+
 // Base text color for the CodeMirror editor, driven by the project-scoped
 // --code-text CSS variable. The CSS variable indirection means this updates
 // live when applyAppearance() sets the override property — no compartment or
@@ -235,12 +312,15 @@ export default function FileEditorPane({
   projectHash,
   path,
   projectName,
+  projectRoot,
   onSave,
   onDirtyChange,
   externalChange,
   revealLine,
   initialCursor,
   onCursorChange,
+  onCursorPosition,
+  onLspStatus,
   mdPreview = false,
   onToggleMdPreview,
 }: Props) {
@@ -250,12 +330,17 @@ export default function FileEditorPane({
   const fontCompartment = useRef(new Compartment());
   const wrapCompartment = useRef(new Compartment());
   const fimCompartment = useRef(new Compartment());
+  // The LSP plugin arrives after a round-trip to the backend, so it goes in
+  // its own compartment rather than blocking the file from opening.
+  const lspCompartment = useRef(new Compartment());
   // Refs so the update/save listeners (bound once per file load) always see
   // the latest callback/path without re-mounting the EditorView per render.
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const onCursorRef = useRef(onCursorChange);
   onCursorRef.current = onCursorChange;
+  const onPositionRef = useRef(onCursorPosition);
+  onPositionRef.current = onCursorPosition;
   const initialCursorRef = useRef(initialCursor);
   initialCursorRef.current = initialCursor;
   const onToggleMdPreviewRef = useRef(onToggleMdPreview);
@@ -388,9 +473,11 @@ export default function FileEditorPane({
       search({ top: true }),
       codeHighlightStyle,
       codeColorTheme,
+      popupTheme,
       fimCompartment.current.of(
         fimCompletion(loadCompletionSettings(), projectHash, forPath)
       ),
+      lspCompartment.current.of([]),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },
         ...closeBracketsKeymap,
@@ -403,7 +490,13 @@ export default function FileEditorPane({
       languageCompartment.current.of(languageExtensionFor(forPath)),
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.docChanged) {
-          onCursorRef.current?.(forPath, update.state.selection.main.head);
+          const head = update.state.selection.main.head;
+          onCursorRef.current?.(forPath, head);
+          const line = update.state.doc.lineAt(head);
+          onPositionRef.current?.({
+            line: line.number,
+            col: head - line.from + 1,
+          });
         }
         if (!update.docChanged) return;
         setDirty(update.state.doc.toString() !== baselineRef.current);
@@ -514,6 +607,13 @@ export default function FileEditorPane({
     );
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
+    // Report where the cursor already is: the update listener only fires on
+    // a change, so without this the status bar stays blank until you type.
+    {
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
+      onPositionRef.current?.({ line: line.number, col: head - line.from + 1 });
+    }
     return () => {
       // Stash the live state before tearing down, or every unmount would
       // roll the file back to however it looked when it was first opened.
@@ -532,6 +632,65 @@ export default function FileEditorPane({
       viewRef.current = null;
     };
   }, [projectHash, path, viewSeq, buildExtensions]);
+
+  // Amendment 2: attach a language server to this file, if there is one.
+  // Everything here is additive — a missing, slow or crashed server leaves
+  // the editor exactly as it was, with syntax highlighting intact (D14).
+  const onLspStatusRef = useRef(onLspStatus);
+  onLspStatusRef.current = onLspStatus;
+  const setLspStatus = useCallback((status: api.LspStatus | null) => {
+    onLspStatusRef.current?.(status);
+  }, []);
+  const language = path ? languageForPath(path) : null;
+  useEffect(() => {
+    if (!path || !language || !projectRoot) {
+      setLspStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const client = await clientFor(projectHash, projectRoot, language);
+        const status = await api.lspStatus(projectHash, language);
+        if (cancelled) return;
+        setLspStatus(status);
+        if (!client) return;
+        viewRef.current?.dispatch({
+          effects: lspCompartment.current.reconfigure(
+            client.plugin(
+              fileUri(projectRoot, path),
+              documentLanguageId(path) ?? language
+            )
+          ),
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setLspStatus({
+            language,
+            state: "unsupported",
+            server: null,
+            restarts: 0,
+            detail: describeError(err),
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectHash, projectRoot, path, language, viewSeq]);
+
+  // A crash, a restart or a disable all arrive as a status event; the bar
+  // has to follow them or D14's states are invisible.
+  useEffect(() => {
+    if (!language) return;
+    const off = listen<api.LspStatus>("lsp-status", (event) => {
+      if (event.payload.language === language) setLspStatus(event.payload);
+    });
+    return () => {
+      void off.then((fn) => fn());
+    };
+  }, [language]);
 
   // Live-reconfigure the font on a settings change, without waiting for the
   // next file switch to remount the view (mirrors languageCompartment's use

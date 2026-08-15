@@ -22,7 +22,8 @@ pub struct ProjectSettings {
     pub format_on_save: HashMap<String, String>,
     /// Force a specific agent for this project instead of PATH
     /// auto-detection (D15). Held as a free string and resolved against
-    /// `KNOWN_AGENTS` by id: an unrecognized name warns and falls back, where
+    /// the discovered ACP Registry agents by id: an unrecognized name warns
+    /// and falls back, where
     /// a typed enum would fail to parse and silently drop *every* setting in
     /// this file back to defaults.
     pub executor_override: Option<String>,
@@ -37,12 +38,18 @@ pub struct ProjectSettings {
     /// primary "Run verify" action (D9). Machine-local UI state, not project
     /// config — same as the rest of this file.
     pub verify_pins: HashMap<String, Vec<String>>,
+    /// Name → shell command the user runs by hand, e.g.
+    /// `{ "dev": "pnpm start", "build": "cargo build" }` (Amendment 1).
+    /// Project-scoped, not file-scoped: the title bar's split button runs
+    /// these, the rail's Run panel edits them. Distinct from `verify` —
+    /// `verify` is the evidence a spec is green, `run` is only a shortcut.
+    pub run: HashMap<String, String>,
 }
 
 const FILE_NAME: &str = ".project-settings.json";
 
 const DEFAULT_CONTENTS: &str =
-    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {},\n  \"verifyPins\": {}\n}\n";
+    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {},\n  \"verifyPins\": {},\n  \"run\": {}\n}\n";
 
 /// Loads `.project-settings.json` from `project_root`. A missing file isn't
 /// an error — it's the common case (e.g. before `ensure_file` has run, or
@@ -113,6 +120,59 @@ pub fn run_format_on_save(settings: &ProjectSettings, project_root: &Path, relat
         }
         Err(err) => format!("{command} failed to start: {err}"),
     })
+}
+
+/// Replaces the `run` map, leaving every other setting in the file alone.
+/// Re-reads before writing rather than holding state: this file is meant to
+/// be hand-edited, so anything changed since load must survive the write.
+pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<()> {
+    let path = project_root.join(FILE_NAME);
+    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !doc.is_object() {
+        doc = serde_json::json!({});
+    }
+    doc["run"] = serde_json::to_value(commands).map_err(|err| err.to_string())?;
+    let body = serde_json::to_string_pretty(&doc).map_err(|err| err.to_string())?;
+    std::fs::write(&path, body + "\n").map_err(|err| format!("write {FILE_NAME}: {err}"))
+}
+
+/// Proposes run commands by looking at what's actually in the project root.
+/// Proposes only — the caller shows these to the user, and nothing reaches
+/// `.project-settings.json` until they accept (D12: detection proposes, it
+/// does not decide).
+pub fn detect_run(project_root: &Path) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+
+    if let Ok(raw) = std::fs::read_to_string(project_root.join("package.json")) {
+        let runner = if project_root.join("pnpm-lock.yaml").exists() {
+            "pnpm run"
+        } else if project_root.join("yarn.lock").exists() {
+            "yarn"
+        } else {
+            "npm run"
+        };
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
+                for name in scripts.keys() {
+                    found.push((name.clone(), format!("{runner} {name}")));
+                }
+            }
+        }
+    }
+    if project_root.join("Cargo.toml").exists() {
+        found.push(("cargo run".to_string(), "cargo run".to_string()));
+    }
+    if project_root.join("Makefile").exists() {
+        found.push(("make".to_string(), "make".to_string()));
+    }
+    if project_root.join("pyproject.toml").exists() {
+        found.push(("python".to_string(), "python -m .".to_string()));
+    }
+    found.sort();
+    found
 }
 
 /// One verification command's result, straight from the process.
@@ -390,5 +450,101 @@ mod tests {
         assert!(settings.verify.is_empty());
         assert_eq!(settings.executor_override.as_deref(), Some("codex"));
         assert_eq!(settings.format_on_save.len(), 1);
+    }
+
+    /// `run` is additive the same way `verify` was: an older settings file
+    /// still loads, and nothing else in it is lost.
+    #[test]
+    fn a_settings_file_without_run_still_loads() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(FILE_NAME),
+            r#"{"formatOnSave": {}, "verify": {"test": "cargo test"}}"#,
+        )
+        .unwrap();
+        let (settings, warning) = load(root.path());
+        assert!(warning.is_none());
+        assert!(settings.run.is_empty());
+        assert_eq!(settings.verify.get("test").map(String::as_str), Some("cargo test"));
+    }
+
+    #[test]
+    fn saving_run_commands_keeps_every_other_setting() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(FILE_NAME),
+            r#"{"formatOnSave": {"\\.rs$": "cargo fmt"}, "executorOverride": "codex", "verify": {"test": "cargo test"}}"#,
+        )
+        .unwrap();
+        let mut commands = HashMap::new();
+        commands.insert("dev".to_string(), "pnpm start".to_string());
+        save_run(root.path(), commands).unwrap();
+
+        let (settings, warning) = load(root.path());
+        assert!(warning.is_none());
+        assert_eq!(settings.run.get("dev").map(String::as_str), Some("pnpm start"));
+        assert_eq!(settings.executor_override.as_deref(), Some("codex"));
+        assert_eq!(settings.verify.len(), 1);
+        assert_eq!(settings.format_on_save.len(), 1);
+    }
+
+    #[test]
+    fn saving_run_commands_works_without_an_existing_file() {
+        let root = tempfile::tempdir().unwrap();
+        let mut commands = HashMap::new();
+        commands.insert("build".to_string(), "cargo build".to_string());
+        save_run(root.path(), commands).unwrap();
+        assert_eq!(load(root.path()).0.run.get("build").map(String::as_str), Some("cargo build"));
+    }
+
+    #[test]
+    fn detection_proposes_package_json_scripts() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"scripts": {"dev": "vite", "build": "tsc && vite build"}}"#,
+        )
+        .unwrap();
+        // No lockfile: npm is the safe assumption.
+        let found = detect_run(root.path());
+        assert!(found.contains(&("dev".to_string(), "npm run dev".to_string())));
+        assert!(found.contains(&("build".to_string(), "npm run build".to_string())));
+
+        // The lockfile decides the runner — `npm run dev` in a pnpm project
+        // is a proposal the user has to correct by hand every time.
+        std::fs::write(root.path().join("pnpm-lock.yaml"), "").unwrap();
+        let found = detect_run(root.path());
+        assert!(found.contains(&("dev".to_string(), "pnpm run dev".to_string())));
+    }
+
+    #[test]
+    fn detection_proposes_cargo_make_and_python_entries() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(root.path().join("Makefile"), "build:\n\techo hi\n").unwrap();
+        std::fs::write(root.path().join("pyproject.toml"), "[project]\nname = \"x\"\n").unwrap();
+        let found = detect_run(root.path());
+        let names: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"cargo run"));
+        assert!(names.contains(&"make"));
+        assert!(names.contains(&"python"));
+    }
+
+    /// Detection proposes; it never writes. A project with candidates but no
+    /// settings file must still have an empty `run` until the user accepts.
+    #[test]
+    fn detection_never_writes_the_settings_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("package.json"), r#"{"scripts": {"dev": "vite"}}"#).unwrap();
+        let found = detect_run(root.path());
+        assert!(!found.is_empty());
+        assert!(load(root.path()).0.run.is_empty());
+        assert!(!root.path().join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn detection_is_empty_for_a_project_with_no_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(detect_run(root.path()).is_empty());
     }
 }
