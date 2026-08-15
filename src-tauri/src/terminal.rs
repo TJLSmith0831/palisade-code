@@ -92,6 +92,13 @@ impl Terminal {
 
     pub fn terminate(&mut self) {
         self.stopping.store(true, Ordering::SeqCst);
+        // `child.kill()` only reaps the shell itself, orphaning anything it
+        // launched — a dev server keeps running and keeps holding its port.
+        // The PTY child leads its own session, so its pgid is its pid.
+        #[cfg(unix)]
+        if let Some(pid) = self.child.process_id() {
+            let _ = std::process::Command::new("kill").arg("--").arg(format!("-{pid}")).output();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(handle) = self.reader_handle.take() {
@@ -142,6 +149,39 @@ mod tests {
         assert!(output.contains("hello-from-pty"), "PTY output was: {output:?}");
 
         term.terminate();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminate_kills_background_children_not_just_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let mut term = Terminal::spawn(dir.path(), move |bytes| {
+            let _ = tx.send(bytes);
+        })
+        .unwrap();
+
+        // Split quoting so the PTY's echo of the command line doesn't itself
+        // contain the marker we're waiting for.
+        term.write(b"sleep 60 & echo p''id=$!\n").unwrap();
+        let output = collect_until(&rx, "pid=", Duration::from_secs(5));
+        let pid = output
+            .split("pid=")
+            .nth(1)
+            .and_then(|rest| rest.trim_start().split_whitespace().next())
+            .and_then(|d| d.trim().parse::<u32>().ok())
+            .unwrap_or_else(|| panic!("no pid in PTY output: {output:?}"));
+
+        term.terminate();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(!alive, "sleep {pid} outlived the terminal it was launched from");
     }
 
     #[test]
