@@ -40,10 +40,27 @@ const openWorkspacePanel = () => {
   return screen.getByTestId("project-picker");
 };
 
-// Mock Tauri APIs before importing App
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+// Mock Tauri APIs before importing App. Handlers are recorded so a test can
+// deliver a backend event (`emit` below) rather than only assert on IPC calls.
+const { listeners } = vi.hoisted(() => ({
+  listeners: new Map<string, ((event: { payload: unknown }) => void)[]>(),
 }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, [...(listeners.get(name) ?? []), handler]);
+    return Promise.resolve(() => {
+      listeners.set(
+        name,
+        (listeners.get(name) ?? []).filter((h) => h !== handler)
+      );
+    });
+  }),
+}));
+
+/** Deliver a backend event to whatever the app registered for it. */
+const emit = (name: string, payload: unknown) => {
+  for (const handler of listeners.get(name) ?? []) handler({ payload });
+};
 
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: vi.fn(() => ({
@@ -176,6 +193,7 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
 };
 
 beforeEach(() => {
+  listeners.clear();
   invokeMock.mockReset();
   invokeMock.mockImplementation(defaultInvoke);
 });
@@ -3038,6 +3056,25 @@ describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
         "content"
       )
     );
+  });
+});
+
+describe("Harness warnings", () => {
+  it("shows a warning as a warning, not as a failed action", async () => {
+    render(<App />);
+    await openProject();
+
+    // These are advisory ("another thread is running here", "that executor
+    // id is unknown, falling back"). Routing them through the error banner
+    // told the user their action had failed when nothing had.
+    act(() => {
+      emit("harness-warning", "1 other thread is running in this project");
+    });
+
+    const banner = await screen.findByTestId("error");
+    expect(banner).toHaveAttribute("data-tone", "warn");
+    expect(banner.textContent).toContain("1 other thread is running");
+    expect(banner.textContent).not.toContain("Couldn't complete that");
   });
 });
 

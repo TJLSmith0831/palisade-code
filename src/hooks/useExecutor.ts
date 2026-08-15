@@ -8,7 +8,9 @@ export function useExecutor() {
     Map<string, { threadId: string; events: ExecutorEvent[] }>
   >(new Map());
   const [busyThreads, setBusyThreads] = useState<Set<string>>(new Set());
-  const [errors, setErrors] = useState<{ id: string; message: string }[]>([]);
+  const [errors, setErrors] = useState<
+    { id: string; message: string; tone: "error" | "warn" }[]
+  >([]);
   const [flight, setFlight] = useState<Preflight | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -39,9 +41,15 @@ export function useExecutor() {
     });
   }, []);
 
-  const addError = useCallback((message: string) => {
-    setErrors((prev) => [...prev, { id: crypto.randomUUID(), message }]);
-  }, []);
+  const addError = useCallback(
+    (message: string, tone: "error" | "warn" = "error") => {
+      setErrors((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), message, tone },
+      ]);
+    },
+    []
+  );
 
   const dismissError = useCallback((id: string) => {
     setErrors((prev) => prev.filter((e) => e.id !== id));

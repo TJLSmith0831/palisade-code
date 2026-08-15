@@ -552,10 +552,11 @@ fn start_session(
     // Collision warning: Floo cannot stop two agents writing the same file.
     let collision = {
         let sessions = harness.acp_sessions.lock().unwrap();
-        sessions
+        let others: Vec<(&str, &str)> = sessions
             .values()
-            .find(|s| s.project_hash == project_hash)
-            .map(|s| format!("{} session {} is already live in this project — concurrent edits are not coordinated; git is the arbiter.", s.agent_name, s.id))
+            .map(|s| (s.project_hash.as_str(), s.thread_id.as_str()))
+            .collect();
+        collision_warning(&others, project_hash, thread_id)
     };
     if let Some(message) = collision {
         let _ = app.emit("harness-warning", message);
@@ -664,6 +665,35 @@ fn ensure_session(
         return Ok((new_id, prefix));
     }
     Ok((start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?, None))
+}
+
+/// Whether starting a session here collides with one Floo can't coordinate.
+///
+/// Only *other threads* count. One thread holding a live spec session and a
+/// live go session at once is the documented design — warning about it fired
+/// on the ordinary /go, said the user's own session was in their way, and
+/// trained them to ignore the one warning that matters: another thread
+/// editing the same working tree.
+///
+/// The message names how many, not which: a session ULID is not something the
+/// user can act on, and the actionable fact is simply "something else is
+/// writing to these files too".
+fn collision_warning(
+    live: &[(&str, &str)],
+    project_hash: &str,
+    thread_id: &str,
+) -> Option<String> {
+    let others = live
+        .iter()
+        .filter(|(hash, thread)| *hash == project_hash && *thread != thread_id)
+        .count();
+    if others == 0 {
+        return None;
+    }
+    Some(format!(
+        "{others} other thread{} running in this project — concurrent edits are not coordinated; git is the arbiter.",
+        if others == 1 { " is" } else { "s are" }
+    ))
 }
 
 /// Drop a session from the live map and close its record. Idempotent.
@@ -1956,6 +1986,37 @@ mod tests {
     fn the_prompt_names_which_diff_it_is_describing() {
         assert!(commit_message_prompt("working-tree", "+x").contains("working-tree diff"));
         assert!(commit_message_prompt("staged", "+x").contains("staged diff"));
+    }
+
+    /// A thread holding a live spec session and a live go session at once is
+    /// the documented design (CLAUDE.md) — /go must not warn about it.
+    #[test]
+    fn a_threads_own_other_session_is_not_a_collision() {
+        let live = [("proj", "t1")];
+        assert_eq!(collision_warning(&live, "proj", "t1"), None);
+    }
+
+    #[test]
+    fn another_thread_in_the_same_project_is() {
+        let live = [("proj", "t2")];
+        let warning = collision_warning(&live, "proj", "t1").expect("warns");
+        assert!(warning.contains("1 other thread is"), "{warning}");
+        assert!(warning.contains("git is the arbiter"));
+    }
+
+    #[test]
+    fn counts_other_threads_and_ignores_this_one() {
+        let live = [("proj", "t1"), ("proj", "t2"), ("proj", "t3")];
+        let warning = collision_warning(&live, "proj", "t1").expect("warns");
+        assert!(warning.contains("2 other threads are"), "{warning}");
+    }
+
+    /// Another project's session shares no working tree, so it is not a
+    /// collision at all.
+    #[test]
+    fn another_project_is_never_a_collision() {
+        let live = [("other", "t2")];
+        assert_eq!(collision_warning(&live, "proj", "t1"), None);
     }
 
     use super::*;

@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -116,7 +116,7 @@ fn installer_for(language: &str, on_path: &dyn Fn(&str) -> bool) -> Option<Vec<S
 
 /// The install command for `language`, resolved against the real PATH.
 pub fn install_command(language: &str) -> Option<Vec<String>> {
-    installer_for(language, &|bin| which(bin).is_some())
+    installer_for(language, &installed)
 }
 
 /// Run the install command for `language` and wait for it. Errors carry the
@@ -125,8 +125,10 @@ pub fn install_command(language: &str) -> Option<Vec<String>> {
 pub fn install(language: &str) -> Res<()> {
     let argv = install_command(language)
         .ok_or_else(|| format!("no installer available for {language} on this machine"))?;
-    let output = Command::new(&argv[0])
+    let exe = which(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
+    let output = Command::new(exe)
         .args(&argv[1..])
+        .env("PATH", crate::executor::child_path_env())
         .output()
         .map_err(|err| format!("{}: {err}", argv[0]))?;
     if output.status.success() {
@@ -151,16 +153,21 @@ fn server_for(language: &str) -> Option<(&'static str, &'static [&'static str])>
 
 /// Whether `binary` resolves on PATH — the same "you install it, we find
 /// it" contract the executor preflight uses.
-fn installed(binary: &str) -> bool {
-    which(binary).is_some()
+///
+/// Resolved through `executor::find_on_path`, not a second local lookup.
+/// This module used to read `$PATH` directly, which is launchd's minimal
+/// `/usr/bin:/bin:/usr/sbin:/sbin` for an app launched from Finder — so
+/// `rust-analyzer` under `~/.cargo/bin`, `pylsp` under `~/.local/bin` and
+/// anything under `~/.nvm/...` reported "not installed" on a machine that
+/// had them. The executor already solved this with a login-shell fallback;
+/// there is no reason for language servers to see a different PATH than
+/// agents do.
+fn which(binary: &str) -> Option<PathBuf> {
+    crate::executor::find_on_path(binary)
 }
 
-fn which(binary: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(binary))
-        .find(|candidate| candidate.is_file())
-        .map(|candidate| candidate.to_string_lossy().into_owned())
+fn installed(binary: &str) -> bool {
+    which(binary).is_some()
 }
 
 /// Wraps one JSON-RPC body in LSP's stdio framing.
@@ -286,8 +293,15 @@ impl LspServers {
         }
 
         let restarts = servers.get(&key).map(|s| s.restarts).unwrap_or(0);
-        let mut child = Command::new(binary)
+        // Resolved path + the login shell's PATH, for the same reason the
+        // executor hands its children one: a server that resolves fine still
+        // shells out to its own toolchain (pylsp → python, rust-analyzer →
+        // cargo, typescript-language-server → node), and launchd's minimal
+        // PATH makes those invisible.
+        let exe = which(binary).unwrap_or_else(|| PathBuf::from(binary));
+        let mut child = Command::new(exe)
             .args(args)
+            .env("PATH", crate::executor::child_path_env())
             .current_dir(project_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

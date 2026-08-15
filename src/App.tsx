@@ -2025,11 +2025,16 @@ export default function App() {
     enableModernWindowStyle({ offsetY: -3 });
   }, []);
 
-  const fail = (err: unknown) =>
+  const banner = (message: string, tone: "error" | "warn") =>
     setErrors((prev) => [
       ...prev,
-      { id: `${Date.now()}-${Math.random()}`, message: describeError(err) },
+      { id: `${Date.now()}-${Math.random()}`, message, tone },
     ]);
+  const fail = (err: unknown) => banner(describeError(err), "error");
+  // Advisory, not a failure: another thread is running here, an executor id
+  // in settings is unknown and Floo fell back. Routing these through `fail`
+  // put "Couldn't complete that" on an action that completed fine.
+  const warn = (message: string) => banner(message, "warn");
   const dismissError = (id: string) =>
     setErrors((prev) => prev.filter((e) => e.id !== id));
 
@@ -2664,7 +2669,7 @@ export default function App() {
     // A graphify watch spawn failure or crash — the routine "not on PATH"
     // case is already covered by the persistent preflight warning banner.
     const warned = listen<string>("harness-warning", ({ payload }) =>
-      fail(payload)
+      warn(payload)
     );
     return () => {
       streaming.then((un) => un());
@@ -3818,7 +3823,8 @@ export default function App() {
         {errors.map((e) => (
           <div
             key={e.id}
-            className="error"
+            className={e.tone === "warn" ? "error warn" : "error"}
+            data-tone={e.tone}
             onClick={() => dismissError(e.id)}
             data-testid="error"
           >

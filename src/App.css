@@ -448,6 +448,14 @@ input[type="checkbox"] {
   color: var(--danger);
 }
 
+/* Advisory, not a failure — the danger palette on something that didn't
+   fail is how users learn to dismiss banners without reading them. */
+.error.warn {
+  background: color-mix(in oklab, var(--warn), transparent 88%);
+  border-bottom-color: color-mix(in oklab, var(--warn), transparent 70%);
+  color: var(--warn);
+}
+
 .dismiss {
   color: var(--muted);
   text-decoration: underline;
