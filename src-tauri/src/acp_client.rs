@@ -7,6 +7,7 @@
 //! agent's model selector (category `model`), which is how Floo learns which
 //! models the agent actually offers.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -273,6 +274,55 @@ fn location_paths_opt(locations: &Option<Vec<v1::ToolCallLocation>>) -> Vec<Stri
     locations.as_deref().map(location_paths).unwrap_or_default()
 }
 
+/// Paths from the tool call's diff content. An edit that ships a
+/// `ToolCallContent::Diff` names the file it rewrites even when the agent
+/// left `locations` empty — OpenCode does exactly that.
+fn content_paths(content: &[v1::ToolCallContent]) -> Vec<String> {
+    content
+        .iter()
+        .filter_map(|c| match c {
+            v1::ToolCallContent::Diff(diff) => {
+                Some(diff.path.to_string_lossy().to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fall back to the path arguments inside a tool call's raw input. Not every
+/// agent fills `locations` — OpenCode's write/edit calls arrive with it empty
+/// — and Spec mode's `openspec/` exemption needs a path to test, so without
+/// this a legitimate spec write reads as "path unknown" and gets denied.
+fn raw_paths(raw_input: Option<&serde_json::Value>) -> Vec<String> {
+    let Some(input) = raw_input else {
+        return Vec::new();
+    };
+    ["filePath", "file_path", "path", "filepath", "oldPath", "newPath"]
+        .iter()
+        .filter_map(|key| input.get(key))
+        .filter_map(|v| v.as_str())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The paths a tool call touches, in descending order of reliability:
+/// `locations` when the agent fills it, then the diff content it streams,
+/// then the raw input's path arguments.
+fn tool_call_paths(
+    locations: Vec<String>,
+    content: &[v1::ToolCallContent],
+    raw_input: Option<&serde_json::Value>,
+) -> Vec<String> {
+    if !locations.is_empty() {
+        return locations;
+    }
+    let from_content = content_paths(content);
+    if !from_content.is_empty() {
+        return from_content;
+    }
+    raw_paths(raw_input)
+}
+
 /// Answer an agent permission request according to the session's mode
 /// policy (D12, D15). `Prompt` has no UI surface yet, so it cancels — the
 /// safe default until the permission prompt UI lands.
@@ -282,7 +332,11 @@ fn answer_permission(
 ) -> v1::RequestPermissionResponse {
     let kind = tool_kind(request.tool_call.fields.kind.as_ref());
     let command = raw_command(request.tool_call.fields.raw_input.as_ref());
-    let paths = location_paths_opt(&request.tool_call.fields.locations);
+    let paths = tool_call_paths(
+        location_paths_opt(&request.tool_call.fields.locations),
+        request.tool_call.fields.content.as_deref().unwrap_or(&[]),
+        request.tool_call.fields.raw_input.as_ref(),
+    );
     let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
     match permissions::decide_permission(mode, kind, command.as_deref(), &path_refs) {
         PermissionDecision::Allow => {
@@ -306,6 +360,56 @@ fn answer_permission(
     }
 }
 
+/// The write-guard's view of one `session/update`: what kind of tool call it
+/// is, the shell command if any, and the paths it touches.
+///
+/// Both `ToolCall` (the announcement) and `ToolCallUpdate` (the follow-up
+/// carrying the diff) are inspected, because agents differ in which one names
+/// the file. `kinds` remembers each call's kind from the announcement so an
+/// update that omits it is still judged as the write it is.
+fn write_guard_input(
+    update: &v1::SessionUpdate,
+    kinds: &std::sync::Mutex<HashMap<String, permissions::ToolKind>>,
+) -> Option<(permissions::ToolKind, Option<String>, Vec<String>)> {
+    match update {
+        v1::SessionUpdate::ToolCall(call) => {
+            let kind = tool_kind(Some(&call.kind));
+            kinds
+                .lock()
+                .unwrap()
+                .insert(call.tool_call_id.to_string(), kind);
+            Some((
+                kind,
+                raw_command(call.raw_input.as_ref()),
+                tool_call_paths(
+                    location_paths(&call.locations),
+                    &call.content,
+                    call.raw_input.as_ref(),
+                ),
+            ))
+        }
+        v1::SessionUpdate::ToolCallUpdate(update) => {
+            let kind = match update.fields.kind.as_ref() {
+                Some(k) => tool_kind(Some(k)),
+                None => *kinds
+                    .lock()
+                    .unwrap()
+                    .get(&update.tool_call_id.to_string())?,
+            };
+            Some((
+                kind,
+                raw_command(update.fields.raw_input.as_ref()),
+                tool_call_paths(
+                    location_paths_opt(&update.fields.locations),
+                    update.fields.content.as_deref().unwrap_or(&[]),
+                    update.fields.raw_input.as_ref(),
+                ),
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Check whether a tool call notification violates the session's permission
 /// mode. Some agents (OpenCode) auto-approve workspace writes internally and
 /// never send `session/request_permission` for in-project edits — so Floo must
@@ -325,6 +429,20 @@ fn spec_mode_violation(
     command: Option<&str>,
     file_paths: &[&str],
 ) -> Option<String> {
+    // An edit whose path is still unknown is undecidable, not a violation.
+    // OpenCode announces a write with empty `locations`, no `rawInput` and no
+    // content, and only names the file on the follow-up update carrying the
+    // diff — so judging the announcement would cancel every spec write,
+    // including the agent's own `openspec/` output. The follow-up update
+    // carries the path and gets judged there.
+    if file_paths.is_empty()
+        && matches!(
+            kind,
+            permissions::ToolKind::Edit | permissions::ToolKind::Move
+        )
+    {
+        return None;
+    }
     match permissions::decide_permission(mode, kind, command, file_paths) {
         PermissionDecision::Deny => {
             let kind_label = match kind {
@@ -372,6 +490,10 @@ async fn run_bridge(
     // arrive in the same turn.
     let cancelled = Arc::new(AtomicBool::new(false));
     let notif_cancelled = cancelled.clone();
+    // Tool kinds by call id, so a `ToolCallUpdate` that omits `kind` is still
+    // judged by the write guard (see `write_guard_input`).
+    let notif_kinds =
+        Arc::new(std::sync::Mutex::new(HashMap::<String, permissions::ToolKind>::new()));
     let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
@@ -389,11 +511,10 @@ async fn run_bridge(
                 // `session/request_permission` for in-project edits. When a
                 // write-kind tool call appears in Spec mode, cancel the turn
                 // and emit a Crashed event so the user sees the denial.
-                if let v1::SessionUpdate::ToolCall(ref call) = notification.update {
+                if let Some((kind, command, paths)) =
+                    write_guard_input(&notification.update, &notif_kinds)
+                {
                     if !notif_cancelled.load(Ordering::SeqCst) {
-                        let kind = tool_kind(Some(&call.kind));
-                        let command = raw_command(call.raw_input.as_ref());
-                        let paths = location_paths(&call.locations);
                         let path_refs: Vec<&str> =
                             paths.iter().map(|s| s.as_str()).collect();
                         if let Some(reason) =
@@ -1078,7 +1199,7 @@ mod tests {
             permissions::ToolKind::Edit,
             PermissionMode::Spec,
             None,
-            &[],
+            &["src/todo.js"],
         );
         assert!(reason.is_some(), "spec mode should flag an edit");
         let reason = reason.unwrap();
@@ -1093,12 +1214,40 @@ mod tests {
     }
 
     /// RED→GREEN: spec_mode_violation flags delete and move in Spec mode.
+    /// A delete is denied whatever the path; a move needs a path to judge.
     #[test]
     fn spec_mode_violation_flags_delete_and_move() {
-        for kind in &[permissions::ToolKind::Delete, permissions::ToolKind::Move] {
+        assert!(
+            spec_mode_violation(
+                permissions::ToolKind::Delete,
+                PermissionMode::Spec,
+                None,
+                &[]
+            )
+            .is_some(),
+            "spec mode should flag a delete"
+        );
+        assert!(
+            spec_mode_violation(
+                permissions::ToolKind::Move,
+                PermissionMode::Spec,
+                None,
+                &["src/todo.js"]
+            )
+            .is_some(),
+            "spec mode should flag a move outside openspec/"
+        );
+    }
+
+    /// A write whose path has not arrived yet is undecidable, not a
+    /// violation — judging it would cancel every OpenCode spec write, whose
+    /// announcement carries no path at all.
+    #[test]
+    fn spec_mode_violation_defers_a_pathless_write() {
+        for kind in &[permissions::ToolKind::Edit, permissions::ToolKind::Move] {
             assert!(
-                spec_mode_violation(*kind, PermissionMode::Spec, None, &[]).is_some(),
-                "spec mode should flag {kind:?}"
+                spec_mode_violation(*kind, PermissionMode::Spec, None, &[]).is_none(),
+                "a pathless {kind:?} should be deferred, not cancelled"
             );
         }
     }
@@ -1117,6 +1266,61 @@ mod tests {
                 "spec mode should NOT flag {kind:?}"
             );
         }
+    }
+
+    /// RED→GREEN: OpenCode sends write tool calls with an empty `locations`,
+    /// so the openspec/ path must come off the raw input — otherwise spec
+    /// mode cancels the turn on the agent's own spec file.
+    #[test]
+    fn tool_call_paths_falls_back_to_raw_input() {
+        let raw = serde_json::json!({"filePath": "openspec/changes/x/proposal.md"});
+        let paths = tool_call_paths(Vec::new(), &[], Some(&raw));
+        assert_eq!(paths, vec!["openspec/changes/x/proposal.md".to_string()]);
+        let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        assert!(
+            spec_mode_violation(
+                permissions::ToolKind::Edit,
+                PermissionMode::Spec,
+                None,
+                &refs
+            )
+            .is_none(),
+            "spec mode should allow a write to openspec/"
+        );
+    }
+
+    /// `locations` wins when the agent fills it.
+    #[test]
+    fn tool_call_paths_prefers_locations() {
+        let raw = serde_json::json!({"path": "openspec/notes.md"});
+        let paths = tool_call_paths(vec!["src/todo.js".to_string()], &[], Some(&raw));
+        assert_eq!(paths, vec!["src/todo.js".to_string()]);
+    }
+
+    /// RED→GREEN: OpenCode's write calls carry neither `locations` nor a
+    /// usable `rawInput` — the only path is on the streamed diff, so spec
+    /// mode has to read it there or it cancels the agent's own spec write.
+    #[test]
+    fn tool_call_paths_reads_the_diff_path() {
+        let diff = v1::Diff::new(
+            std::path::PathBuf::from(
+                "/Users/x/proj/openspec/changes/clear-completed/proposal.md",
+            ),
+            "## Why".to_string(),
+        );
+        let content = vec![v1::ToolCallContent::Diff(diff)];
+        let paths = tool_call_paths(Vec::new(), &content, None);
+        let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        assert!(
+            spec_mode_violation(
+                permissions::ToolKind::Edit,
+                PermissionMode::Spec,
+                None,
+                &refs
+            )
+            .is_none(),
+            "spec mode should allow the diff's openspec/ write"
+        );
     }
 
     /// RED→GREEN: spec_mode_violation does NOT flag edits in Go mode.
