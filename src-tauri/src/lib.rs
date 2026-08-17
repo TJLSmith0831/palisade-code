@@ -4,6 +4,7 @@ mod acp_preflight;
 mod acp_registry;
 mod completion;
 mod executor;
+mod graph_nudge;
 mod grill_inject;
 mod handoff;
 mod permissions;
@@ -97,6 +98,14 @@ async fn switch_project(app: tauri::AppHandle, hash: String) -> Res<Project> {
         // file to open from the settings button — a no-op once it exists.
         if let Err(message) = settings::ensure_file(root) {
             let _ = app.emit("harness-warning", message);
+        }
+        // Keep the code graph out of git: unignored, it shows up in the diff
+        // pane as untracked work and lands in whatever the agent stages. A
+        // no-op once anything already ignores it, and skipped in a non-repo.
+        if let Ok(bin) = git_bin() {
+            if let Err(message) = integrations::ensure_graph_ignored(&bin, root) {
+                let _ = app.emit("harness-warning", message);
+            }
         }
         // Surface malformed settings immediately on load, rather than only when
         // a save or an executor-override lookup happens to re-read them.
@@ -678,12 +687,32 @@ fn ensure_session(
             (Some(reinjection), None) => Some(reinjection),
             (None, tp) => tp,
         };
-        if let Some(prefix) = prefix {
-            harness.pending_prefix.lock().unwrap().insert(new_id.clone(), prefix);
-        }
+        park_prefix(harness, &new_id, &agent.id, project_hash, prefix);
         return Ok(new_id);
     }
-    start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)
+    let id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
+    park_prefix(harness, &id, &agent.id, project_hash, None);
+    Ok(id)
+}
+
+/// Park a new session's first-turn prefix, with the graph-tool nudge ahead of
+/// it. Both live here because every new session gets the nudge — spec and go
+/// alike — while only a handoff has a transcript to carry. `send_to` drains and
+/// clears the slot, so the nudge lands exactly once per session; a `/go` that
+/// starts a session without prompting keeps it for the next real turn.
+fn park_prefix(
+    harness: &Harness,
+    session_id: &str,
+    agent_id: &str,
+    project_hash: &str,
+    prefix: Option<String>,
+) {
+    let nudge = project_root(project_hash)
+        .ok()
+        .and_then(|root| graph_nudge::nudge(agent_id, &root));
+    if let Some(combined) = graph_nudge::compose(nudge, prefix) {
+        harness.pending_prefix.lock().unwrap().insert(session_id.to_string(), combined);
+    }
 }
 
 /// Whether starting a session here collides with one Palisade can't coordinate.
