@@ -1,4 +1,4 @@
-# RESEARCH: Local FIM Code Completion for Floo Network
+# RESEARCH: Local FIM Code Completion for Palisade Code
 
 **Status:** Research phase — model still training
 **Date:** 2026-08-09
@@ -100,7 +100,7 @@ Run the inference engine as a **local sidecar process** managed by the Rust back
 - Can use llama.cpp (fastest kernels) without a C++ build dependency in the Tauri crate
 - Engine is swappable without rebuilding the app
 - HTTP on localhost adds ~1-5ms — negligible vs. 400ms+ inference time
-- Floo Network already has process management patterns (`executor.rs` spawns/manages CLI processes)
+- Palisade Code already has process management patterns (`executor.rs` spawns/manages CLI processes)
 
 **Flow:**
 1. App startup → Rust backend spawns `llama-server` or `mistralrs serve` with the GGUF, Metal enabled, on `127.0.0.1:<port>`
@@ -297,7 +297,7 @@ A new `complete_code` Tauri command requires:
 - FIM is the correct approach for IDE code completion
 - The training methodology (FIM-formatted, loss on middle, function-level masking) is sound
 - The completion length targets (1-150 tokens) are realistic for 0.8B
-- Sidecar process architecture fits Floo Network's existing patterns
+- Sidecar process architecture fits Palisade Code's existing patterns
 - The "FIM engine, not coding model" framing is the right mental model
 
 ### What's at risk

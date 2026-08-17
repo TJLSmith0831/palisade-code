@@ -267,7 +267,7 @@ export const leaveThread = (threadId: string) =>
 // ------------------------------------------------------------ verification
 
 /**
- * One run of one verify command. This is the only evidence Floo accepts that
+ * One run of one verify command. This is the only evidence Palisade accepts that
  * something works: a named command exited with a given code at a given commit.
  * Render the code and the commit — never summarise a set of these into
  * "complete" or "satisfied".
@@ -329,7 +329,7 @@ export type LspState =
 export type LspStatus = {
   language: string;
   state: LspState;
-  /** The binary Floo looked for — names what to install when missing. */
+  /** The binary Palisade looked for — names what to install when missing. */
   server: string | null;
   restarts: number;
   detail: string | null;
@@ -343,7 +343,7 @@ export const lspStatus = (projectHash: string, language: string) =>
   invoke<LspStatus>("lsp_status", { projectHash, language });
 export const lspShutdown = (projectHash: string) =>
   invoke<void>("lsp_shutdown", { projectHash });
-/** The command Floo would run to install this language's server, or null when
+/** The command Palisade would run to install this language's server, or null when
  *  it knows none or the tool that would run it isn't on this machine. */
 export const lspInstallCommand = (language: string) =>
   invoke<string | null>("lsp_install_command", { language });

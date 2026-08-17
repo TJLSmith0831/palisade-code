@@ -1,7 +1,7 @@
 //! Language-server processes (Amendment 2 / `lsp-integration` design.md).
 //!
 //! One server per language per project (D15), spawned on demand from the
-//! first file of that language and killed when the project changes. Floo
+//! first file of that language and killed when the project changes. Palisade
 //! never installs a server — it finds one on PATH or reports that there
 //! isn't one (D5/D6).
 //!
@@ -31,7 +31,7 @@ use crate::store::Res;
 const MAX_RESTARTS: u32 = 3;
 
 /// Language id (LSP's own `languageId`) → the command that serves it and
-/// its arguments. Deliberately a table, not a plugin system: Floo detects
+/// its arguments. Deliberately a table, not a plugin system: Palisade detects
 /// what you installed, it doesn't manage installs (D6).
 const SERVERS: &[(&str, &str, &[&str])] = &[
     ("typescript", "typescript-language-server", &["--stdio"]),
@@ -53,7 +53,7 @@ const SERVERS: &[(&str, &str, &[&str])] = &[
 pub enum LspState {
     /// No server is configured for this language at all.
     Unsupported,
-    /// Floo knows a server for it; that server isn't on PATH.
+    /// Palisade knows a server for it; that server isn't on PATH.
     NotInstalled,
     Starting,
     Running,
@@ -68,21 +68,21 @@ pub enum LspState {
 pub struct LspStatus {
     pub language: String,
     pub state: LspState,
-    /// The binary Floo looked for, so "not installed" names what to install.
+    /// The binary Palisade looked for, so "not installed" names what to install.
     pub server: Option<String>,
     pub restarts: u32,
     /// Present when something went wrong, in the user's words not the log's.
     pub detail: Option<String>,
 }
 
-/// How to install a server Floo can't find, per language. First candidate
+/// How to install a server Palisade can't find, per language. First candidate
 /// whose installer is itself on PATH wins — a machine with `pipx` and one
 /// with `uv` both need python-lsp-server, and neither should have to know
-/// which of the two Floo happened to hardcode.
+/// which of the two Palisade happened to hardcode.
 ///
 /// Deliberately still not a package manager (D6): this is one command per
 /// language, run on the user's say-so, using the toolchain they already have.
-/// Floo bundles nothing.
+/// Palisade bundles nothing.
 const INSTALLERS: &[(&str, &[&[&str]])] = &[
     (
         "typescript",
@@ -103,8 +103,8 @@ const INSTALLERS: &[(&str, &[&[&str]])] = &[
     ("rust", &[&["rustup", "component", "add", "rust-analyzer"]]),
 ];
 
-/// The install command Floo would run for `language`, given what's on PATH.
-/// None when Floo knows no installer, or knows one but its tool is missing —
+/// The install command Palisade would run for `language`, given what's on PATH.
+/// None when Palisade knows no installer, or knows one but its tool is missing —
 /// offering `pipx install …` on a machine without pipx is a dead button.
 fn installer_for(language: &str, on_path: &dyn Fn(&str) -> bool) -> Option<Vec<String>> {
     let (_, candidates) = INSTALLERS.iter().find(|(lang, _)| *lang == language)?;
@@ -143,7 +143,7 @@ pub fn install(language: &str) -> Res<()> {
     })
 }
 
-/// The server command for a language, if Floo knows one.
+/// The server command for a language, if Palisade knows one.
 fn server_for(language: &str) -> Option<(&'static str, &'static [&'static str])> {
     SERVERS
         .iter()
@@ -178,7 +178,7 @@ fn frame(body: &str) -> String {
 /// Pulls whole messages out of a growing stdio buffer, leaving any partial
 /// tail behind. Returns the bodies found; `buffer` keeps the remainder.
 ///
-/// A server can flush half a header, and it may send headers Floo doesn't
+/// A server can flush half a header, and it may send headers Palisade doesn't
 /// care about (`Content-Type`) — both are normal, neither may desync the
 /// stream.
 fn drain_messages(buffer: &mut Vec<u8>) -> Vec<String> {
@@ -238,7 +238,7 @@ impl Drop for Server {
     }
 }
 
-/// Every language server Floo has running, keyed by `(project, language)`.
+/// Every language server Palisade has running, keyed by `(project, language)`.
 #[derive(Default)]
 pub struct LspServers(Mutex<HashMap<(String, String), Server>>);
 
@@ -618,7 +618,7 @@ mod tests {
     }
 
     /// The four languages the product promises out of the box (D6 amended:
-    /// Floo still installs nothing on its own, but it must know how).
+    /// Palisade still installs nothing on its own, but it must know how).
     #[test]
     fn knows_how_to_install_the_baseline_languages() {
         let everything = |_: &str| true;

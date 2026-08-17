@@ -519,7 +519,7 @@ export default function FileEditorPane({
       setConflict(true);
       return;
     }
-    // Floo's own save trips the watcher too, and a reload rebuilds the view
+    // Palisade's own save trips the watcher too, and a reload rebuilds the view
     // from scratch — which threw the cursor and scroll position back to the
     // top of the file on every save. Only rebuild when disk actually differs
     // from what's on screen; that also skips no-op writes from anyone else.

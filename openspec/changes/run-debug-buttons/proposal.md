@@ -1,6 +1,6 @@
 ## Why
 
-Developers expect quick access to run common project commands (dev servers, test suites, builds) without manually typing them in the terminal every time. The timing is right because the terminal pane already exists and works well, so adding run buttons is a UI enhancement that builds on existing infrastructure. This makes Floo feel more like a complete development environment rather than just an agent interface. (D7)
+Developers expect quick access to run common project commands (dev servers, test suites, builds) without manually typing them in the terminal every time. The timing is right because the terminal pane already exists and works well, so adding run buttons is a UI enhancement that builds on existing infrastructure. This makes Palisade feel more like a complete development environment rather than just an agent interface. (D7)
 
 ## What Changes
 

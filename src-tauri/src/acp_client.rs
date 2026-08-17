@@ -1,10 +1,10 @@
 //! ACP client wrapper and session lifecycle (D17).
 //!
 //! Drives a real ACP agent over stdio using the `agent-client-protocol` crate:
-//! the async connection runs on a dedicated bridge thread; Floo's sync side
+//! the async connection runs on a dedicated bridge thread; Palisade's sync side
 //! talks to it through channels, and agent notifications arrive at the sync
 //! `Sink` as `ExecutorEvent`s. `session/new`'s config options carry the
-//! agent's model selector (category `model`), which is how Floo learns which
+//! agent's model selector (category `model`), which is how Palisade learns which
 //! models the agent actually offers.
 
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ use crate::executor::{Envelope, ExecutorEvent, Sink};
 use crate::permissions::{self, PermissionDecision, PermissionMode};
 
 /// How long session startup (spawn + initialize + session/new) may take
-/// before Floo gives up. Cold npx installs can't happen — availability
+/// before Palisade gives up. Cold npx installs can't happen — availability
 /// filtering only lists cached packages — but first-run auth or slow
 /// binaries still need headroom.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
@@ -124,13 +124,13 @@ fn read_devin_api_key() -> Option<String> {
 
 // ------------------------------------------------------------- session types
 
-/// A Floo session backed by a live ACP connection.
+/// A Palisade session backed by a live ACP connection.
 ///
 /// Keeps the public identity fields from the old `Session` struct but
 /// replaces process internals (`Child`, `ChildStdin`, `pump`) with a bridge
 /// thread running the ACP connection (D17).
 pub struct AcpSession {
-    /// Floo's own ULID identity for this session.
+    /// Palisade's own ULID identity for this session.
     pub id: String,
     /// The ACP registry agent id (e.g. "devin", "claude-acp").
     pub agent_id: String,
@@ -145,7 +145,7 @@ pub struct AcpSession {
     pub thread_id: String,
     pub project_root: PathBuf,
     pub mode: String,
-    pub floo_home: PathBuf,
+    pub palisade_home: PathBuf,
     /// The ACP session id, assigned by the agent during session/new.
     pub acp_session_id: Option<String>,
     /// What the agent reported about its model selector at session start.
@@ -196,7 +196,7 @@ pub struct AcpSpawn {
     /// Model value id to select right after session/new, if the thread has
     /// chosen one and the agent offers it.
     pub model: Option<String>,
-    pub floo_home: PathBuf,
+    pub palisade_home: PathBuf,
 }
 
 // ------------------------------------------------------------- bridge
@@ -231,7 +231,7 @@ fn permission_mode(mode: &str, bypass: bool) -> PermissionMode {
     }
 }
 
-/// Map an ACP tool kind onto Floo's permission taxonomy.
+/// Map an ACP tool kind onto Palisade's permission taxonomy.
 fn tool_kind(kind: Option<&v1::ToolKind>) -> permissions::ToolKind {
     use v1::ToolKind as K;
     match kind {
@@ -412,7 +412,7 @@ fn write_guard_input(
 
 /// Check whether a tool call notification violates the session's permission
 /// mode. Some agents (OpenCode) auto-approve workspace writes internally and
-/// never send `session/request_permission` for in-project edits — so Floo must
+/// never send `session/request_permission` for in-project edits — so Palisade must
 /// also enforce Spec mode at the `session/update` layer, by cancelling the
 /// turn when a write-kind tool call appears in Spec mode.
 ///
@@ -466,7 +466,7 @@ fn spec_mode_violation(
 async fn run_bridge(
     transport: impl ConnectTo<acp::Client>,
     spawn: AcpSpawn,
-    floo_session_id: String,
+    palisade_session_id: String,
     sink: Arc<dyn Sink>,
     busy: Arc<AtomicBool>,
     ready_tx: mpsc::Sender<Result<ReadyReport, String>>,
@@ -474,7 +474,7 @@ async fn run_bridge(
     probe_only: bool,
 ) -> Result<(), String> {
     let notif_sink = sink.clone();
-    let notif_session = floo_session_id.clone();
+    let notif_session = palisade_session_id.clone();
     let notif_thread = spawn.thread_id.clone();
     let perm_mode = permission_mode(&spawn.mode, spawn.bypass);
     // ACP streams chunks; there is no complete-text event at turn end.
@@ -499,11 +499,11 @@ async fn run_bridge(
     // originals.
     let tail_ready_tx = ready_tx.clone();
     let tail_sink = sink.clone();
-    let tail_session = floo_session_id.clone();
+    let tail_session = palisade_session_id.clone();
     let tail_thread = spawn.thread_id.clone();
 
     let result = acp::Client.builder()
-        .name("floo-network")
+        .name("palisade-code")
         .on_receive_notification(
             async move |notification: v1::SessionNotification, cx| {
                 // Spec-mode enforcement at the notification layer: some agents
@@ -578,7 +578,7 @@ async fn run_bridge(
             // Authenticate if the agent requires it (D15).  Agents that
             // advertise auth methods (e.g. Devin's API-key flow) will
             // reject session/new until the client calls authenticate first.
-            // AuthMethod::Agent means the agent handles auth itself — Floo
+            // AuthMethod::Agent means the agent handles auth itself — Palisade
             // looks up stored credentials and passes them via _meta.
             if !init_response.auth_methods.is_empty() {
                 let method_id = init_response.auth_methods[0].id().clone();
@@ -642,7 +642,7 @@ async fn run_bridge(
                         match cmd {
                             Some(BridgeCommand::Prompt(text)) => {
                                 let done_sink = sink.clone();
-                                let done_session = floo_session_id.clone();
+                                let done_session = palisade_session_id.clone();
                                 let done_thread = spawn.thread_id.clone();
                                 let done_busy = busy.clone();
                                 let done_text = text_buf.clone();
@@ -683,7 +683,7 @@ async fn run_bridge(
                                     Ok(())
                                 }) {
                                     busy.store(false, Ordering::SeqCst);
-                                    emit(&sink, &floo_session_id, &spawn.thread_id, ExecutorEvent::Crashed {
+                                    emit(&sink, &palisade_session_id, &spawn.thread_id, ExecutorEvent::Crashed {
                                         exit_code: None,
                                         message: format!("prompt send failed: {e}"),
                                     });
@@ -723,7 +723,7 @@ async fn run_bridge(
 
 /// Spawn the bridge thread and wait for the session to become ready.
 ///
-/// Returns the Floo session id, the reported model state, the command
+/// Returns the Palisade session id, the reported model state, the command
 /// channel, and the busy flag — the *same* `Arc` the bridge clears when a
 /// turn ends, so the session handle must share it rather than make its own.
 #[allow(clippy::type_complexity)]
@@ -742,13 +742,13 @@ fn start_with_transport(
     ),
     String,
 > {
-    let floo_session_id = ulid::Ulid::new().to_string();
+    let palisade_session_id = ulid::Ulid::new().to_string();
     let busy = Arc::new(AtomicBool::new(false));
     let bridge_busy = busy.clone();
     let (ready_tx, ready_rx) = mpsc::channel::<Result<ReadyReport, String>>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<BridgeCommand>();
 
-    let thread_session = floo_session_id.clone();
+    let thread_session = palisade_session_id.clone();
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -774,7 +774,7 @@ fn start_with_transport(
 
     match ready_rx.recv_timeout(STARTUP_TIMEOUT) {
         Ok(Ok(report)) => Ok((
-            floo_session_id,
+            palisade_session_id,
             report.models,
             cmd_tx,
             busy,
@@ -821,7 +821,7 @@ pub fn probe_models(
         mode: "spec".into(),
         bypass: false,
         model: None,
-        floo_home: PathBuf::new(),
+        palisade_home: PathBuf::new(),
     };
     let agent = agent_config(&spawn);
     let (_id, models, _cmd_tx, _busy, _acp_id) =
@@ -927,7 +927,7 @@ struct SessionIdentity {
     thread_id: String,
     project_root: PathBuf,
     mode: String,
-    floo_home: PathBuf,
+    palisade_home: PathBuf,
 }
 
 impl SessionIdentity {
@@ -942,7 +942,7 @@ impl SessionIdentity {
             thread_id: spawn.thread_id.clone(),
             project_root: spawn.project_root.clone(),
             mode: spawn.mode.clone(),
-            floo_home: spawn.floo_home.clone(),
+            palisade_home: spawn.palisade_home.clone(),
         }
     }
 
@@ -964,7 +964,7 @@ impl SessionIdentity {
             thread_id: self.thread_id,
             project_root: self.project_root,
             mode: self.mode,
-            floo_home: self.floo_home,
+            palisade_home: self.palisade_home,
             acp_session_id: None,
             models,
             busy,
@@ -989,7 +989,7 @@ pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Result<(), String
 fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
     let mut config = acp::AcpAgentConfig::new(spawn.bin.clone());
     config = config.args(spawn.args.iter().cloned());
-    // A GUI-launched Floo inherits launchd's minimal PATH; the agent (and
+    // A GUI-launched Palisade inherits launchd's minimal PATH; the agent (and
     // anything it shells out to) needs the user's real one.
     if let Some(path) = crate::executor::login_shell_path() {
         config = config.env("PATH", path.to_string_lossy().into_owned());
@@ -1013,7 +1013,7 @@ pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::Unboun
             thread_id: "thread-1".into(),
             project_root: PathBuf::from("/tmp/proj"),
             mode: "spec".into(),
-            floo_home: PathBuf::from("/tmp/floo"),
+            palisade_home: PathBuf::from("/tmp/palisade"),
             acp_session_id: None,
             models: ModelState::default(),
             busy: Arc::new(AtomicBool::new(busy)),
@@ -1191,7 +1191,7 @@ mod tests {
 
     /// RED→GREEN: spec_mode_violation flags an edit tool call in Spec mode.
     /// OpenCode auto-approves workspace writes and never sends
-    /// `session/request_permission` for in-project edits, so Floo must enforce
+    /// `session/request_permission` for in-project edits, so Palisade must enforce
     /// Spec mode at the `session/update` notification layer.
     #[test]
     fn spec_mode_violation_flags_edit_in_spec_mode() {
@@ -1529,7 +1529,7 @@ mod tests {
             mode: "spec".into(),
             bypass: false,
             model,
-            floo_home: PathBuf::from("/tmp/floo"),
+            palisade_home: PathBuf::from("/tmp/palisade"),
         }
     }
 

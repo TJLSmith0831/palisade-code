@@ -105,7 +105,7 @@ Current state: 12 latency/waste candidates identified in architecture review. AC
 
 ## Risks / Trade-offs
 
-- **Risk**: `gix` is still maturing; some write paths (push) aren't ready. Floo only needs read operations (status, diff, rev), so this is acceptable.
+- **Risk**: `gix` is still maturing; some write paths (push) aren't ready. Palisade only needs read operations (status, diff, rev), so this is acceptable.
 - **Risk**: Memoization can introduce bugs if comparison functions are wrong. Mitigation: use shallow comparison for props, deep comparison only for computed values (items, results Map).
 - **Risk**: Debouncing localStorage may lose data if app crashes before flush. Mitigation: flush on `beforeunload` adds a safety net.
 - **Trade-off**: Buffered fsync bounds crash window to turn duration instead of per-message. Acceptable because turns are usually seconds, not minutes.

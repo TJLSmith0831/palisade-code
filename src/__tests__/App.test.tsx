@@ -123,8 +123,8 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -133,8 +133,8 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -769,11 +769,11 @@ describe("Chat column width per preset (Governing Rule)", () => {
 
   it("remembers each preset's width separately", async () => {
     localStorage.setItem(
-      "floo:layout:proj-1:right",
+      "palisade:layout:proj-1:right",
       JSON.stringify({ size: 340, collapsed: false })
     );
     localStorage.setItem(
-      "floo:layout:proj-1:vibe-chat",
+      "palisade:layout:proj-1:vibe-chat",
       JSON.stringify({ size: 700, collapsed: false })
     );
     render(<App />);
@@ -1098,8 +1098,8 @@ describe("Settings panel (D14/D15)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -1108,8 +1108,8 @@ describe("Settings panel (D14/D15)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -1173,8 +1173,8 @@ describe("Settings panel (D14/D15)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -1183,8 +1183,8 @@ describe("Settings panel (D14/D15)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -1389,8 +1389,8 @@ describe("Keyboard navigation (accessibility)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -1399,8 +1399,8 @@ describe("Keyboard navigation (accessibility)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -1490,8 +1490,8 @@ describe("Keyboard navigation (accessibility)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -1500,8 +1500,8 @@ describe("Keyboard navigation (accessibility)", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -1578,8 +1578,8 @@ describe("Keyboard navigation (accessibility)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -1588,8 +1588,8 @@ describe("Keyboard navigation (accessibility)", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -1673,8 +1673,8 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -1683,8 +1683,8 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -1890,8 +1890,8 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -1900,8 +1900,8 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -1988,8 +1988,8 @@ describe("Labeled inputs (accessibility)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -1998,8 +1998,8 @@ describe("Labeled inputs (accessibility)", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -2073,8 +2073,8 @@ describe("Labeled inputs (accessibility)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -2083,8 +2083,8 @@ describe("Labeled inputs (accessibility)", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -2153,8 +2153,8 @@ describe("Error banner provenance", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -2163,8 +2163,8 @@ describe("Error banner provenance", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -2262,7 +2262,7 @@ describe("Find in files (Cmd+Shift+F)", () => {
 
 describe("Theme toggle", () => {
   afterEach(() => {
-    localStorage.removeItem("floo:theme");
+    localStorage.removeItem("palisade:theme");
     delete document.documentElement.dataset.theme;
   });
 
@@ -2288,7 +2288,7 @@ describe("Theme toggle", () => {
 });
 
 describe("First-run onboarding", () => {
-  it("explains what Floo is and offers a prominent Open Project action when there are no projects yet", async () => {
+  it("explains what Palisade is and offers a prominent Open Project action when there are no projects yet", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
         if (cmd === "list_projects") return Promise.resolve([]);
@@ -2420,8 +2420,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -2430,8 +2430,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -2546,8 +2546,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -2556,8 +2556,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -2632,8 +2632,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -2642,8 +2642,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -2772,8 +2772,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -2782,8 +2782,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -2880,8 +2880,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -2890,8 +2890,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         if (cmd === "switch_project") {
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });
@@ -3251,7 +3251,7 @@ describe("Session restore", () => {
 
   it("reopens the tabs that were open, with the same one active", async () => {
     localStorage.setItem(
-      "floo:session:proj-1",
+      "palisade:session:proj-1",
       JSON.stringify({ openPaths: ["a.ts", "b.ts"], activePath: "a.ts" })
     );
     invokeMock.mockImplementation(router());
@@ -3272,7 +3272,7 @@ describe("Session restore", () => {
 
   it("drops a tab whose file has gone since last time", async () => {
     localStorage.setItem(
-      "floo:session:proj-1",
+      "palisade:session:proj-1",
       JSON.stringify({ openPaths: ["a.ts", "deleted.ts"], activePath: "a.ts" })
     );
     invokeMock.mockImplementation(router(["deleted.ts"]));
@@ -3291,7 +3291,7 @@ describe("Session restore", () => {
 
   it("comes back in the shell it was left in", async () => {
     localStorage.setItem(
-      "floo:session:proj-1",
+      "palisade:session:proj-1",
       JSON.stringify({ openPaths: [], activePath: null, centerShell: "vibe" })
     );
     invokeMock.mockImplementation(router());
@@ -3314,7 +3314,7 @@ describe("Session restore", () => {
 
     await waitFor(() => {
       const saved = JSON.parse(
-        localStorage.getItem("floo:session:proj-1") ?? "{}"
+        localStorage.getItem("palisade:session:proj-1") ?? "{}"
       );
       expect(saved.openPaths).toEqual(["b.ts"]);
       expect(saved.activePath).toBe("b.ts");
@@ -3339,8 +3339,8 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -3349,8 +3349,8 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -3424,8 +3424,8 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -3434,8 +3434,8 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
       if (cmd === "switch_project") {
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -3656,8 +3656,8 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -3665,8 +3665,8 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       if (cmd === "switch_project")
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -3714,8 +3714,8 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   };
 
   afterEach(() => {
-    localStorage.removeItem("floo:default-bypass");
-    localStorage.removeItem("floo:thread-prefs:proj-1:t1");
+    localStorage.removeItem("palisade:default-bypass");
+    localStorage.removeItem("palisade:thread-prefs:proj-1:t1");
   });
 
   it("shows the current executor in the composer and opens a menu on click", async () => {
@@ -3925,7 +3925,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
 
     fireEvent.click(toggle);
     expect(toggle).toBeChecked();
-    expect(localStorage.getItem("floo:default-bypass")).toBe("1");
+    expect(localStorage.getItem("palisade:default-bypass")).toBe("1");
 
     fireEvent.click(screen.getByTestId("executor-btn")); // close
     fireEvent.click(screen.getByTestId("executor-btn")); // reopen
@@ -4033,8 +4033,8 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -4042,8 +4042,8 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
       if (cmd === "switch_project")
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -4127,8 +4127,8 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
         return Promise.resolve([
           {
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           },
@@ -4136,8 +4136,8 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
       if (cmd === "switch_project")
         return Promise.resolve({
           hash: "proj-1",
-          root: "/tmp/floo-network",
-          displayName: "floo-network",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
           createdAt: "2026-08-06T00:00:00Z",
           lastAccessedAt: "2026-08-06T00:00:00Z",
         });
@@ -4220,8 +4220,8 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
           return Promise.resolve([
             {
               hash: "proj-1",
-              root: "/tmp/floo-network",
-              displayName: "floo-network",
+              root: "/tmp/palisade-code",
+              displayName: "palisade-code",
               createdAt: "2026-08-06T00:00:00Z",
               lastAccessedAt: "2026-08-06T00:00:00Z",
             },
@@ -4229,8 +4229,8 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
         if (cmd === "switch_project")
           return Promise.resolve({
             hash: "proj-1",
-            root: "/tmp/floo-network",
-            displayName: "floo-network",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
             createdAt: "2026-08-06T00:00:00Z",
             lastAccessedAt: "2026-08-06T00:00:00Z",
           });

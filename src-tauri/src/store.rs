@@ -1,9 +1,9 @@
-//! On-disk state for Floo Network: the global project index, per-project
+//! On-disk state for Palisade Code: the global project index, per-project
 //! thread sidecars, and append-only JSONL session logs.
 //!
-//! Every function takes the floo home directory explicitly rather than
+//! Every function takes the palisade home directory explicitly rather than
 //! reading it from the environment, so tests can point at a tempdir without
-//! process-global state. `floo_home()` is only called by the command layer.
+//! process-global state. `palisade_home()` is only called by the command layer.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -20,11 +20,33 @@ fn e(ctx: &str, err: impl std::fmt::Display) -> String {
     format!("{ctx}: {err}")
 }
 
-/// `~/.floo-network` — the session store, deliberately outside any target repo.
-pub fn floo_home() -> PathBuf {
+/// `~/.palisade-code` — the session store, deliberately outside any target repo.
+pub fn palisade_home() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".floo-network")
+        .join(".palisade-code")
+}
+
+/// Store directories this app has used under earlier names, newest first.
+const LEGACY_HOME_DIRS: [&str; 2] = [".sceilg-code", ".floo-network"];
+
+/// Moves a pre-rename store (`~/.sceilg-code`, `~/.floo-network`) to
+/// `~/.palisade-code` once, so a rename does not orphan existing projects,
+/// threads and session logs. A no-op once the new path exists — never merges.
+pub fn migrate_legacy_home(home: &Path) -> Res<()> {
+    let Some(parent) = home.parent() else {
+        return Ok(());
+    };
+    if home.exists() {
+        return Ok(());
+    }
+    for name in LEGACY_HOME_DIRS {
+        let legacy = parent.join(name);
+        if legacy.is_dir() {
+            return fs::rename(&legacy, home).map_err(|err| e("migrate legacy store", err));
+        }
+    }
+    Ok(())
 }
 
 fn now() -> String {
@@ -1388,6 +1410,47 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 
         assert!(!list_threads(home.path(), &project.hash).unwrap()[0].archived);
+    }
+
+    #[test]
+    fn legacy_home_moves_across_once_and_never_merges() {
+        let parent = tempfile::tempdir().unwrap();
+        let legacy = parent.path().join(".floo-network");
+        let current = parent.path().join(".palisade-code");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("projects.json"), "[]").unwrap();
+
+        migrate_legacy_home(&current).unwrap();
+        assert!(current.join("projects.json").exists());
+        assert!(!legacy.exists());
+
+        // A second run with both present leaves the live store alone.
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("projects.json"), "stale").unwrap();
+        migrate_legacy_home(&current).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(current.join("projects.json")).unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn the_newest_legacy_home_wins() {
+        let parent = tempfile::tempdir().unwrap();
+        let current = parent.path().join(".palisade-code");
+        for (name, body) in [(".floo-network", "oldest"), (".sceilg-code", "newest")] {
+            let dir = parent.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("projects.json"), body).unwrap();
+        }
+
+        migrate_legacy_home(&current).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(current.join("projects.json")).unwrap(),
+            "newest"
+        );
+        // The older store is left untouched rather than silently discarded.
+        assert!(parent.path().join(".floo-network").is_dir());
     }
 
     #[test]

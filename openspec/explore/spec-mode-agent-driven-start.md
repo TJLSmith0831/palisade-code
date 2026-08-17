@@ -64,8 +64,8 @@ Relevant existing specs/changes:
 
 ## D7: spec_type is framing context only — no different artifact structure
 
-- **Decision**: The spec_type (Feature/Bugfix/Other) is framing context for the agent's opening turn only. It does NOT change the OpenSpec artifact structure — Floo's grill flow always creates the same set (proposal.md, design.md, spec.md, tasks.md, decisions.md). There is no bugfix.md variant to wire up.
-- **Why**: Kiro differentiates Feature Specs (requirements.md) from Bugfix Specs (bugfix.md) at the file level, but Floo's grill flow is type-agnostic — the artifacts are the same regardless of whether the change is a feature or a bugfix. The spec_type just helps the agent ask better framing questions.
+- **Decision**: The spec_type (Feature/Bugfix/Other) is framing context for the agent's opening turn only. It does NOT change the OpenSpec artifact structure — Palisade's grill flow always creates the same set (proposal.md, design.md, spec.md, tasks.md, decisions.md). There is no bugfix.md variant to wire up.
+- **Why**: Kiro differentiates Feature Specs (requirements.md) from Bugfix Specs (bugfix.md) at the file level, but Palisade's grill flow is type-agnostic — the artifacts are the same regardless of whether the change is a feature or a bugfix. The spec_type just helps the agent ask better framing questions.
 - **Source**: codebase (openspec/changes/ structure, grill flow)
 
 ## D8: No-executor behavior is unchanged — framing menu shows, agent silently doesn't fire

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useResizable, type UseResizableOptions } from "../useResizable";
 
-const KEY = "floo:layout:test-hash:left";
+const KEY = "palisade:layout:test-hash:left";
 
 beforeEach(() => {
   localStorage.clear();
@@ -108,14 +108,14 @@ describe("useResizable", () => {
   });
 
   it("re-hydrates from localStorage when storageKey changes (project switch)", () => {
-    localStorage.setItem("floo:layout:proj-a:left", JSON.stringify({ size: 200, collapsed: false }));
-    localStorage.setItem("floo:layout:proj-b:left", JSON.stringify({ size: 350, collapsed: true }));
+    localStorage.setItem("palisade:layout:proj-a:left", JSON.stringify({ size: 200, collapsed: false }));
+    localStorage.setItem("palisade:layout:proj-b:left", JSON.stringify({ size: 350, collapsed: true }));
 
     const { result, rerender } = renderHook(
       (props: UseResizableOptions) => useResizable(props),
       {
         initialProps: {
-          storageKey: "floo:layout:proj-a:left",
+          storageKey: "palisade:layout:proj-a:left",
           defaultSize: 193,
           min: 160,
           max: 480,
@@ -126,7 +126,7 @@ describe("useResizable", () => {
     expect(result.current.size).toBe(200);
 
     rerender({
-      storageKey: "floo:layout:proj-b:left",
+      storageKey: "palisade:layout:proj-b:left",
       defaultSize: 193,
       min: 160,
       max: 480,

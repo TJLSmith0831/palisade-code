@@ -26,10 +26,10 @@ const DEBOUNCE_MS = 1250;
 export const PREFIX_BUDGET_CHARS = 1024; // 256 tokens * 4 chars/token
 export const SUFFIX_BUDGET_CHARS = 512; // 128 tokens * 4 chars/token
 
-export const COMPLETION_ENABLED_KEY = "floo:completionEnabled";
-export const COMPLETION_KEYBINDING_KEY = "floo:completionKeybinding";
+export const COMPLETION_ENABLED_KEY = "palisade:completionEnabled";
+export const COMPLETION_KEYBINDING_KEY = "palisade:completionKeybinding";
 export const COMPLETION_SETTINGS_CHANGED_EVENT =
-  "floo:completion-settings-changed";
+  "palisade:completion-settings-changed";
 
 export function loadCompletionSettings(): FimSettings {
   const enabled = localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false";

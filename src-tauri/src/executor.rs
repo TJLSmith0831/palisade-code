@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 // ------------------------------------------------------------- grill skills
 //
-// The four grill skills are baked into Floo as bundled resources so they
+// The four grill skills are baked into Palisade as bundled resources so they
 // work with every ACP agent without per-agent installation (D19). Each
 // skill's full SKILL.md is injected into the agent's prompt based on the
 // thread's mode — the agent receives the instructions as prompt text.
@@ -219,7 +219,7 @@ pub trait Sink: Send + Sync + 'static {
 
 /// One change, as the `openspec` CLI reports it. Task counts are the agent's
 /// own checkbox self-report and are labeled as such wherever shown — never
-/// aggregated by Floo into a claim that anything is complete (D11).
+/// aggregated by Palisade into a claim that anything is complete (D11).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpecChange {
@@ -270,7 +270,7 @@ pub fn parse_openspec_list(body: &str) -> Option<Vec<SpecChange>> {
         })
 }
 
-/// The full detail of one change, verbatim from the CLI. Floo renders this and
+/// The full detail of one change, verbatim from the CLI. Palisade renders this and
 /// writes none of it: the filesystem and `openspec` stay authoritative (D11).
 pub fn openspec_show(
     cache: &crate::openspec_cache::OpenSpecCache,
@@ -606,7 +606,7 @@ mod tests {
               "status": "complete"
             }
           ],
-          "root": { "path": "/Users/x/dev/floo-network", "source": "nearest" }
+          "root": { "path": "/Users/x/dev/palisade-code", "source": "nearest" }
         }"#;
         let changes = parse_openspec_list(captured).unwrap();
         assert_eq!(changes.len(), 2);

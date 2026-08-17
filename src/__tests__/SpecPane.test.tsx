@@ -56,7 +56,7 @@ describe("SpecPane", () => {
     expect(screen.getByText(/48\/71 tasks ticked/)).toHaveTextContent(
       /agent-reported/
     );
-    // openspec's own status is attributed, never presented as Floo's verdict.
+    // openspec's own status is attributed, never presented as Palisade's verdict.
     expect(screen.getByText(/openspec: in-progress/)).toBeDefined();
     expect(screen.queryByText(/^complete$/i)).toBeNull();
   });

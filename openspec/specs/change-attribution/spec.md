@@ -1,7 +1,7 @@
 # change-attribution Specification
 
 ## Purpose
-Gives Floo an evidence-based way to answer "what changed during this session" using git state recorded at session boundaries, labeling anything short of that evidence (agent-reported file-edit hints) as a hint rather than proof — including honestly reporting ambiguity when concurrent sessions make exact attribution impossible.
+Gives Palisade an evidence-based way to answer "what changed during this session" using git state recorded at session boundaries, labeling anything short of that evidence (agent-reported file-edit hints) as a hint rather than proof — including honestly reporting ambiguity when concurrent sessions make exact attribution impossible.
 ## Requirements
 ### Requirement: Git state recorded at session boundaries
 The system SHALL record the git `HEAD` commit and a working-tree status snapshot at both the start and end of a session.

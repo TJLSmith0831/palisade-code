@@ -56,7 +56,7 @@ export default function SessionList({
   const [query, setQuery] = useState("");
   const visible = useMemo(() => filterThreads(threads, query), [threads, query]);
 
-  // Group headers are the workspace name — Floo already has a workspace
+  // Group headers are the workspace name — Palisade already has a workspace
   // picker, so this is not an invented "Spaces" concept.
   const groups = useMemo(() => {
     const byHash = new Map<string, ThreadMeta[]>();

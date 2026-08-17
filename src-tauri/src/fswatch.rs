@@ -1,4 +1,4 @@
-//! Watches the active project root for changes Floo didn't make itself.
+//! Watches the active project root for changes Palisade didn't make itself.
 //!
 //! Mirrors `integrations::Watcher`'s shape — `spawn` returns `Self` rather
 //! than `Res<Self>` (a failed spawn reports through `on_crash` instead of
@@ -46,7 +46,7 @@ pub struct FsWatcher {
     /// at spawn time, so the app keeps working without reconciliation rather
     /// than failing the project switch.
     debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
-    /// Paths Floo wrote itself, with when. Shared with the debouncer thread
+    /// Paths Palisade wrote itself, with when. Shared with the debouncer thread
     /// so a save doesn't bounce straight back as an external change.
     self_writes: SelfWrites,
 }
@@ -135,7 +135,7 @@ impl FsWatcher {
         Self { debouncer: Some(debouncer), self_writes }
     }
 
-    /// Records that Floo just wrote `path`, so the resulting event doesn't
+    /// Records that Palisade just wrote `path`, so the resulting event doesn't
     /// come back as an external change. Callers pass the resolved absolute
     /// path; it's canonicalized here to match what FSEvents will report.
     pub fn note_self_write(&self, path: &Path) {
@@ -173,7 +173,7 @@ fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
     Some(relative.to_string_lossy().to_string())
 }
 
-/// Whether `path` was written by Floo within the suppression window. The
+/// Whether `path` was written by Palisade within the suppression window. The
 /// entry is consumed on match so a genuine external write to the same path a
 /// moment later still reports.
 fn was_self_write(writes: &SelfWrites, path: &Path) -> bool {
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn a_missing_project_folder_says_which_folder_and_what_to_do() {
         let (tx, rx) = mpsc::channel::<String>();
-        let gone = std::path::PathBuf::from("/tmp/floo-does-not-exist-abc123");
+        let gone = std::path::PathBuf::from("/tmp/palisade-does-not-exist-abc123");
         let _watcher = FsWatcher::spawn(
             gone.clone(),
             move |_| {},
@@ -205,7 +205,7 @@ mod tests {
         );
 
         let message = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-        assert!(message.contains("floo-does-not-exist-abc123"), "{message}");
+        assert!(message.contains("palisade-does-not-exist-abc123"), "{message}");
         assert!(message.contains("folder is missing"), "{message}");
         // Bare io text is not something a user can act on.
         assert!(!message.contains("os error"), "{message}");

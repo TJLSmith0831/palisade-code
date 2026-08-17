@@ -1,7 +1,7 @@
 # graphify-integration Specification
 
 ## Purpose
-Keeps floo-network's code map current by correctly invoking the real
+Keeps palisade-code's code map current by correctly invoking the real
 `graphify` CLI and continuously refreshing it in the background, instead
 of requiring a manual run with an argument shape that doesn't match the
 real tool.

@@ -6,7 +6,7 @@ use tauri::Manager;
 
 /// Read-only. Every one of these asks the `openspec` CLI and renders what it
 /// says; nothing here writes a spec file, and nothing here writes to
-/// `~/.floo-network` (task 4.5). Floo's only durable spec state stays the one
+/// `~/.palisade-code` (task 4.5). Palisade's only durable spec state stays the one
 /// reference string on `ThreadMeta`.
 #[tauri::command]
 pub async fn list_spec_changes(app: tauri::AppHandle, project_hash: String) -> Res<Vec<executor::SpecChange>> {
@@ -61,7 +61,7 @@ pub async fn set_spec_change(
     name: Option<String>,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        store::set_open_spec_change(&store::floo_home(), &project_hash, &thread_id, name.as_deref())
+        store::set_open_spec_change(&store::palisade_home(), &project_hash, &thread_id, name.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?

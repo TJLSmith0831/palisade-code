@@ -1,7 +1,7 @@
 //! Grill skill injection (D19, D20).
 //!
 //! The four grill skills (explore, propose, apply, archive) are baked into
-//! Floo as bundled resources. Floo injects the relevant skill's instructions
+//! Palisade as bundled resources. Palisade injects the relevant skill's instructions
 //! into every `session/prompt` based on the thread's mode. The agent receives
 //! skill content as prompt text — no per-agent skill installation required.
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-08-07T13:05:00Z",
-  "title": "Design System: Floo Network",
+  "title": "Design System: Palisade Code",
   "extensions": {
     "colorMeta": {
       "bg": {
@@ -361,7 +361,7 @@
   ],
   "narrative": {
     "northStar": "The Dragon Fire Workbench",
-    "overview": "Floo Network is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project — file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color — Dragon Fire Green — cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.\n\nThis is the same visual language the product has carried since its chat-console days (--accent, --bg, --surface-warm are unchanged), retargeted at an IDE shell: a three-column workspace (resizable file explorer, tabbed editor/chat/diff center, resizable threads/codebase-map/terminal sidebar) replaced the earlier fixed-width chat cockpit as the product moved from \"watch the agent talk\" to \"work alongside the agent in the same files.\"",
+    "overview": "Palisade Code is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project — file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color — Dragon Fire Green — cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.\n\nThis is the same visual language the product has carried since its chat-console days (--accent, --bg, --surface-warm are unchanged), retargeted at an IDE shell: a three-column workspace (resizable file explorer, tabbed editor/chat/diff center, resizable threads/codebase-map/terminal sidebar) replaced the earlier fixed-width chat cockpit as the product moved from \"watch the agent talk\" to \"work alongside the agent in the same files.\"",
     "keyCharacteristics": [
       "One-ink dark field, native chrome. A near-black background with three charcoal surface steps (surface, surface-warm, editor-bg); window traffic lights are native macOS controls, not drawn in CSS. Light mode exists as a full token-for-token mirror.",
       "Scarce glowing accent. Dragon Fire Green marks the active tree row, active tab underline, active thread rail, diff additions, focus rings, and the codebase-map's live node — never decoration.",

@@ -25,7 +25,7 @@ import type { ModelState, Preflight, Project } from "./api";
 // is nothing for either preset to arrange (v1 scope note).
 //
 // Deliberately absent, per PRODUCT.md: any account/sign-in UI, tier or plan
-// badge, or "Pro" label. Floo has no bundled billing; inventing one on the
+// badge, or "Pro" label. Palisade has no bundled billing; inventing one on the
 // first screen a new user sees would misrepresent the product.
 
 type Models = ModelState | "loading" | { error: string } | undefined;
@@ -89,7 +89,7 @@ export default function OnboardingScreen({
       )
     : modelList;
 
-  // Floo is project-scoped (PRODUCT.md): there is no directory-less
+  // Palisade is project-scoped (PRODUCT.md): there is no directory-less
   // execution path, so a message with nowhere to run prompts for a
   // directory rather than being silently accepted.
   const submit = () => {
@@ -107,7 +107,7 @@ export default function OnboardingScreen({
           Drive your own coding agent, spec-first
         </h2>
         <p className="ds-onboarding-pitch">
-          Floo orchestrates Claude Code or Codex through a Socratic
+          Palisade orchestrates Claude Code or Codex through a Socratic
           spec-then-build cycle — no bundled model, no per-usage billing. Open a
           project to get started.
         </p>
@@ -271,7 +271,7 @@ export default function OnboardingScreen({
             <>
               <span className="ds-onboarding-detect-dot bad" />
               No coding agent found on this machine — install Claude Code or
-              Codex, then reopen Floo.
+              Codex, then reopen Palisade.
             </>
           )}
         </div>
@@ -285,7 +285,7 @@ export default function OnboardingScreen({
             <IconFolder size={19} />
             <span className="ds-onboarding-card-title">Open Project</span>
             <span className="ds-onboarding-card-body">
-              Point Floo at a local folder. Everything stays scoped to that
+              Point Palisade at a local folder. Everything stays scoped to that
               project root.
             </span>
           </button>
@@ -358,7 +358,7 @@ export default function OnboardingScreen({
         )}
 
         <p className="ds-onboarding-foot">
-          No account, no sign-in — Floo drives the Claude Code or Codex install
+          No account, no sign-in — Palisade drives the Claude Code or Codex install
           already on this machine, using your existing subscription.
         </p>
       </div>

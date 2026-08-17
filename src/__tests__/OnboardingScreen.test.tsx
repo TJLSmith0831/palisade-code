@@ -103,7 +103,7 @@ describe("OnboardingScreen model picker", () => {
 
 describe("OnboardingScreen recent projects", () => {
   const projects = [
-    { hash: "h1", displayName: "floo-network", root: "/w/floo" },
+    { hash: "h1", displayName: "palisade-code", root: "/w/palisade" },
     { hash: "h2", displayName: "other", root: "/w/other" },
   ] as unknown as Project[];
 

@@ -1,7 +1,7 @@
 //! Preflight and executor resolution (D16, D18).
 //!
 //! The new preflight loads the cached ACP registry, checks PATH availability,
-//! and returns a list of available agents. Floo-level `openspec`/`graphify`
+//! and returns a list of available agents. Palisade-level `openspec`/`graphify`
 //! checks remain. Per-agent skill/plugin checks are dropped.
 //!
 //! `executorOverride` survives as a per-project default, resolved against
@@ -47,9 +47,9 @@ impl Preflight {
     }
 }
 
-/// Run preflight: discover available ACP agents and check Floo-level tools.
-pub fn preflight(floo_home: &Path, find_on_path: &dyn Fn(&str) -> Option<PathBuf>) -> Preflight {
-    let registry_agents = acp_registry::discover_agents(floo_home);
+/// Run preflight: discover available ACP agents and check Palisade-level tools.
+pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<PathBuf>) -> Preflight {
+    let registry_agents = acp_registry::discover_agents(palisade_home);
     let home = crate::executor::home();
     let available = acp_registry::resolve_available(&registry_agents, find_on_path, &|pkg| {
         acp_registry::npx_package_cached(&home, pkg)

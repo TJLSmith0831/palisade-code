@@ -1,14 +1,14 @@
 # store-integrity Specification
 
 ## Purpose
-Fixes confirmed live data-integrity defects in the append-only store — test writes leaking into the real `~/.floo-network`, an unreconciled project index, an O(n²) message-append path, and unbounded persisted payloads — so the structural changes in the rest of this change land on a store that behaves correctly.
+Fixes confirmed live data-integrity defects in the append-only store — test writes leaking into the real `~/.palisade-code`, an unreconciled project index, an O(n²) message-append path, and unbounded persisted payloads — so the structural changes in the rest of this change land on a store that behaves correctly.
 ## Requirements
-### Requirement: Sessions carry their own `floo_home`
+### Requirement: Sessions carry their own `palisade_home`
 The system SHALL resolve the store home directory from the `Session` that owns a write, not from a global lookup, so that a session started against a non-default home (e.g. a test fixture directory) never writes outside it.
 
 #### Scenario: Codex session with a tempdir home
-- **WHEN** a Codex session is started with `floo_home` pointing at a tempdir
-- **THEN** every write performed during that session's turns (including the per-turn spawn path) lands only inside that tempdir, and the real `~/.floo-network` is untouched
+- **WHEN** a Codex session is started with `palisade_home` pointing at a tempdir
+- **THEN** every write performed during that session's turns (including the per-turn spawn path) lands only inside that tempdir, and the real `~/.palisade-code` is untouched
 
 ### Requirement: Project index reconciliation
 The system SHALL reconcile `projects.json` against the `projects/` directory on listing, adopting any directory containing a valid `project.json` that is missing from the index.
@@ -37,5 +37,5 @@ The system SHALL cap the persisted size of `FileEdit.before`, `FileEdit.after`, 
 
 #### Scenario: Test suite does not grow the real store
 - **WHEN** the Rust test suite (`cargo test`) runs to completion
-- **THEN** the count of directories under the real `~/.floo-network/projects/` is unchanged before and after the run
+- **THEN** the count of directories under the real `~/.palisade-code/projects/` is unchanged before and after the run
 

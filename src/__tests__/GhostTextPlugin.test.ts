@@ -406,14 +406,14 @@ describe("GhostTextPlugin", () => {
 
 describe("accepting with Tab (Cursor parity)", () => {
   it("defaults to Tab, the key every other editor uses for this", () => {
-    localStorage.removeItem("floo:completionKeybinding");
+    localStorage.removeItem("palisade:completionKeybinding");
     expect(loadCompletionSettings().acceptKeybinding).toBe("Tab");
   });
 
   it("still honours an explicitly chosen keybinding", () => {
-    localStorage.setItem("floo:completionKeybinding", "Alt-Tab");
+    localStorage.setItem("palisade:completionKeybinding", "Alt-Tab");
     expect(loadCompletionSettings().acceptKeybinding).toBe("Alt-Tab");
-    localStorage.removeItem("floo:completionKeybinding");
+    localStorage.removeItem("palisade:completionKeybinding");
   });
 
   it("declines Tab when nothing is suggested, so indenting still works", () => {

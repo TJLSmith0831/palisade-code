@@ -1388,11 +1388,11 @@ const DEFAULT_PROJECT_SETTINGS = `{
 `;
 const PROJECT_SETTINGS_FILE = ".project-settings.json";
 
-const lastThreadKey = (hash: string) => `floo:lastThread:${hash}`;
-const SHOW_THINKING_KEY = "floo:showThinking";
-const DEFAULT_BYPASS_KEY = "floo:default-bypass";
+const lastThreadKey = (hash: string) => `palisade:lastThread:${hash}`;
+const SHOW_THINKING_KEY = "palisade:showThinking";
+const DEFAULT_BYPASS_KEY = "palisade:default-bypass";
 const threadPrefsKey = (hash: string, threadId: string) =>
-  `floo:thread-prefs:${hash}:${threadId}`;
+  `palisade:thread-prefs:${hash}:${threadId}`;
 
 type ThreadPrefs = { bypass: boolean };
 
@@ -2032,7 +2032,7 @@ export default function App() {
     ]);
   const fail = (err: unknown) => banner(describeError(err), "error");
   // Advisory, not a failure: another thread is running here, an executor id
-  // in settings is unknown and Floo fell back. Routing these through `fail`
+  // in settings is unknown and Palisade fell back. Routing these through `fail`
   // put "Couldn't complete that" on an action that completed fine.
   const warn = (message: string) => banner(message, "warn");
   const dismissError = (id: string) =>
@@ -2683,7 +2683,7 @@ export default function App() {
   // directly to disk, a branch switch, another editor. Kept as its own
   // effect (rather than folded into the executor stream above) because the
   // executor's own FileEdit events only describe what the agent *says* it
-  // wrote, and say nothing about git or anything outside Floo.
+  // wrote, and say nothing about git or anything outside Palisade.
   useEffect(() => {
     const changed = listen<api.FsChanged>("fs-changed", ({ payload }) => {
       // A late event from the project the user just left would otherwise
@@ -3606,7 +3606,7 @@ export default function App() {
           data-testid="top-chrome"
           onMouseDown={onTitlebarMouseDown}
         >
-          <h1 className="sr-only">Floo Network</h1>
+          <h1 className="sr-only">Palisade Code</h1>
           {/* Amendment 8: no shell switch before a project is open — there
               is nothing for either preset to arrange yet. */}
           {project && (

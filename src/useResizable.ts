@@ -45,7 +45,7 @@ export function useResizable(options: UseResizableOptions): UseResizableResult {
   const [state, setState] = useState<Persisted>(() => load(storageKey, defaultSize, defaultCollapsed));
   const drag = useRef<{ start: number; startSize: number } | null>(null);
 
-  // storageKey changes when the active project changes (`floo:layout:<hash>:...`).
+  // storageKey changes when the active project changes (`palisade:layout:<hash>:...`).
   // Reset synchronously during render (not in a useEffect) so a project switch
   // can't race an in-flight drag/toggle that lands between commit and effect.
   const prevKey = useRef(storageKey);

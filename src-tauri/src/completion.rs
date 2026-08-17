@@ -494,11 +494,11 @@ fn wait_for_health(port: u16, timeout: Duration) -> Res<()> {
     Err(format!("completion sidecar did not become healthy on port {port}"))
 }
 
-/// Persists the public completion telemetry counters to `~/.floo-network/completion-telemetry.json`.
+/// Persists the public completion telemetry counters to `~/.palisade-code/completion-telemetry.json`.
 pub fn flush_telemetry(telemetry: &CompletionTelemetry) -> Res<()> {
-    let home = crate::store::floo_home();
+    let home = crate::store::palisade_home();
     std::fs::create_dir_all(&home).map_err(|err| {
-        format!("failed to create floo home dir {}: {err}", home.display())
+        format!("failed to create palisade home dir {}: {err}", home.display())
     })?;
     let path = home.join("completion-telemetry.json");
     let json = serde_json::to_string_pretty(telemetry)

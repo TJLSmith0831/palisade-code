@@ -1,5 +1,5 @@
 ---
-name: FlooNetwork
+name: PalisadeCode
 description: Cross-machine coding-agent IDE — file tree, CodeMirror editor, git diff, terminal, and a live codebase-map graph around an agent chat/diff console.
 colors:
   bg: "oklch(18% 0.005 250)"
@@ -95,13 +95,13 @@ components:
     textColor: "{colors.danger}"
 ---
 
-# Design System: Floo Network
+# Design System: Palisade Code
 
 ## Overview
 
 **Creative North Star: "The Dragon Fire Workbench"**
 
-Floo Network is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project — file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color — Dragon Fire Green — cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.
+Palisade Code is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project — file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color — Dragon Fire Green — cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.
 
 This is the same visual language the product has carried since its chat-console days (`--accent`, `--bg`, `--surface-warm` are unchanged), retargeted at an IDE shell: a three-column workspace (resizable file explorer · tabbed editor/chat/diff center · resizable threads/codebase-map/terminal sidebar) replaced the earlier fixed-width chat cockpit as the product moved from "watch the agent talk" to "work alongside the agent in the same files."
 
@@ -151,7 +151,7 @@ A dark neutral field with one glowing green accent and three semantic status hue
 **Display — 21px, one step, one place.** The first-run screen's headline
 ("Drive your own coding agent, spec-first") is the only type in the product
 above the 13px body step. It exists because that screen is the one moment
-Floo has to say what it is to someone who has never seen it; every other
+Palisade has to say what it is to someone who has never seen it; every other
 surface is dense working chrome and stays on the body/mono steps. Adding a
 second display size means asking what the first one was for.
 

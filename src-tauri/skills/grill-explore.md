@@ -68,7 +68,7 @@ than appending a contradiction.
 
 When the exploration feels change-shaped — scope, approach, and non-goals
 have entries — say so and emit the marker `[READY_TO_PROPOSE]` on its own
-line at the end of your final message. Floo strips the marker from the
+line at the end of your final message. Palisade strips the marker from the
 visible text and auto-fires `grill-propose`; the user does not need to click
 a button. If the user isn't ready, that's fine; omit the marker and the
 notes file waits for the next session either way.

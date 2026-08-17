@@ -40,8 +40,8 @@ fn raw_command(raw_input: Option<&serde_json::Value>) -> String {
         .to_string()
 }
 
-/// Translate a wire-level ACP `session/update` notification into Floo's
-/// `AcpUpdate` vocabulary. Returns `None` for updates Floo ignores
+/// Translate a wire-level ACP `session/update` notification into Palisade's
+/// `AcpUpdate` vocabulary. Returns `None` for updates Palisade ignores
 /// (user echoes, mode/command/info changes).
 pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
     match update {

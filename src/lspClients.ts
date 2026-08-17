@@ -29,7 +29,7 @@ const clients = new Map<string, Entry>();
 /** Every diagnostic currently published, keyed by file URI. */
 const diagnostics = new Map<string, Diagnostic[]>();
 
-export const DIAGNOSTICS_CHANGED = "floo:lsp-diagnostics";
+export const DIAGNOSTICS_CHANGED = "palisade:lsp-diagnostics";
 
 const SEVERITY: Record<number, Diagnostic["severity"]> = {
   1: "error",

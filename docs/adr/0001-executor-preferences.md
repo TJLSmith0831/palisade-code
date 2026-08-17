@@ -1,6 +1,6 @@
 # Thread-level executor model and bypass preferences
 
-Floo's model and bypass controls began as client-side stored preferences with no effect on the executor. We decided to wire them to the next new session's argv, move the controls to the thread/composer level, and let each thread override a global default. A changed preference only affects the next new session; live sessions keep their original flags so an in-flight turn is not handed off to a different model or permission level. The new UI lives in the active thread's composer, similar to Devin Desktop's model and bypass controls.
+Palisade's model and bypass controls began as client-side stored preferences with no effect on the executor. We decided to wire them to the next new session's argv, move the controls to the thread/composer level, and let each thread override a global default. A changed preference only affects the next new session; live sessions keep their original flags so an in-flight turn is not handed off to a different model or permission level. The new UI lives in the active thread's composer, similar to Devin Desktop's model and bypass controls.
 
 ## Considered Options
 

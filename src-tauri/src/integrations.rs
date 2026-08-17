@@ -1,6 +1,6 @@
 //! Graphify code maps.
 //!
-//! The executor reaches the graph directly as MCP tools (D9/D21) — Floo
+//! The executor reaches the graph directly as MCP tools (D9/D21) — Palisade
 //! idempotently registers Graphify's `graphify-mcp` server with the detected
 //! executor on project load (`ensure_claude_mcp`/`ensure_codex_mcp`), so the
 //! agent queries it mid-turn instead of relying on a pre-injected summary.
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn codex_registration_never_overrides_an_existing_trust_decision() {
         // A project the user (or Codex itself) already marked untrusted must
-        // stay untrusted — Floo only ever fills in a *missing* trust entry.
+        // stay untrusted — Palisade only ever fills in a *missing* trust entry.
         let project = tempfile::tempdir().unwrap();
         let codex_home = tempfile::tempdir().unwrap();
         let key = project.path().to_string_lossy().to_string();

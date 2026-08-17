@@ -138,7 +138,7 @@ The system SHALL provide inline fill-in-the-middle (FIM) code completions using 
 
 ### Requirement: Local completion telemetry
 
-The system SHALL record local, privacy-preserving telemetry about inline completion usage: counters for shown/accepted/dismissed/typed-past events and p50/p99 TTFT percentiles. Telemetry SHALL be persisted to `~/.floo-network/completion-telemetry.json` and SHALL NOT include source code or completion content.
+The system SHALL record local, privacy-preserving telemetry about inline completion usage: counters for shown/accepted/dismissed/typed-past events and p50/p99 TTFT percentiles. Telemetry SHALL be persisted to `~/.palisade-code/completion-telemetry.json` and SHALL NOT include source code or completion content.
 
 #### Scenario: Telemetry counters increment
 
@@ -153,7 +153,7 @@ The system SHALL record local, privacy-preserving telemetry about inline complet
 #### Scenario: Telemetry persists to disk
 
 - **WHEN** telemetry is flushed
-- **THEN** the public telemetry counters are written to `~/.floo-network/completion-telemetry.json`
+- **THEN** the public telemetry counters are written to `~/.palisade-code/completion-telemetry.json`
 
 ### Requirement: Large file rendering
 

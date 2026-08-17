@@ -2,8 +2,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useMantineColorScheme } from "@mantine/core";
 import { useResizable } from "../useResizable";
 
-export const THEME_KEY = "floo:theme";
-export const TERMINAL_PLACEMENT_KEY = "floo:terminalPlacement";
+export const THEME_KEY = "palisade:theme";
+export const TERMINAL_PLACEMENT_KEY = "palisade:terminalPlacement";
 
 export type TerminalPlacement = "bottom" | "sidebar";
 export type Theme = "auto" | "light" | "dark";
@@ -106,14 +106,14 @@ export function useAppShell(projectHash: string | undefined) {
   );
 
   const leftRail = useResizable({
-    storageKey: `floo:layout:${layoutHash}:left`,
+    storageKey: `palisade:layout:${layoutHash}:left`,
     defaultSize: 193,
     min: 160,
     max: 420,
     axis: "horizontal",
   });
   const rightPanel = useResizable({
-    storageKey: `floo:layout:${layoutHash}:right`,
+    storageKey: `palisade:layout:${layoutHash}:right`,
     defaultSize: 300,
     min: 260,
     max: 820,
@@ -122,7 +122,7 @@ export function useAppShell(projectHash: string | undefined) {
     defaultCollapsed: false,
   });
   const terminalPanel = useResizable({
-    storageKey: `floo:layout:${layoutHash}:terminal`,
+    storageKey: `palisade:layout:${layoutHash}:terminal`,
     defaultSize: 220,
     min: 120,
     max: 560,
@@ -131,7 +131,7 @@ export function useAppShell(projectHash: string | undefined) {
     defaultCollapsed: true,
   });
   const vibeChat = useResizable({
-    storageKey: `floo:layout:${layoutHash}:vibe-chat`,
+    storageKey: `palisade:layout:${layoutHash}:vibe-chat`,
     defaultSize: 520,
     min: 380,
     max: 900,

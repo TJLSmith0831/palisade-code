@@ -15,14 +15,14 @@ export {
 };
 
 // Personal display preferences — localStorage, not .project-settings.json.
-export const ACCENT_HUE_KEY = "floo:accentHue";
-export const EDITOR_FONT_KEY = "floo:editorFont";
-export const EDITOR_FONT_SIZE_KEY = "floo:editorFontSize";
+export const ACCENT_HUE_KEY = "palisade:accentHue";
+export const EDITOR_FONT_KEY = "palisade:editorFont";
+export const EDITOR_FONT_SIZE_KEY = "palisade:editorFontSize";
 
-export const EDITOR_FONT_CHANGED_EVENT = "floo:editor-font-changed";
+export const EDITOR_FONT_CHANGED_EVENT = "palisade:editor-font-changed";
 
-export const EDITOR_WRAP_KEY = "floo:editorWrap";
-export const EDITOR_WRAP_CHANGED_EVENT = "floo:editor-wrap-changed";
+export const EDITOR_WRAP_KEY = "palisade:editorWrap";
+export const EDITOR_WRAP_CHANGED_EVENT = "palisade:editor-wrap-changed";
 
 export const PROJECT_SETTINGS_FILE = ".project-settings.json";
 
@@ -1042,6 +1042,13 @@ export default function SettingsPanel({
                 }}
               >
                 Show ghost-text FIM completions while typing
+              </div>
+              {/* The bundled local model, named as Palisade ships it. The .gguf
+                  on disk keeps its upstream Qwen filename so the base model
+                  stays traceable — this is the product-facing name only. */}
+              <div style={{ marginTop: 3, color: dim, fontSize: 11 }}>
+                Model: palisade-flash-v1 (runs locally, nothing leaves the
+                machine)
               </div>
             </div>
 

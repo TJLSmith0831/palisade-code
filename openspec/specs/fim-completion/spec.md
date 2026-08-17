@@ -79,7 +79,7 @@ The system SHALL spawn a local llama-server sidecar process at app startup, poin
 
 #### Scenario: Sidecar spawns at app startup
 
-- **WHEN** the Floo Network app starts
+- **WHEN** the Palisade Code app starts
 - **THEN** the system spawns the llama-server sidecar process with the bundled model and Metal acceleration enabled
 
 #### Scenario: Sidecar health check
@@ -94,7 +94,7 @@ The system SHALL spawn a local llama-server sidecar process at app startup, poin
 
 #### Scenario: Sidecar graceful shutdown
 
-- **WHEN** the Floo Network app quits
+- **WHEN** the Palisade Code app quits
 - **THEN** the system terminates the llama-server sidecar process gracefully
 
 ### Requirement: Bundled model and inference engine
@@ -141,7 +141,7 @@ The system SHALL allow users to configure the autocomplete accept keybinding via
 
 ### Requirement: Completion telemetry
 
-The system SHALL track completion acceptance metrics (shown, accepted, dismissed, typed-past) and TTFT percentiles (p50, p99), storing the data locally in `~/.floo-network/completion-telemetry.json`.
+The system SHALL track completion acceptance metrics (shown, accepted, dismissed, typed-past) and TTFT percentiles (p50, p99), storing the data locally in `~/.palisade-code/completion-telemetry.json`.
 
 #### Scenario: Record completion shown
 
@@ -203,7 +203,7 @@ The system SHALL disable completion silently and log an error if the bundled mod
 - **D22** — Settings UI has enable/disable toggle only; no model path configuration (bundled, not user-configurable). (2026-08-12, socrata-fim-completion)
 - **D23** — Missing bundled resources → disable completion silently, log error, one-time toast per session. (2026-08-12, socrata-fim-completion)
 - **D24** — llama.cpp over mistral.rs: faster on Metal (736-1532 T/s vs 606-1116), 10x smaller binary (10MB vs 1GB), validated FIM. (2026-08-12, socrata-fim-completion)
-- **D25** — Telemetry: acceptance rate (shown/accepted/dismissed/typed-past) and TTFT p50/p99; local storage in `~/.floo-network/completion-telemetry.json`. (2026-08-12, socrata-fim-completion)
+- **D25** — Telemetry: acceptance rate (shown/accepted/dismissed/typed-past) and TTFT p50/p99; local storage in `~/.palisade-code/completion-telemetry.json`. (2026-08-12, socrata-fim-completion)
 - **D26** — code-editor spec updated to reflect FIM implementation (fulfills the "future FIM model" seam requirement). (2026-08-12, socrata-fim-completion)
 - **D27** — Implemented now because model is validated (67ms TTFT), performance targets met, distribution is urgent. (2026-08-12, socrata-fim-completion)
 - **D28** — Primary beneficiary is the user (dogfooding as main IDE); secondary are other users receiving the packaged app. (2026-08-12, socrata-fim-completion)

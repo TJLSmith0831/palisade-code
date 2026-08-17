@@ -1,6 +1,6 @@
 # Socrata-v1-Flash FIM Completion Integration
 
-**Topic:** Integrate socrata-v1-flash model for AI-powered autocompletion in Floo Network
+**Topic:** Integrate socrata-v1-flash model for AI-powered autocompletion in Palisade Code
 **Date:** 2026-08-12
 **Status:** Exploration started
 
@@ -124,7 +124,7 @@ Existing research in RESEARCH.md covers model assessment, training data, inferen
 ## D16: Distribution requirement - model bundling
 
 - **Decision**: Model must be bundled with the app for distribution, not stored in user-writable locations
-- **Why**: User wants to package Floo Network for other users; Downloads or home directory locations are user-deletable. Need model embedded in app bundle or sidecar.
+- **Why**: User wants to package Palisade Code for other users; Downloads or home directory locations are user-deletable. Need model embedded in app bundle or sidecar.
 - **Source**: user
 
 ## D17: Tauri resources feature for model bundling
@@ -169,7 +169,7 @@ Existing research in RESEARCH.md covers model assessment, training data, inferen
 
 ## D25: Telemetry scope
 
-- **Decision**: Track acceptance rate (shown/accepted/dismissed/typed-past) and TTFT p50/p99; store locally in `~/.floo-network/completion-telemetry.json`
+- **Decision**: Track acceptance rate (shown/accepted/dismissed/typed-past) and TTFT p50/p99; store locally in `~/.palisade-code/completion-telemetry.json`
 - **Why**: RESEARCH.md recommends acceptance metrics to tune context budgets and debounce; local storage preserves privacy
 - **Source**: RESEARCH.md Phase 5 tuning section
 

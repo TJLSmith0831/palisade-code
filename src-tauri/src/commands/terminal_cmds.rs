@@ -23,7 +23,7 @@ pub async fn terminal_spawn(
             let existing = harness.terminal.lock().unwrap();
             match existing.as_ref() {
                 Some((hash, _)) if hash == &project_hash => return Ok(None),
-                Some((hash, _)) => store::list_projects(&store::floo_home())
+                Some((hash, _)) => store::list_projects(&store::palisade_home())
                     .ok()
                     .and_then(|projects| {
                         projects

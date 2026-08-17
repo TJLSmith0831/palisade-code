@@ -1,7 +1,7 @@
 # verification Specification
 
 ## Purpose
-Gives Floo a mechanism to run project-defined verification commands itself and persist their result, so that "what has been tested" is answered with an observed exit code rather than an agent's self-report.
+Gives Palisade a mechanism to run project-defined verification commands itself and persist their result, so that "what has been tested" is answered with an observed exit code rather than an agent's self-report.
 ## Requirements
 ### Requirement: Project-configured verify commands
 The system SHALL support a `verify` map in `.project-settings.json`, mapping a name to a shell command, following the same schema pattern (`#[serde(default)]`) as the existing `formatOnSave` map.
@@ -14,7 +14,7 @@ The system SHALL support a `verify` map in `.project-settings.json`, mapping a n
 - **WHEN** `.project-settings.json` has no `verify` key
 - **THEN** the project has no verify commands and the settings file still loads normally
 
-### Requirement: Floo runs verification and persists the result
+### Requirement: Palisade runs verification and persists the result
 The system SHALL execute a verify command itself (shell, project root as cwd, capturing stdout/stderr and exit status) and persist a record of the run, rather than only displaying the command for the user or agent to run.
 
 #### Scenario: Passing command

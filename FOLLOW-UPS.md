@@ -1,4 +1,4 @@
-# Floo Network — follow-ups
+# Palisade Code — follow-ups
 
 Deferred work, deliberately not done in the day-23 build. Each entry says what
 is missing, why it was left, and what closing it involves.
@@ -109,4 +109,4 @@ Separately, not a bug but worth knowing: live-verified against the real
 in both prompts tried — only an `estimated_tokens` counter, no readable
 text. The "show thinking" toggle (D19) is wired correctly, but may often
 have nothing to display in practice; this appears to be how the CLI
-streams reasoning today, not a floo-network defect.
+streams reasoning today, not a palisade-code defect.

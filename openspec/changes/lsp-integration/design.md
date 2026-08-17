@@ -1,20 +1,20 @@
 ## Context
 
-Floo's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM completion. The backend already has process management patterns (executor, terminal, Graphify watcher) that can be extended for LSP servers. The frontend uses Tauri IPC for Rust communication and has existing WebSocket infrastructure via the Tauri MCP bridge pattern.
+Palisade's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM completion. The backend already has process management patterns (executor, terminal, Graphify watcher) that can be extended for LSP servers. The frontend uses Tauri IPC for Rust communication and has existing WebSocket infrastructure via the Tauri MCP bridge pattern.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Provide semantic editor features (go-to-definition, hover tooltips, diagnostics, semantic autocomplete) across 20+ programming languages
 - Auto-detect LSP servers from PATH with zero configuration for normal users
-- Maintain Floo's lightweight approach - no LSP server installation management
+- Maintain Palisade's lightweight approach - no LSP server installation management
 - Graceful degradation when LSP servers are missing or crash
 - Fast language switching by keeping servers running per language per project
 
 **Non-Goals:**
 - Debugger protocol (DAP) integration - traditional debugging is out of scope (D6)
-- LSP server installation/management UI - users install servers, Floo detects them (D6)
-- Full extension ecosystem - Floo is an agent harness, not a general-purpose IDE platform (D6)
+- LSP server installation/management UI - users install servers, Palisade detects them (D6)
+- Full extension ecosystem - Palisade is an agent harness, not a general-purpose IDE platform (D6)
 - Workspace-level multi-root LSP support - single project scope for MVP (D10)
 - Performance optimization beyond basic functionality (D10)
 
@@ -28,13 +28,13 @@ Floo's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM
 
 **Alternatives considered:**
 - Custom LSP client implementation: Rejected due to complexity and maintenance burden
-- Monaco Editor with its LSP client: Rejected because Floo already uses CodeMirror 6
+- Monaco Editor with its LSP client: Rejected because Palisade already uses CodeMirror 6
 
 ### LSP Server Management: Rust Backend with WebSocket Bridge (D3, D12)
 
 **Decision:** Rust backend manages LSP server processes via stdio transport, frontend uses Tauri WebSocket plugin for communication.
 
-**Rationale:** Floo already has Rust process management patterns (executor, terminal, Graphify watcher). Managing LSP servers in Rust gives proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security. The Tauri WebSocket plugin provides battle-tested WebSocket handling.
+**Rationale:** Palisade already has Rust process management patterns (executor, terminal, Graphify watcher). Managing LSP servers in Rust gives proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security. The Tauri WebSocket plugin provides battle-tested WebSocket handling.
 
 **Alternatives considered:**
 - Frontend-managed LSP servers via WebAssembly: Rejected because it limits us to WASM-compiled language servers, excluding most mature LSP servers
@@ -53,12 +53,12 @@ Floo's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM
 
 **Decision:** Auto-detect LSP servers from PATH by default (no configuration required), optional overrides in `.project-settings.json` only for custom paths or disabling specific languages.
 
-**Rationale:** Follows Floo's executor detection pattern - user installs the language server, Floo finds it. This avoids the painful LSP setup experience in other editors. Configuration only needed for edge cases (non-standard install paths, disabling LSP for specific languages).
+**Rationale:** Follows Palisade's executor detection pattern - user installs the language server, Palisade finds it. This avoids the painful LSP setup experience in other editors. Configuration only needed for edge cases (non-standard install paths, disabling LSP for specific languages).
 
 **Data shape:** `HashMap<String, LspOverride>` where key is language identifier and value has `enabled: Option<bool>` (None = auto-detect) and `server_path: Option<String>` (custom binary path).
 
 **Alternatives considered:**
-- Full LSP server configuration UI: Rejected as unnecessary complexity that conflicts with Floo's lightweight approach
+- Full LSP server configuration UI: Rejected as unnecessary complexity that conflicts with Palisade's lightweight approach
 
 ### LSP Server Lifecycle: Per-Language Per-Project (D15)
 
@@ -73,7 +73,7 @@ Floo's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM
 
 **Decision:** Handle LSP server crashes gracefully: (1) Log in harness warnings, (2) Auto-restart up to 3 times with exponential backoff, (3) After 3 crashes, disable LSP for that language for the session and show warning, (4) Editor continues with basic syntax highlighting.
 
-**Rationale:** Balances resilience with avoiding infinite restart loops that could hang the editor. Follows Floo's existing process failure handling patterns.
+**Rationale:** Balances resilience with avoiding infinite restart loops that could hang the editor. Follows Palisade's existing process failure handling patterns.
 
 **Alternatives considered:**
 - Infinite restart attempts: Rejected due to risk of hanging the editor
@@ -85,7 +85,7 @@ Floo's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM
 
 **Risk:** LSP server processes might not be cleaned up properly, leading to zombie processes or resource leaks.
 
-**Mitigation:** Follow Floo's existing process management patterns (executor, terminal) which use proper cleanup on Drop. Add explicit process cleanup on project switch and app shutdown. Test with process monitoring tools.
+**Mitigation:** Follow Palisade's existing process management patterns (executor, terminal) which use proper cleanup on Drop. Add explicit process cleanup on project switch and app shutdown. Test with process monitoring tools.
 
 ### WebSocket Bridge Complexity
 

@@ -1,4 +1,4 @@
-# Floo Network Context
+# Palisade Code Context
 
 Terms for the cross-machine agent harness that drives Claude Code or Codex through spec-then-build sessions.
 
@@ -13,7 +13,7 @@ A live or closed invocation of an executor on a thread. A new session picks up t
 _Avoid_: run, turn
 
 **Executor**:
-The detected CLI (claude or codex) that Floo spawns to process a thread's turn.
+The detected CLI (claude or codex) that Palisade spawns to process a thread's turn.
 _Avoid_: agent, model
 
 **Model preference**:

@@ -42,7 +42,7 @@ export default function EditorStatusBar({
   }, []);
 
   // A missing server used to be a sentence telling the user to go install
-  // something. Floo still bundles nothing (D6) — but it knows the one command
+  // something. Palisade still bundles nothing (D6) — but it knows the one command
   // for each of the languages it promises, and the toolchain to run it with is
   // already on the machine, so the sentence may as well be the button.
   const lspLanguage = lsp?.language ?? null;
@@ -132,7 +132,7 @@ export default function EditorStatusBar({
                 )}
               </>
             ) : (
-              // No installer Floo can drive here: name the binary so the
+              // No installer Palisade can drive here: name the binary so the
               // instruction is at least actionable by hand.
               <Menu.Item disabled>
                 Install {lsp?.server} and reopen this file.
@@ -140,7 +140,7 @@ export default function EditorStatusBar({
             ))}
           {lsp?.state === "disabled" && (
             <Menu.Item disabled>
-              Restart Floo to try this server again.
+              Restart Palisade to try this server again.
             </Menu.Item>
           )}
         </Menu.Dropdown>

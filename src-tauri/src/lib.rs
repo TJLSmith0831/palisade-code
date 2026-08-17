@@ -30,7 +30,7 @@ use tauri::{Emitter, Manager};
 use acp_preflight::Preflight;
 use executor::{Envelope, ExecutorEvent, Harness, Sink};
 use serde::Serialize;
-use store::{floo_home, Message, Project};
+use store::{palisade_home, Message, Project};
 pub(crate) use store::{Res, ThreadMeta};
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,7 +44,7 @@ pub(crate) struct DirEntry {
 /// frontend — used by every command that reads/writes inside the project
 /// filesystem (file editing, git, Graphify, format-on-save).
 pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
-    let home = floo_home();
+    let home = palisade_home();
     store::list_projects(&home)?
         .into_iter()
         .find(|p| p.hash == hash)
@@ -59,14 +59,14 @@ pub(crate) fn git_bin() -> Res<PathBuf> {
 
 #[tauri::command]
 async fn list_projects() -> Res<Vec<Project>> {
-    tokio::task::spawn_blocking(|| store::list_projects(&floo_home()))
+    tokio::task::spawn_blocking(|| store::list_projects(&palisade_home()))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn add_project(path: String) -> Res<Project> {
-    tokio::task::spawn_blocking(move || store::add_project(&floo_home(), Path::new(&path)))
+    tokio::task::spawn_blocking(move || store::add_project(&palisade_home(), Path::new(&path)))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -77,7 +77,7 @@ async fn add_project(path: String) -> Res<Project> {
 async fn clone_repository(url: String, parent: String) -> Res<Project> {
     tokio::task::spawn_blocking(move || {
         let target = git::clone(&git_bin()?, &url, Path::new(&parent))?;
-        store::add_project(&floo_home(), &target)
+        store::add_project(&palisade_home(), &target)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -86,7 +86,7 @@ async fn clone_repository(url: String, parent: String) -> Res<Project> {
 #[tauri::command]
 async fn switch_project(app: tauri::AppHandle, hash: String) -> Res<Project> {
     tokio::task::spawn_blocking(move || {
-        let project = store::touch_project(&floo_home(), &hash)?;
+        let project = store::touch_project(&palisade_home(), &hash)?;
         let harness: tauri::State<'_, Harness> = app.state();
         start_watcher(&app, &harness, &project);
         start_fs_watcher(&app, &harness, &project);
@@ -211,21 +211,21 @@ fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>,
 
 #[tauri::command]
 async fn rename_project(hash: String, display_name: String) -> Res<Project> {
-    tokio::task::spawn_blocking(move || store::rename_project(&floo_home(), &hash, &display_name))
+    tokio::task::spawn_blocking(move || store::rename_project(&palisade_home(), &hash, &display_name))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn create_thread(project_hash: String, title: String) -> Res<ThreadMeta> {
-    tokio::task::spawn_blocking(move || store::create_thread(&floo_home(), &project_hash, &title))
+    tokio::task::spawn_blocking(move || store::create_thread(&palisade_home(), &project_hash, &title))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn list_threads(project_hash: String) -> Res<Vec<ThreadMeta>> {
-    tokio::task::spawn_blocking(move || store::list_threads(&floo_home(), &project_hash))
+    tokio::task::spawn_blocking(move || store::list_threads(&palisade_home(), &project_hash))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -237,7 +237,7 @@ async fn rename_thread(
     title: String,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        store::rename_thread(&floo_home(), &project_hash, &thread_id, &title)
+        store::rename_thread(&palisade_home(), &project_hash, &thread_id, &title)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -250,7 +250,7 @@ async fn set_thread_mode(
     mode: String,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        store::set_thread_mode(&floo_home(), &project_hash, &thread_id, &mode)
+        store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, &mode)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -265,7 +265,7 @@ async fn set_thread_archived(
     archived: bool,
 ) -> Res<store::ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        store::set_thread_archived(&floo_home(), &project_hash, &thread_id, archived)
+        store::set_thread_archived(&palisade_home(), &project_hash, &thread_id, archived)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -280,7 +280,7 @@ async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: S
                 "This thread has a turn in progress — wait for it to finish before deleting.".into(),
             );
         }
-        store::delete_thread(&floo_home(), &project_hash, &thread_id)
+        store::delete_thread(&palisade_home(), &project_hash, &thread_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -298,7 +298,7 @@ async fn append_message(
         // A direct append is a harness/user write, not a session's output — it has
         // no producing session to name.
         store::append_message(
-            &floo_home(),
+            &palisade_home(),
             &project_hash,
             &thread_id,
             &role,
@@ -313,7 +313,7 @@ async fn append_message(
 
 #[tauri::command]
 async fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
-    tokio::task::spawn_blocking(move || store::read_thread(&floo_home(), &project_hash, &thread_id))
+    tokio::task::spawn_blocking(move || store::read_thread(&palisade_home(), &project_hash, &thread_id))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -381,7 +381,7 @@ impl Sink for AppSink {
             .map(|s| s.mode.clone())
             .unwrap_or_else(|| "spec".to_string());
         executor::persist(
-            &floo_home(),
+            &palisade_home(),
             &self.project_hash,
             &thread_id,
             &envelope_ref.session_id,
@@ -405,7 +405,7 @@ impl Sink for AppSink {
         match &envelope_ref.event {
             ExecutorEvent::Crashed { .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
-                let _ = executor::on_crash(&floo_home(), &self.project_hash, &thread_id);
+                let _ = executor::on_crash(&palisade_home(), &self.project_hash, &thread_id);
                 let _ = self.app.emit("thread-updated", &thread_id);
             }
             ExecutorEvent::Done => {
@@ -417,7 +417,7 @@ impl Sink for AppSink {
                     match executor::newly_added_change(&watch.before, &after) {
                         executor::ProposeOutcome::One(name) => {
                             let _ = store::set_open_spec_change(
-                                &floo_home(),
+                                &palisade_home(),
                                 &watch.project_hash,
                                 &watch.thread_id,
                                 Some(&name),
@@ -450,7 +450,7 @@ fn preflight_for_harness(harness: &Harness, refresh: bool) -> Preflight {
     let mut cached = harness.preflight.lock().unwrap();
     if refresh || cached.is_none() {
         *cached = Some(acp_preflight::preflight(
-            &store::floo_home(),
+            &store::palisade_home(),
             &|bin| executor::find_on_path(bin),
         ));
     }
@@ -480,7 +480,7 @@ fn resolve_executor<'a>(
 
 /// The thread's stored meta, if it exists.
 fn thread_meta(project_hash: &str, thread_id: &str) -> Option<store::ThreadMeta> {
-    store::list_threads(&floo_home(), project_hash)
+    store::list_threads(&palisade_home(), project_hash)
         .ok()?
         .into_iter()
         .find(|t| t.id == thread_id)
@@ -499,7 +499,7 @@ fn selected_executor(
         let mut cached = harness.preflight.lock().unwrap();
         if cached.is_none() {
             *cached = Some(acp_preflight::preflight(
-                &store::floo_home(),
+                &store::palisade_home(),
                 &|bin| executor::find_on_path(bin),
             ));
         }
@@ -511,11 +511,11 @@ fn selected_executor(
             .ok()
             .and_then(|root| settings::load(&root).0.executor_override)
     });
-    // Preflight is a launch-time snapshot, so an agent installed while Floo is
+    // Preflight is a launch-time snapshot, so an agent installed while Palisade is
     // running reads as missing. Re-detect once before warning about an override.
     if let Some(id) = &override_id {
         if flight.agent(id).is_none_or(|a| a.path.is_none()) {
-            flight = acp_preflight::preflight(&store::floo_home(), &|bin| executor::find_on_path(bin));
+            flight = acp_preflight::preflight(&store::palisade_home(), &|bin| executor::find_on_path(bin));
             *harness.preflight.lock().unwrap() = Some(flight.clone());
         }
     }
@@ -551,13 +551,13 @@ fn start_session(
 ) -> Res<String> {
     let (agent, bin) = selected_executor(app, harness, project_hash, Some(thread_id))?;
     let agent_id = agent.id.clone();
-    let home = floo_home();
+    let home = palisade_home();
     // The thread meta is the source of truth for the model choice; the IPC
     // `model` parameter is legacy and ignored (the frontend passes null).
     let model = thread_meta(project_hash, thread_id).and_then(|t| t.model);
 
     // ACP sessions don't use provider handles — each session is fresh.
-    // Collision warning: Floo cannot stop two agents writing the same file.
+    // Collision warning: Palisade cannot stop two agents writing the same file.
     let collision = {
         let sessions = harness.acp_sessions.lock().unwrap();
         let others: Vec<(&str, &str)> = sessions
@@ -583,7 +583,7 @@ fn start_session(
         mode: mode.to_string(),
         bypass,
         model,
-        floo_home: home.clone(),
+        palisade_home: home.clone(),
     };
 
     let session = acp_client::start_acp_session(spawn, sink_for(app, project_hash))?;
@@ -641,7 +641,7 @@ fn ensure_session(
         // window via usage_update (D8) — 100k tokens covers every current
         // agent's window conservatively enough for a text prefix.
         let turns: Vec<handoff::TranscriptTurn> = store::read_thread(
-            &floo_home(),
+            &palisade_home(),
             project_hash,
             thread_id,
         )
@@ -686,7 +686,7 @@ fn ensure_session(
     start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)
 }
 
-/// Whether starting a session here collides with one Floo can't coordinate.
+/// Whether starting a session here collides with one Palisade can't coordinate.
 ///
 /// Only *other threads* count. One thread holding a live spec session and a
 /// live go session at once is the documented design — warning about it fired
@@ -724,7 +724,7 @@ fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &s
             .ok()
             .and_then(|bin| git::rev_parse_head(&bin, &session.project_root));
         let _ = store::close_session(
-            &floo_home(),
+            &palisade_home(),
             &session.project_hash,
             thread_id,
             session_id,
@@ -778,7 +778,7 @@ async fn send_message(
         // Recorded before the executor is resolved, deliberately: a chat-only
         // project still keeps the user's turn. There is no session to name yet.
         let message =
-            store::append_message(&floo_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
+            store::append_message(&palisade_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
         if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
             // Chat-only mode: the turn is still recorded, nothing answers it.
             return Ok(message);
@@ -828,7 +828,7 @@ async fn go_mode(
             return Err("No executor found on PATH — chat-only mode.".into());
         }
 
-        let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "go")?;
+        let meta = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
         let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
         // Per amended D19: go-mode has no skill injection. The user toggles
         // go-mode to let the agent write code; grill-apply is a separate
@@ -895,14 +895,14 @@ async fn spec_mode(
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let meta = store::set_thread_mode(&floo_home(), &project_hash, &thread_id, "spec")?;
+        let meta = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "spec")?;
         // Persist the spec_type framing on the thread (D11) — survives restarts
         // and is re-injected on agent handoff (D12). Only stored when the user
         // commits to a spec type (non-empty).
         let meta = if spec_type.trim().is_empty() {
             meta
         } else {
-            store::set_spec_type(&floo_home(), &project_hash, &thread_id, &spec_type)?
+            store::set_spec_type(&palisade_home(), &project_hash, &thread_id, &spec_type)?
         };
         if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
@@ -913,7 +913,7 @@ async fn spec_mode(
                 // in the chat. The user sees "Feature" (or "Bugfix", etc.),
                 // not the entire grill-explore skill content.
                 store::append_message(
-                    &floo_home(),
+                    &palisade_home(),
                     &project_hash,
                     &thread_id,
                     "user",
@@ -943,7 +943,7 @@ async fn set_thread_executor(
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
         store::set_thread_executor(
-            &floo_home(),
+            &palisade_home(),
             &project_hash,
             &thread_id,
             executor.as_deref(),
@@ -1016,7 +1016,7 @@ async fn propose(
         // Persist only the short label — the skill content goes to the agent
         // but is not shown in the chat.
         store::append_message(
-            &floo_home(),
+            &palisade_home(),
             &project_hash,
             &thread_id,
             "user",
@@ -1146,7 +1146,7 @@ async fn draft_commit_message(
             mode: "spec".into(),
             bypass: false,
             model,
-            floo_home: floo_home(),
+            palisade_home: palisade_home(),
         };
         acp_client::agent_oneshot(
             spawn,
@@ -1178,7 +1178,7 @@ async fn apply_skill(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let meta = store::list_threads(&floo_home(), &project_hash)?
+        let meta = store::list_threads(&palisade_home(), &project_hash)?
             .into_iter()
             .find(|t| t.id == thread_id)
             .ok_or("thread not found")?;
@@ -1191,7 +1191,7 @@ async fn apply_skill(
         // Persist only the short label — the skill content goes to the agent
         // but is not shown in the chat.
         store::append_message(
-            &floo_home(),
+            &palisade_home(),
             &project_hash,
             &thread_id,
             "user",
@@ -1303,7 +1303,7 @@ async fn list_sessions(
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let live: Vec<String> = harness.acp_sessions.lock().unwrap().keys().cloned().collect();
-        store::close_stale_sessions(&floo_home(), &project_hash, &thread_id, &live)
+        store::close_stale_sessions(&palisade_home(), &project_hash, &thread_id, &live)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1372,7 +1372,7 @@ async fn run_verify(
                     at: chrono::Utc::now().to_rfc3339(),
                 },
             };
-            let _ = store::append_verification(&floo_home(), &run);
+            let _ = store::append_verification(&palisade_home(), &run);
             let _ = app.emit("verification-finished", &run);
         });
         Ok(())
@@ -1383,7 +1383,7 @@ async fn run_verify(
 
 #[tauri::command]
 async fn list_verifications(project_hash: String) -> Res<Vec<store::VerificationRun>> {
-    tokio::task::spawn_blocking(move || store::read_verifications(&floo_home(), &project_hash))
+    tokio::task::spawn_blocking(move || store::read_verifications(&palisade_home(), &project_hash))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1486,7 +1486,7 @@ async fn lsp_status(
     Ok(servers.status(&project_hash, &language))
 }
 
-/// The install command Floo would run for `language`, or None when it knows
+/// The install command Palisade would run for `language`, or None when it knows
 /// none or the tool that would run it isn't on this machine. The status bar
 /// uses this to decide whether to offer the button at all.
 #[tauri::command]
@@ -1495,7 +1495,7 @@ async fn lsp_install_command(language: String) -> Res<Option<String>> {
 }
 
 /// Install the language server for `language` on the user's say-so, using the
-/// toolchain already on the machine. Floo still bundles nothing (D6) — this
+/// toolchain already on the machine. Palisade still bundles nothing (D6) — this
 /// is the one-click version of the instruction the status bar used to print.
 #[tauri::command]
 async fn lsp_install(language: String) -> Res<()> {
@@ -1596,7 +1596,7 @@ async fn session_attribution(
 ) -> Res<Attribution> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let home = floo_home();
+        let home = palisade_home();
         let record = store::read_sessions(&home, &project_hash, &thread_id)?
             .into_iter()
             .find(|r| r.id == session_id)
@@ -1818,6 +1818,10 @@ pub fn run() {
     }
     builder
         .setup(|app| {
+            if let Err(err) = store::migrate_legacy_home(&palisade_home()) {
+                eprintln!("store: {err}");
+                let _ = app.emit("harness-warning", err);
+            }
             let harness: tauri::State<'_, Harness> = app.state();
             if *harness.completion_enabled.lock().unwrap() {
                 let handle = app.handle();
@@ -1935,7 +1939,7 @@ pub fn run() {
 }
 
 /// D22: The marker the agent emits when exploration is change-shaped and
-/// the agent is ready to move to the proposal phase. Floo strips it from
+/// the agent is ready to move to the proposal phase. Palisade strips it from
 /// the visible text and auto-fires `propose`.
 const READY_TO_PROPOSE_MARKER: &str = "[READY_TO_PROPOSE]";
 

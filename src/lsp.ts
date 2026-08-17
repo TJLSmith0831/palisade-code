@@ -6,7 +6,7 @@ import * as api from "./api";
 // Transport — three methods — and Tauri's command + event channel is one,
 // so there is no WebSocket bridge here (see `src-tauri/src/lsp.rs`'s note).
 
-/** File extension → the LSP `languageId` Floo starts a server for. Mirrors
+/** File extension → the LSP `languageId` Palisade starts a server for. Mirrors
  *  `SERVERS` in `src-tauri/src/lsp.rs`; a language missing here just means
  *  no server is started, and the editor keeps its syntax highlighting. */
 const byExtension: Record<string, string> = {
@@ -32,7 +32,7 @@ const byExtension: Record<string, string> = {
   markdown: "markdown",
 };
 
-/** Which *server* serves this file, or null when Floo knows none. One
+/** Which *server* serves this file, or null when Palisade knows none. One
  *  server covers several document languages: typescript-language-server
  *  handles .ts and .tsx alike. */
 export function languageForPath(path: string): string | null {

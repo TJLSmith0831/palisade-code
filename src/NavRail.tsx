@@ -34,7 +34,7 @@ const TOP: RailItem[] = [
 
 const BOTTOM: RailItem[] = [
   { id: "history", label: "History", Icon: IconHistory },
-  // Not "Account": Floo has no account (PRODUCT.md — no sign-in, no
+  // Not "Account": Palisade has no account (PRODUCT.md — no sign-in, no
   // billing), and the panel this opens is the project/branch picker. A
   // first-run reviewer clicked it expecting a profile and landed somewhere
   // unrelated-looking.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build Floo Network.app and install it to /Applications.
+# Build Palisade Code.app and install it to /Applications.
 #
-#   CODESIGN_ID="Floo Network Dev" ./package.sh
-#   CODESIGN_ID="Floo Network Dev" ./package.sh --no-install   # build only
+#   CODESIGN_ID="Palisade Code Dev" ./package.sh
+#   CODESIGN_ID="Palisade Code Dev" ./package.sh --no-install   # build only
 #
 # Follows day-22-stackwatch/package.sh (commit 83ad83f); the difference is that
 # Tauri produces the bundle for us, so this script re-signs Tauri's output
@@ -10,8 +10,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="Floo Network"
-BUNDLE_ID="com.tjlsmith0831.floo-network"
+APP_NAME="Palisade"
+BUNDLE_ID="com.tjlsmith0831.palisade-code"
 APP="src-tauri/target/release/bundle/macos/$APP_NAME.app"
 
 echo "==> building release bundle"
@@ -36,7 +36,7 @@ fi
 # attributes — hence clearing the source icons too, or every build re-inherits
 # them. com.apple.provenance survives all of this and is harmless; codesign
 # signs fine with it.
-xattr -cr assets/icon.png src-tauri/icons/* 2>/dev/null || true
+xattr -cr assets/palisade-icon.png src-tauri/icons/* 2>/dev/null || true
 xattr -cr "$APP"
 xattr -d com.apple.FinderInfo "$APP" 2>/dev/null || true
 find "$APP" -name '.DS_Store' -delete 2>/dev/null || true
@@ -52,11 +52,11 @@ find "$APP" -name '.DS_Store' -delete 2>/dev/null || true
 # concerned, and every grant has to be given again. Signed with a real identity
 # it becomes
 #
-#     designated => identifier "com.tjlsmith0831.floo-network" and certificate leaf = H"..."
+#     designated => identifier "com.tjlsmith0831.palisade-code" and certificate leaf = H"..."
 #
 # — bundle id plus certificate, neither of which changes when the code does.
 #
-# `Floo Network Dev` is a self-signed cert in the login keychain. It does not
+# `Palisade Code Dev` is a self-signed cert in the login keychain. It does not
 # need to be *trusted*: codesign signs happily with an untrusted self-signed
 # identity, and nothing here is distributed, so no Gatekeeper check ever
 # evaluates it. Each machine generates its own — the certs do not need to match
@@ -66,25 +66,25 @@ find "$APP" -name '.DS_Store' -delete 2>/dev/null || true
 #
 #   # macOS ships LibreSSL, whose `openssl req` has no -addext, so the
 #   # extensions go in a config file instead.
-#   cat > floo-cert.cnf <<'CNF'
+#   cat > palisade-cert.cnf <<'CNF'
 #   [req]
 #   distinguished_name = dn
 #   x509_extensions    = ext
 #   prompt             = no
 #   [dn]
-#   CN = Floo Network Dev
+#   CN = Palisade Code Dev
 #   [ext]
 #   basicConstraints   = critical,CA:false
 #   keyUsage           = critical,digitalSignature
 #   extendedKeyUsage   = critical,codeSigning
 #   CNF
 #   openssl req -x509 -newkey rsa:2048 -keyout k.pem -out c.pem -days 3650 \
-#     -nodes -config floo-cert.cnf
-#   openssl pkcs12 -export -inkey k.pem -in c.pem -out floo.p12 \
-#     -name "Floo Network Dev" -passout pass:PICK_ONE
-#   security import floo.p12 -k ~/Library/Keychains/login.keychain-db \
+#     -nodes -config palisade-cert.cnf
+#   openssl pkcs12 -export -inkey k.pem -in c.pem -out palisade.p12 \
+#     -name "Palisade Code Dev" -passout pass:PICK_ONE
+#   security import palisade.p12 -k ~/Library/Keychains/login.keychain-db \
 #     -P PICK_ONE -T /usr/bin/codesign
-#   rm -f k.pem c.pem floo.p12 floo-cert.cnf   # the key belongs in the keychain
+#   rm -f k.pem c.pem palisade.p12 palisade-cert.cnf   # the key belongs in the keychain
 #
 # (`-T /usr/bin/codesign`, not `-A`: only codesign may use the key unprompted.)
 #
@@ -107,7 +107,7 @@ else
   echo "==> signing as '$CODESIGN_ID'"
 fi
 # -i pins the signing identifier to the bundle id. Without it codesign derives
-# one from the binary name (floo_network-<hash>), which is not what the rest of
+# one from the binary name (palisade_code-<hash>), which is not what the rest of
 # the system knows this app as.
 codesign --force --deep --identifier "$BUNDLE_ID" --sign "$CODESIGN_ID" "$APP"
 

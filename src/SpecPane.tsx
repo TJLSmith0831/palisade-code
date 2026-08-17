@@ -29,7 +29,7 @@ type Props = {
 /**
  * Read-only view of a project's OpenSpec changes. Everything here comes from
  * the `openspec` CLI, which stays the authority on what a change is; this pane
- * writes nothing — not a spec file, not a line of `~/.floo-network`.
+ * writes nothing — not a spec file, not a line of `~/.palisade-code`.
  *
  * Task counts are shown as what they are: checkboxes an agent ticked about its
  * own work. Nothing here calls a change complete, satisfied, or implemented.

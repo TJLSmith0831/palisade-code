@@ -11,7 +11,7 @@ export type CompletionTelemetry = {
 
 type StoredTelemetry = CompletionTelemetry & { _latencies: number[] };
 
-const TELEMETRY_KEY = "floo:completionTelemetry";
+const TELEMETRY_KEY = "palisade:completionTelemetry";
 
 function emptyTelemetry(): StoredTelemetry {
   return {

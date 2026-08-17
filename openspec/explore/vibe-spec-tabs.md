@@ -42,7 +42,7 @@ This exploration asks: is that the right scope and shape to build?
 ## D4: Should the spec tab be read-only or editable?
 
 - **Decision**: The spec tab is a **read-only structured view** rendered from `openspec show --json` (or equivalent). It does not open `proposal.md`/`design.md`/`tasks.md` as raw CodeMirror tabs for editing.
-- **Why**: `CLAUDE.md` explicitly says OpenSpec is authoritative and Floo "never writes a spec file" (`openspec/changes/...` files are written by the grill flow and the agent, not by a UI save action); a read-only surface honors that rule, while the user can still edit the underlying `.md` files directly via the file tree if needed.
+- **Why**: `CLAUDE.md` explicitly says OpenSpec is authoritative and Palisade "never writes a spec file" (`openspec/changes/...` files are written by the grill flow and the agent, not by a UI save action); a read-only surface honors that rule, while the user can still edit the underlying `.md` files directly via the file tree if needed.
 - **Source**: `CLAUDE.md` line "OpenSpec is authoritative for specs"
 
 ## D5: What is the relationship between the existing `SpecPane` in Editor shell and the new Vibe spec tabs?

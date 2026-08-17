@@ -1282,38 +1282,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "floo-network"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "base64 0.23.1",
- "chrono",
- "cocoa",
- "dirs",
- "futures",
- "gix",
- "notify",
- "notify-debouncer-full",
- "objc",
- "portable-pty",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-mcp-bridge",
- "tauri-plugin-opener",
- "tempfile",
- "tokio",
- "tokio-util",
- "toml_edit 0.25.13+spec-1.1.0",
- "ulid",
- "ureq",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4060,6 +4028,38 @@ checksum = "9aa2b01e1d916879f73a53d01d1d6cee68adbb31d6d9177a8cfce093cced1d50"
 dependencies = [
  "futures-core",
  "pin-project-lite",
+]
+
+[[package]]
+name = "palisade-code"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "base64 0.23.1",
+ "chrono",
+ "cocoa",
+ "dirs",
+ "futures",
+ "gix",
+ "notify",
+ "notify-debouncer-full",
+ "objc",
+ "portable-pty",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-mcp-bridge",
+ "tauri-plugin-opener",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml_edit 0.25.13+spec-1.1.0",
+ "ulid",
+ "ureq",
 ]
 
 [[package]]

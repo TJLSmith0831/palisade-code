@@ -15,25 +15,25 @@
 ## D3: How should LSP servers be managed (spawned, lifecycle, transport)?
 
 - **Decision**: Rust backend manages LSP server processes via stdio transport, frontend uses WebSocket bridge to communicate
-- **Why**: Floo already has Rust process management patterns (executor, terminal, Graphify watcher). Managing LSP servers in Rust gives us proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security model. WebSocket bridge (similar to Tauri MCP bridge pattern) allows the frontend LSP client to talk to Rust-managed servers.
+- **Why**: Palisade already has Rust process management patterns (executor, terminal, Graphify watcher). Managing LSP servers in Rust gives us proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security model. WebSocket bridge (similar to Tauri MCP bridge pattern) allows the frontend LSP client to talk to Rust-managed servers.
 - **Source**: grill-explore
 
 ## D4: Which LSP servers should we support initially?
 
 - **Decision**: Support all languages that have both CodeMirror language packages and mature LSP servers (TypeScript/JavaScript, Python, Rust, Go, Java, C++, PHP, HTML, CSS, JSON, SQL, Markdown, YAML, XML, etc.)
-- **Why**: CodeMirror has language packages for 20+ languages, and the LSP ecosystem has 400+ servers. Restricting to 3 is arbitrary when the architecture can handle many more. The system should detect and use whatever LSP server is available for the current file's language, following the same pattern as executor detection - user installs the language server, Floo finds and uses it.
+- **Why**: CodeMirror has language packages for 20+ languages, and the LSP ecosystem has 400+ servers. Restricting to 3 is arbitrary when the architecture can handle many more. The system should detect and use whatever LSP server is available for the current file's language, following the same pattern as executor detection - user installs the language server, Palisade finds and uses it.
 - **Source**: user feedback, web research (CodeMirror language packages, LSP ecosystem)
 
 ## D5: Where should LSP configuration live (project vs user level)?
 
 - **Decision**: Auto-detect LSP servers from PATH by default (no configuration required), optional overrides in `.project-settings.json` only for custom paths or disabling specific languages
-- **Why**: Floo already uses this pattern for executor detection - auto-detect from PATH, optional override in settings. LSP should work the same way: user installs typescript-language-server, Floo finds it and uses it. Configuration only needed for edge cases (non-standard install paths, disabling LSP for specific languages). This avoids the painful LSP setup experience in other editors.
+- **Why**: Palisade already uses this pattern for executor detection - auto-detect from PATH, optional override in settings. LSP should work the same way: user installs typescript-language-server, Palisade finds it and uses it. Configuration only needed for edge cases (non-standard install paths, disabling LSP for specific languages). This avoids the painful LSP setup experience in other editors.
 - **Source**: user feedback, codebase analysis (executor detection pattern)
 
 ## D6: What should be the non-goals for LSP integration?
 
 - **Decision**: No debugger protocol (DAP), no LSP server installation management, no full extension ecosystem
-- **Why**: Traditional debugging (breakpoints, step-through, watch variables) requires DAP integration which is a separate complex system beyond the scope of adding basic IDE pieces. LSP server installation should be user-managed (npm install, pip install, cargo install) - Floo should detect and use, not manage. Full extension ecosystem (like VS Code) is out of scope - Floo is an agent harness, not a general-purpose IDE platform.
+- **Why**: Traditional debugging (breakpoints, step-through, watch variables) requires DAP integration which is a separate complex system beyond the scope of adding basic IDE pieces. LSP server installation should be user-managed (npm install, pip install, cargo install) - Palisade should detect and use, not manage. Full extension ecosystem (like VS Code) is out of scope - Palisade is an agent harness, not a general-purpose IDE platform.
 - **Source**: grill-explore
 
 ## D7: How does this relate to the existing code-editor spec?
@@ -45,13 +45,13 @@
 ## D8: Why implement LSP integration now? What's the timing driver?
 
 - **Decision**: Competitive parity and user expectation - modern IDEs have LSP-powered features as table stakes
-- **Why**: Floo's current editor has basic syntax highlighting but lacks semantic understanding (go-to-definition, hover tooltips, diagnostics) that users expect from modern IDEs. The timing is right because the CodeMirror 6 foundation is solid and we have process management patterns in place to handle LSP servers gracefully.
+- **Why**: Palisade's current editor has basic syntax highlighting but lacks semantic understanding (go-to-definition, hover tooltips, diagnostics) that users expect from modern IDEs. The timing is right because the CodeMirror 6 foundation is solid and we have process management patterns in place to handle LSP servers gracefully.
 - **Source**: recommended-accepted
 
 ## D9: Who benefits from LSP integration and what's the primary user-facing impact?
 
-- **Decision**: Developers working in TypeScript/JavaScript, Python, and Rust who use Floo as their daily editor
-- **Why**: The impact is threefold: (1) Navigation - go-to-definition and find-references make codebase exploration faster, (2) Quality - real-time diagnostics catch errors before running, (3) Velocity - semantic autocomplete and hover tooltips reduce context-switching to documentation. This makes Floo feel like a "real" IDE rather than just an agent interface with a basic code viewer.
+- **Decision**: Developers working in TypeScript/JavaScript, Python, and Rust who use Palisade as their daily editor
+- **Why**: The impact is threefold: (1) Navigation - go-to-definition and find-references make codebase exploration faster, (2) Quality - real-time diagnostics catch errors before running, (3) Velocity - semantic autocomplete and hover tooltips reduce context-switching to documentation. This makes Palisade feel like a "real" IDE rather than just an agent interface with a basic code viewer.
 - **Source**: recommended-accepted
 
 ## D10: What's the explicit scope boundary for this change - what's definitively in vs out?
@@ -75,13 +75,13 @@
 ## D13: What should the minimal LSP configuration look like in `.project-settings.json` given auto-detection?
 
 - **Decision**: Add minimal `lsp` field to ProjectSettings as `HashMap<String, LspOverride>` where key is language identifier and value is simple struct with `enabled: Option<bool>` (None = auto-detect, Some(false) = disabled, Some(true) = force enable) and `server_path: Option<String>` (custom binary path, null = PATH detection)
-- **Why**: Default case (no config) means "auto-detect everything from PATH" - zero configuration for normal users. Overrides only for edge cases (non-standard install paths, disabling LSP for specific languages). This follows Floo's executor detection pattern and avoids painful LSP setup.
+- **Why**: Default case (no config) means "auto-detect everything from PATH" - zero configuration for normal users. Overrides only for edge cases (non-standard install paths, disabling LSP for specific languages). This follows Palisade's executor detection pattern and avoids painful LSP setup.
 - **Source**: recommended-accepted
 
 ## D14: What should happen when an LSP server crashes or becomes unresponsive?
 
 - **Decision**: Handle gracefully: (1) Log crash in harness warnings system, (2) Auto-restart server up to 3 times with exponential backoff, (3) After 3 crashes in short window, disable LSP for that language for current session and show user-facing warning, (4) Editor continues with basic syntax highlighting (no crash)
-- **Why**: Balances resilience with avoiding infinite restart loops that could hang the editor. This follows Floo's existing process failure handling patterns and ensures the editor remains functional even when LSP fails.
+- **Why**: Balances resilience with avoiding infinite restart loops that could hang the editor. This follows Palisade's existing process failure handling patterns and ensures the editor remains functional even when LSP fails.
 - **Source**: recommended-accepted
 
 ## D15: What should happen when switching between files of different languages in the same project?
@@ -93,7 +93,7 @@
 ## D16: What are the key integration points for LSP integration in the existing codebase?
 
 - **Decision**: Main integration points: (1) FileEditorPane.tsx - add @codemirror/lsp-client extensions to CodeMirror setup, (2) New Rust module src-tauri/src/lsp.rs - LSP server process management and WebSocket bridge, (3) src-tauri/src/lib.rs - add IPC commands for LSP operations, (4) src-tauri/src/settings.rs - add LSP configuration to ProjectSettings, (5) src/api.ts - add TypeScript wrappers for LSP IPC commands
-- **Why**: Follows Floo's existing pattern of new Rust module → lib.rs IPC → api.ts wrapper → frontend usage. This covers all touch points needed for end-to-end LSP functionality.
+- **Why**: Follows Palisade's existing pattern of new Rust module → lib.rs IPC → api.ts wrapper → frontend usage. This covers all touch points needed for end-to-end LSP functionality.
 - **Source**: codebase analysis, recommended-accepted
 
 ## D17: What's the riskiest part of this change that we should tackle first?

@@ -11,7 +11,7 @@ import {
 } from "./lspClients";
 
 // Amendment 2's Problems tab. Everything here comes from a language server —
-// Floo does not invent diagnostics, so an empty list means the servers said
+// Palisade does not invent diagnostics, so an empty list means the servers said
 // nothing, not that the code is proven fine. The empty state says which.
 
 const ICON = {

@@ -1,4 +1,4 @@
-# Day 23 — Floo Network — AGENTS.md
+# Day 23 — Palisade Code — AGENTS.md
 Cross-machine agent harness: compiled-in agents (Claude Code or Codex) drive both spec-mode (read-only/plan, grill-explore/grill-propose) and go-mode (write-enabled, grill-apply), keeping project threads, session history, and Graphify code maps in sync. Sessions are concurrent and individually identified — a thread can hold several at once.
 
 ## Stack
@@ -12,7 +12,7 @@ Rust + Tauri · TypeScript (frontend) · pnpm · Browserbase (web search) · Gra
 - `pnpm tauri build` — create the release binary
 
 ## Packaging (per machine)
-`CODESIGN_ID="Floo Network Dev" ./package.sh` — builds the release bundle,
+`CODESIGN_ID="Palisade Code Dev" ./package.sh` — builds the release bundle,
 re-signs it with a stable self-signed identity, and installs it to
 `/Applications`. `--no-install` builds without installing.
 
@@ -40,9 +40,9 @@ Two-mode harness that moves from spec to tested code, both modes driven by the s
 
 ## Gotchas
 - **Executor detection is machine-specific.** Personal laptop expects `claude`; work laptop expects `codex`. Detection must tolerate aliases, PATH variations, and missing executables. If both are present, prefer `claude`; if neither, warn and stay in chat-only mode.
-- **Graphify maps the active project, not the harness.** Always pass the detected project root as the working directory; never run it against `day-23-floo-network/`.
+- **Graphify maps the active project, not the harness.** Always pass the detected project root as the working directory; never run it against `day-23-palisade-code/`.
 - **Browserbase key lives in `.env`.** Load with `dotenv`; never commit the key or read `.env` contents into logs.
-- **Session store must live outside target repos.** Default to a dotdir under the user's home (e.g. `~/.floo-network/sessions/`) so project git histories stay clean.
+- **Session store must live outside target repos.** Default to a dotdir under the user's home (e.g. `~/.palisade-code/sessions/`) so project git histories stay clean.
 - **Notes are files inside the project.** The harness proposes a path under the project root; the user confirms before any write. Never create files outside the project root.
 - **Two modes share the executor but differ in permission mode and skill focus.** Spec-mode runs the executor read-only/plan (`--permission-mode plan` for Claude, `--sandbox read-only` for Codex) and focuses on grill-explore/grill-propose. Go-mode runs the executor write-enabled (`--permission-mode default` for Claude, `--sandbox workspace-write` for Codex) and focuses on grill-apply. `/go` terminates the spec-mode executor and spawns a fresh go-mode executor with conversation history carried forward — no summarization call.
 - **Tool permissions are enforced by the executor, not a harness dispatcher.** With a full executor CLI, the executor runs its own internal tool loop — the harness can't easily intercept individual tool calls. Enforcement shifts to the executor's built-in `--permission-mode`/`--sandbox`. The custom `create_note` approval gate and bash two-tier policy from the earlier Gemma-based design are no longer harness-side; whether they can be restored via executor-level hooks (Claude Code hooks, Codex plugins) is an open question for grill-apply.

@@ -1,6 +1,6 @@
 ## Context
 
-Floo's editor currently has a tab bar (TabBar.tsx) that shows open file names with close buttons. The terminal pane (TerminalPane.tsx) already exists and can execute commands via PTY. The `.project-settings.json` file already has a pattern for project-specific configuration (format_on_save, verify commands, executor_override). This change adds run buttons to the tab bar that execute configured commands in the existing terminal pane.
+Palisade's editor currently has a tab bar (TabBar.tsx) that shows open file names with close buttons. The terminal pane (TerminalPane.tsx) already exists and can execute commands via PTY. The `.project-settings.json` file already has a pattern for project-specific configuration (format_on_save, verify commands, executor_override). This change adds run buttons to the tab bar that execute configured commands in the existing terminal pane.
 
 ## Goals / Non-Goals
 
@@ -27,13 +27,13 @@ Floo's editor currently has a tab bar (TabBar.tsx) that shows open file names wi
 
 **Alternatives considered:**
 - Simple button with dropdown only: Rejected because it requires two clicks even for the most common action
-- Separate run and debug buttons: Rejected because Floo doesn't have debugger integration
+- Separate run and debug buttons: Rejected because Palisade doesn't have debugger integration
 
 ### Configuration in .project-settings.json (D3)
 
 **Decision:** Add `run` field to ProjectSettings as `HashMap<String, String>` (command name → shell command), following the existing `verify` field pattern.
 
-**Rationale:** Floo already uses this pattern for project-specific configuration. Adding `run` follows the same structure and keeps configuration version-controlled with the project.
+**Rationale:** Palisade already uses this pattern for project-specific configuration. Adding `run` follows the same structure and keeps configuration version-controlled with the project.
 
 **Alternatives considered:**
 - Separate run configuration file: Rejected to avoid config file proliferation

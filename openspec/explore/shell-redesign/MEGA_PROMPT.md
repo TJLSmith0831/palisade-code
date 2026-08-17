@@ -1,4 +1,4 @@
-# Floo Network — IDE Shell Redesign: Run/Debug + LSP + Status Bar + Shared Shell Architecture
+# Palisade Code — IDE Shell Redesign: Run/Debug + LSP + Status Bar + Shared Shell Architecture
 
 ## Context
 
@@ -171,7 +171,7 @@ list from here — they move to the left rail per above. Thread list stays
 **Vibe-only session list** (new panel, Devin-referenced): a dedicated
 left-edge column in Vibe preset only — "+ New thread", a search field, and
 threads grouped by workspace (not an invented "Spaces" concept; group
-headers are the workspace name, since Floo already has a workspace picker
+headers are the workspace name, since Palisade already has a workspace picker
 per DESIGN.md's right-panel spec). Each row: thread title (2-line clamp),
 relative timestamp, and a small accent dot for threads with a live/busy
 session (`session.busy` already exists in the data model — this is a real
@@ -208,7 +208,7 @@ redundant chrome, not a second source of truth.
 FIM (`GhostTextPlugin.ts`) and its settings already exist and work, but are
 buried in `SettingsPanel.tsx` (line ~1047) with zero in-editor visibility.
 Web research confirms ghost-text quality is the exact bar Cursor set for
-this category — Floo's model is already competitive; the gap is visibility,
+this category — Palisade's model is already competitive; the gap is visibility,
 not quality.
 
 - Small status bar icon, next to the LSP language indicator, showing FIM
@@ -245,7 +245,7 @@ a selection, hiding the explanation at the exact moment it's needed.
 Every piece of UI copy audited for this redesign (the empty-state card, the
 in-chat banner) describes Spec Mode as "read-only planning" with edits
 "disabled" — a purely negative, restriction-first framing. That is not what
-Spec Mode is. Per PRODUCT.md, Spec Mode is Floo's core differentiator: a
+Spec Mode is. Per PRODUCT.md, Spec Mode is Palisade's core differentiator: a
 **Socratic, one-question-at-a-time spec-writing interview** (the
 grill-explore → grill-propose → grill-apply → grill-archive skill chain)
 that produces a binding decision log before any code gets written — not a
@@ -322,7 +322,7 @@ clear "open/clone a project" actions and recent-project recall before any
 editor chrome appears. Reference: `mockup-onboarding.html` in this
 directory — adapted from a live Windsurf/Devin screenshot, not copied
 literally (their "Connect via SSH" and account/tier UI don't map to
-Floo's model and are deliberately absent).
+Palisade's model and are deliberately absent).
 
 - Shown whenever no project is open (cold start, or after closing the last
   open project) — replaces whatever bare picker currently renders.
@@ -339,11 +339,11 @@ Floo's model and are deliberately absent).
   immediately, don't make a first-time user discover it by opening a
   project and hitting a dead end.
 - No account/sign-in UI, no tier/plan badge, no "Pro" label anywhere —
-  PRODUCT.md is explicit that Floo has no bundled billing; inventing one on
+  PRODUCT.md is explicit that Palisade has no bundled billing; inventing one on
   the welcome screen would misrepresent the product on the first screen a
   new user sees.
 - "Recent Projects" (not "Recent sessions" — Devin's sessions are
-  cloud-hosted and cross-project; Floo's are local and project-scoped, so
+  cloud-hosted and cross-project; Palisade's are local and project-scoped, so
   the natural recall list here is projects, with sessions/threads reachable
   once one is opened).
 - **Composer input, present even before a project is open** (per the
@@ -352,7 +352,7 @@ Floo's model and are deliberately absent).
   Bypass Permissions toggle, detected-agent pill, mic, send), and a
   directory row below it ("Local" tag + "Select a directory…"). Submitting
   a message with no project open should prompt for a directory first
-  (Floo's project-scoped model, per PRODUCT.md, has no cloud/directory-less
+  (Palisade's project-scoped model, per PRODUCT.md, has no cloud/directory-less
   execution path the way Devin does) — don't silently accept a message
   with nowhere to run it.
 - **No Vibe/Editor shell switch on this screen.** There's no project open
@@ -419,7 +419,7 @@ to Settings:
 - Frontend: `pnpm test`, `npx tsc --noEmit`
 - Rust: `cd src-tauri && cargo test`
 - Manual, via Tauri MCP bridge (127.0.0.1:9223) per
-  `.agents/skills/run-floo-network/SKILL.md` — Playwright cannot drive this
+  `.agents/skills/run-palisade-code/SKILL.md` — Playwright cannot drive this
   app (WKWebView):
   - Run button proposes correct default per project type (test against a
     Node, Rust, and Python fixture project).

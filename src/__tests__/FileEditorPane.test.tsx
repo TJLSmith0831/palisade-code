@@ -372,7 +372,7 @@ describe("FileEditorPane", () => {
     });
   });
 
-  // Reconciliation with changes Floo didn't make — an agent turn writing to
+  // Reconciliation with changes Palisade didn't make — an agent turn writing to
   // disk, a branch switch, another editor.
   describe("when the file changes on disk", () => {
     it("reloads silently if nothing of the user's would be lost", async () => {
@@ -507,7 +507,7 @@ describe("FileEditorPane", () => {
       expect(screen.queryByTestId("file-conflict-banner")).toBeNull();
     });
 
-    it("keeps the cursor put when the change is Floo's own save", async () => {
+    it("keeps the cursor put when the change is Palisade's own save", async () => {
       const { rerender } = render(
         <FileEditorPane
           projectHash="abc"

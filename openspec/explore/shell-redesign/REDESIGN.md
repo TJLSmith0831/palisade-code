@@ -1,4 +1,4 @@
-# Floo Network Shell Redesign
+# Palisade Code Shell Redesign
 
 **Audience: an Opus-model coding agent working this in an isolated git
 worktree.** This doc is the condensed decision record. `MEGA_PROMPT.md` in
@@ -83,12 +83,12 @@ Takeaways this redesign is built on:
 1. The left icon rail (Explorer/Search/Source Control/…) is the converged
    industry shape, not a stylistic choice this redesign invented.
 2. Kiro's own custom rail icon for its product-specific concept (Specs) is
-   precedent for Floo's own "Specs" rail icon — not scope creep.
+   precedent for Palisade's own "Specs" rail icon — not scope creep.
 3. Windsurf's Problems-tab-in-bottom-dock independently validates this
    redesign's Amendment 2 placement.
 4. **No competitor treats step-through debugging as a differentiator in 2026.** Skipping DAP (run-debug-buttons' original Non-Goal) is not a
    competitive gap — don't second-guess that decision.
-5. Cursor's ghost-text completion is the bar for FIM quality; Floo's model
+5. Cursor's ghost-text completion is the bar for FIM quality; Palisade's model
    is already competitive — the gap this redesign closes is **visibility**
    (Amendment 4), not model quality. Do not touch the completion model.
 
@@ -132,7 +132,7 @@ branch or state transition, Ponytail's ladder before writing code, and
 ### Phase 0 — housekeeping
 
 - [ ] Fix CLAUDE.md's stale `KNOWN_AGENTS` reference (Amendment 5).
-- [ ] Confirm `.agents/skills/run-floo-network/SKILL.md` Tauri MCP flow
+- [ ] Confirm `.agents/skills/run-palisade-code/SKILL.md` Tauri MCP flow
       still works before relying on it for every later verification step.
 
 ### Phase 1 — shared shell skeleton (blocks everything else)
@@ -340,7 +340,7 @@ would.
    Source Control panel is reachable and operable by keyboard alone, with
    a visible focus ring at each step (DESIGN.md's global focus-ring rule).
 5. **The Skeptical Reviewer** — a senior engineer who lives in diffs and
-   commit graphs, joining specifically to evaluate whether Floo's git
+   commit graphs, joining specifically to evaluate whether Palisade's git
    workflow is trustworthy enough to replace their terminal habit. Task:
    make a change, review it in the Source Control panel, use Generate for
    a commit message, commit. Satisfied when: the commit graph, status
@@ -378,7 +378,7 @@ Recorded per the UI/UX Quality Gate's step 10, so the next reader knows
 these were decisions, not drift.
 
 - **Status bar omits `Spaces: 4 · UTF-8 · LF`.** The mockup's right-hand
-  cluster shows indent width, encoding and line endings. Floo tracks none
+  cluster shows indent width, encoding and line endings. Palisade tracks none
   of these — there is no indent setting, no encoding selector, and no
   line-ending conversion. Rendering them would be three fabricated facts
   on a bar whose entire job is reporting real state. `Ln, Col` is shown

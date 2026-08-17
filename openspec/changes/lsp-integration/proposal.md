@@ -1,6 +1,6 @@
 ## Why
 
-Floo's current editor has basic syntax highlighting but lacks semantic understanding (go-to-definition, hover tooltips, diagnostics) that users expect from modern IDEs. The timing is right because the CodeMirror 6 foundation is solid and we have process management patterns in place to handle LSP servers gracefully. (D8)
+Palisade's current editor has basic syntax highlighting but lacks semantic understanding (go-to-definition, hover tooltips, diagnostics) that users expect from modern IDEs. The timing is right because the CodeMirror 6 foundation is solid and we have process management patterns in place to handle LSP servers gracefully. (D8)
 
 ## What Changes
 
@@ -34,6 +34,6 @@ Floo's current editor has basic syntax highlighting but lacks semantic understan
 - Tauri WebSocket plugin in Rust
 
 **Systems:**
-- LSP servers are auto-detected from PATH (user installs them, Floo finds them) - no installation management UI (D6)
+- LSP servers are auto-detected from PATH (user installs them, Palisade finds them) - no installation management UI (D6)
 - LSP servers run per language per project, shut down on project switch (D15)
 - Graceful degradation when LSP servers are missing or crash (D11, D14)

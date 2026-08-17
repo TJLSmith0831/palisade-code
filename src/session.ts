@@ -3,11 +3,11 @@
  * where you were rather than on an empty pane.
  *
  * localStorage rather than the Rust store: this is personal UI state, the
- * same call `floo:layout:<hash>:*` already makes, and it means no IPC on
+ * same call `palisade:layout:<hash>:*` already makes, and it means no IPC on
  * the project-switch path.
  */
 
-export const sessionKey = (projectHash: string) => `floo:session:${projectHash}`;
+export const sessionKey = (projectHash: string) => `palisade:session:${projectHash}`;
 
 export type EditorSession = {
   /** Open tabs, in tab-bar order. */

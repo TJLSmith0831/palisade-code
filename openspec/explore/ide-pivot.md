@@ -1,6 +1,6 @@
-# Explore: Floo Network → AI-native IDE
+# Explore: Palisade Code → AI-native IDE
 
-**Topic:** Pivot Floo Network from a Rust+Tauri agent harness/orchestrator into an AI-native IDE — "Kiro but not suck."
+**Topic:** Pivot Palisade Code from a Rust+Tauri agent harness/orchestrator into an AI-native IDE — "Kiro but not suck."
 
 **Started:** 2026-08-06
 
@@ -12,10 +12,10 @@ What exists today (the agent-orchestration half of an IDE):
 - Executor abstraction: Claude (persistent stdin JSON) + Codex (per-turn `exec resume`), unified `ExecutorEvent` stream.
 - OpenSpec + Grill skills (explore→propose→apply→archive). `grill-propose` is one-question-at-a-time — direct counter to Kiro's "one-line vibe" requirements failure.
 - Graphify code maps (report generator + dependency graph, always-on watcher).
-- Append-only JSONL session store in `~/.floo-network/`, outside repos.
+- Append-only JSONL session store in `~/.palisade-code/`, outside repos.
 - Notes in project root. Diff viewer (display-only). File tree (one-dir-per-IPC). FileEditorPane (49-line read-only viewer).
 
-What an AI-native IDE needs that Floo does not have:
+What an AI-native IDE needs that Palisade does not have:
 - A real editor (syntax highlighting, multi-cursor, find/replace, virtualization).
 - LSP (diagnostics, go-to-def, hover, rename).
 - Tab/multi-line autocomplete (the Cursor/Windsurf killer feature).
@@ -93,14 +93,14 @@ Kiro's documented failures this pivot should avoid:
   - Graphify = tree-sitter AST → typed edges (calls/imports/defines/references), traversed hop-by-hop. No vectors, no RAG.
   - Edge provenance: EXTRACTED (AST, deterministic) / INFERRED (LLM) / AMBIGUOUS (unresolved) — the trust model.
   - Agent paths: CLI (`query`/`path`/`explain`/`prs`) + MCP server (`python -m graphify.serve graphify-out/graph.json`, 10 tools, stdio or HTTP).
-  - Watch mode is AST-only, zero LLM cost. Floo already runs this.
+  - Watch mode is AST-only, zero LLM cost. Palisade already runs this.
   - 36 languages, on-device, Apache 2.0, no telemetry.
-  - Current Floo integration = weak (shell-out + inject bounded summary into thread; agent never touches graph). C replaces mediation with MCP registration.
+  - Current Palisade integration = weak (shell-out + inject bounded summary into thread; agent never touches graph). C replaces mediation with MCP registration.
 - **Tradeoff**: per-executor MCP config (Claude vs Codex differ) — config work, not core code.
 
 ## D10: Hooks
 - **Decision**: Harness-level hooks for v1. Fire on editor saves + executor events. Defer executor-level (block-tool-mid-turn) — harness can't intercept inside the executor's loop anyway (AGENTS.md gotcha).
-- **Why**: The IDE gesture people want is "on save, do X" (format/test/agent-on-save). Saves happen in Floo's editor, which the executor never sees — only harness-level hooks can catch them.
+- **Why**: The IDE gesture people want is "on save, do X" (format/test/agent-on-save). Saves happen in Palisade's editor, which the executor never sees — only harness-level hooks can catch them.
 - **Source**: recommended-accepted
 
 ## D11: Parallel agents

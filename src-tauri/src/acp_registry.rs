@@ -68,7 +68,7 @@ pub struct NpxDistribution {
 
 /// Strip an archive-relative manifest cmd (`./bin/devin`, `.\bin\devin.exe`)
 /// down to the bare executable name a user's PATH would carry (`devin`).
-/// Registry binary cmds are relative to the downloaded archive, which Floo
+/// Registry binary cmds are relative to the downloaded archive, which Palisade
 /// does not install — availability means the user installed the CLI themselves.
 fn cmd_basename(cmd: &str) -> &str {
     let name = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
@@ -201,8 +201,8 @@ const FALLBACK_AGENTS: &[(&str, &str)] = &[
 /// the cache is fresh; otherwise fetches from GitHub and updates the cache.
 /// On fetch failure, falls back to the cache; on no cache, falls back to the
 /// hardcoded list.
-pub fn discover_agents(floo_home: &Path) -> Vec<RegistryAgent> {
-    let cache_dir = floo_home.join("acp-registry");
+pub fn discover_agents(palisade_home: &Path) -> Vec<RegistryAgent> {
+    let cache_dir = palisade_home.join("acp-registry");
     let cache_file = cache_dir.join("agents.json");
 
     // Return fresh cache if available.
@@ -275,7 +275,7 @@ fn fetch_and_cache(_cache_dir: &Path, cache_file: &Path) -> Result<Vec<RegistryA
 fn fetch_agent_list() -> Result<Vec<String>, String> {
     let response = ureq::get(REGISTRY_API)
         .set("Accept", "application/vnd.github.v3+json")
-        .set("User-Agent", "floo-network")
+        .set("User-Agent", "palisade-code")
         .call()
         .map_err(|e| format!("GitHub API request failed: {e}"))?;
     let body = response.into_string().map_err(|e| format!("read response: {e}"))?;
@@ -306,7 +306,7 @@ fn fetch_manifests(agent_ids: &[String]) -> Vec<RegistryAgent> {
 
 fn fetch_manifest(url: &str) -> Result<RegistryAgent, String> {
     let response = ureq::get(url)
-        .set("User-Agent", "floo-network")
+        .set("User-Agent", "palisade-code")
         .call()
         .map_err(|e| format!("fetch {url}: {e}"))?;
     let body = response.into_string().map_err(|e| format!("read {url}: {e}"))?;

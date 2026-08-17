@@ -93,7 +93,7 @@ describe("EditorStatusBar", () => {
     ).toContain("no such component");
   });
 
-  it("falls back to naming the server when Floo has no installer for it", async () => {
+  it("falls back to naming the server when Palisade has no installer for it", async () => {
     invokeMock.mockImplementation(() => Promise.resolve(null));
     render(
       <EditorStatusBar
@@ -123,7 +123,7 @@ describe("EditorStatusBar", () => {
     );
     // D14 disables for the *session*, so the way back is a restart — an
     // in-app "try again" would be a button that does nothing.
-    expect(screen.getByText(/Restart Floo/)).toBeDefined();
+    expect(screen.getByText(/Restart Palisade/)).toBeDefined();
   });
 
   it("still names the file's language when there is no server at all", () => {
@@ -148,17 +148,17 @@ describe("EditorStatusBar", () => {
       "false"
     );
     // The one persistence path, shared with Settings.
-    expect(localStorage.getItem("floo:completionEnabled")).toBe("false");
+    expect(localStorage.getItem("palisade:completionEnabled")).toBe("false");
 
     fireEvent.click(screen.getByTestId("fim-toggle"));
-    expect(localStorage.getItem("floo:completionEnabled")).toBe("true");
+    expect(localStorage.getItem("palisade:completionEnabled")).toBe("true");
   });
 
   it("follows a change made in Settings without a remount", () => {
     render(<EditorStatusBar language="Rust" lsp={status({})} />);
-    localStorage.setItem("floo:completionEnabled", "false");
+    localStorage.setItem("palisade:completionEnabled", "false");
     act(() =>
-      window.dispatchEvent(new Event("floo:completion-settings-changed"))
+      window.dispatchEvent(new Event("palisade:completion-settings-changed"))
     );
     expect(screen.getByTestId("fim-toggle")).toHaveAttribute(
       "aria-pressed",

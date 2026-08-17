@@ -1,10 +1,10 @@
 //! ACP permission handling (D12, D15).
 //!
-//! Floo handles ACP `permission_request` notifications as the permission gate.
+//! Palisade handles ACP `permission_request` notifications as the permission gate.
 //! Spec/go/bypass modes become permission-response policies using ACP's
 //! tool-kind taxonomy. The bypass toggle suppresses all prompts.
 
-/// ACP tool kinds that Floo recognizes for permission decisions.
+/// ACP tool kinds that Palisade recognizes for permission decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolKind {
     Read,
@@ -36,7 +36,7 @@ impl ToolKind {
     }
 }
 
-/// The permission decision Floo makes for a tool request.
+/// The permission decision Palisade makes for a tool request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     /// Auto-approve the request.

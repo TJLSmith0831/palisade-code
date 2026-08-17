@@ -28,7 +28,7 @@ pub struct ProjectSettings {
     /// this file back to defaults.
     pub executor_override: Option<String>,
     /// Name → shell command that proves something works, e.g.
-    /// `{ "test": "cargo test", "typecheck": "pnpm build" }`. Floo runs these
+    /// `{ "test": "cargo test", "typecheck": "pnpm build" }`. Palisade runs these
     /// itself and persists the exit code: a spec is never "complete" because a
     /// model said so — it is green because a named command exited 0 at a named
     /// commit (D3).
@@ -191,7 +191,7 @@ pub struct VerifyOutcome {
 
 /// Run one named verify command the same way `run_format_on_save` runs a
 /// formatter: `sh -c`, cwd = project root, stdout and stderr captured with the
-/// exit status. Floo runs it and reports what happened — it never decides that
+/// exit status. Palisade runs it and reports what happened — it never decides that
 /// a non-zero exit "doesn't count".
 pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -> Res<VerifyOutcome> {
     let command = settings
