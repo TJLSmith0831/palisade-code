@@ -14,7 +14,7 @@ import {
 import {
   Menu,
   Modal as MantineModal,
-  Switch,
+  Popover,
   Tooltip,
   Textarea,
   TextInput,
@@ -27,6 +27,7 @@ import {
   Alert,
   Group,
   Paper,
+  Stack,
   UnstyledButton,
 } from "@mantine/core";
 import {
@@ -41,6 +42,8 @@ import {
   IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
   IconSettings,
+  IconShield,
+  IconShieldOff,
   IconSunMoon,
   IconTerminal2,
 } from "@tabler/icons-react";
@@ -130,13 +133,15 @@ type ChatSurfaceProps = {
   thread: ThreadMeta | null;
   messages: Message[];
   live: ExecutorEvent[];
+  /** The live session id for this thread, if any — needed to resolve a
+   *  pending permission-approval prompt against the right session. */
+  sessionId: string | null;
   busy: boolean;
   /** This thread's isolated worktree, absent until its first session runs
    *  and for every thread in a non-git project. */
   worktree?: api.WorktreeStatus;
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
-  showThinking: boolean;
   executor: Preflight["selected"] | null;
   flight: Preflight | null;
   flightSelected: boolean;
@@ -212,10 +217,10 @@ export const ChatSurface = memo(
     thread,
     messages,
     live,
+    sessionId,
     busy,
     worktree,
     onViewDiff,
-    showThinking,
     executor,
     flight,
     flightSelected,
@@ -262,6 +267,9 @@ export const ChatSurface = memo(
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
+    // Confirmation popover for the Accept→Bypass direction only (D2e) — the
+    // reverse (Bypass→Accept) is a plain click, no popover state needed.
+    const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
     // D6/D15: "Other" spec-type text input state — local to the framing menu.
     const [otherSpecText, setOtherSpecText] = useState("");
     const [showOtherInput, setShowOtherInput] = useState(false);
@@ -994,8 +1002,8 @@ export const ChatSurface = memo(
             {items.length === 0 && <p className="empty">No messages yet.</p>}
             <EventList
               items={items}
-              showThinking={showThinking}
               executor={executor}
+              sessionId={sessionId}
             />
           </>
           {busy && (
@@ -1102,6 +1110,66 @@ export const ChatSurface = memo(
             </Paper>
           )}
 
+          {/* Standalone permission-mode toggle, always visible top-right of
+              the composer (D2c) — separate from the executor/model pickers
+              and Spec/Go control below. Icon carries the state (D2d); only
+              the dangerous direction (Accept→Bypass) asks for confirmation
+              (D2e). */}
+          <Popover
+            opened={bypassConfirmOpen}
+            onChange={setBypassConfirmOpen}
+            withArrow
+            position="top-end"
+          >
+            <Popover.Target>
+              <ActionIcon
+                variant="subtle"
+                color={threadBypass ? "var(--warn)" : "var(--muted)"}
+                data-testid="permission-mode-btn"
+                data-tauri-drag-region-exclude
+                aria-label={threadBypass ? "Bypass permissions" : "Accept permissions"}
+                style={{ position: "absolute", top: 8, right: 8, zIndex: 1 }}
+                onClick={() => {
+                  if (threadBypass) {
+                    onToggleBypass();
+                  } else {
+                    setBypassConfirmOpen(true);
+                  }
+                }}
+              >
+                {threadBypass ? <IconShieldOff size={16} /> : <IconShield size={16} />}
+              </ActionIcon>
+            </Popover.Target>
+            <Popover.Dropdown data-testid="permission-mode-confirm">
+              <Stack gap="xs">
+                <span style={{ fontSize: 13 }}>
+                  Bypass permissions for this thread? Tool calls will run
+                  without asking.
+                </span>
+                <Group gap="xs" justify="flex-end">
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    onClick={() => setBypassConfirmOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    color="var(--warn)"
+                    data-testid="permission-mode-confirm-bypass"
+                    onClick={() => {
+                      onToggleBypass();
+                      setBypassConfirmOpen(false);
+                    }}
+                  >
+                    Bypass
+                  </Button>
+                </Group>
+              </Stack>
+            </Popover.Dropdown>
+          </Popover>
+
           {/* Message input */}
           <Textarea
             value={draft}
@@ -1184,7 +1252,6 @@ export const ChatSurface = memo(
                   <IconBox size={14} />
                   <span className="ds-composer-picker-label">
                     {executorLabel ?? "none detected"}
-                    {threadBypass ? " · bypass" : ""}
                   </span>
                   <IconChevronDown size={12} />
                 </button>
@@ -1226,16 +1293,6 @@ export const ChatSurface = memo(
                     conversation off as text context.
                   </span>
                 )}
-                <Switch
-                  className="ds-bypass-row"
-                  label="Bypass permissions"
-                  description="Skip approval prompts"
-                  labelPosition="left"
-                  color="var(--warn)"
-                  checked={threadBypass}
-                  onChange={onToggleBypass}
-                  data-testid="bypass-toggle"
-                />
               </Menu.Dropdown>
             </Menu>
             <Menu
@@ -1538,8 +1595,6 @@ const DEFAULT_PROJECT_SETTINGS = `{
 const PROJECT_SETTINGS_FILE = ".project-settings.json";
 
 const lastThreadKey = (hash: string) => `palisade:lastThread:${hash}`;
-const SHOW_THINKING_KEY = "palisade:showThinking";
-const DEFAULT_BYPASS_KEY = "palisade:default-bypass";
 const threadPrefsKey = (hash: string, threadId: string) =>
   `palisade:thread-prefs:${hash}:${threadId}`;
 
@@ -1563,14 +1618,10 @@ const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
   localStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
 };
 
-const getDefaultBypass = () => localStorage.getItem(DEFAULT_BYPASS_KEY) === "1";
-const setDefaultBypass = (bypass: boolean) =>
-  localStorage.setItem(DEFAULT_BYPASS_KEY, bypass ? "1" : "0");
-
+// Every never-configured thread starts in Accept mode (D6) — no global
+// default a thread's own toggle could silently promote for every other one.
 const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
-  getThreadPrefs(hash, threadId) ?? {
-    bypass: getDefaultBypass(),
-  };
+  getThreadPrefs(hash, threadId) ?? { bypass: false };
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 type ThreadRowProps = {
   thread: ThreadMeta;
@@ -1878,8 +1929,6 @@ export default function App() {
   useEffect(() => {
     if (!bar) setSelectQuery("");
   }, [bar]);
-  // Executor/live state lives in useExecutor and is aliased here.
-  const showThinking = localStorage.getItem(SHOW_THINKING_KEY) === "1";
   // The open files. Shared by both shells, so switching between Vibe and
   // Editor never closes anything or loses where you were in a file.
   const tabs = useOpenTabs();
@@ -1935,9 +1984,9 @@ export default function App() {
   // Thread-level model/bypass preferences. The composer control reads and
   // writes these; the effective values are resolved before each session-starting
   // call so a live session keeps its original flags (design.md Decision 2).
-  const [threadPrefs, setThreadPrefsState] = useState<ThreadPrefs>(() => ({
-    bypass: getDefaultBypass(),
-  }));
+  const [threadPrefs, setThreadPrefsState] = useState<ThreadPrefs>({
+    bypass: false,
+  });
   const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
   const [hasLiveSession, setHasLiveSession] = useState(false);
   const onToggleBypass = () => {
@@ -1945,13 +1994,6 @@ export default function App() {
     const prefs = { bypass: !threadPrefs.bypass };
     setThreadPrefs(project.hash, thread.id, prefs);
     setThreadPrefsState(prefs);
-  };
-  const onToggleBypassDefault = () => {
-    if (!project || !thread) return;
-    if (!getThreadPrefs(project.hash, thread.id)) {
-      setDefaultBypass(!threadPrefs.bypass);
-    }
-    onToggleBypass();
   };
   // Check whether a live session exists for this thread when the prefs menu
   // opens, so the "Next session will use X" hint can show. A live session
@@ -3626,6 +3668,7 @@ export default function App() {
     thread,
     messages,
     live,
+    sessionId: liveSessionId,
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
     // The code changes themselves, in the editor column — not the Source
@@ -3634,7 +3677,6 @@ export default function App() {
       setDiffFocusPath(null);
       shell.setDiffOpen(true);
     },
-    showThinking,
     executor: activeExecutor,
     models: activeExecutor ? (modelsByAgent[activeExecutor] ?? null) : null,
     onPickExecutor,
@@ -3675,7 +3717,7 @@ export default function App() {
     onPickMode,
     onOpenSpec: (name: string) => tabs.openSpec(name),
     threadBypass: threadPrefs.bypass,
-    onToggleBypass: onToggleBypassDefault,
+    onToggleBypass,
     prefsMenuOpen,
     setPrefsMenuOpen: openPrefsMenu,
     hasLiveSession,
@@ -4243,7 +4285,6 @@ export default function App() {
                             )}
                             <EventList
                               items={allEdits}
-                              showThinking={showThinking}
                               executor={flight?.selected ?? null}
                             />
                           </section>

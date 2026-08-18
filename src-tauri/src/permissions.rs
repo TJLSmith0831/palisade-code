@@ -5,7 +5,7 @@
 //! tool-kind taxonomy. The bypass toggle suppresses all prompts.
 
 /// ACP tool kinds that Palisade recognizes for permission decisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
     Read,
     Search,
@@ -32,6 +32,22 @@ impl ToolKind {
             "move" => ToolKind::Move,
             "execute" => ToolKind::Execute,
             _ => ToolKind::Other,
+        }
+    }
+
+    /// The inverse of `from_str` — the label an approval prompt shows the
+    /// user for this kind.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolKind::Read => "read",
+            ToolKind::Search => "search",
+            ToolKind::Think => "think",
+            ToolKind::Fetch => "fetch",
+            ToolKind::Edit => "edit",
+            ToolKind::Delete => "delete",
+            ToolKind::Move => "move",
+            ToolKind::Execute => "execute",
+            ToolKind::Other => "other",
         }
     }
 }

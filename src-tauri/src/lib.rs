@@ -1376,6 +1376,29 @@ async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res
     .map_err(|e| e.to_string())?
 }
 
+/// Resolve a pending tool-call approval prompt (D7, D-design-2). A missing
+/// or already-resolved `request_id` is a no-op success — the frontend may
+/// hold a stale button after a fast session teardown.
+#[tauri::command]
+async fn answer_permission_prompt(
+    app: tauri::AppHandle,
+    session_id: String,
+    request_id: String,
+    decision: String,
+) -> Res<()> {
+    let answer = acp_client::PermissionAnswer::parse(&decision)
+        .ok_or_else(|| format!("unknown permission decision: {decision}"))?;
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        if let Some(session) = harness.acp_sessions.lock().unwrap().get(&session_id) {
+            session.answer_permission_prompt(&request_id, answer);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What each live session is doing.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2074,6 +2097,7 @@ pub fn run() {
             apply_skill,
             change_status,
             stop_executor,
+            answer_permission_prompt,
             executor_status,
             list_sessions,
             thread_worktrees,

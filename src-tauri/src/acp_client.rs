@@ -7,11 +7,13 @@
 //! agent's model selector (category `model`), which is how Palisade learns which
 //! models the agent actually offers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+
+use tokio::sync::oneshot;
 
 use agent_client_protocol::schema::v1;
 use agent_client_protocol::{self as acp, ConnectTo};
@@ -154,6 +156,8 @@ pub struct AcpSession {
     stopping: Arc<AtomicBool>,
     /// Commands for the bridge thread; dropping it ends the connection.
     cmd_tx: Option<tokio::sync::mpsc::UnboundedSender<BridgeCommand>>,
+    /// Tool calls awaiting the user's Allow/Deny/AllowSession decision.
+    pending_permissions: PendingPermissions,
 }
 
 impl AcpSession {
@@ -161,8 +165,19 @@ impl AcpSession {
         self.busy.load(Ordering::SeqCst)
     }
 
+    /// Resolve a pending permission request from outside the bridge thread
+    /// (the `answer_permission_prompt` Tauri command). A missing id is a
+    /// no-op success — already resolved, or the session is gone.
+    pub fn answer_permission_prompt(&self, request_id: &str, answer: PermissionAnswer) {
+        if let Some(tx) = self.pending_permissions.lock().unwrap().remove(request_id) {
+            let _ = tx.send(answer);
+        }
+    }
+
     /// Terminate this session: tell the bridge to shut down, which closes the
-    /// connection and kills the agent process tree.
+    /// connection and kills the agent process tree. Fail-safe-to-deny (D-design-4):
+    /// any tool call still awaiting the user's decision resolves as denied
+    /// rather than left hanging or defaulting to allow.
     pub fn terminate(&mut self) {
         self.stopping.store(true, Ordering::SeqCst);
         if let Some(tx) = &self.cmd_tx {
@@ -170,6 +185,9 @@ impl AcpSession {
         }
         self.cmd_tx = None;
         self.busy.store(false, Ordering::SeqCst);
+        for (_, tx) in self.pending_permissions.lock().unwrap().drain() {
+            let _ = tx.send(PermissionAnswer::Deny);
+        }
     }
 }
 
@@ -220,6 +238,32 @@ fn emit(sink: &Arc<dyn Sink>, session_id: &str, thread_id: &str, event: Executor
         event,
     });
 }
+
+/// The user's answer to a pending `Prompt`-tier permission request (D7b,
+/// D-design-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionAnswer {
+    Allow,
+    Deny,
+    AllowSession,
+}
+
+impl PermissionAnswer {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "allow" => Some(Self::Allow),
+            "deny" => Some(Self::Deny),
+            "allow_session" => Some(Self::AllowSession),
+            _ => None,
+        }
+    }
+}
+
+/// Requests awaiting the user's decision, keyed by a fresh id distinct from
+/// `tool_call_id` (D-design-2). Lives on the session handle, shared with the
+/// bridge task the same way `busy` already is, so `answer_permission_prompt`
+/// (lib.rs) can resolve one from outside the bridge thread.
+pub(crate) type PendingPermissions = Arc<Mutex<HashMap<String, oneshot::Sender<PermissionAnswer>>>>;
 
 fn permission_mode(mode: &str, bypass: bool) -> PermissionMode {
     if bypass {
@@ -324,11 +368,19 @@ fn tool_call_paths(
 }
 
 /// Answer an agent permission request according to the session's mode
-/// policy (D12, D15). `Prompt` has no UI surface yet, so it cancels — the
-/// safe default until the permission prompt UI lands.
-fn answer_permission(
+/// policy (D12, D15). `Prompt` pauses the turn on a oneshot channel until
+/// the user answers via `answer_permission_prompt` (D7, D-design-1); a kind
+/// already in `session_allowed` (an earlier "allow for rest of session")
+/// auto-allows without registering a new pending entry (D-design-3).
+#[allow(clippy::too_many_arguments)]
+async fn answer_permission(
     request: &v1::RequestPermissionRequest,
     mode: PermissionMode,
+    session_allowed: &Mutex<HashSet<permissions::ToolKind>>,
+    pending: &PendingPermissions,
+    sink: &Arc<dyn Sink>,
+    session_id: &str,
+    thread_id: &str,
 ) -> v1::RequestPermissionResponse {
     let kind = tool_kind(request.tool_call.fields.kind.as_ref());
     let command = raw_command(request.tool_call.fields.raw_input.as_ref());
@@ -337,9 +389,45 @@ fn answer_permission(
         request.tool_call.fields.content.as_deref().unwrap_or(&[]),
         request.tool_call.fields.raw_input.as_ref(),
     );
-    let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-    match permissions::decide_permission(mode, kind, command.as_deref(), &path_refs) {
-        PermissionDecision::Allow => {
+
+    let decision = if session_allowed.lock().unwrap().contains(&kind) {
+        PermissionDecision::Allow
+    } else {
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        permissions::decide_permission(mode, kind, command.as_deref(), &path_refs)
+    };
+
+    let answer = match decision {
+        PermissionDecision::Allow => PermissionAnswer::Allow,
+        PermissionDecision::Deny => PermissionAnswer::Deny,
+        PermissionDecision::Prompt => {
+            let request_id = ulid::Ulid::new().to_string();
+            let (tx, rx) = oneshot::channel();
+            pending.lock().unwrap().insert(request_id.clone(), tx);
+            emit(
+                sink,
+                session_id,
+                thread_id,
+                ExecutorEvent::PermissionRequest {
+                    id: request_id,
+                    tool_call_id: request.tool_call.tool_call_id.to_string(),
+                    tool_kind: kind.as_str().to_string(),
+                    command: command.clone(),
+                    paths: paths.clone(),
+                },
+            );
+            // A dropped sender (session torn down while awaiting) resolves
+            // to Deny rather than leaving this hanging.
+            rx.await.unwrap_or(PermissionAnswer::Deny)
+        }
+    };
+
+    if answer == PermissionAnswer::AllowSession {
+        session_allowed.lock().unwrap().insert(kind);
+    }
+
+    match answer {
+        PermissionAnswer::Allow | PermissionAnswer::AllowSession => {
             let option = request
                 .options
                 .iter()
@@ -354,7 +442,7 @@ fn answer_permission(
                 None => v1::RequestPermissionResponse::new(v1::RequestPermissionOutcome::Cancelled),
             }
         }
-        PermissionDecision::Deny | PermissionDecision::Prompt => {
+        PermissionAnswer::Deny => {
             v1::RequestPermissionResponse::new(v1::RequestPermissionOutcome::Cancelled)
         }
     }
@@ -463,12 +551,14 @@ fn spec_mode_violation(
 /// Run the ACP connection until shutdown. Errors before the session is ready
 /// are reported through `ready_tx`; errors afterwards surface as `Crashed`
 /// events on the sink.
+#[allow(clippy::too_many_arguments)]
 async fn run_bridge(
     transport: impl ConnectTo<acp::Client>,
     spawn: AcpSpawn,
     palisade_session_id: String,
     sink: Arc<dyn Sink>,
     busy: Arc<AtomicBool>,
+    pending_permissions: PendingPermissions,
     ready_tx: mpsc::Sender<Result<ReadyReport, String>>,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>,
     probe_only: bool,
@@ -477,14 +567,28 @@ async fn run_bridge(
     let notif_session = palisade_session_id.clone();
     let notif_thread = spawn.thread_id.clone();
     let perm_mode = permission_mode(&spawn.mode, spawn.bypass);
+    // "Allow for rest of session" (D7b) — scoped to this bridge task's
+    // lifetime, so it needs no explicit cleanup on teardown (D-design-3).
+    let session_allowed: Arc<Mutex<HashSet<permissions::ToolKind>>> =
+        Arc::new(Mutex::new(HashSet::new()));
+    let perm_sink = sink.clone();
+    let perm_session = palisade_session_id.clone();
+    let perm_thread = spawn.thread_id.clone();
+    let perm_pending = pending_permissions.clone();
     // ACP streams chunks; there is no complete-text event at turn end.
     // Accumulate text/thought chunks per turn so the prompt response can
     // emit the assembled `Text`/`Reasoning` events that persist() writes
     // to the thread log.
     let text_buf = Arc::new(std::sync::Mutex::new(String::new()));
     let think_buf = Arc::new(std::sync::Mutex::new(String::new()));
+    // When `think_buf` first goes non-empty for a turn — the "Thought for
+    // Ns" start instant (reasoning-collapse-ux D-design-2). `None` between
+    // turns and while a turn has produced no reasoning yet.
+    let think_started: Arc<std::sync::Mutex<Option<std::time::Instant>>> =
+        Arc::new(std::sync::Mutex::new(None));
     let notif_text = text_buf.clone();
     let notif_think = think_buf.clone();
+    let notif_think_started = think_started.clone();
     // Whether the current turn has already been cancelled for a Spec-mode
     // violation. Prevents double-cancellation when multiple write tool calls
     // arrive in the same turn.
@@ -530,6 +634,7 @@ async fn run_bridge(
                             // doesn't flush partial text as a "completed" turn.
                             notif_text.lock().unwrap().clear();
                             notif_think.lock().unwrap().clear();
+                            *notif_think_started.lock().unwrap() = None;
                             emit(
                                 &notif_sink,
                                 &notif_session,
@@ -550,7 +655,11 @@ async fn run_bridge(
                             notif_text.lock().unwrap().push_str(text)
                         }
                         crate::acp_events::AcpUpdate::ReasoningDelta { text } => {
-                            notif_think.lock().unwrap().push_str(text)
+                            let mut buf = notif_think.lock().unwrap();
+                            if buf.is_empty() {
+                                *notif_think_started.lock().unwrap() = Some(std::time::Instant::now());
+                            }
+                            buf.push_str(text);
                         }
                         _ => {}
                     }
@@ -567,7 +676,17 @@ async fn run_bridge(
         )
         .on_receive_request(
             async move |request: v1::RequestPermissionRequest, responder, _cx| {
-                responder.respond(answer_permission(&request, perm_mode))
+                let response = answer_permission(
+                    &request,
+                    perm_mode,
+                    &session_allowed,
+                    &perm_pending,
+                    &perm_sink,
+                    &perm_session,
+                    &perm_thread,
+                )
+                .await;
+                responder.respond(response)
             },
             acp::on_receive_request!(),
         )
@@ -663,6 +782,7 @@ async fn run_bridge(
                                 let done_busy = busy.clone();
                                 let done_text = text_buf.clone();
                                 let done_think = think_buf.clone();
+                                let done_think_started = think_started.clone();
                                 let done_cancelled = cancelled.clone();
                                 // Reset the per-turn cancellation flag.
                                 cancelled.store(false, Ordering::SeqCst);
@@ -686,8 +806,12 @@ async fn run_bridge(
                                         emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Text { text: full });
                                     }
                                     let thought = std::mem::take(&mut *done_think.lock().unwrap());
+                                    let started = done_think_started.lock().unwrap().take();
                                     if !thought.trim().is_empty() {
-                                        emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Reasoning { text: thought });
+                                        let elapsed_secs = started
+                                            .map(|s| s.elapsed().as_secs())
+                                            .unwrap_or(0);
+                                        emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Reasoning { text: thought, elapsed_secs });
                                     }
                                     match result {
                                         Ok(_) => emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Done),
@@ -755,12 +879,15 @@ fn start_with_transport(
         tokio::sync::mpsc::UnboundedSender<BridgeCommand>,
         Arc<AtomicBool>,
         String,
+        PendingPermissions,
     ),
     String,
 > {
     let palisade_session_id = ulid::Ulid::new().to_string();
     let busy = Arc::new(AtomicBool::new(false));
     let bridge_busy = busy.clone();
+    let pending_permissions: PendingPermissions = Arc::new(Mutex::new(HashMap::new()));
+    let bridge_pending = pending_permissions.clone();
     let (ready_tx, ready_rx) = mpsc::channel::<Result<ReadyReport, String>>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<BridgeCommand>();
 
@@ -782,6 +909,7 @@ fn start_with_transport(
             thread_session,
             sink,
             bridge_busy,
+            bridge_pending,
             ready_tx,
             cmd_rx,
             probe_only,
@@ -795,6 +923,7 @@ fn start_with_transport(
             cmd_tx,
             busy,
             report.acp_session_id,
+            pending_permissions,
         )),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(format!("agent did not answer within {STARTUP_TIMEOUT:?}")),
@@ -810,9 +939,9 @@ fn start_with_transport(
 pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Result<AcpSession, String> {
     let agent = agent_config(&spawn);
     let identity = SessionIdentity::from(&spawn);
-    let (id, models, cmd_tx, busy, acp_session_id) =
+    let (id, models, cmd_tx, busy, acp_session_id, pending_permissions) =
         start_with_transport(agent, spawn, sink, false)?;
-    let mut session = identity.into_session(id, models, cmd_tx, busy);
+    let mut session = identity.into_session(id, models, cmd_tx, busy, pending_permissions);
     session.acp_session_id = Some(acp_session_id);
     Ok(session)
 }
@@ -840,7 +969,7 @@ pub fn probe_models(
         palisade_home: PathBuf::new(),
     };
     let agent = agent_config(&spawn);
-    let (_id, models, _cmd_tx, _busy, _acp_id) =
+    let (_id, models, _cmd_tx, _busy, _acp_id, _pending) =
         start_with_transport(agent, spawn, Arc::new(NullSink), true)?;
     Ok(models)
 }
@@ -902,7 +1031,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result
     let collected = Arc::new(Mutex::new(Collected::default()));
     let sink = Arc::new(CollectingSink(collected.clone()));
     let agent = agent_config(&spawn);
-    let (_id, models, cmd_tx, busy, _acp_id) =
+    let (_id, models, cmd_tx, busy, _acp_id, _pending) =
         start_with_transport(agent, spawn, sink, false)?;
     let _ = models;
 
@@ -968,6 +1097,7 @@ impl SessionIdentity {
         models: ModelState,
         cmd_tx: tokio::sync::mpsc::UnboundedSender<BridgeCommand>,
         busy: Arc<AtomicBool>,
+        pending_permissions: PendingPermissions,
     ) -> AcpSession {
         AcpSession {
             id,
@@ -986,6 +1116,7 @@ impl SessionIdentity {
             busy,
             stopping: Arc::new(AtomicBool::new(false)),
             cmd_tx: Some(cmd_tx),
+            pending_permissions,
         }
     }
 }
@@ -1035,6 +1166,7 @@ pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::Unboun
             busy: Arc::new(AtomicBool::new(busy)),
             stopping: Arc::new(AtomicBool::new(false)),
             cmd_tx: Some(cmd_tx),
+            pending_permissions: Arc::new(Mutex::new(HashMap::new())),
         },
         cmd_rx,
     )
@@ -1068,7 +1200,7 @@ mod tests {
     fn collector_ignores_deltas_and_other_events() {
         let mut collected = Collected::default();
         collected.accept(&ExecutorEvent::TextDelta { text: "fix".into() });
-        collected.accept(&ExecutorEvent::Reasoning { text: "thinking".into() });
+        collected.accept(&ExecutorEvent::Reasoning { text: "thinking".into(), elapsed_secs: 0 });
         collected.accept(&ExecutorEvent::ToolCall {
             id: "1".into(),
             name: "bash".into(),
@@ -1157,19 +1289,45 @@ mod tests {
         }
     }
 
+    /// Test rig for `answer_permission`: fresh session-allow-list, pending
+    /// map, and an event-observing sink, all handed back so a test can both
+    /// await the response and inspect what was emitted/registered.
+    struct PermissionRig {
+        session_allowed: Mutex<HashSet<permissions::ToolKind>>,
+        pending: PendingPermissions,
+        sink: Arc<dyn Sink>,
+        events: std::sync::mpsc::Receiver<Envelope>,
+    }
+
+    impl PermissionRig {
+        fn new() -> Self {
+            let (tx, rx) = std::sync::mpsc::channel();
+            Self {
+                session_allowed: Mutex::new(HashSet::new()),
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                sink: Arc::new(ChannelSink(tx)),
+                events: rx,
+            }
+        }
+
+        async fn answer(&self, req: &v1::RequestPermissionRequest, mode: PermissionMode) -> v1::RequestPermissionResponse {
+            answer_permission(req, mode, &self.session_allowed, &self.pending, &self.sink, "sess-1", "thread-1").await
+        }
+    }
+
     /// RED→GREEN: spec mode auto-approves reads.
-    #[test]
-    fn spec_mode_allows_read() {
+    #[tokio::test]
+    async fn spec_mode_allows_read() {
         let req = permission_request(v1::ToolKind::Read, None);
-        let res = answer_permission(&req, PermissionMode::Spec);
+        let res = PermissionRig::new().answer(&req, PermissionMode::Spec).await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
     }
 
     /// RED→GREEN: spec mode denies edits by cancelling.
-    #[test]
-    fn spec_mode_denies_edit() {
+    #[tokio::test]
+    async fn spec_mode_denies_edit() {
         let req = permission_request(v1::ToolKind::Edit, None);
-        let res = answer_permission(&req, PermissionMode::Spec);
+        let res = PermissionRig::new().answer(&req, PermissionMode::Spec).await;
         assert!(matches!(
             res.outcome,
             v1::RequestPermissionOutcome::Cancelled
@@ -1177,30 +1335,122 @@ mod tests {
     }
 
     /// RED→GREEN: bypass mode allows everything.
-    #[test]
-    fn bypass_allows_execute() {
+    #[tokio::test]
+    async fn bypass_allows_execute() {
         let req = permission_request(v1::ToolKind::Execute, Some(serde_json::json!({"command": "rm -rf /tmp/x"})));
-        let res = answer_permission(&req, PermissionMode::Bypass);
+        let res = PermissionRig::new().answer(&req, PermissionMode::Bypass).await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
     }
 
     /// RED→GREEN: openspec commands are whitelisted even in spec mode (D20).
-    #[test]
-    fn spec_mode_allows_openspec_execute() {
+    #[tokio::test]
+    async fn spec_mode_allows_openspec_execute() {
         let req = permission_request(v1::ToolKind::Execute, Some(serde_json::json!({"command": "openspec list"})));
-        let res = answer_permission(&req, PermissionMode::Spec);
+        let res = PermissionRig::new().answer(&req, PermissionMode::Spec).await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
     }
 
-    /// RED→GREEN: go-mode prompts on execute → cancelled until the prompt UI exists.
-    #[test]
-    fn go_mode_prompt_cancels_for_now() {
+    /// RED→GREEN 1.2: a Prompt-tier request registers a pending entry and
+    /// emits `PermissionRequest`, and does not resolve until answered.
+    #[tokio::test]
+    async fn go_mode_prompt_registers_pending_and_waits() {
         let req = permission_request(v1::ToolKind::Execute, Some(serde_json::json!({"command": "cargo build"})));
-        let res = answer_permission(&req, PermissionMode::Go);
-        assert!(matches!(
-            res.outcome,
-            v1::RequestPermissionOutcome::Cancelled
-        ));
+        let rig = PermissionRig::new();
+
+        // Race the future against a short timeout: it must NOT resolve on
+        // its own — only once a decision is sent through the pending sender.
+        let fut = rig.answer(&req, PermissionMode::Go);
+        tokio::pin!(fut);
+        let raced = tokio::time::timeout(Duration::from_millis(50), &mut fut).await;
+        assert!(raced.is_err(), "should still be waiting for the user's decision");
+
+        let event = rig.events.recv_timeout(Duration::from_millis(50)).expect("PermissionRequest should have been emitted");
+        let ExecutorEvent::PermissionRequest { id, tool_kind, command, .. } = event.event else {
+            panic!("expected a PermissionRequest event, got {:?}", event.event);
+        };
+        assert_eq!(tool_kind, "execute");
+        assert_eq!(command.as_deref(), Some("cargo build"));
+
+        let tx = rig.pending.lock().unwrap().remove(&id).expect("pending entry should be registered");
+        tx.send(PermissionAnswer::Allow).unwrap();
+        let res = fut.await;
+        assert_eq!(selected_option(res).as_deref(), Some("allow"));
+    }
+
+    /// RED→GREEN 1.3: Allow/Deny sent through the paired sender resolve
+    /// `answer_permission` to the corresponding response.
+    #[tokio::test]
+    async fn pending_decision_resolves_to_matching_response() {
+        for (answer, expect_allow) in [(PermissionAnswer::Allow, true), (PermissionAnswer::Deny, false)] {
+            let req = permission_request(v1::ToolKind::Delete, None);
+            let rig = PermissionRig::new();
+            let fut = rig.answer(&req, PermissionMode::Go);
+            tokio::pin!(fut);
+            let _ = tokio::time::timeout(Duration::from_millis(20), &mut fut).await;
+            let event = rig.events.recv_timeout(Duration::from_millis(50)).unwrap();
+            let ExecutorEvent::PermissionRequest { id, .. } = event.event else { panic!("expected PermissionRequest") };
+            let tx = rig.pending.lock().unwrap().remove(&id).unwrap();
+            tx.send(answer).unwrap();
+            let res = fut.await;
+            assert_eq!(selected_option(res).is_some(), expect_allow);
+        }
+    }
+
+    /// RED→GREEN 2.1: once a kind is allowed for the session, later
+    /// Prompt-tier requests of that kind auto-allow without a new pending entry.
+    #[tokio::test]
+    async fn allow_session_auto_allows_later_calls_of_the_same_kind() {
+        let rig = PermissionRig::new();
+        let first = permission_request(v1::ToolKind::Execute, Some(serde_json::json!({"command": "cargo build"})));
+        let fut = rig.answer(&first, PermissionMode::Go);
+        tokio::pin!(fut);
+        let _ = tokio::time::timeout(Duration::from_millis(20), &mut fut).await;
+        let event = rig.events.recv_timeout(Duration::from_millis(50)).unwrap();
+        let ExecutorEvent::PermissionRequest { id, .. } = event.event else { panic!("expected PermissionRequest") };
+        let tx = rig.pending.lock().unwrap().remove(&id).unwrap();
+        tx.send(PermissionAnswer::AllowSession).unwrap();
+        let res = fut.await;
+        assert_eq!(selected_option(res).as_deref(), Some("allow"));
+
+        // A second Execute request of the same kind auto-allows: no new
+        // pending entry, no new PermissionRequest event.
+        let second = permission_request(v1::ToolKind::Execute, Some(serde_json::json!({"command": "cargo test"})));
+        let res2 = rig.answer(&second, PermissionMode::Go).await;
+        assert_eq!(selected_option(res2).as_deref(), Some("allow"));
+        assert!(rig.events.try_recv().is_err(), "no second PermissionRequest should have been emitted");
+        assert!(rig.pending.lock().unwrap().is_empty());
+    }
+
+    /// RED→GREEN 3.1: draining a session's pending permissions on teardown
+    /// resolves every still-pending sender to Deny.
+    #[tokio::test]
+    async fn terminate_drains_pending_permissions_as_denied() {
+        let (mut session, _cmd_rx) = stub_session(false);
+        let (tx, rx) = oneshot::channel();
+        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+
+        session.terminate();
+
+        assert_eq!(rx.await, Ok(PermissionAnswer::Deny));
+        assert!(session.pending_permissions.lock().unwrap().is_empty());
+    }
+
+    /// RED→GREEN: `answer_permission_prompt` resolves a registered pending
+    /// entry and is a no-op for an unknown/already-resolved id.
+    #[tokio::test]
+    async fn answer_permission_prompt_resolves_or_no_ops() {
+        let (session, _cmd_rx) = stub_session(false);
+        let (tx, mut rx) = oneshot::channel();
+        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+
+        session.answer_permission_prompt("does-not-exist", PermissionAnswer::Allow);
+        assert!(rx.try_recv().is_err(), "unknown id must not resolve the real pending entry");
+
+        session.answer_permission_prompt("req-1", PermissionAnswer::Allow);
+        assert_eq!(rx.await, Ok(PermissionAnswer::Allow));
+
+        // Already-resolved id: a second call is a harmless no-op.
+        session.answer_permission_prompt("req-1", PermissionAnswer::Deny);
     }
 
     // --------------------------------------------------------- spec-mode notification enforcement
@@ -1424,6 +1674,10 @@ mod tests {
     /// text chunk per prompt, and records set_config_option requests.
     struct FakeAgent {
         set_config_requests: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        /// Also stream a couple of `AgentThoughtChunk`s before the reply —
+        /// opt-in so `bridge_prompt_round_trips`' text-only event sequence
+        /// stays exact for every other test using this fake.
+        emit_thoughts: bool,
     }
 
     impl FakeAgent {
@@ -1435,6 +1689,7 @@ mod tests {
             >,
         ) -> tokio::task::JoinHandle<()> {
             let set_requests = self.set_config_requests.clone();
+            let emit_thoughts = self.emit_thoughts;
             tokio::spawn(async move {
                 let _ = acp::Agent
                     .builder()
@@ -1485,7 +1740,17 @@ mod tests {
                         acp::on_receive_request!(),
                     )
                     .on_receive_request(
-                        async |req: v1::PromptRequest, responder, cx| {
+                        async move |req: v1::PromptRequest, responder, cx| {
+                            if emit_thoughts {
+                                for piece in ["hmm ", "thinking"] {
+                                    let _ = cx.send_notification(v1::SessionNotification::new(
+                                        req.session_id.clone(),
+                                        v1::SessionUpdate::AgentThoughtChunk(v1::ContentChunk::new(
+                                            v1::ContentBlock::Text(v1::TextContent::new(piece)),
+                                        )),
+                                    ));
+                                }
+                            }
                             for piece in ["agent ", "reply"] {
                                 let _ = cx.send_notification(v1::SessionNotification::new(
                                     req.session_id.clone(),
@@ -1514,6 +1779,19 @@ mod tests {
         FakeAgent,
         tokio::task::JoinHandle<()>,
     ) {
+        fake_agent_pair_with(false)
+    }
+
+    fn fake_agent_pair_with(
+        emit_thoughts: bool,
+    ) -> (
+        acp::ByteStreams<
+            impl futures::AsyncWrite + Send + 'static,
+            impl futures::AsyncRead + Send + 'static,
+        >,
+        FakeAgent,
+        tokio::task::JoinHandle<()>,
+    ) {
         use tokio_util::compat::TokioAsyncReadCompatExt;
         use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -1523,6 +1801,7 @@ mod tests {
 
         let fake = FakeAgent {
             set_config_requests: Arc::new(std::sync::Mutex::new(vec![])),
+            emit_thoughts,
         };
         let handle = fake.spawn(acp::ByteStreams::new(
             agent_w.compat_write(),
@@ -1568,7 +1847,7 @@ mod tests {
         let (transport, _fake, _agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
         let session = start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false);
-        let (_id, models, _cmds, _busy, acp_id) = session.expect("session should start");
+        let (_id, models, _cmds, _busy, acp_id, _pending) = session.expect("session should start");
         assert_eq!(models.current.as_deref(), Some("model-a"));
         assert_eq!(models.models.len(), 2);
         assert_eq!(acp_id, "acp-sess-1");
@@ -1581,12 +1860,12 @@ mod tests {
     async fn bridge_prompt_round_trips() {
         let (transport, _fake, _agent) = fake_agent_pair();
         let (tx, rx) = std::sync::mpsc::channel();
-        let (id, _models, cmds, busy, _acp_id) =
+        let (id, _models, cmds, busy, _acp_id, pending) =
             start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false)
                 .unwrap();
 
         let session = SessionIdentity::from(&test_spawn(None))
-            .into_session(id, ModelState::default(), cmds, busy);
+            .into_session(id, ModelState::default(), cmds, busy, pending);
         send_acp_prompt(&session, "hello").unwrap();
 
         // Live deltas stream first…
@@ -1605,13 +1884,48 @@ mod tests {
         assert!(!session.is_busy());
     }
 
+    /// RED→GREEN 1.2: reasoning deltas accumulate and the turn-completion
+    /// flush emits a complete `Reasoning` event carrying a real elapsed time
+    /// (reasoning-collapse-ux D-design-2) — not the placeholder 0 the
+    /// unreachable `acp_events::map_acp_update` arm uses.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bridge_reasoning_round_trips_with_elapsed_time() {
+        let (transport, _fake, _agent) = fake_agent_pair_with(true);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (id, _models, cmds, busy, _acp_id, pending) =
+            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false)
+                .unwrap();
+        let session = SessionIdentity::from(&test_spawn(None))
+            .into_session(id, ModelState::default(), cmds, busy, pending);
+        send_acp_prompt(&session, "hello").unwrap();
+
+        // Reasoning deltas stream before the text ones (FakeAgent's order).
+        let first = recv_event(&rx);
+        assert!(matches!(first.event, ExecutorEvent::ReasoningDelta { ref text } if text == "hmm "));
+        let second = recv_event(&rx);
+        assert!(matches!(second.event, ExecutorEvent::ReasoningDelta { ref text } if text == "thinking"));
+
+        // Drain the text events, then the complete Reasoning event.
+        loop {
+            let event = recv_event(&rx);
+            if let ExecutorEvent::Reasoning { text, elapsed_secs } = event.event {
+                assert_eq!(text, "hmm thinking");
+                // Real time elapsed, not the acp_events placeholder — a
+                // same-process round trip is well under a second, so this
+                // just proves it's a real (small) duration, not garbage.
+                assert!(elapsed_secs < 5, "elapsed_secs should be a small real duration, got {elapsed_secs}");
+                break;
+            }
+        }
+    }
+
     /// RED→GREEN: a thread-chosen model is applied via set_config_option
     /// right after session/new.
     #[tokio::test(flavor = "multi_thread")]
     async fn bridge_applies_model_choice() {
         let (transport, fake, _agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
-        let (_id, models, _cmds, _busy, _acp_id) = start_with_transport(
+        let (_id, models, _cmds, _busy, _acp_id, _pending) = start_with_transport(
             transport,
             test_spawn(Some("model-b".into())),
             Arc::new(ChannelSink(tx)),
@@ -1631,7 +1945,7 @@ mod tests {
     async fn probe_returns_models_without_a_session() {
         let (transport, _fake, agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
-        let (_id, models, _cmds, _busy, _acp_id) =
+        let (_id, models, _cmds, _busy, _acp_id, _pending) =
             start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), true)
                 .unwrap();
         assert_eq!(models.models.len(), 2);

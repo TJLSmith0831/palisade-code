@@ -1,5 +1,5 @@
-import { memo, useMemo, useState } from "react";
-import { Alert, Badge, Box, Code, Paper, Stack } from "@mantine/core";
+import { memo, useCallback, useMemo, useState } from "react";
+import { Alert, Badge, Box, Button, Code, Group, Paper, Stack } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import {
   IconChevronDown,
@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 
 import type { ExecutorEvent, Message, Preflight } from "./api";
+import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
 
@@ -52,13 +53,28 @@ export type Item =
 export function mergeDeltas(events: ExecutorEvent[]): ExecutorEvent[] {
   const merged: ExecutorEvent[] = [];
   for (const event of events) {
-    if (event.kind === "textDelta" || event.kind === "reasoningDelta") {
-      const kind = event.kind === "textDelta" ? "text" : "reasoning";
+    if (event.kind === "textDelta") {
       const last = merged[merged.length - 1];
-      if (last && last.kind === kind) {
-        merged[merged.length - 1] = { kind, text: last.text + event.text };
+      if (last && last.kind === "text") {
+        merged[merged.length - 1] = { kind: "text", text: last.text + event.text };
       } else {
-        merged.push({ kind, text: event.text });
+        merged.push({ kind: "text", text: event.text });
+      }
+      continue;
+    }
+    if (event.kind === "reasoningDelta") {
+      // elapsedSecs is a placeholder while a turn is still streaming — the
+      // authoritative "reasoning" event below replaces this wholesale with
+      // the backend-computed value once the turn completes.
+      const last = merged[merged.length - 1];
+      if (last && last.kind === "reasoning") {
+        merged[merged.length - 1] = {
+          kind: "reasoning",
+          text: last.text + event.text,
+          elapsedSecs: 0,
+        };
+      } else {
+        merged.push({ kind: "reasoning", text: event.text, elapsedSecs: 0 });
       }
       continue;
     }
@@ -99,17 +115,99 @@ export function itemsFromMessages(messages: Message[]): Item[] {
   });
 }
 
+/** Per-turn reasoning disclosure, default collapsed (reasoning-collapse-ux).
+ *  Reuses ToolBlock's collapsible Paper/header/chevron shell rather than a
+ *  bespoke look — one collapsible-block pattern in the chat, not two. */
+function ReasoningBlock({
+  event,
+}: {
+  event: Extract<ExecutorEvent, { kind: "reasoning" }>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Paper
+      withBorder
+      radius="sm"
+      p={0}
+      data-testid="reasoning-block"
+      style={{ maxWidth: "100%", overflow: "hidden" }}
+    >
+      <Box
+        onClick={() => setOpen(!open)}
+        data-testid="reasoning-block-header"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          padding: "6px 12px",
+          cursor: "pointer",
+          userSelect: "none",
+          boxSizing: "border-box",
+        }}
+      >
+        {open ? (
+          <IconChevronDown
+            size={14}
+            style={{ flex: "0 0 auto" }}
+            data-testid="reasoning-block-open-chev"
+          />
+        ) : (
+          <IconChevronRight
+            size={14}
+            style={{ flex: "0 0 auto" }}
+            data-testid="reasoning-block-closed-chev"
+          />
+        )}
+        <Box
+          style={{
+            flex: "1 1 0",
+            minWidth: 0,
+            fontSize: 12,
+            color: "var(--muted)",
+          }}
+        >
+          Thought for {event.elapsedSecs}s
+        </Box>
+      </Box>
+      {open && (
+        <Box
+          p="sm"
+          data-testid="reasoning-block-text"
+          style={{
+            borderTop: "1px solid var(--border)",
+            whiteSpace: "pre-wrap",
+            fontSize: 13,
+            color: "var(--muted)",
+            maxHeight: 320,
+            overflow: "auto",
+          }}
+        >
+          {event.text}
+        </Box>
+      )}
+    </Paper>
+  );
+}
+
 function ToolBlock({
   event,
   output,
+  pending,
+  onAnswer,
 }: {
   event: Extract<ExecutorEvent, { kind: "toolCall" }>;
   output?: Extract<ExecutorEvent, { kind: "toolResult" }>;
+  /** Set when the permission policy flagged this call as needing the user's
+   *  decision (D7, tool-approval-prompt spec) — the turn is paused until
+   *  Allow/Deny/AllowSession is answered. */
+  pending?: Extract<ExecutorEvent, { kind: "permissionRequest" }>;
+  onAnswer?: (requestId: string, decision: "allow" | "deny" | "allow_session") => void;
 }) {
   const [open, setOpen] = useState(false);
   const failed = output?.isError === true;
   const running = !output;
-  const badgeColor = running ? "gray" : failed ? "red" : "green";
+  const badgeColor = pending ? "yellow" : running ? "gray" : failed ? "red" : "green";
   const preview = event.command.split("\n")[0].slice(0, 120);
 
   return (
@@ -178,27 +276,61 @@ function ToolBlock({
         >
           {preview}
         </Box>
-        {running && (
-          <IconLoader2
-            size={14}
-            style={{ flex: "0 0 auto", color: "var(--muted)" }}
-            className="ds-spin"
-            data-testid="tool-status-running"
-          />
-        )}
-        {!running && !failed && (
-          <IconCircleCheck
-            size={14}
-            style={{ flex: "0 0 auto", color: "var(--success)" }}
-            data-testid="tool-status-success"
-          />
-        )}
-        {failed && (
-          <IconCircleX
-            size={14}
-            style={{ flex: "0 0 auto", color: "var(--danger)" }}
-            data-testid="tool-status-failed"
-          />
+        {pending ? (
+          <Group gap={4} wrap="nowrap" data-testid="permission-prompt" onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="compact-xs"
+              variant="light"
+              color="green"
+              data-testid="permission-allow"
+              onClick={() => onAnswer?.(pending.id, "allow")}
+            >
+              Allow
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="light"
+              color="red"
+              data-testid="permission-deny"
+              onClick={() => onAnswer?.(pending.id, "deny")}
+            >
+              Deny
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="light"
+              color="gray"
+              data-testid="permission-allow-session"
+              onClick={() => onAnswer?.(pending.id, "allow_session")}
+            >
+              Allow for session
+            </Button>
+          </Group>
+        ) : (
+          <>
+            {running && (
+              <IconLoader2
+                size={14}
+                style={{ flex: "0 0 auto", color: "var(--muted)" }}
+                className="ds-spin"
+                data-testid="tool-status-running"
+              />
+            )}
+            {!running && !failed && (
+              <IconCircleCheck
+                size={14}
+                style={{ flex: "0 0 auto", color: "var(--success)" }}
+                data-testid="tool-status-success"
+              />
+            )}
+            {failed && (
+              <IconCircleX
+                size={14}
+                style={{ flex: "0 0 auto", color: "var(--danger)" }}
+                data-testid="tool-status-failed"
+              />
+            )}
+          </>
         )}
       </Box>
       {open && (
@@ -233,12 +365,15 @@ function ToolBlock({
 
 export const EventList = memo(function EventList({
   items,
-  showThinking,
   executor,
+  sessionId = null,
 }: {
   items: Item[];
-  showThinking: boolean;
   executor: Preflight["selected"];
+  /** The live session id these events belong to — needed to resolve a
+   *  pending permission prompt. Absent for read-only render paths (e.g. the
+   *  diff tab), which never include `toolCall`/`permissionRequest` items. */
+  sessionId?: string | null;
 }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = useMemo(() => {
@@ -251,6 +386,31 @@ export const EventList = memo(function EventList({
     }
     return map;
   }, [items]);
+
+  // Permission prompts still awaiting the user's decision, keyed by the
+  // tool call they belong to. Answered ones are hidden locally the moment a
+  // decision is sent (task 5.2) — the backend has no "resolved" event, so
+  // this is the only signal a re-render has that it's done.
+  const [answered, setAnswered] = useState<Set<string>>(new Set());
+  const pending = useMemo(() => {
+    const map = new Map<
+      string,
+      Extract<ExecutorEvent, { kind: "permissionRequest" }>
+    >();
+    for (const item of items) {
+      if (item.kind === "permissionRequest" && !answered.has(item.id)) {
+        map.set(item.toolCallId, item);
+      }
+    }
+    return map;
+  }, [items, answered]);
+  const onAnswer = useCallback(
+    (requestId: string, decision: "allow" | "deny" | "allow_session") => {
+      setAnswered((prev) => new Set(prev).add(requestId));
+      if (sessionId) void answerPermissionPrompt(sessionId, requestId, decision);
+    },
+    [sessionId]
+  );
 
   return (
     <>
@@ -302,17 +462,9 @@ export const EventList = memo(function EventList({
               </div>
             );
           case "reasoning":
-            // Global toggle (D19), not a per-message disclosure — off means
-            // not rendered at all.
-            return showThinking ? (
-              <div
-                key={index}
-                className="reasoning-inline"
-                data-testid="reasoning"
-              >
-                {item.text}
-              </div>
-            ) : null;
+            // Per-turn disclosure, default collapsed (reasoning-collapse-ux
+            // D1) — supersedes the removed global show/hide toggle.
+            return <ReasoningBlock key={index} event={item} />;
           // mergeDeltas always folds these into "text"/"reasoning" before
           // EventList sees them; kept here only so the switch documents
           // every Item kind instead of relying on the implicit fallthrough.
@@ -332,8 +484,14 @@ export const EventList = memo(function EventList({
                 key={index}
                 event={item}
                 output={results.get(item.id)}
+                pending={pending.get(item.id)}
+                onAnswer={onAnswer}
               />
             );
+          // Rendered inline on the tool call it belongs to (via `pending`),
+          // not as its own bubble.
+          case "permissionRequest":
+            return null;
           case "crashed":
             return (
               <Alert

@@ -123,7 +123,7 @@ export type Preflight = {
 /** Mirrors the Rust `ExecutorEvent` enum, tagged by `kind`. */
 export type ExecutorEvent =
   | { kind: "text"; text: string }
-  | { kind: "reasoning"; text: string }
+  | { kind: "reasoning"; text: string; elapsedSecs: number }
   | { kind: "textDelta"; text: string }
   | { kind: "reasoningDelta"; text: string }
   | {
@@ -135,6 +135,14 @@ export type ExecutorEvent =
     }
   | { kind: "toolCall"; id: string; name: string; command: string }
   | { kind: "toolResult"; id: string; output: string; isError: boolean }
+  | {
+      kind: "permissionRequest";
+      id: string;
+      toolCallId: string;
+      toolKind: string;
+      command: string | null;
+      paths: string[];
+    }
   | { kind: "done" }
   | { kind: "crashed"; exitCode: number | null; message: string };
 
@@ -254,6 +262,15 @@ export const changeStatus = (projectHash: string, changeName: string) =>
 /** Stop one session, or every live session when no id is given. */
 export const stopExecutor = (sessionId?: string) =>
   invoke<void>("stop_executor", { sessionId: sessionId ?? null });
+
+/** Resolve a pending `permissionRequest` event: "allow" (once), "deny", or
+ *  "allow_session" (auto-allow that tool kind for the rest of the session). */
+export const answerPermissionPrompt = (
+  sessionId: string,
+  requestId: string,
+  decision: "allow" | "deny" | "allow_session"
+) =>
+  invoke<void>("answer_permission_prompt", { sessionId, requestId, decision });
 
 /** One run of one agent against one thread. */
 export type SessionRecord = {
