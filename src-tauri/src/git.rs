@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::git_repo;
+use crate::integrations::GRAPH_DIR;
 use crate::store::Res;
 
 pub use crate::git_repo::{BranchInfo, FileStatus};
@@ -188,6 +189,20 @@ pub fn ahead_behind(_bin: &Path, root: &Path) -> Res<Option<(u32, u32)>> {
 /// deleting it instead of `git checkout --`.
 pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res<()> {
     if untracked {
+        // A project that doesn't gitignore `graphify-out/` reports it as one
+        // untracked directory entry, so "discard changes" on it means
+        // `remove_dir_all` on the whole code graph — minutes of extraction, and
+        // every graph tool broken until it's rebuilt. The graph is
+        // Palisade-managed state, not the user's uncommitted work, so this
+        // button doesn't get to delete it; removing it stays a deliberate act
+        // outside the diff pane.
+        if path.trim_end_matches('/') == GRAPH_DIR {
+            return Err(format!(
+                "{GRAPH_DIR}/ holds this project's code graph, which Palisade maintains — \
+                 discarding changes won't delete it. Remove the folder yourself if you \
+                 really want it gone."
+            ));
+        }
         let full = root.join(path);
         // An untracked directory (git status reports it as one entry, e.g.
         // "graphify-out/") needs remove_dir_all — remove_file only deletes
@@ -637,6 +652,39 @@ mod tests {
         discard_file(git(), root, "scratch-dir/", true).unwrap();
 
         assert!(!root.join("scratch-dir").exists());
+    }
+
+    /// RED→GREEN: in a project that doesn't gitignore it, `graphify-out/` shows
+    /// up in `git status` as one untracked directory entry, and "discard" then
+    /// means `remove_dir_all` on the whole code graph — minutes of extraction
+    /// gone, from a button whose confirm dialog says "discard changes". The
+    /// graph is Palisade-managed state, not the user's uncommitted work.
+    #[test]
+    fn discard_file_refuses_to_delete_the_code_graph() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+        let out = root.join("graphify-out");
+        fs::create_dir(&out).unwrap();
+        fs::write(out.join("graph.json"), "{}").unwrap();
+
+        let error = discard_file(git(), root, "graphify-out/", true).unwrap_err();
+
+        assert!(out.join("graph.json").exists(), "the graph must survive a discard");
+        assert!(error.contains("graphify-out"), "the error should name what it refused: {error}");
+    }
+
+    /// The guard keys on the graph directory itself, not on anything that
+    /// merely lives beneath it — a stray file inside stays discardable.
+    #[test]
+    fn discard_file_still_deletes_a_sibling_of_the_code_graph() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+        fs::create_dir(root.join("graphify-outtakes")).unwrap();
+        fs::write(root.join("graphify-outtakes/x.txt"), "temp\n").unwrap();
+
+        discard_file(git(), root, "graphify-outtakes/", true).unwrap();
+
+        assert!(!root.join("graphify-outtakes").exists());
     }
 
     #[test]

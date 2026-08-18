@@ -102,8 +102,12 @@ pub fn summarize_report(report: &str, out_dir: &Path) -> String {
     )
 }
 
+/// Where every graph artifact lives, relative to the project root. Named
+/// because `git::discard_file` has to recognise it to refuse deleting it.
+pub const GRAPH_DIR: &str = "graphify-out";
+
 pub fn default_out_dir(project_root: &Path) -> PathBuf {
-    project_root.join("graphify-out")
+    project_root.join(GRAPH_DIR)
 }
 
 /// Read what a finished run left on disk. `graph.json` is optional so a report
@@ -325,6 +329,81 @@ fn write_toml(path: &Path, doc: &DocumentMut) -> Res<()> {
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
+/// How many times in a row a dying watcher gets restarted before Palisade
+/// stops and says so. Bounded because the common cause is a broken install
+/// (a missing Python dep, a bad PATH), which fails identically forever —
+/// retrying that in a tight loop burns CPU and never heals.
+const RESTART_LIMIT: u32 = 3;
+
+/// A watcher that stayed up this long was working; whatever killed it is a
+/// new incident, not the same crash loop, so its restart budget resets.
+const HEALTHY_RUN: Duration = Duration::from_secs(60);
+
+/// How long to wait before restarting, or `None` to give up. Grows with each
+/// consecutive failure so a transient cause (a file locked mid-write, a
+/// rebuild churning the tree) gets progressively more room to clear.
+fn restart_delay(consecutive_failures: u32) -> Option<Duration> {
+    (consecutive_failures <= RESTART_LIMIT)
+        .then(|| Duration::from_millis(200 * u64::from(consecutive_failures)))
+}
+
+/// The failure count after a child that ran for `ran_for` died.
+fn consecutive_after(previous: u32, ran_for: Duration) -> u32 {
+    if ran_for >= HEALTHY_RUN {
+        1
+    } else {
+        previous + 1
+    }
+}
+
+/// Make sure git ignores the graph directory, so it never shows up as
+/// untracked work in the diff pane, never invites a discard, and never lands
+/// in a commit. The graph is machine-local and rebuilt on demand.
+///
+/// Coverage is decided by `git check-ignore`, not by reading `.gitignore`:
+/// the pattern may live in a parent directory, a global excludes file, or a
+/// broader glob the user already wrote, and appending a duplicate in those
+/// cases would be noise in a file the user owns. A project that isn't a git
+/// repo is left alone entirely.
+pub fn ensure_graph_ignored(git_bin: &Path, project_root: &Path) -> Res<()> {
+    if !project_root.join(".git").exists() {
+        return Ok(());
+    }
+    // The trailing slash matters: asked as a bare `graphify-out`, git will not
+    // match a directory-only pattern (`graphify-out/`) — it can't tell the path
+    // is a directory — and Palisade would append a duplicate entry on every
+    // project load. Asked with the slash, both that and broader globs match.
+    let already_ignored = Command::new(git_bin)
+        .args(["check-ignore", "-q", &format!("{GRAPH_DIR}/")])
+        .current_dir(project_root)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if already_ignored {
+        return Ok(());
+    }
+
+    let path = project_root.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    // Only ever appended to, and only with a leading newline when the file
+    // doesn't already end in one — this is the user's file, not Palisade's.
+    let separator = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
+    let addition =
+        format!("{separator}\n# Palisade Code's code graph — machine-local, rebuilt on demand.\n{GRAPH_DIR}/\n");
+    std::fs::write(&path, existing + &addition).map_err(|err| format!("update .gitignore: {err}"))
+}
+
+/// The last thing `graphify watch` said before dying, for the crash banner.
+/// Only the final line: graphify's fatal errors are one line ("error: watchdog
+/// not installed. Run: pip install watchdog"), and a warning banner is no place
+/// for a traceback. `None` when it died silently, so the caller keeps its
+/// exit-status wording rather than showing an empty reason.
+fn watch_failure_reason(log_path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(log_path).ok()?;
+    let line = raw.lines().rev().find(|line| !line.trim().is_empty())?;
+    Some(line.trim().trim_start_matches("error: ").to_string())
+}
+
 /// Supervises `graphify watch <project_root>` for the currently active
 /// project. Everything — spawning, polling `graph.json`'s mtime for the
 /// pane-refresh signal, and detecting a crash — runs on one background
@@ -357,11 +436,30 @@ impl Watcher {
             let stopping = Arc::clone(&stopping);
             let pid_path = pid_path.clone();
             thread::spawn(move || {
+                // stderr goes to a file, not `Stdio::null()` and not a pipe:
+                // null threw away the one line that says how to fix the crash
+                // ("error: watchdog not installed. Run: pip install watchdog"),
+                // and an unread pipe would block the child once its buffer
+                // filled. A file can't deadlock and survives for diagnosis.
+                let log_path = default_out_dir(&project_root).join(".watch.log");
+                if let Some(parent) = log_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let graph_path = default_out_dir(&project_root).join("graph.json");
+                let mut last_seen = std::fs::metadata(&graph_path).and_then(|m| m.modified()).ok();
+                // Consecutive failures, not total: a watcher that has been up
+                // for a while earns its budget back (`consecutive_after`).
+                let mut failures = 0u32;
+                'supervise: loop {
+                let stderr = match std::fs::File::create(&log_path) {
+                    Ok(file) => Stdio::from(file),
+                    Err(_) => Stdio::null(),
+                };
                 let mut child = match Command::new(&bin)
                     .arg("watch")
                     .arg(&project_root)
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
+                    .stderr(stderr)
                     .spawn()
                 {
                     Ok(child) => child,
@@ -371,8 +469,7 @@ impl Watcher {
                     }
                 };
                 crate::pidguard::record(&pid_path, child.id());
-                let graph_path = default_out_dir(&project_root).join("graph.json");
-                let mut last_seen = std::fs::metadata(&graph_path).and_then(|m| m.modified()).ok();
+                let started = std::time::Instant::now();
                 loop {
                     if stopping.load(Ordering::SeqCst) {
                         let _ = child.kill();
@@ -381,8 +478,29 @@ impl Watcher {
                     }
                     match child.try_wait() {
                         Ok(Some(status)) => {
-                            on_crash(format!("graphify watch exited unexpectedly ({status})"));
-                            return;
+                            // Restart quietly: a watcher that heals itself is
+                            // not something the user has to act on. Only a
+                            // crash loop we've given up on earns a warning.
+                            failures = consecutive_after(failures, started.elapsed());
+                            let reason = watch_failure_reason(&log_path);
+                            match restart_delay(failures) {
+                                Some(delay) => {
+                                    thread::sleep(delay);
+                                    continue 'supervise;
+                                }
+                                None => {
+                                    on_crash(match reason {
+                                        Some(reason) => format!(
+                                            "graphify watch keeps stopping and has exited for good: {reason}"
+                                        ),
+                                        None => format!(
+                                            "graphify watch exited unexpectedly ({status}) \
+                                             and did not recover after {RESTART_LIMIT} restarts"
+                                        ),
+                                    });
+                                    return;
+                                }
+                            }
                         }
                         Ok(None) => {}
                         Err(_) => {}
@@ -394,6 +512,7 @@ impl Watcher {
                         }
                     }
                     thread::sleep(WATCH_POLL_INTERVAL);
+                }
                 }
             })
         };
@@ -476,8 +595,174 @@ mod tests {
                 let _ = tx.send(message);
             },
         );
-        let message = rx.recv_timeout(Duration::from_secs(3)).expect("on_crash should fire");
+        // Waits through the restart budget now: the watcher retries before it reports.
+        let message = rx.recv_timeout(Duration::from_secs(20)).expect("on_crash should fire");
         assert!(message.contains("exited"), "got {message}");
+        watcher.terminate();
+    }
+
+    // ---------------------------------------------------------- gitignore
+
+    fn git() -> PathBuf {
+        crate::executor::find_on_path("git").expect("git on PATH")
+    }
+
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new(git()).args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
+        dir
+    }
+
+    fn is_ignored(root: &Path) -> bool {
+        Command::new(git())
+            .args(["check-ignore", "-q", &format!("{GRAPH_DIR}/")])
+            .current_dir(root)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// RED→GREEN: unless the graph dir is ignored it shows up in the diff pane
+    /// as untracked work, invites a discard, and pollutes every commit the
+    /// agent stages. It is machine-local, rebuilt on demand — it belongs in
+    /// `.gitignore`, not in the user's history.
+    #[test]
+    fn ensure_graph_ignored_adds_the_entry_when_missing() {
+        let dir = init_repo();
+        assert!(!is_ignored(dir.path()), "precondition: not ignored yet");
+
+        ensure_graph_ignored(&git(), dir.path()).unwrap();
+
+        assert!(is_ignored(dir.path()), "git should now ignore the graph dir");
+        let text = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(text.contains(GRAPH_DIR), "got: {text}");
+    }
+
+    /// RED→GREEN: this runs on every project load, so a second call must not
+    /// append a second copy — the file would grow one line per app start.
+    #[test]
+    fn ensure_graph_ignored_is_idempotent() {
+        let dir = init_repo();
+        ensure_graph_ignored(&git(), dir.path()).unwrap();
+        ensure_graph_ignored(&git(), dir.path()).unwrap();
+        ensure_graph_ignored(&git(), dir.path()).unwrap();
+
+        let text = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(text.matches(GRAPH_DIR).count(), 1, "one entry only, got: {text}");
+    }
+
+    /// RED→GREEN: coverage can come from a pattern we didn't write (a parent
+    /// `.gitignore`, a global excludes file, `out*/`). Asking git rather than
+    /// string-matching the file is what makes those count.
+    #[test]
+    fn ensure_graph_ignored_respects_coverage_it_did_not_write() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join(".gitignore"), "graphify*\n").unwrap();
+
+        ensure_graph_ignored(&git(), dir.path()).unwrap();
+
+        let text = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(text, "graphify*\n", "an existing pattern that already covers it is left alone");
+    }
+
+    /// RED→GREEN: a project that isn't a git repo has nothing to ignore, and
+    /// dropping a `.gitignore` into a plain folder is litter.
+    #[test]
+    fn ensure_graph_ignored_skips_a_non_repo() {
+        let dir = tempfile::tempdir().unwrap();
+
+        ensure_graph_ignored(&git(), dir.path()).unwrap();
+
+        assert!(!dir.path().join(".gitignore").exists(), "no .gitignore in a non-repo");
+    }
+
+    // ------------------------------------------------------ restart supervision
+
+    /// RED→GREEN: a blip should heal itself — back off a little, then longer,
+    /// rather than hammering a process that may be failing on a locked file.
+    #[test]
+    fn restart_delay_backs_off_then_gives_up() {
+        let first = restart_delay(1).expect("a first failure is always worth a retry");
+        let second = restart_delay(2).expect("a second failure still retries");
+        assert!(second > first, "delay must grow: {first:?} then {second:?}");
+        assert_eq!(
+            restart_delay(RESTART_LIMIT + 1),
+            None,
+            "past the limit it gives up instead of hot-looping on a broken install"
+        );
+    }
+
+    /// RED→GREEN: a crash-looping watcher must respawn a bounded number of
+    /// times and then report — not die on the first exit (the old behavior,
+    /// which left the graph silently stale for the rest of the session), and
+    /// not retry forever (which would spin on a permanently broken install).
+    #[test]
+    fn watcher_restarts_a_crashed_child_then_gives_up() {
+        let root = tempfile::tempdir().unwrap();
+        let attempts = root.path().join("attempts.txt");
+        let script = root.path().join("crash-looping-stand-in.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho run >> {}\necho 'error: boom' >&2\nexit 1\n", attempts.display()),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = Watcher::spawn(script, root.path().to_path_buf(), || {}, move |message| {
+            let _ = tx.send(message);
+        });
+        let message = rx.recv_timeout(Duration::from_secs(20)).expect("on_crash should fire");
+        watcher.terminate();
+
+        let runs = std::fs::read_to_string(&attempts).unwrap().lines().count();
+        assert!(runs > 1, "the watcher must respawn after a crash, got {runs} run(s)");
+        assert_eq!(runs, RESTART_LIMIT as usize + 1, "it should stop after the restart limit");
+        assert!(message.contains("boom"), "the give-up message keeps the reason: {message}");
+    }
+
+    /// RED→GREEN: a watcher that ran healthily for a long stretch before dying
+    /// is a fresh incident, not a continuation of an old crash loop — its
+    /// restart budget resets, so a week-long session doesn't exhaust it.
+    #[test]
+    fn a_long_healthy_run_resets_the_restart_budget() {
+        assert_eq!(consecutive_after(5, HEALTHY_RUN), 1, "a healthy run resets the count to this failure alone");
+        assert_eq!(
+            consecutive_after(2, Duration::from_millis(10)),
+            3,
+            "an immediate re-crash keeps counting up"
+        );
+    }
+
+    /// RED→GREEN: a watcher that dies takes its reason with it unless we keep
+    /// stderr. The real case was `error: watchdog not installed. Run: pip
+    /// install watchdog` — a one-line fix the user never saw, because the
+    /// banner said only "exited unexpectedly (exit status: 1)".
+    #[test]
+    fn watcher_crash_message_carries_the_processs_own_error() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("failing-stand-in.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'error: watchdog not installed. Run: pip install watchdog' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = Watcher::spawn(script, root.path().to_path_buf(), || {}, move |message| {
+            let _ = tx.send(message);
+        });
+        // Waits through the restart budget now: the watcher retries before it reports.
+        let message = rx.recv_timeout(Duration::from_secs(20)).expect("on_crash should fire");
+        assert!(
+            message.contains("watchdog not installed"),
+            "crash message must carry the process's own stderr, got: {message}"
+        );
         watcher.terminate();
     }
 
@@ -493,7 +778,8 @@ mod tests {
                 let _ = tx.send(message);
             },
         );
-        let message = rx.recv_timeout(Duration::from_secs(3)).expect("on_crash should fire");
+        // Waits through the restart budget now: the watcher retries before it reports.
+        let message = rx.recv_timeout(Duration::from_secs(20)).expect("on_crash should fire");
         assert!(message.contains("could not start"), "got {message}");
         watcher.terminate();
     }
