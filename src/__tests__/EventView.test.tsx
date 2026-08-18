@@ -38,7 +38,7 @@ describe("EventList markdown rendering", () => {
   it("renders markdown emphasis as real elements, not literal asterisks", () => {
     const items: Item[] = [{ kind: "text", text: "**bold** and *italic*" }];
     renderWithMantine(
-      <EventList items={items} showThinking={false} executor={null} />
+      <EventList items={items} executor={null} />
     );
     expect(screen.getByText("bold").tagName).toBe("STRONG");
     expect(screen.getByText("italic").tagName).toBe("EM");
@@ -46,7 +46,7 @@ describe("EventList markdown rendering", () => {
 
   it("renders file diffs at full width", () => {
     renderWithMantine(
-      <EventList items={[editItem]} showThinking={false} executor={null} />
+      <EventList items={[editItem]} executor={null} />
     );
     expect(getComputedStyle(screen.getByTestId("file-edit")).width).toBe(
       "100%"
@@ -76,7 +76,7 @@ describe("ToolBlock rendering", () => {
 
   it("renders the tool name as a badge and command preview in the header", () => {
     renderWithMantine(
-      <EventList items={[toolCallItem]} showThinking={false} executor={null} />
+      <EventList items={[toolCallItem]} executor={null} />
     );
     const block = screen.getByTestId("tool-block");
     expect(block).toBeDefined();
@@ -87,7 +87,7 @@ describe("ToolBlock rendering", () => {
 
   it("shows a running indicator when no output has arrived", () => {
     renderWithMantine(
-      <EventList items={[toolCallItem]} showThinking={false} executor={null} />
+      <EventList items={[toolCallItem]} executor={null} />
     );
     expect(screen.getByTestId("tool-status-running")).toBeDefined();
   });
@@ -96,7 +96,6 @@ describe("ToolBlock rendering", () => {
     renderWithMantine(
       <EventList
         items={[toolCallItem, toolResultItem]}
-        showThinking={false}
         executor={null}
       />
     );
@@ -107,7 +106,6 @@ describe("ToolBlock rendering", () => {
     renderWithMantine(
       <EventList
         items={[toolCallItem, failedResultItem]}
-        showThinking={false}
         executor={null}
       />
     );
@@ -118,7 +116,6 @@ describe("ToolBlock rendering", () => {
     renderWithMantine(
       <EventList
         items={[toolCallItem, toolResultItem]}
-        showThinking={false}
         executor={null}
       />
     );
@@ -138,7 +135,6 @@ describe("ToolBlock rendering", () => {
     renderWithMantine(
       <EventList
         items={[toolCallItem, failedResultItem]}
-        showThinking={false}
         executor={null}
       />
     );
@@ -150,11 +146,92 @@ describe("ToolBlock rendering", () => {
   });
 });
 
+describe("ToolBlock pending-approval UI (tool-approval-prompt)", () => {
+  const toolCallItem: Item = {
+    kind: "toolCall",
+    id: "t1",
+    name: "Bash",
+    command: "cargo build",
+  };
+  const permissionRequestItem: Item = {
+    kind: "permissionRequest",
+    id: "req-1",
+    toolCallId: "t1",
+    toolKind: "execute",
+    command: "cargo build",
+    paths: [],
+  };
+
+  it("renders Allow/Deny/Allow-for-session actions in place of the status icon while pending", () => {
+    renderWithMantine(
+      <EventList
+        items={[toolCallItem, permissionRequestItem]}
+        executor={null}
+      />
+    );
+    expect(screen.getByTestId("permission-prompt")).toBeDefined();
+    expect(screen.getByTestId("permission-allow")).toBeDefined();
+    expect(screen.getByTestId("permission-deny")).toBeDefined();
+    expect(screen.getByTestId("permission-allow-session")).toBeDefined();
+    expect(screen.queryByTestId("tool-status-running")).toBeNull();
+  });
+
+  it("clears the pending state locally once a decision is sent, without a sessionId to answer against", () => {
+    renderWithMantine(
+      <EventList
+        items={[toolCallItem, permissionRequestItem]}
+        executor={null}
+      />
+    );
+    fireEvent.click(screen.getByTestId("permission-allow"));
+    expect(screen.queryByTestId("permission-prompt")).toBeNull();
+    // Falls back to the ordinary running indicator once resolved locally.
+    expect(screen.getByTestId("tool-status-running")).toBeDefined();
+  });
+
+  it("a tool call with no matching permissionRequest renders its ordinary status, not a prompt", () => {
+    renderWithMantine(
+      <EventList items={[toolCallItem]} executor={null} />
+    );
+    expect(screen.queryByTestId("permission-prompt")).toBeNull();
+    expect(screen.getByTestId("tool-status-running")).toBeDefined();
+  });
+});
+
+describe("ReasoningBlock rendering (reasoning-collapse-ux)", () => {
+  const reasoningItem: Item = {
+    kind: "reasoning",
+    text: "step one\nstep two",
+    elapsedSecs: 7,
+  };
+
+  it("renders collapsed by default, showing 'Thought for Ns' with no reasoning text visible", () => {
+    renderWithMantine(
+      <EventList items={[reasoningItem]} executor={null} />
+    );
+    expect(screen.getByTestId("reasoning-block")).toBeDefined();
+    expect(screen.getByText("Thought for 7s")).toBeDefined();
+    expect(screen.queryByTestId("reasoning-block-text")).toBeNull();
+    expect(screen.getByTestId("reasoning-block-closed-chev")).toBeDefined();
+  });
+
+  it("expands to show the full reasoning text on click", () => {
+    renderWithMantine(
+      <EventList items={[reasoningItem]} executor={null} />
+    );
+    fireEvent.click(screen.getByTestId("reasoning-block-header"));
+    expect(screen.getByTestId("reasoning-block-open-chev")).toBeDefined();
+    expect(screen.getByTestId("reasoning-block-text").textContent).toBe(
+      "step one\nstep two"
+    );
+  });
+});
+
 describe("EventList chat spacing", () => {
   it("uses normal white-space so markdown reflows instead of preserving literal newlines", () => {
     const items: Item[] = [{ kind: "text", text: "line one\nline two" }];
     const { container } = renderWithMantine(
-      <EventList items={items} showThinking={false} executor={null} />
+      <EventList items={items} executor={null} />
     );
     const content = container.querySelector(".message .content");
     expect(content).not.toBeNull();
@@ -166,7 +243,7 @@ describe("EventList chat spacing", () => {
       { kind: "text", text: "intro text\n\n## heading\n\nafter text" },
     ];
     const { container } = renderWithMantine(
-      <EventList items={items} showThinking={false} executor={null} />
+      <EventList items={items} executor={null} />
     );
     const heading = container.querySelector(".message .content h2");
     expect(heading).not.toBeNull();
@@ -178,7 +255,7 @@ describe("EventList chat spacing", () => {
   it("gives paragraphs an 8px bottom margin", () => {
     const items: Item[] = [{ kind: "text", text: "first paragraph\n\nsecond" }];
     const { container } = renderWithMantine(
-      <EventList items={items} showThinking={false} executor={null} />
+      <EventList items={items} executor={null} />
     );
     const p = container.querySelector(".message .content p");
     expect(p).not.toBeNull();
@@ -188,7 +265,7 @@ describe("EventList chat spacing", () => {
   it("gives list items a 4px bottom margin", () => {
     const items: Item[] = [{ kind: "text", text: "- a\n- b\n- c" }];
     const { container } = renderWithMantine(
-      <EventList items={items} showThinking={false} executor={null} />
+      <EventList items={items} executor={null} />
     );
     const li = container.querySelector(".message .content li");
     expect(li).not.toBeNull();

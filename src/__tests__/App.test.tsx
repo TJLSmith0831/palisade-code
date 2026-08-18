@@ -3712,8 +3712,8 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   };
 
   afterEach(() => {
-    localStorage.removeItem("palisade:default-bypass");
     localStorage.removeItem("palisade:thread-prefs:proj-1:t1");
+    localStorage.removeItem("palisade:thread-prefs:proj-1:t2");
   });
 
   it("shows the current executor in the composer and opens a menu on click", async () => {
@@ -3910,24 +3910,61 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     expect(await screen.findByTestId("models-none")).toBeDefined();
   });
 
-  it("has a bypass-permissions toggle, default off, that flips on and persists across menu reopen", async () => {
+  it("has a standalone permission-mode icon button, default Accept, that requires confirmation to enable Bypass and persists per-thread", async () => {
     setupWithThread("claude");
     render(<App />);
     await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    fireEvent.click(screen.getByTestId("executor-btn"));
-    const toggle = await screen.findByTestId("bypass-toggle");
-    expect(toggle).not.toBeChecked();
+    const btn = await screen.findByTestId("permission-mode-btn");
+    expect(btn).toHaveAttribute("aria-label", "Accept permissions");
 
-    fireEvent.click(toggle);
-    expect(toggle).toBeChecked();
-    expect(localStorage.getItem("palisade:default-bypass")).toBe("1");
+    // Clicking while in Accept mode opens a confirmation popover rather
+    // than flipping immediately (D2e).
+    fireEvent.click(btn);
+    expect(await screen.findByTestId("permission-mode-confirm")).toBeDefined();
+    expect(btn).toHaveAttribute("aria-label", "Accept permissions");
 
-    fireEvent.click(screen.getByTestId("executor-btn")); // close
-    fireEvent.click(screen.getByTestId("executor-btn")); // reopen
-    expect(await screen.findByTestId("bypass-toggle")).toBeChecked();
+    fireEvent.click(screen.getByTestId("permission-mode-confirm-bypass"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("permission-mode-btn")
+      ).toHaveAttribute("aria-label", "Bypass permissions")
+    );
+    expect(localStorage.getItem("palisade:thread-prefs:proj-1:t1")).toBe(
+      JSON.stringify({ bypass: true })
+    );
+
+    // Bypass→Accept is a plain click, no confirmation.
+    fireEvent.click(screen.getByTestId("permission-mode-btn"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("permission-mode-btn")
+      ).toHaveAttribute("aria-label", "Accept permissions")
+    );
+  });
+
+  it("declining the confirmation popover leaves the thread in Accept mode", async () => {
+    setupWithThread("claude");
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    fireEvent.click(await screen.findByTestId("permission-mode-btn"));
+    expect(await screen.findByTestId("permission-mode-confirm")).toBeDefined();
+
+    fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
+    await waitFor(() =>
+      expect(screen.getByTestId("permission-mode-confirm")).toHaveStyle({
+        display: "none",
+      })
+    );
+    expect(screen.getByTestId("permission-mode-btn")).toHaveAttribute(
+      "aria-label",
+      "Accept permissions"
+    );
   });
 
   it("shows a 'next session' hint when a live session exists for the thread", async () => {
@@ -4000,10 +4037,15 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
-    // Enable bypass
-    fireEvent.click(screen.getByTestId("executor-btn"));
-    const toggle = await screen.findByTestId("bypass-toggle");
-    fireEvent.click(toggle);
+    // Enable bypass via the icon button + confirmation popover.
+    fireEvent.click(await screen.findByTestId("permission-mode-btn"));
+    fireEvent.click(await screen.findByTestId("permission-mode-confirm-bypass"));
+    await waitFor(() =>
+      expect(screen.getByTestId("permission-mode-btn")).toHaveAttribute(
+        "aria-label",
+        "Bypass permissions"
+      )
+    );
 
     // Send a message
     fireEvent.change(screen.getByTestId("composer-input"), {
@@ -4021,6 +4063,102 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         bypass: true,
       })
     );
+  });
+
+  it("enabling Bypass on one thread leaves other threads (existing and new) in Accept mode (no sticky default)", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects")
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      if (cmd === "switch_project")
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread A",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+          },
+          {
+            id: "t2",
+            projectHash: "proj-1",
+            title: "Thread B",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "read_thread") return Promise.resolve([]);
+      if (cmd === "executor_status") return Promise.resolve([]);
+      if (cmd === "preflight")
+        return Promise.resolve({
+          agents: [
+            {
+              id: "claude",
+              name: "Claude Code",
+              version: null,
+              path: "/usr/local/bin/claude",
+              cmd: "claude-acp",
+            },
+          ],
+          selected: "claude",
+          openspec: true,
+          graphify: true,
+          ready: true,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    // Enable Bypass on Thread A.
+    fireEvent.click(await screen.findByTestId("permission-mode-btn"));
+    fireEvent.click(await screen.findByTestId("permission-mode-confirm-bypass"));
+    await waitFor(() =>
+      expect(screen.getByTestId("permission-mode-btn")).toHaveAttribute(
+        "aria-label",
+        "Bypass permissions"
+      )
+    );
+
+    // Switch to Thread B: never configured, must still be Accept.
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(
+      within(screen.getByTestId("thread-list")).getByText("Thread B").closest("li")!
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread B")
+    );
+    expect(screen.getByTestId("permission-mode-btn")).toHaveAttribute(
+      "aria-label",
+      "Accept permissions"
+    );
+
+    localStorage.removeItem("palisade:thread-prefs:proj-1:t2");
   });
 });
 

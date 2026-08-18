@@ -117,7 +117,12 @@ pub(crate) fn home() -> PathBuf {
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ExecutorEvent {
     Text { text: String },
-    Reasoning { text: String },
+    /// A turn's complete reasoning/thinking content, rendered as a
+    /// collapsed "Thought for Ns" block (reasoning-collapse-ux D-design-2).
+    /// `elapsed_secs` is computed backend-side, from the first reasoning
+    /// delta to this complete event, so a reload shows the same number the
+    /// live view did.
+    Reasoning { text: String, elapsed_secs: u64 },
     /// A live fragment of an in-progress `Text`/`Reasoning` message
     /// (Claude's `stream_event` content-block deltas, D6/D27) — a
     /// rendering signal only, never persisted; the complete `Text`/
@@ -128,6 +133,17 @@ pub enum ExecutorEvent {
     /// Emitted when the tool starts; `ToolResult` fills in its output later.
     ToolCall { id: String, name: String, command: String },
     ToolResult { id: String, output: String, is_error: bool },
+    /// A tool call whose permission policy returned `Prompt` (D7, D-design-1)
+    /// — the agent's turn is paused awaiting `answer_permission_prompt`.
+    /// Live-only, like the deltas: the fail-safe teardown resolves any
+    /// still-pending request to denied, so nothing survives to replay.
+    PermissionRequest {
+        id: String,
+        tool_call_id: String,
+        tool_kind: String,
+        command: Option<String>,
+        paths: Vec<String>,
+    },
     Done,
     Crashed { exit_code: Option<i32>, message: String },
 }
@@ -150,12 +166,12 @@ pub fn persist(
 ) {
     let (role, content) = match event {
         ExecutorEvent::Text { text } => ("assistant", text.clone()),
-        // Reasoning is transient and can be enormous; not persisted. Deltas
-        // are a live-rendering signal only — the complete Text/Reasoning
-        // event that follows each one is what actually gets persisted.
-        ExecutorEvent::Reasoning { .. }
-        | ExecutorEvent::TextDelta { .. }
+        // Deltas are a live-rendering signal only — the complete
+        // Text/Reasoning event that follows each one is what actually gets
+        // persisted (below, capped like tool output).
+        ExecutorEvent::TextDelta { .. }
         | ExecutorEvent::ReasoningDelta { .. }
+        | ExecutorEvent::PermissionRequest { .. }
         | ExecutorEvent::Done => return,
         ExecutorEvent::Crashed { message, .. } => ("system", message.clone()),
         structured => ("tool", serde_json::to_string(&capped(structured)).unwrap_or_default()),
@@ -194,6 +210,10 @@ fn capped(event: &ExecutorEvent) -> ExecutorEvent {
             id: id.clone(),
             output: cap(output),
             is_error: *is_error,
+        },
+        ExecutorEvent::Reasoning { text, elapsed_secs } => ExecutorEvent::Reasoning {
+            text: cap(text),
+            elapsed_secs: *elapsed_secs,
         },
         other => other.clone(),
     }
@@ -584,6 +604,36 @@ mod tests {
         let reasoning_delta =
             serde_json::to_value(ExecutorEvent::ReasoningDelta { text: "hm".into() }).unwrap();
         assert_eq!(reasoning_delta, serde_json::json!({ "kind": "reasoningDelta", "text": "hm" }));
+
+        let reasoning = serde_json::to_value(ExecutorEvent::Reasoning {
+            text: "thinking".into(),
+            elapsed_secs: 4,
+        })
+        .unwrap();
+        assert_eq!(
+            reasoning,
+            serde_json::json!({ "kind": "reasoning", "text": "thinking", "elapsedSecs": 4 })
+        );
+
+        let permission_request = serde_json::to_value(ExecutorEvent::PermissionRequest {
+            id: "req-1".into(),
+            tool_call_id: "tc-1".into(),
+            tool_kind: "execute".into(),
+            command: Some("cargo build".into()),
+            paths: vec![],
+        })
+        .unwrap();
+        assert_eq!(
+            permission_request,
+            serde_json::json!({
+                "kind": "permissionRequest",
+                "id": "req-1",
+                "toolCallId": "tc-1",
+                "toolKind": "execute",
+                "command": "cargo build",
+                "paths": [],
+            })
+        );
     }
 
     #[test]
@@ -653,15 +703,18 @@ mod tests {
         assert!(openspec_change_dirs(repo.path()).contains(&"some-change".to_string()));
     }
 
+    /// RED→GREEN: reasoning now persists (role "tool", capped JSON) like
+    /// tool calls, so it survives a reload (reasoning-collapse-ux D-design-1)
+    /// — `Done` is still the only one of this group that's discarded.
     #[test]
-    fn reasoning_is_not_persisted_but_text_and_tools_are() {
+    fn reasoning_is_persisted_like_tool_calls_and_text() {
         let home = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
         let project = store::add_project(home.path(), repo.path()).unwrap();
         let thread = store::create_thread(home.path(), &project.hash, "t").unwrap();
 
         for event in [
-            ExecutorEvent::Reasoning { text: "secret".into() },
+            ExecutorEvent::Reasoning { text: "secret".into(), elapsed_secs: 3 },
             ExecutorEvent::Text { text: "visible".into() },
             ExecutorEvent::ToolCall { id: "t1".into(), name: "Bash".into(), command: "ls".into() },
             ExecutorEvent::Done,
@@ -671,11 +724,17 @@ mod tests {
         store::flush_session_log_writer().unwrap();
 
         let messages = store::read_thread(home.path(), &project.hash, &thread.id).unwrap();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].role, "assistant");
-        assert_eq!(messages[0].content, "visible");
-        assert_eq!(messages[1].role, "tool");
-        let round_trip: ExecutorEvent = serde_json::from_str(&messages[1].content).unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, "tool");
+        let reasoning: ExecutorEvent = serde_json::from_str(&messages[0].content).unwrap();
+        assert_eq!(
+            reasoning,
+            ExecutorEvent::Reasoning { text: "secret".into(), elapsed_secs: 3 }
+        );
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "visible");
+        assert_eq!(messages[2].role, "tool");
+        let round_trip: ExecutorEvent = serde_json::from_str(&messages[2].content).unwrap();
         assert!(matches!(round_trip, ExecutorEvent::ToolCall { .. }));
     }
 
@@ -716,5 +775,19 @@ mod tests {
         let capped = cap(&text);
         assert!(capped.starts_with('é'));
         assert!(capped.contains("[truncated"));
+    }
+
+    /// RED→GREEN 1.5: reasoning longer than PERSIST_CAP is truncated without
+    /// splitting a UTF-8 code point, mirroring `capping_never_splits_a_utf8_code_point`.
+    #[test]
+    fn reasoning_capping_never_splits_a_utf8_code_point() {
+        let text = "é".repeat(PERSIST_CAP);
+        let event = ExecutorEvent::Reasoning { text: text.clone(), elapsed_secs: 5 };
+        let ExecutorEvent::Reasoning { text: capped_text, elapsed_secs } = capped(&event) else {
+            panic!("expected Reasoning");
+        };
+        assert!(capped_text.starts_with('é'));
+        assert!(capped_text.contains("[truncated"));
+        assert_eq!(elapsed_secs, 5);
     }
 }

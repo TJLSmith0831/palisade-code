@@ -144,10 +144,15 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
             }
         }
         AcpUpdate::Reasoning { text } => {
+            // Unreached by `from_session_update` today (ACP only streams
+            // reasoning as `ReasoningDelta`; the complete `Reasoning` event
+            // is assembled by run_bridge's turn-completion flush, which
+            // knows the real elapsed time). Kept for API completeness if an
+            // agent ever sends a complete thought in one shot.
             if text.trim().is_empty() {
                 vec![]
             } else {
-                vec![ExecutorEvent::Reasoning { text }]
+                vec![ExecutorEvent::Reasoning { text, elapsed_secs: 0 }]
             }
         }
         AcpUpdate::TextDelta { text } => {
@@ -219,7 +224,10 @@ mod tests {
     fn reasoning_update_maps_to_reasoning_event() {
         let events = map_acp_update(AcpUpdate::Reasoning { text: "Let me think...".into() });
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0], ExecutorEvent::Reasoning { text: "Let me think...".into() });
+        assert_eq!(
+            events[0],
+            ExecutorEvent::Reasoning { text: "Let me think...".into(), elapsed_secs: 0 }
+        );
     }
 
     /// RED→GREEN 4.1: Empty text produces no event.
