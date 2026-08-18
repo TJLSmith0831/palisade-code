@@ -554,6 +554,9 @@ async fn run_bridge(
                         }
                         _ => {}
                     }
+                    if let Some(commands) = crate::acp_events::extract_commands(&update) {
+                        notif_sink.emit_commands(&notif_session, &notif_thread, commands);
+                    }
                     for event in crate::acp_events::map_acp_update(update) {
                         emit(&notif_sink, &notif_session, &notif_thread, event);
                     }
@@ -597,8 +600,21 @@ async fn run_bridge(
                     })?;
             }
 
+            // The project's MCP servers, handed over the protocol rather than
+            // left for the agent to find. `.mcp.json` is a Claude-shaped file;
+            // passing the same list here is what makes those servers reach
+            // Codex and every other agent without Palisade learning a second
+            // config format per agent. Remote transports are filtered by what
+            // this agent actually said it supports.
+            let mcp = &init_response.agent_capabilities.mcp_capabilities;
+            let mcp_servers =
+                crate::mcp::for_session(&spawn.project_root, mcp.http, mcp.sse);
+
             let new_session = cx
-                .send_request(v1::NewSessionRequest::new(spawn.project_root.clone()))
+                .send_request(
+                    v1::NewSessionRequest::new(spawn.project_root.clone())
+                        .mcp_servers(mcp_servers),
+                )
                 .block_task()
                 .await
                 .map_err(|e| acp::Error::internal_error().data(format!("session/new failed: {e}")))?;

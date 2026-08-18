@@ -76,8 +76,29 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
             size: usage.size,
         }),
         v1::SessionUpdate::Plan(_) => Some(AcpUpdate::PlanUpdate),
+        v1::SessionUpdate::AvailableCommandsUpdate(update) => Some(AcpUpdate::Commands {
+            commands: update
+                .available_commands
+                .iter()
+                .map(|c| AgentCommand {
+                    name: c.name.clone(),
+                    description: c.description.clone(),
+                })
+                .collect(),
+        }),
         _ => None,
     }
+}
+
+/// One slash command the agent says it can run. Skills, user commands, and
+/// built-ins all arrive through the same channel and are indistinguishable
+/// here by design — Palisade lists what the agent offers rather than
+/// deciding what a skill is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommand {
+    pub name: String,
+    pub description: String,
 }
 
 /// ACP session update kinds that we map to ExecutorEvent variants.
@@ -103,6 +124,9 @@ pub enum AcpUpdate {
     UsageUpdate { used: u64, size: u64 },
     /// Plan update — ignored in v1.
     PlanUpdate,
+    /// The agent's advertised slash commands (goes to the session-status
+    /// channel, not ExecutorEvent — these are metadata, not conversation).
+    Commands { commands: Vec<AgentCommand> },
 }
 
 /// Map an ACP update into zero or more `ExecutorEvent` variants.
@@ -150,8 +174,11 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
         AcpUpdate::Crashed { message } => {
             vec![ExecutorEvent::Crashed { exit_code: None, message }]
         }
-        // usage_update and plan_update produce no ExecutorEvent.
-        AcpUpdate::UsageUpdate { .. } | AcpUpdate::PlanUpdate => vec![],
+        // usage_update, plan_update and available_commands_update produce no
+        // ExecutorEvent — nothing here belongs in the persisted transcript.
+        AcpUpdate::UsageUpdate { .. } | AcpUpdate::PlanUpdate | AcpUpdate::Commands { .. } => {
+            vec![]
+        }
     }
 }
 
@@ -159,6 +186,14 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
 pub fn extract_usage(update: &AcpUpdate) -> Option<(u64, u64)> {
     match update {
         AcpUpdate::UsageUpdate { used, size } => Some((*used, *size)),
+        _ => None,
+    }
+}
+
+/// Extract advertised commands from an update, if present.
+pub fn extract_commands(update: &AcpUpdate) -> Option<&[AgentCommand]> {
+    match update {
+        AcpUpdate::Commands { commands } => Some(commands),
         _ => None,
     }
 }
@@ -401,5 +436,55 @@ mod tests {
         );
         let echo = v1::SessionUpdate::UserMessageChunk(text_chunk("hi"));
         assert_eq!(from_session_update(&echo), None);
+    }
+
+    // ------------------------------------------------- available commands
+
+    /// The agent's advertised commands are how skills reach the `/` menu.
+    /// Verified against `@agentclientprotocol/claude-agent-acp` 0.69.0: a
+    /// project's own `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`
+    /// both arrive here, so Palisade needs no filesystem knowledge of any
+    /// agent's skill directory layout.
+    #[test]
+    fn wire_available_commands() {
+        let update = v1::SessionUpdate::AvailableCommandsUpdate(
+            v1::AvailableCommandsUpdate::new(vec![
+                v1::AvailableCommand::new("review", "Review code changes"),
+                v1::AvailableCommand::new("ponytail:ponytail-audit", "Audit for bloat"),
+            ]),
+        );
+        assert_eq!(
+            from_session_update(&update),
+            Some(AcpUpdate::Commands {
+                commands: vec![
+                    AgentCommand {
+                        name: "review".into(),
+                        description: "Review code changes".into(),
+                    },
+                    AgentCommand {
+                        name: "ponytail:ponytail-audit".into(),
+                        description: "Audit for bloat".into(),
+                    },
+                ]
+            })
+        );
+    }
+
+    /// Commands are session metadata, not conversation: they must not enter
+    /// the ExecutorEvent stream, which is what gets persisted to the thread's
+    /// JSONL and re-rendered on reload.
+    #[test]
+    fn commands_produce_no_executor_event() {
+        let events = map_acp_update(AcpUpdate::Commands { commands: vec![] });
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn commands_are_extracted_for_the_side_channel() {
+        let update = AcpUpdate::Commands {
+            commands: vec![AgentCommand { name: "go".into(), description: "d".into() }],
+        };
+        assert_eq!(extract_commands(&update).map(<[_]>::len), Some(1));
+        assert_eq!(extract_commands(&AcpUpdate::PlanUpdate), None);
     }
 }

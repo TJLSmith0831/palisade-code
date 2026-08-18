@@ -26,6 +26,7 @@ import {
   Badge,
   Alert,
   Group,
+  Paper,
   UnstyledButton,
 } from "@mantine/core";
 import {
@@ -64,6 +65,7 @@ import type {
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
+import { commandTrigger, matchCommands, slashQuery } from "./slashCommands";
 import { deriveStage, type SpecStage } from "./stage";
 import { RenameIcon, DeleteIcon } from "./icons";
 import {
@@ -89,6 +91,7 @@ import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
+import McpPane from "./McpPane";
 import RunPanel from "./RunPanel";
 import ProblemsPane from "./ProblemsPane";
 import EditorStatusBar from "./EditorStatusBar";
@@ -138,6 +141,9 @@ type ChatSurfaceProps = {
   onPickModel: (modelId: string) => void;
   /** The model menu was opened — probe the provider if not yet cached. */
   onProbeModels: () => void;
+  /** Slash commands the agent advertised for this thread (ACP
+   *  `available_commands_update`) — skills, user commands and built-ins alike. */
+  commands: api.AgentCommand[];
   draft: string;
   setDraft: (value: string) => void;
   onSend: () => void;
@@ -210,6 +216,7 @@ export const ChatSurface = memo(
     onPickExecutor,
     onPickModel,
     onProbeModels,
+    commands,
     draft,
     setDraft,
     onSend,
@@ -299,6 +306,29 @@ export const ChatSurface = memo(
         ),
       [messages, live]
     );
+    // The `/` menu. Opens on a leading slash and closes on the first space —
+    // ACP takes the whole line as the prompt, so the rest is the command's
+    // own input and there is nothing left to complete.
+    const commandQuery = slashQuery(draft);
+    const commandMatches = useMemo(
+      () => (commandQuery === null ? [] : matchCommands(commands, commandQuery)),
+      [commands, commandQuery]
+    );
+    const commandMenuOpen = commandMatches.length > 0;
+    const [commandIndex, setCommandIndex] = useState(0);
+    // A new query can be shorter than the old list; clamping here rather than
+    // in the key handler keeps the highlight on a row that actually exists.
+    const activeCommand = commandMatches[commandIndex] ?? commandMatches[0];
+    useEffect(() => {
+      setCommandIndex(0);
+    }, [commandQuery]);
+
+    // Completing a command just rewrites the draft — ACP invokes one by
+    // sending its name as the prompt. The sigil is the agent's, not ours.
+    const pickCommand = (command: api.AgentCommand) => {
+      setDraft(commandTrigger(command));
+    };
+
     // Re-arm auto-scroll on send, then let the effect below pin to bottom.
     const handleSend = () => {
       setAutoScroll(true);
@@ -976,13 +1006,76 @@ export const ChatSurface = memo(
             borderRadius: 14,
             background: "var(--surface)",
             boxSizing: "border-box",
+            position: "relative",
           }}
         >
+          {/* The `/` menu, anchored above the composer so the input it is
+              completing stays visible and in place while it filters. */}
+          {commandMenuOpen && (
+            <Paper
+              withBorder
+              shadow="md"
+              radius="md"
+              className="ds-command-menu"
+              data-testid="command-menu"
+              role="listbox"
+              aria-label="Agent commands"
+            >
+              <div className="ds-command-menu-scroll">
+                {commandMatches.map((command, index) => (
+                  <UnstyledButton
+                    key={command.name}
+                    role="option"
+                    aria-selected={command === activeCommand}
+                    data-active={command === activeCommand || undefined}
+                    className="ds-command-menu-row"
+                    // Mouse and keyboard drive the same highlight, so hovering
+                    // never leaves two rows looking selected at once.
+                    onMouseEnter={() => setCommandIndex(index)}
+                    onClick={() => pickCommand(command)}
+                  >
+                    <span className="ds-command-menu-name">
+                      {commandTrigger(command).trimEnd()}
+                    </span>
+                    <span className="ds-command-menu-desc">
+                      {command.description}
+                    </span>
+                  </UnstyledButton>
+                ))}
+              </div>
+            </Paper>
+          )}
+
           {/* Message input */}
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              // The menu owns the arrows, Tab, Enter and Escape while it is
+              // open — otherwise Enter would send a half-typed command name.
+              if (commandMenuOpen) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : -1;
+                  setCommandIndex(
+                    (i) =>
+                      (i + step + commandMatches.length) % commandMatches.length
+                  );
+                  return;
+                }
+                if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+                  event.preventDefault();
+                  if (activeCommand) pickCommand(activeCommand);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  // Closing without choosing: keep what was typed, drop the
+                  // sigil, so Escape never destroys the user's text.
+                  setDraft(draft.replace(/^(\s*)[/$]/, "$1"));
+                  return;
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
 
@@ -993,7 +1086,7 @@ export const ChatSurface = memo(
             }}
             placeholder={
               flightSelected
-                ? "Message, or /propose"
+                ? "Message, or / for commands"
                 : "Chat-only — no executor on PATH"
             }
             aria-label="Message"
@@ -1667,6 +1760,8 @@ export default function App() {
   const setLiveBySession = ex.setLiveBySession;
   const busyThreads = ex.busyThreads;
   const setBusyFor = ex.setBusyFor;
+  const commandsByThread = ex.commandsByThread;
+  const setCommandsByThread = ex.setCommandsByThread;
   const modelsRef = ex.modelsRef;
   const modelsByAgent = ex.modelsByAgent;
   const setModelsByAgent = ex.setModelsByAgent;
@@ -2671,11 +2766,23 @@ export default function App() {
     const warned = listen<string>("harness-warning", ({ payload }) =>
       warn(payload)
     );
+    // The agent's `/` menu. Keyed by thread, not session: the composer belongs
+    // to the thread, and a thread can hold a spec and a go session at once.
+    // The agent re-sends the whole list whenever it changes, so this replaces
+    // rather than merges.
+    const commanded = listen<api.AgentCommands>(
+      "agent-commands",
+      ({ payload }) =>
+        setCommandsByThread((prev) =>
+          new Map(prev).set(payload.threadId, payload.commands)
+        )
+    );
     return () => {
       streaming.then((un) => un());
       updated.then((un) => un());
       ambiguous.then((un) => un());
       warned.then((un) => un());
+      commanded.then((un) => un());
     };
   }, [refresh, setBusyFor]);
 
@@ -3421,6 +3528,7 @@ export default function App() {
     },
     flightSelected: !!flight?.selected,
     flight,
+    commands: thread ? (commandsByThread.get(thread.id) ?? []) : [],
     draft,
     setDraft,
     onSend,
@@ -3556,6 +3664,8 @@ export default function App() {
             </div>
           </>
         );
+      case "mcp":
+        return <McpPane projectHash={project.hash} onError={fail} />;
       case "history":
         return (
           <>

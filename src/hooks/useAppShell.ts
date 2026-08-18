@@ -23,6 +23,7 @@ export const PANEL_IDS = [
   "specs",
   "codemap",
   "run",
+  "mcp",
   "history",
   "workspace",
   "settings",

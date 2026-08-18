@@ -18,6 +18,7 @@ import {
   IconSend,
   IconSparkles,
 } from "@tabler/icons-react";
+import palisadeWordmark from "../assets/palisade-wordmark-darkmode-no-bg.png";
 import type { ModelState, Preflight, Project } from "./api";
 
 // Amendment 8's first-run screen: shown whenever no project is open. Stands
@@ -100,17 +101,12 @@ export default function OnboardingScreen({
   return (
     <div className="ds-onboarding" data-testid="onboarding">
       <div className="ds-onboarding-inner">
-        <div className="ds-onboarding-mark" aria-hidden="true">
-          <IconSparkles size={22} />
-        </div>
-        <h2 className="ds-onboarding-title">
-          Drive your own coding agent, spec-first
-        </h2>
-        <p className="ds-onboarding-pitch">
-          Palisade orchestrates Claude Code or Codex through a Socratic
-          spec-then-build cycle — no bundled model, no per-usage billing. Open a
-          project to get started.
-        </p>
+        <img
+          className="ds-onboarding-mark"
+          src={palisadeWordmark}
+          alt="Palisade"
+          draggable={false}
+        />
 
         <div className="ds-onboarding-composer">
           <Textarea
@@ -242,9 +238,6 @@ export default function OnboardingScreen({
             </ActionIcon>
           </div>
           <div className="ds-onboarding-dir-row">
-            <span className="ds-onboarding-dir-tag">
-              <IconFolder size={13} /> Local
-            </span>
             <button
               className="ds-onboarding-dir-pick"
               onClick={onOpenProject}
@@ -357,10 +350,6 @@ export default function OnboardingScreen({
           </>
         )}
 
-        <p className="ds-onboarding-foot">
-          No account, no sign-in — Palisade drives the Claude Code or Codex install
-          already on this machine, using your existing subscription.
-        </p>
       </div>
     </div>
   );

@@ -2298,10 +2298,8 @@ describe("First-run onboarding", () => {
 
     render(<App />);
     await screen.findByTestId("onboarding");
-    // The pitch, not a bare "no projects" sentence.
-    expect(
-      screen.getByRole("heading", { level: 2, name: /spec-first/i })
-    ).toBeDefined();
+    // The brand mark, not a bare "no projects" sentence.
+    expect(screen.getByAltText("Palisade")).toBeDefined();
     // With no project there is nothing to recall.
     expect(screen.queryByTestId("recent-project")).toBeNull();
 
@@ -4314,5 +4312,216 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
     });
+  });
+});
+
+// The `/` menu is fed entirely by the agent's ACP `available_commands_update`
+// notification. Verified against @agentclientprotocol/claude-agent-acp 0.69.0:
+// a project's own .claude/skills/*/SKILL.md arrives through this channel, so
+// Palisade never scans a skill directory or hardcodes an agent's layout.
+describe("Agent command menu", () => {
+  const openThread = async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "list_threads") {
+        return Promise.resolve([
+          {
+            id: "t1",
+            title: "Thread A",
+            createdAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+          },
+        ]);
+      }
+      if (cmd === "read_thread") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({
+          agents: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+            {
+              id: "codex",
+              label: "Codex",
+              path: null,
+              skillsOk: true,
+              pluginOk: true,
+            },
+          ],
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "load_graphify")
+        return Promise.resolve({
+          outDir: "",
+          report: "",
+          graph: null,
+          summary: "",
+        });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+  };
+
+  const advertise = (commands: { name: string; description: string }[]) =>
+    emit("agent-commands", {
+      sessionId: "s1",
+      threadId: "t1",
+      commands,
+    });
+
+  it("stays shut until the agent has advertised something", async () => {
+    await openThread();
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "/" },
+    });
+    expect(screen.queryByTestId("command-menu")).not.toBeInTheDocument();
+  });
+
+  it("lists the agent's commands, project skills included", async () => {
+    await openThread();
+    advertise([
+      { name: "review", description: "Review code changes" },
+      { name: "my-project-skill", description: "PROJECT MARKER" },
+    ]);
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "/" },
+    });
+    const menu = await screen.findByTestId("command-menu");
+    expect(menu).toHaveTextContent("/review");
+    expect(menu).toHaveTextContent("/my-project-skill");
+    expect(menu).toHaveTextContent("PROJECT MARKER");
+  });
+
+  it("filters as the user types and completes the choice into the draft", async () => {
+    await openThread();
+    advertise([
+      { name: "review", description: "Review code changes" },
+      { name: "propose", description: "Propose a change" },
+    ]);
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "/rev" } });
+    const menu = await screen.findByTestId("command-menu");
+    expect(menu).not.toHaveTextContent("/propose");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    // ACP invokes a command by sending "/name" as the prompt; the trailing
+    // space both closes the menu and is where an argument would go.
+    await waitFor(() => expect(input).toHaveValue("/review "));
+    expect(screen.queryByTestId("command-menu")).not.toBeInTheDocument();
+  });
+
+  it("does not send the message while the menu is open", async () => {
+    await openThread();
+    advertise([{ name: "review", description: "Review code changes" }]);
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "/rev" } });
+    await screen.findByTestId("command-menu");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input).toHaveValue("/review "));
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "send_message",
+      expect.anything()
+    );
+  });
+
+  it("moves the highlight with the arrow keys", async () => {
+    await openThread();
+    advertise([
+      { name: "review", description: "Review code changes" },
+      { name: "revert", description: "Revert a commit" },
+    ]);
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "/rev" } });
+    await screen.findByTestId("command-menu");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input).toHaveValue("/revert "));
+  });
+
+  it("keeps the typed text when Escape dismisses the menu", async () => {
+    await openThread();
+    advertise([{ name: "review", description: "Review code changes" }]);
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "/rev" } });
+    await screen.findByTestId("command-menu");
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() => expect(input).toHaveValue("rev"));
+    expect(screen.queryByTestId("command-menu")).not.toBeInTheDocument();
+  });
+
+  it("drives a Codex-style sigil command without double-prefixing it", async () => {
+    await openThread();
+    // codex-acp 1.4.0 carries the "$" inside the advertised name.
+    advertise([{ name: "$tdd", description: "Test-driven development" }]);
+    const input = screen.getByTestId("composer-input");
+
+    fireEvent.change(input, { target: { value: "$td" } });
+    const menu = await screen.findByTestId("command-menu");
+    expect(menu).toHaveTextContent("$tdd");
+    expect(menu).not.toHaveTextContent("/$tdd");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input).toHaveValue("$tdd "));
+  });
+
+  it("finds a sigil command from a slash, since the user need not know", async () => {
+    await openThread();
+    advertise([{ name: "$tdd", description: "Test-driven development" }]);
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "/tdd" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input).toHaveValue("$tdd "));
+  });
+
+  it("replaces the list when the agent re-advertises mid-session", async () => {
+    await openThread();
+    advertise([{ name: "old-skill", description: "Was here" }]);
+    advertise([{ name: "new-skill", description: "Is here now" }]);
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "/" },
+    });
+    const menu = await screen.findByTestId("command-menu");
+    expect(menu).toHaveTextContent("/new-skill");
+    expect(menu).not.toHaveTextContent("/old-skill");
   });
 });
