@@ -26,6 +26,12 @@ export type ThreadMeta = {
   specType?: string | null;
   /** Archived threads drop out of the default History list; nothing is lost. */
   archived?: boolean;
+  /** The thread's isolated git worktree; null until its first session runs. */
+  worktreePath?: string | null;
+  worktreeBranch?: string | null;
+  /** "auto" = Palisade named this thread (and may rename it while it is still
+   *  a placeholder); "manual" = the user did, and it is never touched. */
+  titleSource?: "auto" | "manual";
 };
 
 export type Message = {
@@ -274,6 +280,20 @@ export type SessionStatus = {
 };
 
 export const executorStatus = () => invoke<SessionStatus[]>("executor_status");
+
+/** A thread's isolated worktree and what has changed inside it. Keyed by
+ *  thread, not session: uncommitted work outlives the session that made it. */
+export type WorktreeStatus = {
+  threadId: string;
+  branch: string;
+  added: number;
+  removed: number;
+};
+
+/** Only threads that have a worktree appear — never-run threads and non-git
+ *  projects are simply absent. */
+export const threadWorktrees = (projectHash: string) =>
+  invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
 /** Release a thread's idle sessions. Sessions mid-turn keep running. */
@@ -474,12 +494,14 @@ export const terminalKill = () => invoke<void>("terminal_kill");
 
 export type FileStatus = { path: string; code: string };
 
-export const gitStatus = (projectHash: string) =>
-  invoke<FileStatus[]>("git_status", { projectHash });
-export const gitWorkingDiff = (projectHash: string) =>
-  invoke<string>("git_working_diff", { projectHash });
-export const gitStagedDiff = (projectHash: string) =>
-  invoke<string>("git_staged_diff", { projectHash });
+/** `threadId` reads that thread's own worktree instead of the project root.
+ *  Reads only — staging and committing always act on the project root. */
+export const gitStatus = (projectHash: string, threadId?: string) =>
+  invoke<FileStatus[]>("git_status", { projectHash, threadId });
+export const gitWorkingDiff = (projectHash: string, threadId?: string) =>
+  invoke<string>("git_working_diff", { projectHash, threadId });
+export const gitStagedDiff = (projectHash: string, threadId?: string) =>
+  invoke<string>("git_staged_diff", { projectHash, threadId });
 export const gitStageHunk = (projectHash: string, patch: string) =>
   invoke<void>("git_stage_hunk", { projectHash, patch });
 export const gitUnstageHunk = (projectHash: string, patch: string) =>

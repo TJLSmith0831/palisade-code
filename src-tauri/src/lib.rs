@@ -290,6 +290,22 @@ async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: S
                 "This thread has a turn in progress — wait for it to finish before deleting.".into(),
             );
         }
+        // The thread's worktree goes with it. Archiving deliberately does not
+        // do this: an archived thread keeps its uncommitted work on disk.
+        // Best-effort — a worktree git won't drop must not block the delete
+        // the user asked for, and its metadata is about to be gone anyway.
+        if let Some(meta) = thread_meta(&project_hash, &thread_id) {
+            if let Some(path) = meta.worktree_path {
+                if let (Ok(bin), Ok(root)) = (git_bin(), project_root(&project_hash)) {
+                    let _ = git::remove_worktree(
+                        &bin,
+                        &root,
+                        Path::new(&path),
+                        meta.worktree_branch.as_deref(),
+                    );
+                }
+            }
+        }
         store::delete_thread(&palisade_home(), &project_hash, &thread_id)
     })
     .await
@@ -518,7 +534,7 @@ fn resolve_executor<'a>(
 }
 
 /// The thread's stored meta, if it exists.
-fn thread_meta(project_hash: &str, thread_id: &str) -> Option<store::ThreadMeta> {
+pub(crate) fn thread_meta(project_hash: &str, thread_id: &str) -> Option<store::ThreadMeta> {
     store::list_threads(&palisade_home(), project_hash)
         .ok()?
         .into_iter()
@@ -577,6 +593,62 @@ fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode:
         .map(|s| s.id.clone())
 }
 
+/// The directory this thread's sessions run in: its own git worktree, so two
+/// threads in one project never write to the same files.
+///
+/// Created lazily, on the thread's first session start — a thread that is
+/// created and never run leaves no worktree or branch behind. Threads that
+/// predate worktree isolation have no recorded path and pick one up here, so
+/// no migration pass is needed.
+///
+/// Falls back to the project root, which is the pre-isolation behaviour, when
+/// the project isn't a git repo (silently — that project never had isolation
+/// to lose) or when git refuses to make the worktree (with a warning, since
+/// that one is unexpected and the user is about to get uncoordinated edits).
+fn thread_worktree(
+    app: &tauri::AppHandle,
+    home: &Path,
+    project: &Path,
+    project_hash: &str,
+    thread_id: &str,
+) -> PathBuf {
+    if let Some(recorded) = thread_meta(project_hash, thread_id).and_then(|t| t.worktree_path) {
+        let path = PathBuf::from(recorded);
+        if path.is_dir() {
+            return path;
+        }
+    }
+    let Ok(bin) = git_bin() else {
+        return project.to_path_buf();
+    };
+    // A project that isn't a repo never had isolation to lose — no warning.
+    if !git::is_git_repo(&bin, project) {
+        return project.to_path_buf();
+    }
+    match git::add_worktree(&bin, project, thread_id) {
+        Ok((path, branch)) => {
+            let _ = store::set_thread_worktree(
+                home,
+                project_hash,
+                thread_id,
+                &path.to_string_lossy(),
+                &branch,
+            );
+            path
+        }
+        Err(err) => {
+            let _ = app.emit(
+                "harness-warning",
+                format!(
+                    "Could not create an isolated worktree for this thread ({err}) — \
+                     it will run in the project root, where concurrent edits are not coordinated."
+                ),
+            );
+            project.to_path_buf()
+        }
+    }
+}
+
 /// Start a new ACP session on a thread and record it open.
 fn start_session(
     app: &tauri::AppHandle,
@@ -595,21 +667,11 @@ fn start_session(
     // `model` parameter is legacy and ignored (the frontend passes null).
     let model = thread_meta(project_hash, thread_id).and_then(|t| t.model);
 
-    // ACP sessions don't use provider handles — each session is fresh.
-    // Collision warning: Palisade cannot stop two agents writing the same file.
-    let collision = {
-        let sessions = harness.acp_sessions.lock().unwrap();
-        let others: Vec<(&str, &str)> = sessions
-            .values()
-            .map(|s| (s.project_hash.as_str(), s.thread_id.as_str()))
-            .collect();
-        collision_warning(&others, project_hash, thread_id)
-    };
-    if let Some(message) = collision {
-        let _ = app.emit("harness-warning", message);
-    }
-
-    let root = project_root(project_hash)?;
+    let project = project_root(project_hash)?;
+    // Two threads in one project used to share this working tree, and all
+    // Palisade could do was warn that "git is the arbiter". Each thread now
+    // runs in its own worktree instead, so there is nothing to warn about.
+    let root = thread_worktree(app, &home, &project, project_hash, thread_id);
     let spawn = acp_client::AcpSpawn {
         agent_id: agent.id.clone(),
         agent_name: agent.name.clone(),
@@ -745,35 +807,6 @@ fn park_prefix(
     }
 }
 
-/// Whether starting a session here collides with one Palisade can't coordinate.
-///
-/// Only *other threads* count. One thread holding a live spec session and a
-/// live go session at once is the documented design — warning about it fired
-/// on the ordinary /go, said the user's own session was in their way, and
-/// trained them to ignore the one warning that matters: another thread
-/// editing the same working tree.
-///
-/// The message names how many, not which: a session ULID is not something the
-/// user can act on, and the actionable fact is simply "something else is
-/// writing to these files too".
-fn collision_warning(
-    live: &[(&str, &str)],
-    project_hash: &str,
-    thread_id: &str,
-) -> Option<String> {
-    let others = live
-        .iter()
-        .filter(|(hash, thread)| *hash == project_hash && *thread != thread_id)
-        .count();
-    if others == 0 {
-        return None;
-    }
-    Some(format!(
-        "{others} other thread{} running in this project — concurrent edits are not coordinated; git is the arbiter.",
-        if others == 1 { " is" } else { "s are" }
-    ))
-}
-
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
     harness.pending_prefix.lock().unwrap().remove(session_id);
@@ -838,6 +871,16 @@ async fn send_message(
         // project still keeps the user's turn. There is no session to name yet.
         let message =
             store::append_message(&palisade_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
+        // Name the thread after the turn that opened it, so "New thread" is
+        // never what the user has to live with. Silent on failure: a title is
+        // cosmetic and must not cost the user their message.
+        let _ = store::set_auto_title(
+            &palisade_home(),
+            &project_hash,
+            &thread_id,
+            &content,
+            model_title(&harness, &content).as_deref(),
+        );
         if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
             // Chat-only mode: the turn is still recorded, nothing answers it.
             return Ok(message);
@@ -849,6 +892,22 @@ async fn send_message(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// A thread title written by the bundled local model, or `None` if it isn't
+/// up yet or didn't return anything usable.
+///
+/// Deliberately does *not* start the sidecar: this runs on the user's first
+/// turn, and spawning a model to earn a nicer label would delay the message
+/// they actually sent. If inline completion has the model warm, titles get
+/// the good path; otherwise the caller trims the prompt instead.
+fn model_title(harness: &Harness, prompt: &str) -> Option<String> {
+    let server = harness.completion_server.lock().unwrap();
+    let server = server.as_ref()?;
+    if !server.is_alive() {
+        return None;
+    }
+    server.title(prompt).ok()
 }
 
 /// Send one turn to a named live session, carrying any handoff transcript
@@ -1347,6 +1406,45 @@ async fn executor_status(app: tauri::AppHandle) -> Res<Vec<SessionStatus>> {
             .collect();
         statuses.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(statuses)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A thread's isolated worktree, and what has changed inside it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeStatus {
+    thread_id: String,
+    branch: String,
+    added: u32,
+    removed: u32,
+}
+
+/// What each thread's worktree holds, for the sidebar's diff stat and the
+/// chat header's branch.
+///
+/// Keyed by thread rather than by session on purpose: a thread's uncommitted
+/// work outlives the session that produced it, and the moment a turn ends is
+/// exactly when the user wants to see what it changed. Threads with no
+/// worktree (never run, or a non-git project) are simply absent.
+#[tauri::command]
+async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
+    tokio::task::spawn_blocking(move || {
+        let bin = git_bin()?;
+        let mut out = vec![];
+        for thread in store::list_threads(&palisade_home(), &project_hash)? {
+            let (Some(path), Some(branch)) = (thread.worktree_path, thread.worktree_branch) else {
+                continue;
+            };
+            let path = PathBuf::from(path);
+            if !path.is_dir() {
+                continue;
+            }
+            let (added, removed) = git::diff_stat(&bin, &path).unwrap_or((0, 0));
+            out.push(WorktreeStatus { thread_id: thread.id, branch, added, removed });
+        }
+        Ok(out)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1978,6 +2076,7 @@ pub fn run() {
             stop_executor,
             executor_status,
             list_sessions,
+            thread_worktrees,
             leave_thread,
             run_verify,
             list_verifications,
@@ -2128,37 +2227,6 @@ mod tests {
         assert!(commit_message_prompt("staged", "+x").contains("staged diff"));
     }
 
-    /// A thread holding a live spec session and a live go session at once is
-    /// the documented design (CLAUDE.md) — /go must not warn about it.
-    #[test]
-    fn a_threads_own_other_session_is_not_a_collision() {
-        let live = [("proj", "t1")];
-        assert_eq!(collision_warning(&live, "proj", "t1"), None);
-    }
-
-    #[test]
-    fn another_thread_in_the_same_project_is() {
-        let live = [("proj", "t2")];
-        let warning = collision_warning(&live, "proj", "t1").expect("warns");
-        assert!(warning.contains("1 other thread is"), "{warning}");
-        assert!(warning.contains("git is the arbiter"));
-    }
-
-    #[test]
-    fn counts_other_threads_and_ignores_this_one() {
-        let live = [("proj", "t1"), ("proj", "t2"), ("proj", "t3")];
-        let warning = collision_warning(&live, "proj", "t1").expect("warns");
-        assert!(warning.contains("2 other threads are"), "{warning}");
-    }
-
-    /// Another project's session shares no working tree, so it is not a
-    /// collision at all.
-    #[test]
-    fn another_project_is_never_a_collision() {
-        let live = [("other", "t2")];
-        assert_eq!(collision_warning(&live, "proj", "t1"), None);
-    }
-
     use super::*;
 
     /// Builds an ACP preflight snapshot from named agent ids.
@@ -2235,6 +2303,9 @@ mod tests {
             model: None,
             spec_type: None,
             archived: false,
+            worktree_path: None,
+            worktree_branch: None,
+            title_source: "manual".into(),
         }
     }
 

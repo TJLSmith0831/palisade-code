@@ -1,16 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Badge, Modal as MantineModal } from "@mantine/core";
+import { Alert, Badge, Modal as MantineModal, SegmentedControl } from "@mantine/core";
 import type { StructuredPatch, StructuredPatchHunk } from "diff";
 
 import * as api from "./api";
 import type { FileStatus } from "./api";
 import DiffRows from "./DiffRows";
+import type { DiffView } from "./DiffRows";
 import { describeError } from "./errors";
 import { rowsFromHunk } from "./diffLines";
 import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
 
+/** Survives remounts and app restarts: a reviewer who wants side-by-side
+ *  wants it for the whole review, not for one file. */
+const VIEW_KEY = "palisade.diffView";
+
 type Props = {
   projectHash: string;
+  /** Read this thread's isolated worktree instead of the project root.
+   *
+   *  Staging, discarding and committing are hidden while it is set: those
+   *  act on the project root, and offering them over a worktree's diff would
+   *  stage a file the user is not looking at. Reviewing a thread's work is
+   *  reading; the Source Control panel is where changes get committed. */
+  threadId?: string;
   /** Show only this file's diff — set when a row in the Source Control
    *  panel is clicked, so "click a change" lands on that change rather
    *  than on the whole working tree. */
@@ -29,13 +41,15 @@ function FileDiff({
   onStageAll,
   onDiscard,
   busy,
+  view,
 }: {
   file: StructuredPatch;
   actionLabel: string;
-  onHunkAction: (hunk: StructuredPatchHunk) => void;
+  onHunkAction?: (hunk: StructuredPatchHunk) => void;
   onStageAll?: () => void;
   onDiscard?: () => void;
   busy: boolean;
+  view: DiffView;
 }) {
   return (
     <div className="diff-file" data-testid="diff-file">
@@ -55,12 +69,14 @@ function FileDiff({
       </div>
       {file.hunks.map((hunk, i) => (
         <div key={i} className="diff-hunk">
-          <div className="diff-hunk-head">
-            <button onClick={() => onHunkAction(hunk)} disabled={busy} data-testid="hunk-action-btn">
-              {actionLabel}
-            </button>
-          </div>
-          <DiffRows rows={rowsFromHunk(hunk)} />
+          {onHunkAction && (
+            <div className="diff-hunk-head">
+              <button onClick={() => onHunkAction(hunk)} disabled={busy} data-testid="hunk-action-btn">
+                {actionLabel}
+              </button>
+            </div>
+          )}
+          <DiffRows rows={rowsFromHunk(hunk)} view={view} />
         </div>
       ))}
     </div>
@@ -69,10 +85,14 @@ function FileDiff({
 
 export default function DiffPane({
   projectHash,
+  threadId,
   refreshToken,
   focusPath,
   onClearFocus,
 }: Props) {
+  // Reviewing another tree is read-only: every write below targets the
+  // project root, so the buttons would act on a file that is not on screen.
+  const readOnly = threadId !== undefined;
   const [isRepo, setIsRepo] = useState(true);
   const [status, setStatus] = useState<FileStatus[]>([]);
   const [workingFiles, setWorkingFiles] = useState<StructuredPatch[]>([]);
@@ -80,6 +100,13 @@ export default function DiffPane({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState<{ path: string; untracked: boolean } | null>(null);
+  const [view, setView] = useState<DiffView>(
+    () => (localStorage.getItem(VIEW_KEY) as DiffView | null) ?? "inline"
+  );
+  const pickView = (next: DiffView) => {
+    setView(next);
+    localStorage.setItem(VIEW_KEY, next);
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -93,9 +120,9 @@ export default function DiffPane({
         return;
       }
       const [nextStatus, working, staged] = await Promise.all([
-        api.gitStatus(projectHash),
-        api.gitWorkingDiff(projectHash),
-        api.gitStagedDiff(projectHash),
+        api.gitStatus(projectHash, threadId),
+        api.gitWorkingDiff(projectHash, threadId),
+        api.gitStagedDiff(projectHash, threadId),
       ]);
       setStatus(nextStatus);
       setWorkingFiles(parseFilePatches(working));
@@ -104,7 +131,7 @@ export default function DiffPane({
     } catch (err) {
       setError(describeError(err));
     }
-  }, [projectHash]);
+  }, [projectHash, threadId]);
 
   useEffect(() => {
     refresh();
@@ -183,7 +210,31 @@ export default function DiffPane({
         </Alert>
       )}
 
-      {isClean && !error && <p className="empty">Nothing to commit — working tree clean.</p>}
+      {isClean && !error && (
+        <p className="empty">
+          {readOnly
+            ? "No changes in this thread yet."
+            : "Nothing to commit — working tree clean."}
+        </p>
+      )}
+
+      {/* Reading a rewrite line-by-line and reading it as a replacement are
+          different jobs; the toggle is per reviewer, not per file. */}
+      {!isClean && (
+        <div className="diff-toolbar" data-testid="diff-toolbar">
+          <span className="diff-spacer" />
+          <SegmentedControl
+            size="xs"
+            value={view}
+            onChange={(next) => pickView(next as DiffView)}
+            data-testid="diff-view-toggle"
+            data={[
+              { label: "Inline", value: "inline" },
+              { label: "Side by Side", value: "split" },
+            ]}
+          />
+        </div>
+      )}
 
       {focusPath && (
         <div className="diff-focus-bar" data-testid="diff-focus-bar">
@@ -203,8 +254,13 @@ export default function DiffPane({
               key={pathFromPatch(file)}
               file={file}
               actionLabel="Unstage hunk"
-              onHunkAction={(hunk) => run(() => api.gitUnstageHunk(projectHash, patchForHunk(file, hunk)))}
+              onHunkAction={
+                readOnly
+                  ? undefined
+                  : (hunk) => run(() => api.gitUnstageHunk(projectHash, patchForHunk(file, hunk)))
+              }
               busy={busy}
+              view={view}
             />
           ))}
         </section>
@@ -218,10 +274,23 @@ export default function DiffPane({
               key={pathFromPatch(file)}
               file={file}
               actionLabel="Stage hunk"
-              onHunkAction={(hunk) => run(() => api.gitStageHunk(projectHash, patchForHunk(file, hunk)))}
-              onStageAll={() => run(() => api.gitStageFile(projectHash, pathFromPatch(file)))}
-              onDiscard={() => setConfirmDiscard({ path: pathFromPatch(file), untracked: false })}
+              onHunkAction={
+                readOnly
+                  ? undefined
+                  : (hunk) => run(() => api.gitStageHunk(projectHash, patchForHunk(file, hunk)))
+              }
+              onStageAll={
+                readOnly
+                  ? undefined
+                  : () => run(() => api.gitStageFile(projectHash, pathFromPatch(file)))
+              }
+              onDiscard={
+                readOnly
+                  ? undefined
+                  : () => setConfirmDiscard({ path: pathFromPatch(file), untracked: false })
+              }
               busy={busy}
+              view={view}
             />
           ))}
           {shownUntracked.map((entry) => (
@@ -232,20 +301,24 @@ export default function DiffPane({
                   new
                 </Badge>
                 <span className="diff-spacer" />
-                <button
-                  onClick={() => setConfirmDiscard({ path: entry.path, untracked: true })}
-                  disabled={busy}
-                  data-testid="discard-untracked-btn"
-                >
-                  Discard
-                </button>
-                <button
-                  onClick={() => run(() => api.gitStageFile(projectHash, entry.path))}
-                  disabled={busy}
-                  data-testid="stage-untracked-btn"
-                >
-                  Stage
-                </button>
+                {!readOnly && (
+                  <>
+                    <button
+                      onClick={() => setConfirmDiscard({ path: entry.path, untracked: true })}
+                      disabled={busy}
+                      data-testid="discard-untracked-btn"
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onClick={() => run(() => api.gitStageFile(projectHash, entry.path))}
+                      disabled={busy}
+                      data-testid="stage-untracked-btn"
+                    >
+                      Stage
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ))}

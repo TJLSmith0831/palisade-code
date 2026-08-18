@@ -227,3 +227,62 @@ describe("DiffPane", () => {
     expect(onClearFocus).toHaveBeenCalled();
   });
 });
+
+describe("DiffPane worktree review", () => {
+  it("reads the named thread's worktree, not the project root", async () => {
+    mockGit((cmd) => {
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" threadId="t1" />);
+    await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
+
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "git_working_diff");
+    expect(call?.[1]).toMatchObject({ projectHash: "p1", threadId: "t1" });
+  });
+
+  // Staging acts on the project root. Offering it over a worktree's diff
+  // would stage a file the user is not looking at.
+  it("hides staging and discarding while reviewing a worktree", async () => {
+    mockGit((cmd) => {
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" threadId="t1" />);
+    await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
+
+    expect(screen.queryByTestId("stage-all-btn")).toBeNull();
+    expect(screen.queryByTestId("discard-btn")).toBeNull();
+    expect(screen.queryByTestId("hunk-action-btn")).toBeNull();
+  });
+
+  it("keeps staging available on the project's own working tree", async () => {
+    mockGit((cmd) => {
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
+
+    expect(screen.getByTestId("stage-all-btn")).toBeTruthy();
+    expect(screen.getByTestId("hunk-action-btn")).toBeTruthy();
+  });
+
+  it("switches between inline and side-by-side", async () => {
+    mockGit((cmd) => {
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    await waitFor(() => expect(screen.getByTestId("diff-rows-inline")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("radio", { name: "Side by Side" }));
+
+    await waitFor(() => expect(screen.getByTestId("diff-rows-split")).toBeTruthy());
+    expect(screen.queryByTestId("diff-rows-inline")).toBeNull();
+  });
+});

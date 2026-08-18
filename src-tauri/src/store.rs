@@ -237,6 +237,25 @@ pub struct ThreadMeta {
     /// remains separate. Absent on older records, which are not archived.
     #[serde(default)]
     pub archived: bool,
+    /// The git worktree this thread's sessions run in, and the branch it is
+    /// checked out on. Created lazily on the thread's first session start, so
+    /// `None` means "not created yet" — for a thread that has never run, and
+    /// for every thread that predates worktree isolation. Also stays `None`
+    /// for projects that aren't git repos, which run in the project root.
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+    #[serde(default)]
+    pub worktree_branch: Option<String>,
+    /// Who owns `title`: "auto" means Palisade named it (or hasn't yet) and
+    /// may rename it, "manual" means the user did and it is never touched
+    /// again. Threads that predate auto-titling default to "manual" — they
+    /// carry names their users typed, and renaming those would be theft.
+    #[serde(default = "manual_title_source")]
+    pub title_source: String,
+}
+
+fn manual_title_source() -> String {
+    "manual".to_string()
 }
 // `executorSessionId` used to live here. It was a provider-private resume
 // handle on a provider-independent entity, and it was written unconditionally
@@ -267,6 +286,11 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         model: None,
         spec_type: None,
         archived: false,
+        worktree_path: None,
+        worktree_branch: None,
+        // A brand new thread's title is a placeholder ("New thread"), not a
+        // choice — the first turn replaces it.
+        title_source: "auto".into(),
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -323,14 +347,92 @@ fn update_thread(home: &Path, hash: &str, id: &str, f: impl FnOnce(&mut ThreadMe
     Ok(meta)
 }
 
+/// Renaming by hand is how a user takes ownership of the title: auto-titling
+/// never touches it again.
 pub fn rename_thread(home: &Path, hash: &str, id: &str, title: &str) -> Res<ThreadMeta> {
-    update_thread(home, hash, id, |m| m.title = title.trim().to_string())
+    update_thread(home, hash, id, |m| {
+        m.title = title.trim().to_string();
+        m.title_source = "manual".into();
+    })
+}
+
+/// The names Palisade gives a thread before it knows what it is about. Only
+/// a title still sitting at one of these is Palisade's to replace.
+const PLACEHOLDER_TITLES: [&str; 2] = ["New thread", "Untitled thread"];
+
+/// Name a thread after the turn that opened it, so the user never has to.
+///
+/// Fires once, on the first turn: a thread already named — by an earlier turn
+/// or by the user — keeps that name, or every prompt would rename the thread
+/// out from under whoever was reading the list.
+/// `generated` is the model's title when one was available; the trimmed
+/// prompt stands in when it wasn't, so a thread is always named.
+pub fn set_auto_title(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    prompt: &str,
+    generated: Option<&str>,
+) -> Res<()> {
+    let Some(title) = generated.map(str::to_string).or_else(|| derive_title(prompt)) else {
+        return Ok(());
+    };
+    update_thread(home, hash, id, |m| {
+        if m.title_source == "auto" && PLACEHOLDER_TITLES.contains(&m.title.as_str()) {
+            m.title = title;
+        }
+    })?;
+    Ok(())
+}
+
+/// A thread title from the turn that started it: the first real line, cut to
+/// something that fits a sidebar row.
+///
+/// `None` when there is nothing worth showing — the title stays the
+/// placeholder rather than becoming a worse name than "New thread".
+pub fn derive_title(prompt: &str) -> Option<String> {
+    let line = prompt
+        .lines()
+        // Skip quoted context and headings pasted above the actual request.
+        .map(|l| l.trim().trim_start_matches(['#', '>', '-', '*', ' ']))
+        .find(|l| !l.is_empty())?;
+    let mut title = String::new();
+    for word in line.split_whitespace() {
+        // Cut on a word boundary, but never produce an empty title from one
+        // very long first word.
+        if !title.is_empty() && title.len() + 1 + word.len() > 48 {
+            title.push('…');
+            break;
+        }
+        if !title.is_empty() {
+            title.push(' ');
+        }
+        title.push_str(word);
+    }
+    let mut chars = title.chars();
+    let first = chars.next()?;
+    Some(first.to_uppercase().collect::<String>() + chars.as_str())
 }
 
 /// Archive (or unarchive) a thread. Nothing is deleted: the log, the
 /// sessions and the metadata all stay exactly where they were.
 pub fn set_thread_archived(home: &Path, hash: &str, id: &str, archived: bool) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| m.archived = archived)
+}
+
+/// Record the worktree a thread's sessions run in. Written once, by the
+/// thread's first session start; later starts read it back and reuse it.
+pub fn set_thread_worktree(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    path: &str,
+    branch: &str,
+) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.worktree_path = Some(path.to_string());
+        m.worktree_branch = Some(branch.to_string());
+    })
 }
 
 /// Link a thread to the OpenSpec change `/propose` created for it.
@@ -1464,4 +1566,111 @@ mod tests {
         assert_eq!(renamed.title, "new");
     }
 
+    // ------------------------------------------------------- auto titling
+
+    #[test]
+    fn derive_title_takes_the_first_real_line_and_capitalises_it() {
+        assert_eq!(
+            derive_title("\n\nadd validation to the orders API\nand then tests"),
+            Some("Add validation to the orders API".into())
+        );
+    }
+
+    /// Prompts routinely open with a markdown heading or a quote marker. The
+    /// marker is punctuation, not part of the name.
+    #[test]
+    fn derive_title_strips_markdown_and_quote_markers() {
+        assert_eq!(
+            derive_title("## Context\nfix the login redirect"),
+            Some("Context".into())
+        );
+        assert_eq!(derive_title("- fix the login redirect"), Some("Fix the login redirect".into()));
+        assert_eq!(derive_title("> quoted\n"), Some("Quoted".into()));
+    }
+
+    #[test]
+    fn derive_title_truncates_on_a_word_boundary() {
+        let title = derive_title(
+            "refactor the entire authentication subsystem and every one of its callers",
+        )
+        .unwrap();
+        assert!(title.ends_with('…'), "{title}");
+        assert!(title.chars().count() <= 50, "{title}");
+        assert!(!title.contains("callers"));
+    }
+
+    #[test]
+    fn derive_title_gives_up_rather_than_naming_a_thread_badly() {
+        assert_eq!(derive_title(""), None);
+        assert_eq!(derive_title("   \n\n  "), None);
+    }
+
+    #[test]
+    fn a_new_threads_first_turn_names_it_and_later_turns_do_not_rename_it() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+
+        set_auto_title(home.path(), &project.hash, &thread.id, "add order validation", None).unwrap();
+        let named = list_threads(home.path(), &project.hash).unwrap().remove(0);
+        assert_eq!(named.title, "Add order validation");
+        assert_eq!(named.title_source, "auto");
+
+        set_auto_title(home.path(), &project.hash, &thread.id, "now also fix the tests", None).unwrap();
+        let after = list_threads(home.path(), &project.hash).unwrap().remove(0);
+        assert_eq!(after.title, "Add order validation", "the second turn must not rename it");
+    }
+
+    /// The model writes the name when it is up; trimming the prompt is only
+    /// the fallback, because a trimmed prompt makes a long, clumsy title.
+    #[test]
+    fn a_model_written_title_wins_over_the_trimmed_prompt() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+
+        set_auto_title(
+            home.path(),
+            &project.hash,
+            &thread.id,
+            "the login page redirects to a 404 after signing in with google, can you look into it",
+            Some("Fix Google sign-in redirect"),
+        )
+        .unwrap();
+
+        let named = list_threads(home.path(), &project.hash).unwrap().remove(0);
+        assert_eq!(named.title, "Fix Google sign-in redirect");
+    }
+
+    /// A name the user typed is theirs. Auto-titling never overwrites it.
+    #[test]
+    fn a_manually_renamed_thread_is_never_auto_titled() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+
+        rename_thread(home.path(), &project.hash, &thread.id, "My own name").unwrap();
+        set_auto_title(home.path(), &project.hash, &thread.id, "add order validation", None).unwrap();
+
+        let after = list_threads(home.path(), &project.hash).unwrap().remove(0);
+        assert_eq!(after.title, "My own name");
+        assert_eq!(after.title_source, "manual");
+    }
+
+    /// Threads written before auto-titling existed carry names their users
+    /// typed — reading one back must not mark it Palisade's to rename.
+    #[test]
+    fn a_thread_from_before_auto_titling_defaults_to_manual() {
+        let meta: ThreadMeta = serde_json::from_str(
+            r#"{"id":"01A","projectHash":"h","title":"Hand named","createdAt":"t",
+                "updatedAt":"t","currentMode":"spec","openSpecChangeName":null}"#,
+        )
+        .unwrap();
+
+        assert_eq!(meta.title_source, "manual");
+        assert_eq!(meta.worktree_path, None);
+    }
 }

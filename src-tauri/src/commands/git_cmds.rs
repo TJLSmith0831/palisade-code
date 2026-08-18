@@ -1,25 +1,45 @@
-use crate::{git, git_bin, project_root, Res};
+use std::path::PathBuf;
 
-#[tauri::command]
-pub async fn git_status(project_hash: String) -> Res<Vec<git::FileStatus>> {
-    tokio::task::spawn_blocking(move || git::status(&git_bin()?, &project_root(&project_hash)?))
-        .await
-        .map_err(|e| e.to_string())?
+use crate::{git, git_bin, project_root, thread_meta, Res};
+
+/// Which tree a read is about: a thread's own worktree when one is named and
+/// exists, the project root otherwise.
+///
+/// Read paths only. Staging and committing still act on the project root —
+/// pointing a write at a worktree the user is merely *watching* is how edits
+/// land in the wrong tree, so the panes that offer those stay where they are.
+fn read_root(project_hash: &str, thread_id: Option<&str>) -> Res<PathBuf> {
+    let root = project_root(project_hash)?;
+    let worktree = thread_id
+        .and_then(|id| thread_meta(project_hash, id))
+        .and_then(|t| t.worktree_path)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir());
+    Ok(worktree.unwrap_or(root))
 }
 
 #[tauri::command]
-pub async fn git_working_diff(project_hash: String) -> Res<String> {
+pub async fn git_status(project_hash: String, thread_id: Option<String>) -> Res<Vec<git::FileStatus>> {
     tokio::task::spawn_blocking(move || {
-        git::working_tree_diff(&git_bin()?, &project_root(&project_hash)?)
+        git::status(&git_bin()?, &read_root(&project_hash, thread_id.as_deref())?)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn git_staged_diff(project_hash: String) -> Res<String> {
+pub async fn git_working_diff(project_hash: String, thread_id: Option<String>) -> Res<String> {
     tokio::task::spawn_blocking(move || {
-        git::staged_diff(&git_bin()?, &project_root(&project_hash)?)
+        git::working_tree_diff(&git_bin()?, &read_root(&project_hash, thread_id.as_deref())?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_staged_diff(project_hash: String, thread_id: Option<String>) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        git::staged_diff(&git_bin()?, &read_root(&project_hash, thread_id.as_deref())?)
     })
     .await
     .map_err(|e| e.to_string())?

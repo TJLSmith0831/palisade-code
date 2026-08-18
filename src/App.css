@@ -1612,6 +1612,72 @@ input[type="checkbox"] {
   user-select: none;
 }
 
+/* Gutter numbers: dim enough to read past, aligned so digits stack. */
+.diff-lineno {
+  flex-shrink: 0;
+  width: 4ch;
+  text-align: right;
+  color: var(--muted);
+  opacity: 0.6;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- side-by-side diff ---------------------------------------------------- */
+
+.diff-rows.split {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  /* Two equal columns that never let one side's long line push the other
+     off-screen; the pane scrolls horizontally instead. */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow-x: auto;
+}
+
+.diff-pair {
+  display: contents;
+}
+
+.diff-cell {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-right: 1px solid var(--border);
+}
+
+/* The blank opposite a pure add or delete: shaded, so the eye reads the
+   gap as "nothing here", not as an empty line of code. */
+.diff-cell.empty {
+  background: color-mix(in oklab, var(--muted), transparent 94%);
+}
+
+.diff-cell.add {
+  background: color-mix(in oklab, var(--success), transparent 90%);
+  color: var(--success);
+}
+
+.diff-cell.remove {
+  background: color-mix(in oklab, var(--danger), transparent 90%);
+  color: var(--danger);
+}
+
+.diff-cell .diff-content {
+  min-width: 0;
+}
+
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 0 0 8px;
+}
+
 /* --- git diff pane -------------------------------------------------------- */
 
 .diff-pane {
@@ -2832,8 +2898,46 @@ details.graph-report-wrap > summary {
   font-size: 10.5px;
   color: var(--muted);
   font-family: var(--mono);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
+/* Marks a title Palisade wrote rather than one the user typed. */
+.ds-session-spark {
+  color: var(--muted);
+  vertical-align: -1px;
+  margin-right: 3px;
+}
+
+.ds-session-diff {
+  display: inline-flex;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-session-diff .added {
+  color: var(--success);
+}
+
+.ds-session-diff .removed {
+  color: var(--danger);
+}
+
+/* The thread's own worktree branch — the isolation, made visible. */
+.ds-session-branch {
+  margin-top: 2px;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--muted);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Three states, and never colour alone: running pulses, changed sits still.
+   Idle renders no dot at all. */
 .ds-session-dot {
   position: absolute;
   top: 11px;
@@ -2842,6 +2946,86 @@ details.graph-report-wrap > summary {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
+}
+
+.ds-session-dot[data-state="running"] {
+  background: var(--accent);
+  animation: ds-session-pulse 1.6s ease-in-out infinite;
+}
+
+.ds-session-dot[data-state="changed"] {
+  background: transparent;
+  border: 1.5px solid var(--warn);
+}
+
+@keyframes ds-session-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent), transparent 60%);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-session-dot[data-state="running"] {
+    animation: none;
+  }
+}
+
+/* Live state of the open thread's worktree, above the composer. */
+.ds-worktree-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ds-worktree-strip-branch {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-worktree-strip-stat {
+  display: inline-flex;
+  gap: 5px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-worktree-strip-stat .added {
+  color: var(--success);
+}
+
+.ds-worktree-strip-stat .removed {
+  color: var(--danger);
+}
+
+.ds-worktree-strip-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ds-worktree-strip-link:hover {
+  text-decoration: underline;
 }
 
 /* --- Source Control panel (Amendment 7) ---------------------------------- */

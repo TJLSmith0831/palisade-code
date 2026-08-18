@@ -236,6 +236,90 @@ impl CompletionServer {
     }
 }
 
+impl CompletionServer {
+    /// Names a thread from its opening prompt, using the same bundled model
+    /// the editor's inline completion runs on — no extra agent turn, no
+    /// network, no cost.
+    ///
+    /// Short deadline and no retry, unlike `complete`: a title is cosmetic,
+    /// and the caller falls back to trimming the prompt. Making the user's
+    /// first turn wait on a cold sidecar to earn a nicer label is a bad
+    /// trade, so a slow model simply loses the race.
+    pub fn title(&self, prompt: &str) -> Res<String> {
+        let url = format!("http://127.0.0.1:{}/completion", self.port());
+        let resp = ureq::post(&url)
+            .timeout(Duration::from_secs(4))
+            .send_json(&title_request_body(prompt))
+            .map_err(|err| format!("title request failed: {err}"))?;
+        let text = resp
+            .into_string()
+            .map_err(|err| format!("failed to read title response: {err}"))?;
+        let raw = serde_json::from_str::<serde_json::Value>(&text)
+            .map_err(|err| format!("failed to parse title response: {err}"))?
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        clean_title(&raw).ok_or_else(|| "model returned no usable title".to_string())
+    }
+}
+
+/// An instruction-style prompt rather than FIM: this is a summarisation task,
+/// not a code-hole to fill. Few-shot, because a 0.8B model asked bare for "a
+/// title" tends to answer the request instead of naming it.
+pub fn build_title_prompt(request: &str) -> String {
+    // A long paste is a title's worst input and the model's slowest; the
+    // first part carries the intent.
+    let request: String = request.chars().take(600).collect();
+    format!(
+        "Write a short title (3-6 words) naming what the user asked for. \
+         Title only, no quotes, no trailing period.\n\n\
+         Request: the login page redirects to a 404 after signing in with google, \
+         can you look into why that happens\n\
+         Title: Fix Google sign-in redirect\n\n\
+         Request: add a priority field to each todo item\n\
+         Title: Add todo priority field\n\n\
+         Request: {}\n\
+         Title:",
+        request.trim()
+    )
+}
+
+fn title_request_body(request: &str) -> serde_json::Value {
+    serde_json::json!({
+        "prompt": build_title_prompt(request),
+        // A title is one short line: stop at the newline that ends it.
+        "n_predict": 16,
+        "temperature": DEFAULT_TEMPERATURE,
+        "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+        "top_p": DEFAULT_TOP_P,
+        "stop": ["\n", "Request:", "Title:", FIM_END.to_string()],
+    })
+}
+
+/// Strips what a small model decorates a title with, and rejects the rest.
+/// `None` when nothing usable came back — the caller keeps its own fallback
+/// rather than showing the user a stray fragment.
+pub fn clean_title(raw: &str) -> Option<String> {
+    let line = raw.lines().find(|l| !l.trim().is_empty())?;
+    let cleaned = line
+        .trim()
+        .trim_start_matches("Title:")
+        .trim()
+        .trim_matches(['"', '\'', '`', '*'])
+        .trim_end_matches('.')
+        .trim();
+    // A model that echoed the instruction back, or produced a sentence, has
+    // not produced a title.
+    if cleaned.is_empty() || cleaned.chars().count() > 60 || cleaned.split_whitespace().count() > 10
+    {
+        return None;
+    }
+    let mut chars = cleaned.chars();
+    let first = chars.next()?;
+    Some(first.to_uppercase().collect::<String>() + chars.as_str())
+}
+
 impl Default for CompletionServer {
     fn default() -> Self {
         Self::new()
@@ -872,5 +956,54 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
     fn truncate_returns_empty_string_unchanged() {
         let result = truncate_to_complete_lines("".to_string());
         assert_eq!(result, "");
+    }
+
+    // ------------------------------------------------------- thread titles
+
+    /// Small models decorate: quotes, a leading label, a trailing period.
+    #[test]
+    fn clean_title_strips_what_a_small_model_wraps_a_title_in() {
+        assert_eq!(clean_title(" \"Fix login redirect\" "), Some("Fix login redirect".into()));
+        assert_eq!(clean_title("Title: add todo priority"), Some("Add todo priority".into()));
+        assert_eq!(clean_title("**Fix the parser**"), Some("Fix the parser".into()));
+        assert_eq!(clean_title("Fix login redirect."), Some("Fix login redirect".into()));
+    }
+
+    /// A model that answered the request instead of naming it has not
+    /// produced a title — better to fall back than to show a sentence.
+    #[test]
+    fn clean_title_rejects_a_sentence_or_an_empty_answer() {
+        assert_eq!(clean_title(""), None);
+        assert_eq!(clean_title("   \n  "), None);
+        assert_eq!(
+            clean_title(
+                "Sure, I can help you with that — first I would look at the routing config"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn clean_title_takes_only_the_first_line() {
+        assert_eq!(clean_title("Fix login redirect\nRequest: something else"), Some("Fix login redirect".into()));
+    }
+
+    /// A pasted stack trace must not become the prompt: it is slow to
+    /// tokenize and the intent is in the first part anyway.
+    #[test]
+    fn build_title_prompt_caps_a_long_paste() {
+        let prompt = build_title_prompt(&"x".repeat(5000));
+
+        assert!(prompt.len() < 1500, "prompt was {} chars", prompt.len());
+        assert!(prompt.ends_with("Title:"));
+    }
+
+    #[test]
+    fn title_request_stops_at_the_end_of_one_line() {
+        let body = title_request_body("add a priority field");
+        let stop = body.get("stop").and_then(|v| v.as_array()).unwrap();
+
+        assert!(stop.iter().any(|s| s.as_str() == Some("\n")));
+        assert_eq!(body.get("n_predict").and_then(|v| v.as_u64()), Some(16));
     }
 }

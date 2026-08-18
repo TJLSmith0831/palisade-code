@@ -131,6 +131,11 @@ type ChatSurfaceProps = {
   messages: Message[];
   live: ExecutorEvent[];
   busy: boolean;
+  /** This thread's isolated worktree, absent until its first session runs
+   *  and for every thread in a non-git project. */
+  worktree?: api.WorktreeStatus;
+  /** Opens the Source Control panel on this thread's worktree. */
+  onViewDiff?: () => void;
   showThinking: boolean;
   executor: Preflight["selected"] | null;
   flight: Preflight | null;
@@ -208,6 +213,8 @@ export const ChatSurface = memo(
     messages,
     live,
     busy,
+    worktree,
+    onViewDiff,
     showThinking,
     executor,
     flight,
@@ -930,6 +937,26 @@ export const ChatSurface = memo(
               {thread.openSpecChangeName}
             </Badge>
           )}
+          {/* The branch this thread's agent is actually writing to. Absent
+              until the first session creates the worktree, and for projects
+              that aren't git repos. */}
+          {worktree && (
+            <Tooltip
+              label="This thread runs in its own git worktree"
+              openDelay={400}
+            >
+              <Badge
+                size="sm"
+                variant="default"
+                tt="none"
+                ff="var(--mono)"
+                leftSection={<IconGitBranch size={11} />}
+                data-testid="worktree-chip"
+              >
+                {worktree.branch}
+              </Badge>
+            </Tooltip>
+          )}
           <div className="spacer" />
         </div>
         {/* Amendment 5: switching agents mid-session used to be explained
@@ -990,6 +1017,35 @@ export const ChatSurface = memo(
             </Button>
           </div>
         )}
+        {/* What this thread has changed inside its own worktree, sitting
+            where the user is already looking when a turn ends. Renders only
+            once there is something to report — an empty worktree gets no
+            strip, and neither does a non-git project.
+
+            It says what changed, never that the change is correct: only a
+            verify run can claim that. */}
+        {worktree && worktree.added + worktree.removed > 0 && (
+          <div className="ds-worktree-strip" data-testid="worktree-strip">
+            <IconGitBranch size={12} />
+            <span className="ds-worktree-strip-branch">{worktree.branch}</span>
+            <span className="ds-worktree-strip-stat">
+              <span className="added">+{worktree.added}</span>
+              <span className="removed">−{worktree.removed}</span>
+            </span>
+            <div className="spacer" />
+            {onViewDiff && (
+              <button
+                type="button"
+                className="ds-worktree-strip-link"
+                onClick={onViewDiff}
+                data-testid="worktree-view-diff"
+              >
+                View diff
+              </button>
+            )}
+          </div>
+        )}
+
         <form
           className={`composer ${dragActive ? "drag-active" : ""}`}
           onSubmit={(event) => {
@@ -2694,6 +2750,51 @@ export default function App() {
     };
   }, []);
 
+  // Each thread's own worktree and what has changed in it, keyed by thread —
+  // this is what the sidebar's diff stat and branch line read.
+  const [worktrees, setWorktrees] = useState<Map<string, api.WorktreeStatus>>(
+    new Map()
+  );
+  const loadWorktrees = useCallback(() => {
+    const hash = current.current.project?.hash;
+    if (!hash) return;
+    api.threadWorktrees(hash).then(
+      (list) => setWorktrees(new Map(list.map((w) => [w.threadId, w]))),
+      // A non-git project has no worktrees to report; the rows just show none.
+      () => setWorktrees(new Map())
+    );
+  }, []);
+  // Polled only while an agent is actually working — the stat is otherwise
+  // static, and a timer running against an idle app buys nothing. The diff
+  // pane rides the same tick, so watching chat and watching the code stay in
+  // step while the agent writes.
+  useEffect(() => {
+    loadWorktrees();
+    if (busyThreads.size === 0) return;
+    const timer = setInterval(() => {
+      loadWorktrees();
+      setDiffRefreshToken((n) => n + 1);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [loadWorktrees, project?.hash, threads, busyThreads]);
+
+  // Show the code as the agent changes it, the way Cursor and Windsurf both
+  // do: the moment a turn starts, the editor column switches to the diff, so
+  // a user reading the chat is also watching the edits land.
+  //
+  // Rising edge only. Closing the diff mid-turn is a decision the user made
+  // about *this* turn, and re-opening it under them on the next poll would
+  // be the app arguing with them; the next turn starts the cycle over.
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    const busyNow = thread ? busyThreads.has(thread.id) : false;
+    if (busyNow && !wasBusy.current && shell.centerShell === "vibe") {
+      setDiffFocusPath(null);
+      shell.setDiffOpen(true);
+    }
+    wasBusy.current = busyNow;
+  }, [busyThreads, thread?.id, shell.centerShell, shell.setDiffOpen]);
+
   const refresh = useCallback(async () => {
     const { project, thread } = current.current;
     if (!project || !thread) return;
@@ -3131,6 +3232,14 @@ export default function App() {
         // message); don't duplicate it.
         prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
       );
+      // The first turn is also what names the thread, and that name is
+      // written server-side — without re-reading, the row the user is
+      // looking at keeps saying "New thread" until something else refreshes.
+      api.listThreads(project.hash).then((found) => {
+        setThreads(found);
+        const mine = found.find((t) => t.id === activeThread.id);
+        if (mine) setThread(mine);
+      }, () => {});
       // Chat-only mode never answers, so never leave the composer locked.
       if (!flight?.selected) setBusy(false);
     } catch (err) {
@@ -3518,6 +3627,13 @@ export default function App() {
     messages,
     live,
     busy,
+    worktree: thread ? worktrees.get(thread.id) : undefined,
+    // The code changes themselves, in the editor column — not the Source
+    // Control panel, which is where committing and pushing live.
+    onViewDiff: () => {
+      setDiffFocusPath(null);
+      shell.setDiffOpen(true);
+    },
     showThinking,
     executor: activeExecutor,
     models: activeExecutor ? (modelsByAgent[activeExecutor] ?? null) : null,
@@ -3990,6 +4106,7 @@ export default function App() {
                 /* `busyThreads` is already exactly "threads with a live
                    session" — no second derivation of the same state. */
                 liveThreadIds={busyThreads}
+                worktrees={worktrees}
                 onNewThread={onNewThread}
                 onSelect={onSelectVibeThread}
                 onRename={onRenameThread}
@@ -4088,6 +4205,10 @@ export default function App() {
                       {project && (
                         <DiffPane
                           projectHash={project.hash}
+                          /* The agent writes in this thread's worktree, so
+                             that is the tree to show — the project root has
+                             none of its edits. */
+                          threadId={thread?.worktreePath ? thread.id : undefined}
                           refreshToken={diffRefreshToken}
                           focusPath={diffFocusPath}
                           onClearFocus={() => setDiffFocusPath(null)}

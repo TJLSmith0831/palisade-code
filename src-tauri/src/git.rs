@@ -151,6 +151,76 @@ pub fn delete_branch(bin: &Path, root: &Path, name: &str) -> Res<()> {
     run(bin, root, &["branch", "-d", name]).map(|_| ())
 }
 
+// -------------------------------------------------------------- worktrees
+
+/// Where a thread's worktree lives, and what branch it runs on. Both derive
+/// from the thread id alone, so a path can be recomputed without reading the
+/// thread's metadata back. Worktrees go under `.git/` because that directory
+/// is outside the working tree git reports on — a sibling directory inside
+/// the project would show up as untracked in every status call.
+pub fn worktree_paths(root: &Path, thread_id: &str) -> (std::path::PathBuf, String) {
+    let chars: Vec<char> = thread_id.chars().collect();
+    let short: String = chars[chars.len().saturating_sub(8)..].iter().collect();
+    (
+        root.join(".git").join("palisade-worktrees").join(thread_id),
+        format!("palisade/{short}"),
+    )
+}
+
+/// Lines added and removed in this worktree against HEAD — the "+12 −3" the
+/// sidebar shows for what a thread has actually done.
+///
+/// Untracked files count as pure additions. `git diff` never lists them, and
+/// a file the agent just created is the most visible change there is, so
+/// leaving them out would report "+0 −0" for a thread that wrote a new module.
+///
+/// ponytail: an untracked *directory* reports as one porcelain entry and is
+/// counted as zero. Recurse it if new-directory changes start reading wrong.
+pub fn diff_stat(bin: &Path, root: &Path) -> Res<(u32, u32)> {
+    let raw = run(bin, root, &["diff", "--numstat", "HEAD"])?;
+    let (mut added, mut removed) = (0u32, 0u32);
+    for line in raw.lines() {
+        let mut cols = line.split('\t');
+        // A binary file reports "-\t-": no line counts to add.
+        if let (Some(a), Some(r)) = (cols.next(), cols.next()) {
+            added += a.parse::<u32>().unwrap_or(0);
+            removed += r.parse::<u32>().unwrap_or(0);
+        }
+    }
+    for file in status(bin, root)?.iter().filter(|f| f.code == "??") {
+        if let Ok(body) = std::fs::read_to_string(root.join(&file.path)) {
+            added += body.lines().count() as u32;
+        }
+    }
+    Ok((added, removed))
+}
+
+/// Create the thread's worktree, branching from the project's current HEAD.
+/// Returns the path and branch it created. Errors when the project is not a
+/// git repo, has no commits yet, or the branch name is already taken — every
+/// caller treats that as "fall back to the project root", not as fatal.
+pub fn add_worktree(bin: &Path, root: &Path, thread_id: &str) -> Res<(std::path::PathBuf, String)> {
+    let (path, branch) = worktree_paths(root, thread_id);
+    let path_str = path.to_string_lossy().into_owned();
+    run(bin, root, &["worktree", "add", "-b", &branch, &path_str])?;
+    Ok((path, branch))
+}
+
+/// Remove a thread's worktree and the branch it was on. `--force` because the
+/// worktree is Palisade's own and is expected to hold uncommitted agent edits;
+/// refusing to clean up after a thread the user deliberately deleted would
+/// leak a directory they can't see. The branch delete is best-effort: `-d`
+/// leaves an unmerged branch behind rather than force-deleting it, so
+/// committed work survives a thread deletion.
+pub fn remove_worktree(bin: &Path, root: &Path, path: &Path, branch: Option<&str>) -> Res<()> {
+    let path_str = path.to_string_lossy().into_owned();
+    run(bin, root, &["worktree", "remove", "--force", &path_str])?;
+    if let Some(name) = branch {
+        let _ = delete_branch(bin, root, name);
+    }
+    Ok(())
+}
+
 // --------------------------------------------------------- remote sync
 
 pub fn fetch(bin: &Path, root: &Path) -> Res<()> {
@@ -792,5 +862,133 @@ mod tests {
         init_repo(git(), dir.path()).unwrap();
 
         assert!(is_git_repo(git(), dir.path()));
+    }
+
+    // ----------------------------------------------------------- worktrees
+
+    /// The isolation the whole feature rests on: an edit in one thread's
+    /// worktree is invisible to another thread's, and to the project root.
+    #[test]
+    fn two_threads_get_separate_worktrees_that_do_not_see_each_others_edits() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+
+        let (path_a, branch_a) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+        let (path_b, branch_b) = add_worktree(git(), root, "01THREADBBBB").unwrap();
+        assert_ne!(path_a, path_b);
+        assert_ne!(branch_a, branch_b);
+
+        fs::write(path_a.join(&tracked), "edited by thread A\n").unwrap();
+
+        assert_eq!(porcelain_snapshot(git(), &path_a), vec![tracked.clone()]);
+        assert!(porcelain_snapshot(git(), &path_b).is_empty(), "B must not see A's edit");
+        assert!(porcelain_snapshot(git(), root).is_empty(), "root must not see A's edit");
+    }
+
+    /// A thread's second session must reuse the first one's worktree — asking
+    /// git for the same one twice is an error, which is what makes the
+    /// recorded path (not a fresh `add`) the reuse path in `thread_worktree`.
+    #[test]
+    fn adding_the_same_threads_worktree_twice_fails() {
+        let (dir, _) = init_test_repo();
+        let root = dir.path();
+
+        add_worktree(git(), root, "01THREADAAAA").unwrap();
+
+        assert!(add_worktree(git(), root, "01THREADAAAA").is_err());
+    }
+
+    /// Deleting a thread takes its worktree with it, uncommitted edits and
+    /// all — otherwise the directory leaks where the user cannot see it.
+    #[test]
+    fn removing_a_worktree_deletes_it_even_with_uncommitted_edits() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let (path, branch) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+        fs::write(path.join(&tracked), "uncommitted\n").unwrap();
+
+        remove_worktree(git(), root, &path, Some(&branch)).unwrap();
+
+        assert!(!path.exists());
+        let branches = list_branches(git(), root).unwrap();
+        assert!(!branches.iter().any(|b| b.name == branch), "branch should be gone too");
+    }
+
+    /// Committed work outlives the thread that made it: `remove_worktree`
+    /// deletes the branch with `-d`, so an unmerged branch is left behind.
+    #[test]
+    fn removing_a_worktree_keeps_a_branch_that_has_unmerged_commits() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let (path, branch) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+        fs::write(path.join(&tracked), "committed in the worktree\n").unwrap();
+        run(git(), &path, &["add", "-A"]).unwrap();
+        run(git(), &path, &["commit", "-q", "-m", "work"]).unwrap();
+
+        remove_worktree(git(), root, &path, Some(&branch)).unwrap();
+
+        assert!(!path.exists());
+        let branches = list_branches(git(), root).unwrap();
+        assert!(branches.iter().any(|b| b.name == branch), "unmerged commits must survive");
+    }
+
+    /// The worktree lives under `.git/`, which git does not report on — a
+    /// sibling inside the project would show as untracked in every status.
+    #[test]
+    fn worktrees_do_not_show_up_as_untracked_files_in_the_project() {
+        let (dir, _) = init_test_repo();
+        let root = dir.path();
+
+        add_worktree(git(), root, "01THREADAAAA").unwrap();
+
+        assert!(porcelain_snapshot(git(), root).is_empty());
+    }
+
+    /// A non-repo project has no worktree to make — the caller falls back to
+    /// the project root, silently, because it never had isolation to lose.
+    #[test]
+    fn adding_a_worktree_outside_a_repo_fails() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(add_worktree(git(), dir.path(), "01THREADAAAA").is_err());
+    }
+
+    /// A new file is the most visible thing an agent does, and `git diff`
+    /// never lists untracked paths — so an unmodified counter would report
+    /// "+0 −0" for a thread that just wrote a module.
+    #[test]
+    fn diff_stat_counts_edits_and_untracked_new_files() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        assert_eq!(diff_stat(git(), root).unwrap(), (0, 0));
+
+        // Was 3 lines; now 2 lines with one of them new.
+        fs::write(root.join(&tracked), "line one\nchanged\n").unwrap();
+        assert_eq!(diff_stat(git(), root).unwrap(), (1, 2));
+
+        fs::write(root.join("brand_new.txt"), "a\nb\nc\n").unwrap();
+        assert_eq!(diff_stat(git(), root).unwrap(), (4, 2));
+    }
+
+    /// Each thread's stat reflects only its own worktree.
+    #[test]
+    fn diff_stat_is_per_worktree() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let (path_a, _) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+        let (path_b, _) = add_worktree(git(), root, "01THREADBBBB").unwrap();
+
+        fs::write(path_a.join(&tracked), "only A edited this\n").unwrap();
+
+        assert_eq!(diff_stat(git(), &path_a).unwrap(), (1, 3));
+        assert_eq!(diff_stat(git(), &path_b).unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn worktree_branch_is_namespaced_and_path_is_keyed_by_thread_id() {
+        let (path, branch) = worktree_paths(Path::new("/proj"), "01ABCDEFGHIJKLMNOP");
+
+        assert_eq!(branch, "palisade/IJKLMNOP");
+        assert_eq!(path, Path::new("/proj/.git/palisade-worktrees/01ABCDEFGHIJKLMNOP"));
     }
 }

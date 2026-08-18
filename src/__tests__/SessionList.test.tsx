@@ -2,8 +2,12 @@ import type { ReactElement } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import SessionList, { relativeTime, filterThreads } from "../SessionList";
-import type { ThreadMeta } from "../api";
+import SessionList, {
+  relativeTime,
+  filterThreads,
+  threadState,
+} from "../SessionList";
+import type { ThreadMeta, WorktreeStatus } from "../api";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
@@ -78,7 +82,11 @@ describe("SessionList row actions", () => {
   // The Vibe sidebar lost rename/archive when it replaced the old thread
   // list; the Editor preset's History panel kept them. Same thread, same
   // two verbs, whichever sidebar you are looking at.
-  const renderList = (over: Partial<ThreadMeta> = {}) => {
+  const renderList = (
+    over: Partial<ThreadMeta> = {},
+    worktrees = new Map<string, WorktreeStatus>(),
+    liveThreadIds = new Set<string>(),
+  ) => {
     const onRename = vi.fn();
     const onArchive = vi.fn();
     const onSelect = vi.fn();
@@ -88,7 +96,8 @@ describe("SessionList row actions", () => {
         projects={[]}
         activeProject={undefined}
         activeThread={undefined}
-        liveThreadIds={new Set()}
+        liveThreadIds={liveThreadIds}
+        worktrees={worktrees}
         onNewThread={vi.fn()}
         onSelect={onSelect}
         onRename={onRename}
@@ -115,5 +124,98 @@ describe("SessionList row actions", () => {
   it("leaves archived threads out — History is where they are found again", () => {
     renderList({ archived: true });
     expect(screen.queryByTestId("session-item")).toBeNull();
+  });
+});
+
+describe("threadState", () => {
+  const t = thread({});
+  const wt = (added: number, removed: number): WorktreeStatus => ({
+    threadId: "t1",
+    branch: "palisade/ABCD1234",
+    added,
+    removed,
+  });
+
+  it("reads running while a session is live, whatever the worktree holds", () => {
+    expect(threadState(t, new Set(["t1"]), wt(4, 1))).toBe("running");
+    expect(threadState(t, new Set(["t1"]), undefined)).toBe("running");
+  });
+
+  it("reads changed once the agent stops and left edits behind", () => {
+    expect(threadState(t, new Set(), wt(4, 1))).toBe("changed");
+    expect(threadState(t, new Set(), wt(0, 3))).toBe("changed");
+  });
+
+  it("reads idle with no session and nothing changed", () => {
+    expect(threadState(t, new Set(), wt(0, 0))).toBe("idle");
+    expect(threadState(t, new Set(), undefined)).toBe("idle");
+  });
+});
+
+describe("SessionList worktree isolation", () => {
+  const worktree = (over: Partial<WorktreeStatus> = {}): WorktreeStatus => ({
+    threadId: "t1",
+    branch: "palisade/ABCD1234",
+    added: 12,
+    removed: 3,
+    ...over,
+  });
+
+  const renderWith = (
+    worktrees: Map<string, WorktreeStatus>,
+    over: Partial<ThreadMeta> = {},
+    live = new Set<string>(),
+  ) =>
+    render(
+      <SessionList
+        threads={[thread(over)]}
+        projects={[]}
+        activeProject={undefined}
+        activeThread={undefined}
+        liveThreadIds={live}
+        worktrees={worktrees}
+        onNewThread={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+
+  it("shows the thread's branch and diff stat", () => {
+    renderWith(new Map([["t1", worktree()]]));
+    expect(screen.getByText("palisade/ABCD1234")).toBeTruthy();
+    expect(screen.getByText("+12")).toBeTruthy();
+    expect(screen.getByText("−3")).toBeTruthy();
+  });
+
+  /// A non-git project, and a thread that has never run, have no worktree —
+  /// the row must degrade to what it always was, not render empty chrome.
+  it("shows no branch or diff stat for a thread with no worktree", () => {
+    renderWith(new Map());
+    expect(screen.queryByTestId("session-diff")).toBeNull();
+    expect(screen.queryByText(/palisade\//)).toBeNull();
+    expect(screen.getByTestId("session-item")).toBeTruthy();
+  });
+
+  it("hides the diff stat when the worktree is clean", () => {
+    renderWith(new Map([["t1", worktree({ added: 0, removed: 0 })]]));
+    expect(screen.queryByTestId("session-diff")).toBeNull();
+    expect(screen.getByText("palisade/ABCD1234")).toBeTruthy();
+  });
+
+  it("marks an auto-named thread and leaves a hand-named one unmarked", () => {
+    renderWith(new Map(), { titleSource: "auto" });
+    expect(screen.getByLabelText("Auto-named")).toBeTruthy();
+  });
+
+  it("does not mark a thread the user named themselves", () => {
+    renderWith(new Map(), { titleSource: "manual" });
+    expect(screen.queryByLabelText("Auto-named")).toBeNull();
+  });
+
+  it("keeps rename and archive reachable on a row that now has a worktree", () => {
+    renderWith(new Map([["t1", worktree()]]));
+    expect(screen.getByTestId("session-rename")).toBeTruthy();
+    expect(screen.getByTestId("session-archive")).toBeTruthy();
   });
 });

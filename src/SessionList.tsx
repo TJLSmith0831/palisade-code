@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
-import { Button, TextInput } from "@mantine/core";
-import { IconArchive, IconPencil, IconPlus, IconSearch } from "@tabler/icons-react";
-import type { Project, ThreadMeta } from "./api";
+import { Button, TextInput, Tooltip } from "@mantine/core";
+import {
+  IconArchive,
+  IconPencil,
+  IconPlus,
+  IconSearch,
+  IconSparkles,
+} from "@tabler/icons-react";
+import type { Project, ThreadMeta, WorktreeStatus } from "./api";
 
 // Amendment 3's Vibe-only session list: the browse/search surface, distinct
 // from the in-conversation thread-tab strip (which stays as the quick
@@ -31,12 +37,37 @@ export function filterThreads(threads: ThreadMeta[], query: string) {
   return live.filter((t) => t.title.toLowerCase().includes(needle));
 }
 
+/** What a row's dot says about the thread, in priority order: an agent is
+ *  working here / it stopped and left changes to look at / nothing pending.
+ *
+ *  "Changed" is deliberately not called "done" — uncommitted edits in a
+ *  worktree are evidence that something happened, never evidence that it
+ *  worked. Only a verify run can say that. */
+export type ThreadState = "running" | "changed" | "idle";
+
+export function threadState(
+  thread: ThreadMeta,
+  liveThreadIds: Set<string>,
+  worktree: WorktreeStatus | undefined
+): ThreadState {
+  if (liveThreadIds.has(thread.id)) return "running";
+  if (worktree && worktree.added + worktree.removed > 0) return "changed";
+  return "idle";
+}
+
+const STATE_LABEL: Record<ThreadState, string> = {
+  running: "Agent is working",
+  changed: "Uncommitted changes in this thread's worktree",
+  idle: "Idle",
+};
+
 export default function SessionList({
   threads,
   projects,
   activeProject,
   activeThread,
   liveThreadIds,
+  worktrees,
   onNewThread,
   onSelect,
   onRename,
@@ -48,6 +79,9 @@ export default function SessionList({
   activeThread: ThreadMeta | undefined;
   /** Threads with a live/busy session — drives the accent dot. */
   liveThreadIds: Set<string>;
+  /** Each thread's isolated worktree, keyed by thread id. Threads that have
+   *  never run — and every thread in a non-git project — are absent. */
+  worktrees: Map<string, WorktreeStatus>;
   onNewThread: () => void;
   onSelect: (thread: ThreadMeta) => void;
   onRename: (thread: ThreadMeta) => void;
@@ -102,7 +136,10 @@ export default function SessionList({
         {groups.map((group) => (
           <div key={group.hash}>
             <h2 className="ds-section-heading">{group.name}</h2>
-            {group.list.map((thread) => (
+            {group.list.map((thread) => {
+              const worktree = worktrees.get(thread.id);
+              const state = threadState(thread, liveThreadIds, worktree);
+              return (
               <div
                 key={thread.id}
                 className={`ds-session-item${
@@ -120,10 +157,35 @@ export default function SessionList({
                 }}
                 data-testid="session-item"
               >
-                <div className="ds-session-title">{thread.title}</div>
-                <div className="ds-session-meta">
-                  {relativeTime(thread.updatedAt)}
+                <div className="ds-session-title">
+                  {/* Marks a name Palisade wrote from the opening turn, so a
+                      title the user never chose does not read as one they
+                      did. Renaming clears it. */}
+                  {thread.titleSource === "auto" && (
+                    <Tooltip label="Named from the first message" openDelay={400}>
+                      <IconSparkles
+                        size={11}
+                        className="ds-session-spark"
+                        aria-label="Auto-named"
+                      />
+                    </Tooltip>
+                  )}
+                  {thread.title}
                 </div>
+                <div className="ds-session-meta">
+                  <span>{relativeTime(thread.updatedAt)}</span>
+                  {worktree && worktree.added + worktree.removed > 0 && (
+                    <span className="ds-session-diff" data-testid="session-diff">
+                      <span className="added">+{worktree.added}</span>
+                      <span className="removed">−{worktree.removed}</span>
+                    </span>
+                  )}
+                </div>
+                {worktree && (
+                  <div className="ds-session-branch" title={worktree.branch}>
+                    {worktree.branch}
+                  </div>
+                )}
                 {/* Same two verbs the Editor preset's History panel offers.
                     stopPropagation, or the row's own click selects too. */}
                 <div className="ds-thread-actions">
@@ -152,14 +214,19 @@ export default function SessionList({
                     <IconArchive size={13} />
                   </button>
                 </div>
-                {liveThreadIds.has(thread.id) && (
-                  <span
-                    className="ds-session-dot"
-                    aria-label="session running"
-                  />
+                {state !== "idle" && (
+                  <Tooltip label={STATE_LABEL[state]} openDelay={400}>
+                    <span
+                      className="ds-session-dot"
+                      data-state={state}
+                      data-testid="session-dot"
+                      aria-label={STATE_LABEL[state]}
+                    />
+                  </Tooltip>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         ))}
       </div>
