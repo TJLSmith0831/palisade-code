@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import * as api from "../api";
-import type { ExecutorEvent, Message, Preflight } from "../api";
+import type { AgentCommand, ExecutorEvent, Message, Preflight } from "../api";
 
 export function useExecutor() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -8,6 +8,10 @@ export function useExecutor() {
     Map<string, { threadId: string; events: ExecutorEvent[] }>
   >(new Map());
   const [busyThreads, setBusyThreads] = useState<Set<string>>(new Set());
+  // The `/` menu's contents, per thread, as the agent advertised them over ACP.
+  const [commandsByThread, setCommandsByThread] = useState<
+    Map<string, AgentCommand[]>
+  >(new Map());
   const [errors, setErrors] = useState<
     { id: string; message: string; tone: "error" | "warn" }[]
   >([]);
@@ -63,6 +67,8 @@ export function useExecutor() {
       setLiveBySession,
       busyThreads,
       setBusyThreads,
+      commandsByThread,
+      setCommandsByThread,
       errors,
       setErrors,
       flight,
@@ -81,6 +87,7 @@ export function useExecutor() {
       messages,
       liveBySession,
       busyThreads,
+      commandsByThread,
       errors,
       flight,
       draft,

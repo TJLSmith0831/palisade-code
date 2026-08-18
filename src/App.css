@@ -2,6 +2,10 @@
   /* Dragon Fire Workbench v2 tokens — from merged-design.json */
   /* Overridden inline (documentElement.style) by the accent-color picker. */
   --accent-hue: 145;
+  /* One monospace stack, defined once. `ui-monospace` resolves to whatever
+     the platform's own mono is (SF Mono on macOS) — the app ships no font
+     file, so naming a webfont here only ever produced a silent fallback. */
+  --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --backdrop: var(
     --app-shell-dark-override,
     oklch(11% 0.015 var(--accent-hue, 145))
@@ -181,9 +185,7 @@ pre,
 .working,
 .message .meta,
 .thread-meta {
-  font-family:
-    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
-    Consolas, monospace;
+  font-family: var(--mono);
 }
 
 button,
@@ -411,7 +413,7 @@ input[type="checkbox"] {
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 9px;
   transition: all 120ms ease-out;
 }
@@ -526,7 +528,7 @@ input[type="checkbox"] {
 }
 
 .ds-rail-label {
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -592,7 +594,7 @@ input[type="checkbox"] {
 .ds-branch-list li {
   padding: 6px 10px;
   font-size: 12px;
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   cursor: pointer;
   border-bottom: 1px solid var(--border);
 }
@@ -648,11 +650,14 @@ input[type="checkbox"] {
   background: var(--surface-warm);
 }
 
+/* Selection is carried by the accent-tinted row background the rest of the
+   shell uses, not an accent bar down the left edge. Hover keeps the neutral
+   --surface-warm, so the two states stay distinguishable — which the old
+   rule managed only via the border, since it shared hover's background.
+   Dropping the border also drops the radius and padding overrides that
+   existed only to make room for it, so active rows align with the others. */
 .ds-threads-panel li.active {
-  background: var(--surface-warm);
-  border-left: 2px solid var(--accent);
-  border-radius: 0 6px 6px 0;
-  padding-left: 6px;
+  background: var(--active-row);
 }
 
 .ds-thread-row {
@@ -729,7 +734,7 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   min-height: 0;
 }
 
@@ -963,7 +968,7 @@ input[type="checkbox"] {
 }
 
 .ds-tab {
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 11px;
   padding: 5px 10px;
   border-radius: 5px 5px 0 0;
@@ -1027,7 +1032,7 @@ input[type="checkbox"] {
   background: var(--editor-bg);
   display: flex;
   flex-direction: column;
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1078,7 +1083,7 @@ input[type="checkbox"] {
 
 .ds-editor-path {
   color: var(--muted);
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .ds-editor-spacer {
@@ -1178,7 +1183,7 @@ input[type="checkbox"] {
 /* --- breadcrumbs (v2) --------------------------------------------------- */
 
 .ds-breadcrumbs {
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 10px;
   color: var(--muted);
   padding: 8px 12px 6px;
@@ -1336,7 +1341,7 @@ input[type="checkbox"] {
   border-right: 1px solid var(--border);
   background: transparent;
   white-space: nowrap;
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .ds-file-tabs button[data-active] {
@@ -1578,7 +1583,7 @@ input[type="checkbox"] {
   width: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1677,7 +1682,7 @@ input[type="checkbox"] {
   border-radius: 6px;
   background: var(--surface);
   color: var(--fg);
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 12px;
 }
 
@@ -1726,7 +1731,7 @@ input[type="checkbox"] {
 
 .diff-file-path {
   color: var(--fg);
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .diff-spacer {
@@ -2058,9 +2063,7 @@ details.graph-report-wrap > summary {
 
 .editor .w-md-editor textarea {
   color: var(--fg);
-  font-family:
-    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
-    Consolas, monospace;
+  font-family: var(--mono);
   font-size: 13px;
 }
 
@@ -2086,9 +2089,7 @@ details.graph-report-wrap > summary {
 .wmde-markdown code {
   background: var(--bg);
   color: var(--accent);
-  font-family:
-    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
-    Consolas, monospace;
+  font-family: var(--mono);
 }
 
 .wmde-markdown pre {
@@ -2250,9 +2251,7 @@ details.graph-report-wrap > summary {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted);
-  font-family:
-    "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco,
-    Consolas, monospace;
+  font-family: var(--mono);
   font-size: 12px;
 }
 
@@ -2474,7 +2473,7 @@ details.graph-report-wrap > summary {
 .ds-command-chord {
   margin-left: auto;
   color: var(--muted);
-  font-family: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 /* Mode selector labels inherit control color so the active pill is legible. */
@@ -3077,31 +3076,32 @@ details.graph-report-wrap > summary {
   flex-shrink: 0;
 }
 
+/* The wordmark is the whole header now — no headline, no pitch — so it is
+   sized by width against the 560px column rather than by height like the
+   square chip it replaced. Transparent art, so it sits on the shell
+   background with no plate behind it. The file carries a wide glow margin,
+   hence the tight bottom spacing: the art already supplies its own. */
 .ds-onboarding-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  background: var(--active-row);
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: clamp(6px, 2vh, 16px);
+  width: min(300px, 62%);
+  height: auto;
+  margin-bottom: clamp(2px, 1vh, 10px);
+  user-select: none;
 }
 
-.ds-onboarding-title {
-  font-size: 21px;
-  font-weight: 700;
-  color: var(--fg);
-  margin: 0 0 8px;
+/* The wordmark is drawn for one background: the dark variant glows white and
+   vanishes on a light shell. Swapped here rather than in React because the
+   theme has three states — explicit light, explicit dark, and "auto" meaning
+   the OS — and the cascade already resolves all three. The `content`
+   property replaces what the image element renders; if it were ever
+   unsupported the element falls back to the dark variant the JSX sets. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .ds-onboarding-mark {
+    content: url("../assets/palisade-wordmark-lightmode-no-bg.png");
+  }
 }
 
-.ds-onboarding-pitch {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--muted);
-  margin: 0 0 clamp(10px, 3vh, 22px);
-  max-width: 420px;
+:root[data-theme="light"] .ds-onboarding-mark {
+  content: url("../assets/palisade-wordmark-lightmode-no-bg.png");
 }
 
 .ds-onboarding-composer {
@@ -3132,7 +3132,6 @@ details.graph-report-wrap > summary {
   flex: 1;
 }
 
-.ds-onboarding-dir-tag,
 .ds-onboarding-dir-pick {
   display: flex;
   align-items: center;
@@ -3228,14 +3227,6 @@ details.graph-report-wrap > summary {
   overflow-y: auto;
 }
 
-/* A short window (a laptop with a docked terminal, a split screen) can't hold
-   the pitch paragraph as well — the headline already carries it. */
-@media (max-height: 700px) {
-  .ds-onboarding-pitch {
-    display: none;
-  }
-}
-
 .ds-onboarding-recent-row {
   display: flex;
   align-items: center;
@@ -3280,15 +3271,6 @@ details.graph-report-wrap > summary {
 .ds-onboarding-recent-path {
   font-size: 10.5px;
   font-family: var(--mono);
-}
-
-.ds-onboarding-foot {
-  flex-shrink: 0;
-  margin-top: 14px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--muted);
-  max-width: 400px;
 }
 
 /* --- responsive: keep the shell usable on a small laptop -----------------
@@ -3741,4 +3723,191 @@ details.graph-report-wrap > summary {
 
 .ds-thread-archive-toggle:hover {
   color: var(--fg);
+}
+
+/* --- the composer's `/` command menu --------------------------------------
+   Anchored above the composer rather than below it: the composer already
+   sits at the bottom of the pane, so a downward menu would be clipped. */
+.ds-command-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  overflow: hidden;
+  z-index: 5;
+}
+
+/* A plain overflow container, not Mantine's ScrollArea: its viewport sizes
+   to the widest child, so a long single-line description stretched the menu
+   and spilled past the panel edge instead of ellipsizing. */
+.ds-command-menu-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.ds-command-menu-row {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 12px;
+  text-align: left;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.ds-command-menu-row[data-active] {
+  background: var(--active-row);
+}
+
+.ds-command-menu-name {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* One line, hard-truncated. Skill descriptions are author-written and some
+   run to a paragraph; at two lines an agent advertising 83 commands showed
+   barely three at a time, which is not a list you can scan. The name is what
+   you are picking by — the description only has to disambiguate. */
+.ds-command-menu-desc {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- MCP servers panel ----------------------------------------------------
+   The panel is ~290px wide, so every row is two lines: identity on top with
+   its controls, the command or URL beneath. Cramming name, command, switch
+   and delete onto one line wrapped the path under the switch and pushed the
+   name out of alignment. */
+.ds-mcp-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 10px;
+}
+
+/* Tabs and search stay put; only the list scrolls. */
+.ds-mcp-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ds-mcp-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ds-mcp-empty {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.ds-mcp-row {
+  padding: 7px 6px;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.ds-mcp-row:hover {
+  background: var(--active-row);
+}
+
+/* A disabled server stays legible but visibly inactive — the switch alone is
+   a small target to read state from at a glance. */
+.ds-mcp-row[data-off] .ds-mcp-name,
+.ds-mcp-row[data-off] .ds-mcp-detail {
+  opacity: 0.5;
+}
+
+.ds-mcp-row-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ds-mcp-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Registry titles keep the same single-line ellipsis as installed names, so
+   every row is the same height and the Install buttons line up down the
+   column. A two-line title pushed its button to the row's centre and made
+   the list read as ragged. The description below carries the detail. */
+.ds-mcp-name.as-text {
+  cursor: default;
+}
+
+/* Prose: a registry description is worth two lines before it gives up. */
+.ds-mcp-detail {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* A command or URL is one long unbroken token, so it ellipsizes rather than
+   wrapping — breaking `/…/bin/graphify-mcp` mid-word reads as two paths.
+   The full value is on hover and in the edit form. */
+.ds-mcp-cmd {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-mcp-manual {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ds-mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.ds-mcp-form-actions {
+  display: flex;
+  gap: 6px;
 }

@@ -143,6 +143,22 @@ export type Envelope = {
   event: ExecutorEvent;
 };
 
+/** One slash command the agent advertises. Skills, user-defined commands and
+ *  built-ins are indistinguishable here on purpose — the agent decides what it
+ *  offers, Palisade only lists it. */
+export type AgentCommand = {
+  name: string;
+  description: string;
+};
+
+/** Payload of the `agent-commands` event. Keyed by session: two sessions can
+ *  run different agents at once, with different commands. */
+export type AgentCommands = {
+  sessionId: string;
+  threadId: string;
+  commands: AgentCommand[];
+};
+
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
 
@@ -681,3 +697,53 @@ export const getCompletionSettings = () =>
 
 export const flushCompletionTelemetry = (telemetry: CompletionTelemetry) =>
   invoke<void>("flush_completion_telemetry", { telemetry });
+
+// ---------------------------------------------------------------- mcp
+//
+// The project's `.mcp.json` is the store; the backend also hands the enabled
+// servers to each agent session over ACP `session/new`, which is what makes
+// them reach non-Claude agents that never read `.mcp.json`.
+
+/** One configured MCP server. `command`/`args`/`env` carry a stdio server,
+ *  `url`/`headers` a remote one; `transport` says which. */
+export type McpServer = {
+  name: string;
+  transport: "stdio" | "http" | "sse";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  enabled: boolean;
+};
+
+/** One browsable server from the official MCP registry. `installable` is
+ *  false when it needs a step Palisade won't take on the user's behalf (a
+ *  docker pull, a binary download) — those link to their repo instead. */
+export type McpRegistryEntry = {
+  name: string;
+  title: string;
+  description: string;
+  version: string;
+  repository: string;
+  installable: boolean;
+  server: McpServer | null;
+};
+
+export const listMcpServers = (projectHash: string) =>
+  invoke<McpServer[]>("list_mcp_servers", { projectHash });
+
+export const saveMcpServer = (projectHash: string, server: McpServer) =>
+  invoke<void>("save_mcp_server", { projectHash, server });
+
+export const removeMcpServer = (projectHash: string, name: string) =>
+  invoke<void>("remove_mcp_server", { projectHash, name });
+
+export const setMcpServerEnabled = (
+  projectHash: string,
+  name: string,
+  enabled: boolean
+) => invoke<void>("set_mcp_server_enabled", { projectHash, name, enabled });
+
+export const searchMcpRegistry = (query: string, limit = 30) =>
+  invoke<McpRegistryEntry[]>("search_mcp_registry", { query, limit });

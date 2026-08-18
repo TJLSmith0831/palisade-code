@@ -12,6 +12,7 @@ mod git;
 mod git_repo;
 mod integrations;
 mod lsp;
+mod mcp;
 mod pidguard;
 mod session_log_writer;
 mod openspec_cache;
@@ -329,6 +330,17 @@ struct SpecLinkAmbiguous {
     names: Vec<String>,
 }
 
+/// Payload for `agent-commands`: the slash commands one session's agent
+/// advertises. Keyed by session because two sessions can run at once with
+/// different agents, and therefore different commands.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentCommands {
+    session_id: String,
+    thread_id: String,
+    commands: Vec<crate::acp_events::AgentCommand>,
+}
+
 /// Forwards parsed executor events to the webview, and owns the two reactions
 /// that must happen no matter which adapter produced them: a crash reverts the
 /// thread to spec-mode, and a finished `/propose` turn records its new change.
@@ -338,6 +350,24 @@ struct AppSink {
 }
 
 impl Sink for AppSink {
+    /// The agent re-sends the whole list whenever it changes, so the payload
+    /// replaces the session's commands rather than appending to them.
+    fn emit_commands(
+        &self,
+        session_id: &str,
+        thread_id: &str,
+        commands: &[crate::acp_events::AgentCommand],
+    ) {
+        let _ = self.app.emit(
+            "agent-commands",
+            AgentCommands {
+                session_id: session_id.to_string(),
+                thread_id: thread_id.to_string(),
+                commands: commands.to_vec(),
+            },
+        );
+    }
+
     fn emit(&self, envelope: &Envelope) {
         // D22: detect the [READY_TO_PROPOSE] marker in agent text. If present,
         // strip it from the visible text and auto-fire `propose`. The user
@@ -1775,6 +1805,54 @@ async fn set_completion_keybinding(
     .map_err(|e| e.to_string())?
 }
 
+// ------------------------------------------------------------------ mcp
+//
+// `.mcp.json` in the project root is the store; `acp_client` additionally
+// hands the enabled servers to each session over `session/new`. Every command
+// here resolves the root from the global index rather than trusting a path
+// from the frontend, same as the file and git commands.
+
+#[tauri::command]
+async fn list_mcp_servers(project_hash: String) -> Res<Vec<mcp::McpServer>> {
+    tokio::task::spawn_blocking(move || Ok(mcp::list(&project_root(&project_hash)?)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn save_mcp_server(project_hash: String, server: mcp::McpServer) -> Res<()> {
+    tokio::task::spawn_blocking(move || mcp::save(&project_root(&project_hash)?, &server))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn remove_mcp_server(project_hash: String, name: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || mcp::remove(&project_root(&project_hash)?, &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn set_mcp_server_enabled(
+    project_hash: String,
+    name: String,
+    enabled: bool,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        mcp::set_enabled(&project_root(&project_hash)?, &name, enabled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn search_mcp_registry(query: String, limit: u32) -> Res<Vec<mcp::RegistryEntry>> {
+    tokio::task::spawn_blocking(move || mcp::search_registry(&query, limit))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn flush_completion_telemetry(
     telemetry: completion::CompletionTelemetry,
@@ -1840,6 +1918,11 @@ pub fn run() {
             set_completion_keybinding,
             get_completion_settings,
             flush_completion_telemetry,
+            list_mcp_servers,
+            save_mcp_server,
+            remove_mcp_server,
+            set_mcp_server_enabled,
+            search_mcp_registry,
             list_projects,
             add_project,
             clone_repository,

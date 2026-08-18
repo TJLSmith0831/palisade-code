@@ -6,6 +6,7 @@ import {
   IconClipboardList,
   IconTopologyStar3,
   IconPlayerPlay,
+  IconPlug,
   IconHistory,
   IconFolders,
   IconSettings,
@@ -30,6 +31,7 @@ const TOP: RailItem[] = [
   { id: "specs", label: "Specs", Icon: IconClipboardList },
   { id: "codemap", label: "Codebase Map", Icon: IconTopologyStar3 },
   { id: "run", label: "Run configurations", Icon: IconPlayerPlay },
+  { id: "mcp", label: "MCP Servers", Icon: IconPlug },
 ];
 
 const BOTTOM: RailItem[] = [

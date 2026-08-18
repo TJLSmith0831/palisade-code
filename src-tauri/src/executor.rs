@@ -215,6 +215,20 @@ pub struct Envelope {
 /// Anything that can receive parsed events.
 pub trait Sink: Send + Sync + 'static {
     fn emit(&self, envelope: &Envelope);
+
+    /// The slash commands the agent advertises for a session. Session
+    /// metadata, not conversation, so it bypasses `Envelope`/persistence
+    /// entirely. Carries the thread id because this fires at session start,
+    /// before any event has streamed — the frontend has no other way to know
+    /// which thread's composer these belong to yet. Default no-op: only the
+    /// app sink has a `/` menu to fill.
+    fn emit_commands(
+        &self,
+        _session_id: &str,
+        _thread_id: &str,
+        _commands: &[crate::acp_events::AgentCommand],
+    ) {
+    }
 }
 
 /// One change, as the `openspec` CLI reports it. Task counts are the agent's

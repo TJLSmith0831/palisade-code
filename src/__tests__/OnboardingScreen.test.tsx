@@ -128,3 +128,34 @@ describe("OnboardingScreen recent projects", () => {
     expect(onSelectProject).not.toHaveBeenCalled();
   });
 });
+
+// Pre-release: the first screen is the icon and the composer. No pitch copy,
+// no "Local" execution-target tag (there is only one target), and no
+// sign-in claim — account gating is coming, so promising its absence would
+// become a lie the moment it ships.
+describe("OnboardingScreen header and footer", () => {
+  it("leads with the Palisade icon instead of a headline and pitch", () => {
+    render(<OnboardingScreen {...base} />);
+    expect(screen.getByAltText("Palisade")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Drive your own coding agent/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/no bundled model, no per-usage billing/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("drops the Local execution-target tag", () => {
+    render(<OnboardingScreen {...base} />);
+    expect(screen.queryByText("Local")).not.toBeInTheDocument();
+    // the directory picker beside it survives
+    expect(
+      screen.getByTestId("onboarding-select-directory"),
+    ).toBeInTheDocument();
+  });
+
+  it("makes no no-account claim", () => {
+    render(<OnboardingScreen {...base} />);
+    expect(screen.queryByText(/No account, no sign-in/i)).not.toBeInTheDocument();
+  });
+});
