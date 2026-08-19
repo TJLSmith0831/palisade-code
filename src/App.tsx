@@ -29,6 +29,7 @@ import {
   Paper,
   Stack,
   UnstyledButton,
+  Indicator,
 } from "@mantine/core";
 import {
   IconAlertTriangle,
@@ -1988,26 +1989,20 @@ export default function App() {
     bypass: false,
   });
   const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
-  const [hasLiveSession, setHasLiveSession] = useState(false);
+  // Whether *this* thread has a live session right now, so the "Next session
+  // will use X" hint only shows when switching would actually hand off an
+  // in-progress conversation. Reads `busyThreads` directly — the same
+  // reactive state the sidebar dot uses — rather than polling
+  // `executorStatus()` on menu-open: that poll raced the click (open the
+  // menu, pick a provider before the fetch resolved) and could show the
+  // hint on a thread that had never sent a message, just because a
+  // *previous* thread's stale `hasLiveSession` value was still in state.
+  const hasLiveSession = thread ? busyThreads.has(thread.id) : false;
   const onToggleBypass = () => {
     if (!project || !thread) return;
     const prefs = { bypass: !threadPrefs.bypass };
     setThreadPrefs(project.hash, thread.id, prefs);
     setThreadPrefsState(prefs);
-  };
-  // Check whether a live session exists for this thread when the prefs menu
-  // opens, so the "Next session will use X" hint can show. A live session
-  // keeps its original flags; only the next new session picks up the change.
-  const openPrefsMenu = (open: boolean) => {
-    setPrefsMenuOpen(open);
-    if (open && project && thread) {
-      api
-        .executorStatus()
-        .then((statuses) => {
-          setHasLiveSession(statuses.some((s) => s.threadId === thread.id));
-        })
-        .catch(() => setHasLiveSession(false));
-    }
   };
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<
@@ -2759,16 +2754,35 @@ export default function App() {
   // A thread's live buffer is dropped once its history is re-read from disk —
   // every event was already persisted as it arrived, so keeping it would
   // render each one twice. Scoped to one thread so another thread's in-flight
-  // session isn't wiped along with it.
+  // session isn't wiped along with it. A still-unanswered permission request
+  // is the exception: it's live-only (never persisted, D-design comment on
+  // ExecutorEvent::PermissionRequest), so dropping it on entry would strand
+  // the session waiting on a prompt the UI no longer shows.
   const clearLiveFor = useCallback((threadId: string) => {
     setLiveBySession((previous) => {
       const next = new Map(previous);
       for (const [id, entry] of next) {
-        if (entry.threadId === threadId) next.delete(id);
+        if (entry.threadId !== threadId) continue;
+        const last = entry.events[entry.events.length - 1];
+        if (last?.kind === "permissionRequest") continue;
+        next.delete(id);
       }
       return next;
     });
   }, []);
+
+  // Threads whose live session is blocked on an unanswered permission prompt
+  // — the sidebar's "needs-attention" dot and aggregate count. Derived from
+  // the same live event stream the chat pane already renders the prompt
+  // from, not a new subsystem.
+  const attentionThreads = useMemo(() => {
+    const set = new Set<string>();
+    for (const entry of liveBySession.values()) {
+      const last = entry.events[entry.events.length - 1];
+      if (last?.kind === "permissionRequest") set.add(entry.threadId);
+    }
+    return set;
+  }, [liveBySession]);
 
   // OS-level drag-drop gives real absolute paths (unlike HTML5 File objects
   // in WKWebView, which often lack them). Dropped images get appended to the
@@ -3719,7 +3733,7 @@ export default function App() {
     threadBypass: threadPrefs.bypass,
     onToggleBypass,
     prefsMenuOpen,
-    setPrefsMenuOpen: openPrefsMenu,
+    setPrefsMenuOpen,
     hasLiveSession,
     threads: openThreads,
     onSelectThread: onSelectVibeThread,
@@ -3912,17 +3926,31 @@ export default function App() {
           {/* Vibe preset only: chat is the primary surface there, so the
               reclaimable width is the session list's, not the chat rail's. */}
           {project && shell.centerShell === "vibe" && (
-            <Tooltip label="Toggle session list">
-              <button
-                className="ds-icon-btn"
-                onClick={shell.toggleSessionList}
-                aria-label="Toggle session list"
-                aria-pressed={shell.sessionListOpen}
-                data-testid="toggle-session-list"
-                data-tauri-drag-region-exclude
+            <Tooltip
+              label={
+                attentionThreads.size > 0
+                  ? `${attentionThreads.size} thread${attentionThreads.size === 1 ? "" : "s"} waiting on you`
+                  : "Toggle session list"
+              }
+            >
+              <Indicator
+                label={attentionThreads.size}
+                size={16}
+                color="var(--danger)"
+                disabled={shell.sessionListOpen || attentionThreads.size === 0}
+                data-testid="session-list-attention-badge"
               >
-                <IconLayoutSidebar size={14} />
-              </button>
+                <button
+                  className="ds-icon-btn"
+                  onClick={shell.toggleSessionList}
+                  aria-label="Toggle session list"
+                  aria-pressed={shell.sessionListOpen}
+                  data-testid="toggle-session-list"
+                  data-tauri-drag-region-exclude
+                >
+                  <IconLayoutSidebar size={14} />
+                </button>
+              </Indicator>
             </Tooltip>
           )}
           <div className="ds-chrome-utils">
@@ -4148,6 +4176,7 @@ export default function App() {
                 /* `busyThreads` is already exactly "threads with a live
                    session" — no second derivation of the same state. */
                 liveThreadIds={busyThreads}
+                attentionThreadIds={attentionThreads}
                 worktrees={worktrees}
                 onNewThread={onNewThread}
                 onSelect={onSelectVibeThread}

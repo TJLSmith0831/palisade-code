@@ -160,6 +160,7 @@ describe("ToolBlock pending-approval UI (tool-approval-prompt)", () => {
     toolKind: "execute",
     command: "cargo build",
     paths: [],
+    warning: null,
   };
 
   it("renders Allow/Deny/Allow-for-session actions in place of the status icon while pending", () => {
@@ -195,6 +196,26 @@ describe("ToolBlock pending-approval UI (tool-approval-prompt)", () => {
     );
     expect(screen.queryByTestId("permission-prompt")).toBeNull();
     expect(screen.getByTestId("tool-status-running")).toBeDefined();
+  });
+
+  it("shows the port/DB conflict warning inline in the same prompt when one is attached", () => {
+    renderWithMantine(
+      <EventList
+        items={[
+          toolCallItem,
+          { ...permissionRequestItem, warning: "Another session in this project is already running a command on port 3000." },
+        ]}
+        executor={null}
+      />
+    );
+    expect(screen.getByTestId("permission-conflict-warning").textContent).toContain("port 3000");
+  });
+
+  it("renders no conflict warning when none is attached", () => {
+    renderWithMantine(
+      <EventList items={[toolCallItem, permissionRequestItem]} executor={null} />
+    );
+    expect(screen.queryByTestId("permission-conflict-warning")).toBeNull();
   });
 });
 

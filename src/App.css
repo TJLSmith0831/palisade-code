@@ -2925,8 +2925,9 @@ details.graph-report-wrap > summary {
   text-overflow: ellipsis;
 }
 
-/* Three states, and never colour alone: running pulses, changed sits still.
-   Idle renders no dot at all. */
+/* Four states, and never colour alone: needs-attention is solid danger (the
+   loudest, but no animation — a stuck thread doesn't get to be a distraction),
+   running pulses, changed sits still. Idle renders no dot at all. */
 .ds-session-dot {
   position: absolute;
   top: 11px;
@@ -2945,6 +2946,33 @@ details.graph-report-wrap > summary {
 .ds-session-dot[data-state="changed"] {
   background: transparent;
   border: 1.5px solid var(--warn);
+}
+
+.ds-session-dot[data-state="needs-attention"] {
+  background: var(--danger);
+  width: 8px;
+  height: 8px;
+}
+
+.ds-sessions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ds-sessions-attention-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 @keyframes ds-session-pulse {

@@ -333,6 +333,17 @@ function ToolBlock({
           </>
         )}
       </Box>
+      {pending?.warning && (
+        <Alert
+          color="orange"
+          variant="light"
+          p="xs"
+          data-testid="permission-conflict-warning"
+          style={{ borderRadius: 0, borderTop: "1px solid var(--border)" }}
+        >
+          {pending.warning}
+        </Alert>
+      )}
       {open && (
         <Stack gap="xs" p="sm" style={{ borderTop: "1px solid var(--border)" }}>
           <Code

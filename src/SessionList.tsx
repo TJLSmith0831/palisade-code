@@ -43,19 +43,22 @@ export function filterThreads(threads: ThreadMeta[], query: string) {
  *  "Changed" is deliberately not called "done" — uncommitted edits in a
  *  worktree are evidence that something happened, never evidence that it
  *  worked. Only a verify run can say that. */
-export type ThreadState = "running" | "changed" | "idle";
+export type ThreadState = "needs-attention" | "running" | "changed" | "idle";
 
 export function threadState(
   thread: ThreadMeta,
   liveThreadIds: Set<string>,
-  worktree: WorktreeStatus | undefined
+  worktree: WorktreeStatus | undefined,
+  attentionThreadIds: Set<string> = new Set()
 ): ThreadState {
+  if (attentionThreadIds.has(thread.id)) return "needs-attention";
   if (liveThreadIds.has(thread.id)) return "running";
   if (worktree && worktree.added + worktree.removed > 0) return "changed";
   return "idle";
 }
 
 const STATE_LABEL: Record<ThreadState, string> = {
+  "needs-attention": "Waiting on you",
   running: "Agent is working",
   changed: "Uncommitted changes in this thread's worktree",
   idle: "Idle",
@@ -67,6 +70,7 @@ export default function SessionList({
   activeProject,
   activeThread,
   liveThreadIds,
+  attentionThreadIds = new Set(),
   worktrees,
   onNewThread,
   onSelect,
@@ -79,6 +83,9 @@ export default function SessionList({
   activeThread: ThreadMeta | undefined;
   /** Threads with a live/busy session — drives the accent dot. */
   liveThreadIds: Set<string>;
+  /** Threads blocked on a permission prompt (or other blocking question) —
+   *  the loudest dot state, and what the aggregate count in the header sums. */
+  attentionThreadIds?: Set<string>;
   /** Each thread's isolated worktree, keyed by thread id. Threads that have
    *  never run — and every thread in a non-git project — are absent. */
   worktrees: Map<string, WorktreeStatus>;
@@ -111,15 +118,24 @@ export default function SessionList({
 
   return (
     <aside className="ds-sessions" data-testid="session-list" aria-label="Threads">
-      <Button
-        variant="default"
-        fullWidth
-        leftSection={<IconPlus size={14} />}
-        onClick={onNewThread}
-        data-testid="session-new-thread"
-      >
-        New thread
-      </Button>
+      <div className="ds-sessions-header">
+        <Button
+          variant="default"
+          fullWidth
+          leftSection={<IconPlus size={14} />}
+          onClick={onNewThread}
+          data-testid="session-new-thread"
+        >
+          New thread
+        </Button>
+        {attentionThreadIds.size > 0 && (
+          <Tooltip label={`${attentionThreadIds.size} thread${attentionThreadIds.size === 1 ? "" : "s"} waiting on you`}>
+            <span className="ds-sessions-attention-count" data-testid="session-attention-count">
+              {attentionThreadIds.size}
+            </span>
+          </Tooltip>
+        )}
+      </div>
 
       <TextInput
         value={query}
@@ -138,7 +154,7 @@ export default function SessionList({
             <h2 className="ds-section-heading">{group.name}</h2>
             {group.list.map((thread) => {
               const worktree = worktrees.get(thread.id);
-              const state = threadState(thread, liveThreadIds, worktree);
+              const state = threadState(thread, liveThreadIds, worktree, attentionThreadIds);
               return (
               <div
                 key={thread.id}
