@@ -48,6 +48,7 @@ import {
   mediaKindFor,
   mimeTypeFor,
 } from "./codeLanguage";
+import { definitionClick } from "./definitionClick";
 import { describeError } from "./errors";
 import { documentLanguageId, fileUri, languageForPath } from "./lsp";
 import { clientFor } from "./lspClients";
@@ -478,6 +479,7 @@ export default function FileEditorPane({
         fimCompletion(loadCompletionSettings(), projectHash, forPath)
       ),
       lspCompartment.current.of([]),
+      definitionClick(),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },
         ...closeBracketsKeymap,

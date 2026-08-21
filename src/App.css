@@ -1160,6 +1160,11 @@ input[type="checkbox"] {
   border-left-color: var(--accent);
 }
 
+/* Held while Cmd (macOS) / Ctrl-click-to-definition is armed. */
+.ds-editor-body .cm-editor.cm-definition-modifier .cm-content {
+  cursor: pointer;
+}
+
 /* CM6 tooltips (autocomplete popup) portal to document.body, not into
    .ds-editor-body, so these rules must stay unscoped. */
 .cm-tooltip-autocomplete {
