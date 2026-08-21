@@ -23,10 +23,16 @@ const render = (ui: ReactElement) =>
 // project is the user's explicit act, the way every other IDE behaves. Most
 // tests below exercise the shell, so they open the first recent project
 // first. Tests that are *about* the onboarding screen use `render` alone.
+//
+// No rail panel defaults open either (D: "no default open on load") — most
+// of these tests exercise the file tree/side panel, so this helper opens
+// Explorer too. Tests about the closed-by-default state itself render
+// without this helper's Explorer click.
 const openProject = async () => {
   const rows = await screen.findAllByTestId("recent-project");
   fireEvent.click(rows[0]);
   await screen.findByTestId("shell-toggle");
+  fireEvent.click(screen.getByTestId("rail-explorer"));
 };
 
 // The workspace picker moved out of the right rail and behind the Workspace
@@ -864,9 +870,14 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
     }
   });
 
-  it("opens the Explorer panel by default and closes it on a second click", async () => {
+  it("opens with no panel by default, and opens/closes Explorer on click", async () => {
     render(<App />);
-    await openProject();
+    const rows = await screen.findAllByTestId("recent-project");
+    fireEvent.click(rows[0]);
+    await screen.findByTestId("shell-toggle");
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("rail-explorer"));
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
     expect(screen.getByTestId("side-panel")).toHaveAttribute(
       "data-panel",

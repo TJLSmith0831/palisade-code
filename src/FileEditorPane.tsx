@@ -836,7 +836,7 @@ export default function FileEditorPane({
   if (error) {
     return (
       <Alert
-        color="var(--danger)"
+        color="danger"
         variant="light"
         m="12px 16px 0"
         style={{ whiteSpace: "pre-wrap" }}
@@ -960,7 +960,7 @@ export default function FileEditorPane({
       </div>
       {conflict && (
         <Alert
-          color="var(--warning)"
+          color="warn"
           variant="light"
           m="8px 16px 0"
           title="Changed on disk"

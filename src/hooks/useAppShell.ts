@@ -51,8 +51,10 @@ export function useAppShell(projectHash: string | undefined) {
   }, []);
 
   // Which left-rail panel is open, or null for "rail only, no panel". Held
-  // once for both presets so switching Vibe/Editor never resets it.
-  const [activePanel, setActivePanel] = useState<PanelId | null>("explorer");
+  // once for both presets so switching Vibe/Editor never resets it. Starts
+  // closed — the rail itself is the wayfinding, no panel should presume to
+  // be what the user wants on a first look.
+  const [activePanel, setActivePanel] = useState<PanelId | null>(null);
   const selectPanel = useCallback((id: PanelId) => {
     setActivePanel((current) => (current === id ? null : id));
   }, []);

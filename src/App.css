@@ -5,11 +5,16 @@
   /* One monospace stack, defined once. `ui-monospace` resolves to whatever
      the platform's own mono is (SF Mono on macOS) — the app ships no font
      file, so naming a webfont here only ever produced a silent fallback. */
-  --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+    monospace;
   --backdrop: var(
     --app-shell-dark-override,
     oklch(11% 0.015 var(--accent-hue, 145))
   );
+  /* The dim behind any Modal-family overlay. Both modals already agreed on
+     this value; they just spelled it two different ways inline, so it read
+     as a one-off in each file instead of the convention it is. */
+  --scrim: rgba(0, 0, 0, 0.68);
   --chrome-bg: var(--app-shell-dark-override, oklch(15% 0.004 250));
   --bg: var(--app-shell-dark-override, oklch(18% 0.005 250));
   --surface: var(--shell-accent-dark-override, oklch(22% 0.006 250));
@@ -25,6 +30,10 @@
   --success: oklch(72% 0.15 160);
   --warn: oklch(76% 0.15 65);
   --danger: oklch(64% 0.22 25);
+  /* Ink for anything on a solid --danger fill, mirroring --accent-on.
+     Was referenced as var(--danger-on, #fff) before it existed, so the
+     literal fallback is what actually painted. */
+  --danger-on: oklch(98% 0.02 25);
   /* Code editor colors — overridable by the Settings panel's appearance
      pickers (project-scoped, via .project-settings.json). Defaults match
      the original --fg/--muted so the editor looks unchanged until a
@@ -74,6 +83,7 @@
     --success: oklch(42% 0.13 160);
     --warn: oklch(48% 0.13 65);
     --danger: oklch(46% 0.19 25);
+    --danger-on: oklch(98% 0.02 25);
     --code-comment: var(--code-comment-light-override, oklch(46% 0.012 250));
     --code-text: var(--code-text-light-override, oklch(20% 0.006 250));
     --code-keyword: oklch(48% 0.17 280);
@@ -112,6 +122,7 @@
   --success: oklch(42% 0.13 160);
   --warn: oklch(48% 0.13 65);
   --danger: oklch(46% 0.19 25);
+  --danger-on: oklch(98% 0.02 25);
   --code-comment: var(--code-comment-light-override, oklch(46% 0.012 250));
   --code-text: var(--code-text-light-override, oklch(20% 0.006 250));
   --code-keyword: oklch(48% 0.17 280);
@@ -318,12 +329,15 @@ input[type="checkbox"] {
 }
 
 .ds-shell-toggle button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   border: none;
   background: transparent;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
-  padding: 3px 10px;
+  padding: 3px 10px 3px 8px;
   border-radius: 9999px;
   cursor: pointer;
   transition: all 120ms ease-out;
@@ -818,10 +832,12 @@ input[type="checkbox"] {
 }
 
 .ds-chevron {
-  font-size: 9px;
-  width: 12px;
-  text-align: center;
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ds-tree-label {
@@ -2588,6 +2604,16 @@ details.graph-report-wrap > summary {
   flex: 1;
 }
 
+/* Splits workspace-navigation icons from agent-facing ones (D-layout-fix):
+   two groups of ≤4 read as a decision, not one unbroken run of 7. */
+.ds-rail-divider {
+  width: 20px;
+  height: 1px;
+  margin: 2px 0;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
 .ds-rail-btn {
   position: relative;
   width: 32px;
@@ -3246,6 +3272,20 @@ details.graph-report-wrap > summary {
   flex-direction: column;
   align-items: center;
   text-align: center;
+  animation: ds-onboarding-in 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes ds-onboarding-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-onboarding-inner {
+    animation: none;
+  }
 }
 
 /* Everything except the recents list keeps its natural height; the list is
@@ -3289,6 +3329,13 @@ details.graph-report-wrap > summary {
   border-radius: 8px;
   padding: 10px 12px;
   text-align: left;
+  transition: border-color 150ms ease;
+}
+
+/* The composer gave zero feedback on focus (Mantine's `unstyled` Textarea
+   strips its own ring) — the first thing a new user clicks felt inert. */
+.ds-onboarding-composer:focus-within {
+  border-color: color-mix(in oklab, var(--accent), transparent 55%);
 }
 
 .ds-onboarding-composer-row,
@@ -3320,6 +3367,7 @@ details.graph-report-wrap > summary {
   font-size: 11.5px;
   cursor: pointer;
   padding: 0;
+  transition: color 150ms ease;
 }
 
 .ds-onboarding-dir-pick:hover {
@@ -3380,11 +3428,16 @@ details.graph-report-wrap > summary {
   background: var(--surface);
   color: var(--muted);
   cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
 }
 
-.ds-onboarding-card:hover,
+/* Same hover idiom as every tree/thread/recent-project row (surface-warm) —
+   the cards were the one clickable surface on this screen not following it. */
+.ds-onboarding-card:hover:not(:disabled),
 .ds-onboarding-card:focus-visible {
   border-color: color-mix(in oklab, var(--accent), transparent 60%);
+  background: var(--surface-warm);
+  color: var(--fg);
 }
 
 .ds-onboarding-card-title {

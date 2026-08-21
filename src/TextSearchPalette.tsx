@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  IconBrandPython,
+  IconFileText,
+  IconPhoto,
+} from "@tabler/icons-react";
 import Palette from "./Palette";
 import { fuzzyMatch } from "./fuzzyMatch";
 import type { SearchOptions, TextMatch } from "./api";
@@ -126,69 +131,16 @@ export default function TextSearchPalette({
     const extension = path.split(".").pop()?.toLowerCase();
 
     if (extension === "py") {
-      return (
-        <svg
-          viewBox="0 0 24 24"
-          style={{
-            width: 18,
-            height: 18,
-            fill: "none",
-            stroke: "currentColor",
-            strokeWidth: 1.6,
-            strokeLinecap: "round",
-            strokeLinejoin: "round",
-          }}
-          aria-hidden="true"
-        >
-          <path d="M12 3c-3.2 0-3.5 1.8-3.5 3.5V9h7v1.5H8.5C5.5 10.5 4 12 4 15s1.5 4 4.5 4H10v-3h-2c-.8 0-1.5-.7-1.5-1.5S7.2 13 8 13h7.5c3 0 4.5-1.5 4.5-4.5V7c0-2.5-1.5-4-4-4h-4z" />
-          <circle cx="10.5" cy="6" r=".7" fill="currentColor" />
-        </svg>
-      );
+      return <IconBrandPython size={18} stroke={1.6} aria-hidden="true" />;
     }
 
     if (
       ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(extension ?? "")
     ) {
-      return (
-        <svg
-          viewBox="0 0 24 24"
-          style={{
-            width: 18,
-            height: 18,
-            fill: "none",
-            stroke: "currentColor",
-            strokeWidth: 1.6,
-            strokeLinecap: "round",
-            strokeLinejoin: "round",
-          }}
-          aria-hidden="true"
-        >
-          <rect x="4" y="4" width="16" height="16" rx="2" />
-          <circle cx="9" cy="9" r="1.5" />
-          <path d="m5 17 4-4 3 3 2-2 5 5" />
-        </svg>
-      );
+      return <IconPhoto size={18} stroke={1.6} aria-hidden="true" />;
     }
 
-    return (
-      <svg
-        viewBox="0 0 24 24"
-        style={{
-          width: 18,
-          height: 18,
-          fill: "none",
-          stroke: "currentColor",
-          strokeWidth: 1.6,
-          strokeLinecap: "round",
-          strokeLinejoin: "round",
-        }}
-        aria-hidden="true"
-      >
-        <path d="M6 3.5h8l4 4V20.5H6z" />
-        <path d="M14 3.5v4h4" />
-        <path d="M9 12h6M9 15.5h6" />
-      </svg>
-    );
+    return <IconFileText size={18} stroke={1.6} aria-hidden="true" />;
   };
 
   const OptionToggle = ({
@@ -401,7 +353,7 @@ export default function TextSearchPalette({
                 whiteSpace: "nowrap",
                 color: active ? "var(--fg)" : "var(--muted)",
                 fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                  "var(--mono)",
                 fontSize: 11,
                 fontWeight: 500,
               }}
@@ -415,7 +367,7 @@ export default function TextSearchPalette({
                 whiteSpace: "nowrap",
                 color: active ? "var(--fg)" : "var(--muted)",
                 fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                  "var(--mono)",
                 fontSize: 11,
               }}
             >
