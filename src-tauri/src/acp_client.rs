@@ -165,6 +165,13 @@ impl AcpSession {
         self.busy.load(Ordering::SeqCst)
     }
 
+    /// True while this session is blocked on an unanswered Allow/Deny
+    /// prompt — reuses `pending_permissions` rather than tracking a
+    /// separate flag (attention-routing D1).
+    pub fn needs_attention(&self) -> bool {
+        !self.pending_permissions.lock().unwrap().is_empty()
+    }
+
     /// Resolve a pending permission request from outside the bridge thread
     /// (the `answer_permission_prompt` Tauri command). A missing id is a
     /// no-op success — already resolved, or the session is gone.
@@ -188,6 +195,7 @@ impl AcpSession {
         for (_, tx) in self.pending_permissions.lock().unwrap().drain() {
             let _ = tx.send(PermissionAnswer::Deny);
         }
+        active_commands_registry().lock().unwrap().remove(&self.id);
     }
 }
 
@@ -264,6 +272,98 @@ impl PermissionAnswer {
 /// bridge task the same way `busy` already is, so `answer_permission_prompt`
 /// (lib.rs) can resolve one from outside the bridge thread.
 pub(crate) type PendingPermissions = Arc<Mutex<HashMap<String, oneshot::Sender<PermissionAnswer>>>>;
+
+/// The last Execute-kind command each live session ran, keyed by session id
+/// — shared across every bridge task the same way `pending_permissions`
+/// already is (D-attention-routing-2), so a second session's permission
+/// check can see what the first is doing in the same project.
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveCommand {
+    pub project_hash: String,
+    pub command: String,
+}
+pub(crate) type ActiveCommands = Arc<Mutex<HashMap<String, ActiveCommand>>>;
+
+/// One process-wide registry, shared by every session's bridge thread — all
+/// sessions run in this same OS process, so a `OnceLock` static is simpler
+/// than threading a new field through `AcpSpawn`/`Harness`/every call site
+/// that already exists for `pending_permissions`.
+static ACTIVE_COMMANDS: std::sync::OnceLock<ActiveCommands> = std::sync::OnceLock::new();
+fn active_commands_registry() -> ActiveCommands {
+    ACTIVE_COMMANDS
+        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .clone()
+}
+
+/// ponytail: literal-string/port match only — no shell parsing. Extracts
+/// bare port-range numbers (1024-65535) appearing in the command text.
+/// Upgrade to a real shell/arg parser if this produces repeated false
+/// negatives users report (e.g. a port hidden behind a shell variable).
+fn command_ports(command: &str) -> HashSet<u32> {
+    let mut ports = HashSet::new();
+    let mut digits = String::new();
+    for ch in command.chars().chain(std::iter::once(' ')) {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            continue;
+        }
+        if let Ok(n) = digits.parse::<u32>() {
+            if (1024..=65535).contains(&n) {
+                ports.insert(n);
+            }
+        }
+        digits.clear();
+    }
+    ports
+}
+
+/// ponytail: literal match on `DATABASE_URL=<value>` only — not a general
+/// .env parser. Upgrade if users hit real collisions this misses.
+fn command_database_url(command: &str) -> Option<&str> {
+    let rest = command.split("DATABASE_URL=").nth(1)?;
+    Some(rest.split_whitespace().next().unwrap_or(""))
+        .filter(|v| !v.is_empty())
+}
+
+/// Compares one about-to-run command against every other session's last
+/// command in the same project, and returns a warning to attach to the
+/// permission prompt when they look like they'll collide. `None` when
+/// nothing obviously conflicts — false negatives are fine here (see the
+/// `ponytail:` notes on the two checks above), false positives that block
+/// normal work are not.
+fn conflict_warning(
+    project_hash: &str,
+    command: &str,
+    self_session_id: &str,
+    active: &HashMap<String, ActiveCommand>,
+) -> Option<String> {
+    let ports = command_ports(command);
+    let db_url = command_database_url(command);
+    for (other_id, other) in active {
+        if other_id == self_session_id || other.project_hash != project_hash {
+            continue;
+        }
+        let shared_ports: Vec<u32> = command_ports(&other.command)
+            .into_iter()
+            .filter(|p| ports.contains(p))
+            .collect();
+        if !shared_ports.is_empty() {
+            return Some(format!(
+                "Another session in this project is already running a command on port {} (`{}`).",
+                shared_ports[0], other.command
+            ));
+        }
+        if let (Some(a), Some(b)) = (db_url, command_database_url(&other.command)) {
+            if a == b {
+                return Some(format!(
+                    "Another session in this project is already using DATABASE_URL={a} (`{}`).",
+                    other.command
+                ));
+            }
+        }
+    }
+    None
+}
 
 fn permission_mode(mode: &str, bypass: bool) -> PermissionMode {
     if bypass {
@@ -381,6 +481,8 @@ async fn answer_permission(
     sink: &Arc<dyn Sink>,
     session_id: &str,
     thread_id: &str,
+    project_hash: &str,
+    active_commands: &ActiveCommands,
 ) -> v1::RequestPermissionResponse {
     let kind = tool_kind(request.tool_call.fields.kind.as_ref());
     let command = raw_command(request.tool_call.fields.raw_input.as_ref());
@@ -390,11 +492,38 @@ async fn answer_permission(
         request.tool_call.fields.raw_input.as_ref(),
     );
 
+    // Port/DB-env collision check (attention-routing D2): only meaningful
+    // for shell commands, and only ever escalates to a warning — it never
+    // denies on its own, the mode policy below still decides that.
+    let conflict = if kind == permissions::ToolKind::Execute {
+        command.as_deref().and_then(|cmd| {
+            let warning = {
+                let mut active = active_commands.lock().unwrap();
+                active.insert(
+                    session_id.to_string(),
+                    ActiveCommand { project_hash: project_hash.to_string(), command: cmd.to_string() },
+                );
+                conflict_warning(project_hash, cmd, session_id, &active)
+            };
+            warning
+        })
+    } else {
+        None
+    };
+
     let decision = if session_allowed.lock().unwrap().contains(&kind) {
         PermissionDecision::Allow
     } else {
         let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
         permissions::decide_permission(mode, kind, command.as_deref(), &path_refs)
+    };
+    // A detected conflict always surfaces the prompt, even under a policy
+    // that would otherwise auto-allow — the whole point is the user sees it
+    // before two sessions collide.
+    let decision = if conflict.is_some() && decision == PermissionDecision::Allow {
+        PermissionDecision::Prompt
+    } else {
+        decision
     };
 
     let answer = match decision {
@@ -414,6 +543,7 @@ async fn answer_permission(
                     tool_kind: kind.as_str().to_string(),
                     command: command.clone(),
                     paths: paths.clone(),
+                    warning: conflict.clone(),
                 },
             );
             // A dropped sender (session torn down while awaiting) resolves
@@ -559,6 +689,7 @@ async fn run_bridge(
     sink: Arc<dyn Sink>,
     busy: Arc<AtomicBool>,
     pending_permissions: PendingPermissions,
+    active_commands: ActiveCommands,
     ready_tx: mpsc::Sender<Result<ReadyReport, String>>,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>,
     probe_only: bool,
@@ -575,6 +706,8 @@ async fn run_bridge(
     let perm_session = palisade_session_id.clone();
     let perm_thread = spawn.thread_id.clone();
     let perm_pending = pending_permissions.clone();
+    let perm_project = spawn.project_hash.clone();
+    let perm_active_commands = active_commands.clone();
     // ACP streams chunks; there is no complete-text event at turn end.
     // Accumulate text/thought chunks per turn so the prompt response can
     // emit the assembled `Text`/`Reasoning` events that persist() writes
@@ -684,6 +817,8 @@ async fn run_bridge(
                     &perm_sink,
                     &perm_session,
                     &perm_thread,
+                    &perm_project,
+                    &perm_active_commands,
                 )
                 .await;
                 responder.respond(response)
@@ -910,6 +1045,7 @@ fn start_with_transport(
             sink,
             bridge_busy,
             bridge_pending,
+            active_commands_registry(),
             ready_tx,
             cmd_rx,
             probe_only,
@@ -1261,6 +1397,99 @@ mod tests {
         assert_eq!(state, ModelState::default());
     }
 
+    // --------------------------------------------------------- port/db conflict detection
+
+    /// RED→GREEN: two sessions in the same project running dev servers on
+    /// the same literal port number trigger a conflict warning.
+    #[test]
+    fn conflict_warning_flags_same_port_same_project() {
+        let mut active = HashMap::new();
+        active.insert(
+            "sess-a".to_string(),
+            ActiveCommand { project_hash: "proj-1".into(), command: "npm run dev -- --port 3000".into() },
+        );
+        let warning = conflict_warning("proj-1", "npm run dev -- --port 3000", "sess-b", &active);
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("3000"));
+    }
+
+    /// RED→GREEN: same port, but the other session is in a different
+    /// project — no warning, worktrees already isolate that.
+    #[test]
+    fn conflict_warning_ignores_same_port_different_project() {
+        let mut active = HashMap::new();
+        active.insert(
+            "sess-a".to_string(),
+            ActiveCommand { project_hash: "proj-1".into(), command: "npm run dev -- --port 3000".into() },
+        );
+        assert!(conflict_warning("proj-2", "npm run dev -- --port 3000", "sess-b", &active).is_none());
+    }
+
+    /// RED→GREEN: non-conflicting ports in the same project pass through.
+    #[test]
+    fn conflict_warning_ignores_different_ports_same_project() {
+        let mut active = HashMap::new();
+        active.insert(
+            "sess-a".to_string(),
+            ActiveCommand { project_hash: "proj-1".into(), command: "npm run dev -- --port 3000".into() },
+        );
+        assert!(conflict_warning("proj-1", "npm run dev -- --port 4000", "sess-b", &active).is_none());
+    }
+
+    /// RED→GREEN: a session never compares against its own recorded command.
+    #[test]
+    fn conflict_warning_ignores_self() {
+        let mut active = HashMap::new();
+        active.insert(
+            "sess-a".to_string(),
+            ActiveCommand { project_hash: "proj-1".into(), command: "npm run dev -- --port 3000".into() },
+        );
+        assert!(conflict_warning("proj-1", "npm run dev -- --port 3000", "sess-a", &active).is_none());
+    }
+
+    /// RED→GREEN: the DB-env-var case is its own, separately tested path —
+    /// two sessions pointed at the same DATABASE_URL in the same project.
+    #[test]
+    fn conflict_warning_flags_same_database_url_same_project() {
+        let mut active = HashMap::new();
+        active.insert(
+            "sess-a".to_string(),
+            ActiveCommand {
+                project_hash: "proj-1".into(),
+                command: "DATABASE_URL=postgres://localhost/app npm run migrate".into(),
+            },
+        );
+        let warning = conflict_warning(
+            "proj-1",
+            "DATABASE_URL=postgres://localhost/app npm test",
+            "sess-b",
+            &active,
+        );
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("postgres://localhost/app"));
+    }
+
+    /// RED→GREEN: different DATABASE_URL values in the same project don't
+    /// warn — only a literal match does (ponytail ceiling).
+    #[test]
+    fn conflict_warning_ignores_different_database_urls() {
+        let mut active = HashMap::new();
+        active.insert(
+            "sess-a".to_string(),
+            ActiveCommand {
+                project_hash: "proj-1".into(),
+                command: "DATABASE_URL=postgres://localhost/app_a npm run migrate".into(),
+            },
+        );
+        assert!(conflict_warning(
+            "proj-1",
+            "DATABASE_URL=postgres://localhost/app_b npm test",
+            "sess-b",
+            &active,
+        )
+        .is_none());
+    }
+
     // --------------------------------------------------------- permissions
 
     fn permission_request(
@@ -1297,21 +1526,46 @@ mod tests {
         pending: PendingPermissions,
         sink: Arc<dyn Sink>,
         events: std::sync::mpsc::Receiver<Envelope>,
+        session_id: String,
+        project_hash: String,
+        active_commands: ActiveCommands,
     }
 
     impl PermissionRig {
         fn new() -> Self {
+            Self::for_session("sess-1", "proj-1", Arc::new(Mutex::new(HashMap::new())))
+        }
+
+        /// A rig for a specific session id, sharing `active_commands` with
+        /// whatever other rig(s) the caller built from the same registry —
+        /// how a same-project conflict test observes what another live
+        /// session already registered.
+        fn for_session(session_id: &str, project_hash: &str, active_commands: ActiveCommands) -> Self {
             let (tx, rx) = std::sync::mpsc::channel();
             Self {
                 session_allowed: Mutex::new(HashSet::new()),
                 pending: Arc::new(Mutex::new(HashMap::new())),
                 sink: Arc::new(ChannelSink(tx)),
                 events: rx,
+                session_id: session_id.to_string(),
+                project_hash: project_hash.to_string(),
+                active_commands,
             }
         }
 
         async fn answer(&self, req: &v1::RequestPermissionRequest, mode: PermissionMode) -> v1::RequestPermissionResponse {
-            answer_permission(req, mode, &self.session_allowed, &self.pending, &self.sink, "sess-1", "thread-1").await
+            answer_permission(
+                req,
+                mode,
+                &self.session_allowed,
+                &self.pending,
+                &self.sink,
+                &self.session_id,
+                "thread-1",
+                &self.project_hash,
+                &self.active_commands,
+            )
+            .await
         }
     }
 
@@ -1348,6 +1602,65 @@ mod tests {
         let req = permission_request(v1::ToolKind::Execute, Some(serde_json::json!({"command": "openspec list"})));
         let res = PermissionRig::new().answer(&req, PermissionMode::Spec).await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
+    }
+
+    /// RED→GREEN: a second session in the same project running a command on
+    /// the same port escalates an otherwise auto-allowed Spec-mode Execute
+    /// to a Prompt carrying the conflict warning — the whole point of
+    /// port-and-db-conflict-detection.
+    #[tokio::test]
+    async fn conflicting_port_escalates_to_prompt_with_warning() {
+        let active: ActiveCommands = Arc::new(Mutex::new(HashMap::new()));
+        let first = PermissionRig::for_session("sess-a", "proj-1", active.clone());
+        let first_req = permission_request(
+            v1::ToolKind::Execute,
+            Some(serde_json::json!({"command": "npm run dev -- --port 3000"})),
+        );
+        // Spec mode auto-allows execute, so this resolves immediately and
+        // just needs to register in the shared registry for the next check.
+        first.answer(&first_req, PermissionMode::Spec).await;
+
+        let second = PermissionRig::for_session("sess-b", "proj-1", active.clone());
+        let second_req = permission_request(
+            v1::ToolKind::Execute,
+            Some(serde_json::json!({"command": "npm run dev -- --port 3000"})),
+        );
+        let fut = second.answer(&second_req, PermissionMode::Spec);
+        tokio::pin!(fut);
+        let raced = tokio::time::timeout(Duration::from_millis(50), &mut fut).await;
+        assert!(raced.is_err(), "a conflict must pause for the user even though Spec mode would auto-allow");
+
+        let event = second.events.recv_timeout(Duration::from_millis(50)).expect("PermissionRequest should have been emitted");
+        let ExecutorEvent::PermissionRequest { id, warning, .. } = event.event else {
+            panic!("expected a PermissionRequest event, got {:?}", event.event);
+        };
+        assert!(warning.expect("conflict warning should be attached").contains("3000"));
+
+        let tx = second.pending.lock().unwrap().remove(&id).expect("pending entry should be registered");
+        tx.send(PermissionAnswer::Allow).unwrap();
+        fut.await;
+    }
+
+    /// RED→GREEN: no conflict means Spec mode's normal auto-allow still
+    /// applies — the check must never block ordinary, non-colliding work.
+    #[tokio::test]
+    async fn non_conflicting_command_still_auto_allows() {
+        let active: ActiveCommands = Arc::new(Mutex::new(HashMap::new()));
+        let first = PermissionRig::for_session("sess-a", "proj-1", active.clone());
+        let first_req = permission_request(
+            v1::ToolKind::Execute,
+            Some(serde_json::json!({"command": "npm run dev -- --port 3000"})),
+        );
+        first.answer(&first_req, PermissionMode::Spec).await;
+
+        let second = PermissionRig::for_session("sess-b", "proj-1", active.clone());
+        let second_req = permission_request(
+            v1::ToolKind::Execute,
+            Some(serde_json::json!({"command": "npm run dev -- --port 4000"})),
+        );
+        let res = second.answer(&second_req, PermissionMode::Spec).await;
+        assert_eq!(selected_option(res).as_deref(), Some("allow"));
+        assert!(second.events.try_recv().is_err(), "no warning should be emitted when nothing conflicts");
     }
 
     /// RED→GREEN 1.2: a Prompt-tier request registers a pending entry and
@@ -1451,6 +1764,21 @@ mod tests {
 
         // Already-resolved id: a second call is a harmless no-op.
         session.answer_permission_prompt("req-1", PermissionAnswer::Deny);
+    }
+
+    /// RED→GREEN: `needs_attention` is true exactly while a permission
+    /// request is pending, and false again once it's answered.
+    #[tokio::test]
+    async fn needs_attention_tracks_pending_permissions() {
+        let (session, _cmd_rx) = stub_session(false);
+        assert!(!session.needs_attention());
+
+        let (tx, _rx) = oneshot::channel();
+        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        assert!(session.needs_attention());
+
+        session.answer_permission_prompt("req-1", PermissionAnswer::Allow);
+        assert!(!session.needs_attention());
     }
 
     // --------------------------------------------------------- spec-mode notification enforcement

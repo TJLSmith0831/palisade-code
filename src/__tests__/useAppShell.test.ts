@@ -33,6 +33,10 @@ describe("left rail panel selection", () => {
     ]);
   });
 
+  it("opens no panel by default — rail only until the user picks one", () => {
+    expect(render().result.current.activePanel).toBeNull();
+  });
+
   it("opens a panel when its rail icon is selected", () => {
     const { result } = render();
     act(() => result.current.selectPanel("git"));

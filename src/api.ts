@@ -142,6 +142,9 @@ export type ExecutorEvent =
       toolKind: string;
       command: string | null;
       paths: string[];
+      /** Set when this command looks like it collides with another live
+       *  session in the same project (same port or DATABASE_URL). */
+      warning: string | null;
     }
   | { kind: "done" }
   | { kind: "crashed"; exitCode: number | null; message: string };

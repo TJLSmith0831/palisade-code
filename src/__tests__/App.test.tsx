@@ -35,6 +35,15 @@ const openProject = async () => {
   fireEvent.click(screen.getByTestId("rail-explorer"));
 };
 
+// No panel opens by default on project open (removed 2026-08-19) — tests that
+// need the file tree visible open Explorer explicitly, the way a user would.
+// Idempotent so repeated calls in one test don't toggle the panel back shut.
+const openExplorerPanel = () => {
+  if (!screen.queryByTestId("file-tree")) {
+    fireEvent.click(screen.getByTestId("rail-explorer"));
+  }
+};
+
 // The workspace picker moved out of the right rail and behind the Workspace
 // icon on the shared left rail (Amendment 3 — the right rail is chat +
 // threads only now). Idempotent so repeated calls in one test don't toggle
@@ -718,6 +727,7 @@ describe("Resize handles (one per row)", () => {
   it("keeps each handle in its own row, so the sidebar edge is grabbable", async () => {
     render(<App />);
     await openProject();
+    openExplorerPanel();
     const sidebarHandle = screen.getByTestId("resize-left-rail");
     const chatHandle = screen.getByTestId("resize-right-panel");
 
@@ -746,6 +756,7 @@ describe("Status bar (mockup parity)", () => {
   it("shows the cursor position once a file is open, and nothing before", async () => {
     render(<App />);
     await openProject();
+    openExplorerPanel();
     expect(screen.queryByTestId("cursor-position")).toBeNull();
 
     fireEvent.click(await screen.findByText("AGENTS.md"));
@@ -870,11 +881,9 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
     }
   });
 
-  it("opens with no panel by default, and opens/closes Explorer on click", async () => {
+  it("opens no panel by default, opens Explorer on click, and closes it on a second click", async () => {
     render(<App />);
-    const rows = await screen.findAllByTestId("recent-project");
-    fireEvent.click(rows[0]);
-    await screen.findByTestId("shell-toggle");
+    await openProject();
     expect(screen.queryByTestId("side-panel")).toBeNull();
 
     fireEvent.click(screen.getByTestId("rail-explorer"));
@@ -994,7 +1003,7 @@ describe("Editor chrome (merged-design v2)", () => {
     await openProject();
     // Breadcrumbs live in the editor toolbar, so they appear once a file is
     // open — the leading segment is the project name.
-    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    openExplorerPanel();
     fireEvent.click(await screen.findByText("AGENTS.md"));
     await waitFor(() =>
       expect(screen.getByTestId("breadcrumbs").textContent).toContain(
@@ -1013,7 +1022,7 @@ describe("Editor chrome (merged-design v2)", () => {
     render(<App />);
     await openProject();
 
-    await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
+    openExplorerPanel();
     // The tree container mounts before its root listing resolves, so wait
     // for the entry rather than for its parent.
     fireEvent.click(await screen.findByText("AGENTS.md"));
@@ -1336,6 +1345,7 @@ describe("Resizable layout persistence", () => {
   it("persists side-panel width via drag and rehydrates on remount", async () => {
     const { unmount } = render(<App />);
     await openProject();
+    openExplorerPanel();
 
     fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), {
       clientX: 200,
@@ -1349,6 +1359,7 @@ describe("Resizable layout persistence", () => {
     unmount();
     render(<App />);
     await openProject();
+    openExplorerPanel();
     expect(
       screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
     ).toBe("253px");
@@ -1380,6 +1391,7 @@ describe("Resizable layout persistence", () => {
   it("closes and reopens the side panel via Cmd+\\", async () => {
     render(<App />);
     await openProject();
+    openExplorerPanel();
     expect(screen.getByTestId("side-panel")).toBeDefined();
 
     fireEvent.keyDown(window, { key: "\\", metaKey: true });
@@ -1754,6 +1766,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
 
     render(<App />);
     await openProject();
+    openExplorerPanel();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -1865,6 +1878,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
 
     render(<App />);
     await openProject();
+    openExplorerPanel();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -1970,6 +1984,7 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
 
     render(<App />);
     await openProject();
+    openExplorerPanel();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -3057,6 +3072,7 @@ describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
     await openProject();
     await toVibe();
 
+    openExplorerPanel();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
 
@@ -3315,6 +3331,7 @@ describe("Session restore", () => {
     invokeMock.mockImplementation(router());
     render(<App />);
     await openProject();
+    openExplorerPanel();
 
     fireEvent.click(await screen.findByText("b.ts"));
     await waitFor(() =>
@@ -3634,6 +3651,7 @@ describe("Project switching", () => {
     render(<App />);
     await openProject();
 
+    openExplorerPanel();
     await waitFor(() => expect(screen.getByText("a.ts")).toBeDefined());
     fireEvent.click(screen.getByText("a.ts"));
     await waitFor(() =>
@@ -3780,11 +3798,13 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     setupWithThread("claude");
     const base = invokeMock.getMockImplementation()!;
     invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      // A live session for this thread is what makes the switch ambiguous.
-      if (cmd === "executor_status")
-        return Promise.resolve([
-          { threadId: "t1", sessionId: "s1", busy: true, agentId: "claude" },
-        ]);
+      if (cmd === "send_message")
+        return Promise.resolve({
+          seq: 1,
+          role: "user",
+          content: "hello",
+          createdAt: "2026-08-12T00:00:00Z",
+        });
       return base(cmd, args);
     });
     render(<App />);
@@ -3792,6 +3812,12 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
+    // A live session for this thread is what makes the switch ambiguous.
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "hello" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    await screen.findByTestId("composer-stop");
 
     fireEvent.click(screen.getByTestId("executor-btn"));
     fireEvent.click(await screen.findByTestId("executor-opt-codex"));
@@ -3981,26 +4007,42 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
   it("shows a 'next session' hint when a live session exists for the thread", async () => {
     setupWithThread("claude");
     const baseImpl = invokeMock.getMockImplementation();
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "executor_status")
-        return Promise.resolve([
-          {
-            id: "s1",
-            threadId: "t1",
-            agentId: "claude",
-            mode: "spec",
-            busy: false,
-          },
-        ]);
-      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "send_message")
+        return Promise.resolve({
+          seq: 1,
+          role: "user",
+          content: "hello",
+          createdAt: "2026-08-12T00:00:00Z",
+        });
+      return baseImpl?.(cmd, args) ?? Promise.resolve([]);
     });
     render(<App />);
     await openProject();
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
+    // Send a message so this thread genuinely has a live (busy) session —
+    // the hint reads that same reactive state, not a separate poll.
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "hello" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    await screen.findByTestId("composer-stop");
+
     fireEvent.click(screen.getByTestId("executor-btn"));
     expect(await screen.findByTestId("next-session-hint")).toBeDefined();
+  });
+
+  it("shows no 'next session' hint before any message has been sent on the thread", async () => {
+    setupWithThread("claude");
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    fireEvent.click(screen.getByTestId("executor-btn"));
+    expect(screen.queryByTestId("next-session-hint")).toBeNull();
   });
 
   it("shows a stop button and calls stop_executor when the agent is busy", async () => {

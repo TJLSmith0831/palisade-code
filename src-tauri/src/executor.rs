@@ -143,6 +143,11 @@ pub enum ExecutorEvent {
         tool_kind: String,
         command: Option<String>,
         paths: Vec<String>,
+        /// Set when this command looks like it collides with another live
+        /// session in the same project (same port or DATABASE_URL) —
+        /// port-and-db-conflict-detection D1. Surfaced inline in the same
+        /// prompt rather than a separate dialog.
+        warning: Option<String>,
     },
     Done,
     Crashed { exit_code: Option<i32>, message: String },
@@ -621,6 +626,7 @@ mod tests {
             tool_kind: "execute".into(),
             command: Some("cargo build".into()),
             paths: vec![],
+            warning: None,
         })
         .unwrap();
         assert_eq!(
@@ -632,6 +638,7 @@ mod tests {
                 "toolKind": "execute",
                 "command": "cargo build",
                 "paths": [],
+                "warning": null,
             })
         );
     }

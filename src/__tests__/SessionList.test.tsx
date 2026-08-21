@@ -150,6 +150,54 @@ describe("threadState", () => {
     expect(threadState(t, new Set(), wt(0, 0))).toBe("idle");
     expect(threadState(t, new Set(), undefined)).toBe("idle");
   });
+
+  it("reads needs-attention over running when a permission prompt is pending", () => {
+    expect(threadState(t, new Set(["t1"]), wt(4, 1), new Set(["t1"]))).toBe(
+      "needs-attention"
+    );
+  });
+
+  it("reads needs-attention even with no worktree changes yet", () => {
+    expect(threadState(t, new Set(["t1"]), undefined, new Set(["t1"]))).toBe(
+      "needs-attention"
+    );
+  });
+});
+
+describe("SessionList needs-attention rendering", () => {
+  const renderWithAttention = (attentionThreadIds: Set<string>) =>
+    render(
+      <SessionList
+        threads={[thread({})]}
+        projects={[]}
+        activeProject={undefined}
+        activeThread={undefined}
+        liveThreadIds={new Set(["t1"])}
+        attentionThreadIds={attentionThreadIds}
+        worktrees={new Map()}
+        onNewThread={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+      />
+    );
+
+  it("marks a blocked thread's dot as needs-attention, not running", () => {
+    renderWithAttention(new Set(["t1"]));
+    expect(screen.getByTestId("session-dot").getAttribute("data-state")).toBe(
+      "needs-attention"
+    );
+  });
+
+  it("shows the aggregate count of threads waiting on the user", () => {
+    renderWithAttention(new Set(["t1"]));
+    expect(screen.getByTestId("session-attention-count").textContent).toBe("1");
+  });
+
+  it("hides the aggregate count when nothing needs attention", () => {
+    renderWithAttention(new Set());
+    expect(screen.queryByTestId("session-attention-count")).toBeNull();
+  });
 });
 
 describe("SessionList worktree isolation", () => {
