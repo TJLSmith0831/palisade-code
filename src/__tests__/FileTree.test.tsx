@@ -144,6 +144,30 @@ describe("FileTree", () => {
     await waitFor(() => expect(onPathRenamed).toHaveBeenCalledWith("README.md", "GUIDE.md"));
   });
 
+  it("rejects a rename containing a slash without calling the backend", async () => {
+    const onPathRenamed = vi.fn();
+    render(
+      <FileTree
+        projectHash="good"
+        projectName="p"
+        onSelectFile={vi.fn()}
+        activePath={null}
+        onPathRenamed={onPathRenamed}
+      />,
+    );
+    const row = await screen.findByText("README.md");
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByText("Rename"));
+
+    const input = screen.getByTestId("tree-rename-input");
+    fireEvent.change(input, { target: { value: "docs/GUIDE.md" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(screen.getByText(/can't contain/i)).toBeDefined());
+    expect(calls.some((c) => c.cmd === "rename_path")).toBe(false);
+    expect(onPathRenamed).not.toHaveBeenCalled();
+  });
+
   it("deletes a file via the context menu, only after confirming", async () => {
     const onPathDeleted = vi.fn();
     render(

@@ -148,12 +148,15 @@ A dark neutral field with one glowing green accent and three semantic status hue
 
 **Mono — `ui-monospace, SF Mono, JetBrains Mono, Menlo`**: file paths and tree labels, tab labels, line numbers, diff content, the terminal, uppercase section labels (`Staged Changes`, `Turn History`), badges, `<kbd>` hints. Set small (9–12px) since this is a dense, information-forward tool, not an editorial surface.
 
-**Display — 21px, one step, one place.** The first-run screen's headline
-("Drive your own coding agent, spec-first") is the only type in the product
-above the 13px body step. It exists because that screen is the one moment
-Palisade has to say what it is to someone who has never seen it; every other
-surface is dense working chrome and stays on the body/mono steps. Adding a
-second display size means asking what the first one was for.
+**Display — 21px, one step, currently unused.** Reserved for a first-run
+headline above the 13px body step — every other surface is dense working
+chrome and stays on the body/mono steps, so a second display size still means
+asking what the first one was for. Pre-release, the first-run screen carries
+no headline or pitch copy at all (see `OnboardingScreen.test.tsx`): account
+gating is still coming, and a claim like "no bundled model, no per-usage
+billing" would become false the moment it ships, so the screen states nothing
+rather than something that could go stale. If a headline returns once that's
+settled, this is the step it uses.
 
 **The Two-Voice Rule.** If it's read as a path, a key, or a label, it's mono; if it's read as a sentence, it's sans. This split predates the IDE pivot and hasn't moved.
 
@@ -176,6 +179,7 @@ Mostly flat — this is a workbench, not a card deck. Borders (`--border`, the o
 
 - **Flat** (`none`): the default for panels, tree/thread rows, tabs, the editor.
 - **Raised** (`0 4px 20px rgba(0,0,0,0.35)` / `0 8px 24px rgba(0,0,0,0.35)`): the two floating-layer weights — modal command-bars get the lighter one, the file-tree context menu and settings-panel-triggered overlays the heavier.
+- **Scrim** (`--scrim`, `rgba(0,0,0,0.68)` + `backdrop-filter: blur(5px)`): the dim behind every Modal-family overlay (file palette, find-in-files, settings, confirm/rename/branch prompts). One value, one token — an overlay that wants a different darkness is a new elevation decision, not a local tweak.
 - **Focus ring** (`0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%)`): every focusable control (`button`, `input`, `select`, plus keyboard-activatable tree/thread/branch rows) gets this on `:focus-visible`, globally, once.
 - **Active-tab lift** (`box-shadow: 0 2px 8px rgba(0,0,0,0.3)`): the only shadow on something that isn't an overlay — the active mode-selector button.
 

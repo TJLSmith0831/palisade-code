@@ -158,7 +158,7 @@ export default function GraphPane({ projectHash }: Props) {
 
       {error && (
         <Alert
-          color="var(--danger)"
+          color="danger"
           variant="light"
           m="12px 16px 0"
           style={{ whiteSpace: "pre-wrap" }}

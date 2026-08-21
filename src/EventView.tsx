@@ -266,7 +266,7 @@ function ToolBlock({
             flex: "1 1 0",
             minWidth: 0,
             fontFamily:
-              '"Geist Mono", "SF Mono", ui-monospace, Menlo, monospace',
+              "var(--mono)",
             fontSize: 12,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -281,7 +281,7 @@ function ToolBlock({
             <Button
               size="compact-xs"
               variant="light"
-              color="green"
+              color="success"
               data-testid="permission-allow"
               onClick={() => onAnswer?.(pending.id, "allow")}
             >
@@ -290,7 +290,7 @@ function ToolBlock({
             <Button
               size="compact-xs"
               variant="light"
-              color="red"
+              color="danger"
               data-testid="permission-deny"
               onClick={() => onAnswer?.(pending.id, "deny")}
             >
@@ -299,7 +299,7 @@ function ToolBlock({
             <Button
               size="compact-xs"
               variant="light"
-              color="gray"
+              color="neutral"
               data-testid="permission-allow-session"
               onClick={() => onAnswer?.(pending.id, "allow_session")}
             >
@@ -422,7 +422,7 @@ export const EventList = memo(function EventList({
               return (
                 <Alert
                   key={index}
-                  color="var(--danger)"
+                  color="danger"
                   variant="light"
                   data-testid="crash-banner"
                 >
@@ -496,7 +496,7 @@ export const EventList = memo(function EventList({
             return (
               <Alert
                 key={index}
-                color="var(--danger)"
+                color="danger"
                 variant="light"
                 data-testid="crash-banner"
               >

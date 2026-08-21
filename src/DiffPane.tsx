@@ -164,7 +164,7 @@ export default function DiffPane({
       <div className="diff-pane" data-testid="diff-pane">
         {error && (
           <Alert
-            color="var(--danger)"
+            color="danger"
             variant="light"
             m="12px 16px 0"
             style={{ whiteSpace: "pre-wrap" }}
@@ -200,7 +200,7 @@ export default function DiffPane({
     <div className="diff-pane" data-testid="diff-pane">
       {error && (
         <Alert
-          color="var(--danger)"
+          color="danger"
           variant="light"
           m="12px 16px 0"
           style={{ whiteSpace: "pre-wrap" }}
@@ -297,7 +297,7 @@ export default function DiffPane({
             <div key={entry.path} className="diff-file" data-testid="diff-untracked-file">
               <div className="diff-file-head">
                 <span className="diff-file-path">{entry.path}</span>
-                <Badge size="xs" variant="light" color="var(--success)">
+                <Badge size="xs" variant="light" color="success">
                   new
                 </Badge>
                 <span className="diff-spacer" />

@@ -35,12 +35,17 @@ import {
   IconArchive,
   IconBox,
   IconChevronDown,
+  IconCode,
+  IconCommand,
   IconLayoutSidebarRight,
+  IconMessageDots,
   IconPlayerPlay,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
+  IconPlayerStopFilled,
+  IconSend2,
   IconSettings,
   IconShield,
   IconShieldOff,
@@ -973,7 +978,7 @@ export const ChatSurface = memo(
             This lives in the chat area and stays until dismissed. */}
         {switchNotice && (
           <Alert
-            color="var(--warn)"
+            color="warn"
             variant="light"
             m="8px 12px 0"
             data-testid="executor-switch-banner"
@@ -1009,7 +1014,7 @@ export const ChatSurface = memo(
           {busy && (
             <div className="working" data-testid="working">
               executor working
-              <Loader type="dots" size={16} color="var(--muted)" />
+              <Loader type="dots" size={16} color="neutral" />
             </div>
           )}
         </div>
@@ -1124,7 +1129,7 @@ export const ChatSurface = memo(
             <Popover.Target>
               <ActionIcon
                 variant="subtle"
-                color={threadBypass ? "var(--warn)" : "var(--muted)"}
+                color={threadBypass ? "warn" : "neutral"}
                 data-testid="permission-mode-btn"
                 data-tauri-drag-region-exclude
                 aria-label={threadBypass ? "Bypass permissions" : "Accept permissions"}
@@ -1156,7 +1161,7 @@ export const ChatSurface = memo(
                   </Button>
                   <Button
                     size="compact-xs"
-                    color="var(--warn)"
+                    color="warn"
                     data-testid="permission-mode-confirm-bypass"
                     onClick={() => {
                       onToggleBypass();
@@ -1464,8 +1469,8 @@ export const ChatSurface = memo(
                   styles={{
                     root: {
                       flexShrink: 0,
-                      backgroundColor: "var(--danger, #e5484d)",
-                      color: "var(--danger-on, #fff)",
+                      backgroundColor: "var(--danger)",
+                      color: "var(--danger-on)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -1479,15 +1484,7 @@ export const ChatSurface = memo(
                     },
                   }}
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
+                  <IconPlayerStopFilled size={14} />
                 </ActionIcon>
               ) : (
                 <ActionIcon
@@ -1521,20 +1518,7 @@ export const ChatSurface = memo(
                     },
                   }}
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="17"
-                    height="17"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-                    <path d="M15 10l-4 4l6 6l4 -16l-18 7l4 2l2 6l3 -4" />
-                  </svg>
+                  <IconSend2 size={17} />
                 </ActionIcon>
               )}
             </div>
@@ -3426,6 +3410,17 @@ export default function App() {
   // place and described differently in another.
   const commands = useMemo<Command[]>(
     () => [
+      // Listed first and listed at all so the palette documents its own way
+      // in: this chord used to live only in the keyboard handler, which made
+      // it the single shortcut the shortcut list didn't mention.
+      {
+        id: "help.commands",
+        group: "Help",
+        label: "Command palette (all shortcuts)",
+        chord: "Mod+Shift+P",
+        keywords: "help keyboard shortcuts commands keys",
+        run: () => setCommandPaletteOpen(true),
+      },
       {
         id: "file.open",
         group: "Go",
@@ -3886,7 +3881,9 @@ export default function App() {
               {/* "Vibe" and "Editor" say nothing to someone who has never
                   used this app — a first-run reviewer listed both as
                   unexplained jargon. The names stay (they're the product's
-                  own), the tooltip explains the difference. */}
+                  own), but a tooltip only pays out on hover, so the glyph
+                  carries the same distinction for someone just looking:
+                  speech bubble = chat leads, brackets = code leads. */}
               <Tooltip label="Vibe — chat first, code alongside it">
                 <button
                   className={shell.centerShell === "vibe" ? "active" : ""}
@@ -3894,6 +3891,7 @@ export default function App() {
                   aria-label="Vibe layout: chat first, code alongside it"
                   data-testid="shell-vibe"
                 >
+                  <IconMessageDots size={13} stroke={1.8} aria-hidden="true" />
                   Vibe
                 </button>
               </Tooltip>
@@ -3904,6 +3902,7 @@ export default function App() {
                   aria-label="Editor layout: code first, chat alongside it"
                   data-testid="shell-editor"
                 >
+                  <IconCode size={13} stroke={1.8} aria-hidden="true" />
                   Editor
                 </button>
               </Tooltip>
@@ -3934,10 +3933,14 @@ export default function App() {
             {project && runList.length > 0 && (
               <div className="ds-run-split" data-tauri-drag-region-exclude>
                 {(() => {
-                  const [name, command] =
-                    runList.find(([n]) => n === runLast) ?? runList[0];
+                  const remembered = runList.find(([n]) => n === runLast);
+                  const [name, command] = remembered ?? runList[0];
                   return (
-                    <Tooltip label={`Run ${command}`}>
+                    <Tooltip
+                      label={`${
+                        remembered ? "Run again" : "Run"
+                      }: ${command}`}
+                    >
                       <button
                         className="ds-icon-btn ds-run-primary"
                         onClick={() => runCommand(name, command)}
@@ -4022,6 +4025,21 @@ export default function App() {
                 <IconSunMoon size={14} />
               </button>
             </Tooltip>
+            {/* The only always-visible way in to the command list. Every
+                shortcut this app has was previously reachable only by
+                already knowing a shortcut, which is fine for the person who
+                wrote them and a dead end for anyone else. */}
+            <Tooltip label="Commands and shortcuts (Cmd+Shift+P)">
+              <button
+                className="ds-icon-btn"
+                onClick={() => setCommandPaletteOpen(true)}
+                aria-label="Commands and shortcuts"
+                data-testid="open-commands"
+                data-tauri-drag-region-exclude
+              >
+                <IconCommand size={14} />
+              </button>
+            </Tooltip>
             <Tooltip label="Settings">
               <button
                 className="ds-icon-btn"
@@ -4037,7 +4055,7 @@ export default function App() {
         </header>
         {flight && flight.warnings.length > 0 && (
           <Alert
-            color="var(--warn)"
+            color="warn"
             variant="light"
             radius={0}
             data-testid="preflight-warnings"
@@ -4050,7 +4068,7 @@ export default function App() {
 
         {specLinkChoice && (
           <Alert
-            color="var(--warn)"
+            color="warn"
             variant="light"
             radius={0}
             withCloseButton

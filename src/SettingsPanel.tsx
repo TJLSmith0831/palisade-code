@@ -608,7 +608,7 @@ export default function SettingsPanel({
       data-testid="settings-panel"
       styles={{
         overlay: {
-          background: "rgba(0, 0, 0, .68)",
+          background: "var(--scrim)",
           backdropFilter: "blur(5px)",
         },
         content: {
@@ -911,7 +911,7 @@ export default function SettingsPanel({
                 border: `1px solid ${border}`,
                 borderRadius: 7,
                 outline: "none",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontFamily: "var(--mono)",
                 fontSize: 13,
                 textAlign: "center",
                 boxSizing: "border-box",
@@ -981,7 +981,9 @@ export default function SettingsPanel({
               flexShrink: 0,
               border: "none",
               borderRadius: 999,
-              background: editorWrap ? accent : "#343940",
+              // Was a hardcoded charcoal, which stayed dark in light mode —
+              // the one control on this panel that ignored the theme.
+              background: editorWrap ? accent : "var(--surface-warm)",
               cursor: "pointer",
               transition: "background 120ms ease",
               boxSizing: "border-box",
@@ -995,7 +997,10 @@ export default function SettingsPanel({
                 width: 16,
                 height: 16,
                 borderRadius: "50%",
-                background: "#fff",
+                // Contrasts with whichever track it sits on: dark ink on the
+                // bright accent when on, foreground on the neutral track when
+                // off. A fixed white knob read as low-contrast on the accent.
+                background: editorWrap ? "var(--accent-on)" : "var(--fg)",
                 boxShadow: "0 1px 3px rgba(0,0,0,.35)",
                 transition: "left 120ms ease",
               }}
@@ -1131,7 +1136,7 @@ export default function SettingsPanel({
             color: accent,
             background: "transparent",
             border: "none",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontFamily: "var(--mono)",
             fontSize: 12,
             fontWeight: 600,
             cursor: "pointer",
@@ -1151,7 +1156,7 @@ export default function SettingsPanel({
             alignItems: "center",
             marginTop: 18,
             color: dim,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontFamily: "var(--mono)",
             fontSize: 11,
           }}
         >

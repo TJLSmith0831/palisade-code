@@ -4,6 +4,7 @@ import {
   IconCircle,
   IconColumns,
   IconFileText,
+  IconSearch,
 } from "@tabler/icons-react";
 import Palette from "./Palette";
 import { filterCommands, formatChord, type Command } from "./commands";
@@ -76,21 +77,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
           flexShrink: 0,
         }}
       >
-        <svg
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          style={{
-            width: 17,
-            height: 17,
-            fill: "none",
-            stroke: "currentColor",
-            strokeWidth: 1.8,
-            strokeLinecap: "round",
-          }}
-        >
-          <circle cx="11" cy="11" r="6.5" />
-          <path d="m16 16 4 4" />
-        </svg>
+        <IconSearch size={17} aria-hidden="true" stroke={1.8} />
       </div>
       <div>
         <div style={{ color: "var(--fg)", fontSize: 13, fontWeight: 500 }}>

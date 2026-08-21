@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tree, useTree, type RenderTreeNodePayload, type TreeNodeData } from "@mantine/core";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import * as api from "./api";
 import { describeError } from "./errors";
 import { NewFileIcon, NewFolderIcon } from "./icons";
@@ -47,6 +48,18 @@ const dirOf = (path: string) => {
 };
 
 const joinPath = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
+
+// Both rename and create take a raw typed name, so the check lives here
+// rather than in either one. Without it the only feedback was whatever the
+// backend rejected with, surfaced in the error banner after a round-trip —
+// the name is knowably bad before it is ever sent.
+const nameError = (name: string): string | null => {
+  if (name.includes("/")) return "Name can't contain “/”.";
+  if (name === "." || name === "..") return `“${name}” is a reserved name.`;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(name)) return "Name can't contain control characters.";
+  return null;
+};
 
 export default function FileTree({
   projectHash,
@@ -176,6 +189,11 @@ export default function FileTree({
       setRenaming(null);
       return;
     }
+    const invalid = nameError(trimmed);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
     const to = joinPath(dirOf(path), trimmed);
     try {
       await api.renamePath(projectHash, path, to);
@@ -204,6 +222,11 @@ export default function FileTree({
     const trimmed = name.trim();
     if (!trimmed) {
       setCreating(null);
+      return;
+    }
+    const invalid = nameError(trimmed);
+    if (invalid) {
+      setError(invalid);
       return;
     }
     const path = joinPath(parentPath, trimmed);
@@ -384,7 +407,13 @@ export default function FileTree({
         }}
         data-testid="tree-row"
       >
-        <span className="ds-chevron">{entry.is_dir ? (expanded ? "▾" : "▸") : "▸"}</span>
+        <span className="ds-chevron">
+          {entry.is_dir && expanded ? (
+            <IconChevronDown size={13} stroke={2} />
+          ) : (
+            <IconChevronRight size={13} stroke={2} />
+          )}
+        </span>
         <span className="ds-tree-label">{entry.name}</span>
       </div>
     );

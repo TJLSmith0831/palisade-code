@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal as MantineModal } from "@mantine/core";
+import { IconSearch } from "@tabler/icons-react";
 
 type RenderItemContext = {
   active: boolean;
@@ -187,7 +188,7 @@ export default function Palette<T>({
       }}
       styles={{
         overlay: {
-          backgroundColor: "rgba(0, 0, 0, 0.68)",
+          backgroundColor: "var(--scrim)",
           backdropFilter: "blur(5px)",
         },
         content: {
@@ -228,23 +229,17 @@ export default function Palette<T>({
           margin: "4px 16px 12px",
         }}
       >
-        <svg
-          viewBox="0 0 24 24"
+        <IconSearch
+          size={18}
           aria-hidden="true"
+          stroke={1.8}
           style={{
             position: "absolute",
             left: 14,
-            width: 18,
-            height: 18,
-            fill: "none",
-            stroke: focused ? "var(--accent)" : "var(--muted)",
-            strokeWidth: 1.8,
+            color: focused ? "var(--accent)" : "var(--muted)",
             pointerEvents: "none",
           }}
-        >
-          <circle cx="11" cy="11" r="6.5" />
-          <path d="m16 16 4 4" />
-        </svg>
+        />
 
         <input
           data-autofocus={autoFocus ? "" : undefined}
