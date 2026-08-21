@@ -39,6 +39,15 @@ agent-client-protocol = "2"
 ureq = { version = "2", features = ["json"] }
 tokio = { version = "1", features = ["rt", "macros", "io-util"] }
 gix = "0.86"
+# Database viewer/editor: `any` picks the concrete driver per connection URL at
+# runtime, so one binary speaks both Postgres and SQLite.
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls",
+  "any",
+  "postgres",
+  "sqlite",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

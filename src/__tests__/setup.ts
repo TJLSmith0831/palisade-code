@@ -15,6 +15,10 @@ Range.prototype.getBoundingClientRect = () => ({
 // jsdom has no ResizeObserver (it has no layout to observe). TerminalPane
 // uses one to refit xterm on container resize — a no-op stub is enough for
 // tests, which never rely on a real resize firing.
+// jsdom has no layout, so Element.scrollIntoView is unimplemented. Mantine's
+// Select/Combobox calls it when the keyboard-highlighted option changes.
+Element.prototype.scrollIntoView ??= () => {};
+
 class ResizeObserverStub {
   observe() {}
   unobserve() {}

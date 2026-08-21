@@ -3,6 +3,8 @@ import {
   IconGitCompare,
   IconMarkdown,
   IconNotebook,
+  IconTable,
+  IconTerminal2,
 } from "@tabler/icons-react";
 import { isMarkdownPath, tabKey, type OpenTab } from "./openTabs";
 
@@ -21,6 +23,39 @@ type Props = {
 
 /** `src/components/Foo.tsx` -> `Foo.tsx`. The full path is the tooltip. */
 export const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+/** What the tab says. Short enough to fit a tab; the tooltip carries the rest. */
+export const tabLabel = (tab: OpenTab): string => {
+  switch (tab.type) {
+    case "spec":
+      return tab.specName;
+    case "table":
+      return tab.table;
+    case "query":
+      return `SQL — ${tab.connectionName}`;
+    default:
+      return basename(tab.path);
+  }
+};
+
+const tabTooltip = (tab: OpenTab): string => {
+  switch (tab.type) {
+    case "spec":
+      return `OpenSpec change: ${tab.specName}`;
+    case "table":
+      return tab.schema ? `${tab.schema}.${tab.table}` : tab.table;
+    case "query":
+      return `SQL editor for ${tab.connectionName}`;
+    default:
+      return tab.path;
+  }
+};
+
+const tabIcons = {
+  spec: IconNotebook,
+  table: IconTable,
+  query: IconTerminal2,
+} as const;
 
 /**
  * The open files, and a way into the diff.
@@ -56,12 +91,8 @@ export default function TabBar({
         <Tabs.List style={{ flexWrap: "nowrap", overflowX: "auto" }}>
           {tabs.map((tab) => {
             const key = tabKey(tab);
-            const label =
-              tab.type === "spec" ? tab.specName : basename(tab.path);
-            const tooltip =
-              tab.type === "spec"
-                ? `OpenSpec change: ${tab.specName}`
-                : tab.path;
+            const label = tabLabel(tab);
+            const tooltip = tabTooltip(tab);
             return (
               <Tooltip key={key} label={tooltip} openDelay={600} withinPortal>
                 <Tabs.Tab
@@ -77,11 +108,12 @@ export default function TabBar({
                     event.preventDefault();
                     onClose(key);
                   }}
-                  leftSection={
-                    tab.type === "spec" ? (
-                      <IconNotebook size={14} style={{ flexShrink: 0 }} />
-                    ) : undefined
-                  }
+                  leftSection={(() => {
+                    const Icon = tabIcons[tab.type as keyof typeof tabIcons];
+                    return Icon ? (
+                      <Icon size={14} style={{ flexShrink: 0 }} />
+                    ) : undefined;
+                  })()}
                   rightSection={
                     <CloseButton
                       component="span"

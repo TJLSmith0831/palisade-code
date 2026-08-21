@@ -23,13 +23,46 @@ export type SpecTab = {
   mdPreview: false;
 };
 
-export type OpenTab = FileTab | SpecTab;
+export type TableTab = {
+  type: "table";
+  /** Which saved connection this table belongs to — never its URL. */
+  connectionId: string;
+  connectionName: string;
+  /** Null on SQLite, which has no schema layer. */
+  schema: string | null;
+  table: string;
+  dirty: false;
+  mdPreview: false;
+};
+
+export type QueryTab = {
+  type: "query";
+  connectionId: string;
+  /** One query tab per connection, so its name is the connection's. */
+  connectionName: string;
+  dirty: false;
+  mdPreview: false;
+};
+
+export type OpenTab = FileTab | SpecTab | TableTab | QueryTab;
 
 /** The stable string key for a tab — its identity in `activePath`, the
  * Mantine `Tabs` component, and session save/restore. File tabs use their
- * path; spec tabs use `spec:<name>` so `coerce` can recover them (D11, task 2.3). */
-export const tabKey = (tab: OpenTab): string =>
-  tab.type === "spec" ? `spec:${tab.specName}` : tab.path;
+ * path; spec tabs use `spec:<name>` so `coerce` can recover them (D11, task 2.3).
+ * Database tabs follow the same shape, keyed by connection so the same table
+ * open on "dev" and on "staging" are two tabs, not one. */
+export const tabKey = (tab: OpenTab): string => {
+  switch (tab.type) {
+    case "spec":
+      return `spec:${tab.specName}`;
+    case "table":
+      return `table:${tab.connectionId}:${tab.schema ?? ""}:${tab.table}`;
+    case "query":
+      return `query:${tab.connectionId}`;
+    default:
+      return tab.path;
+  }
+};
 
 /** How many closed tabs Cmd+Shift+T can walk back through. */
 const REOPEN_DEPTH = 10;
@@ -88,21 +121,55 @@ export function useOpenTabs() {
     closed.current = closed.current.filter((k) => k !== path);
   }, []);
 
-  /** Open an OpenSpec change as a read-only spec tab (D1/D3). Re-selects
-   * an already-open spec tab instead of duplicating it. */
-  const openSpec = useCallback((specName: string) => {
-    const key = `spec:${specName}`;
+  /** Adds a non-file tab, or re-selects it when it is already open. */
+  const openTab = useCallback((tab: OpenTab) => {
+    const key = tabKey(tab);
     setTabs((current) =>
-      current.some((tab) => tabKey(tab) === key)
-        ? current
-        : [
-            ...current,
-            { type: "spec" as const, specName, dirty: false, mdPreview: false },
-          ]
+      current.some((t) => tabKey(t) === key) ? current : [...current, tab]
     );
     setActivePath(key);
     closed.current = closed.current.filter((k) => k !== key);
   }, []);
+
+  /** Open an OpenSpec change as a read-only spec tab (D1/D3). */
+  const openSpec = useCallback(
+    (specName: string) =>
+      openTab({ type: "spec", specName, dirty: false, mdPreview: false }),
+    [openTab]
+  );
+
+  /** Open a database table as a data-grid tab (D1). */
+  const openTable = useCallback(
+    (
+      connectionId: string,
+      connectionName: string,
+      schema: string | null,
+      table: string
+    ) =>
+      openTab({
+        type: "table",
+        connectionId,
+        connectionName,
+        schema,
+        table,
+        dirty: false,
+        mdPreview: false,
+      }),
+    [openTab]
+  );
+
+  /** Open the SQL editor for a connection — one tab per connection. */
+  const openQuery = useCallback(
+    (connectionId: string, connectionName: string) =>
+      openTab({
+        type: "query",
+        connectionId,
+        connectionName,
+        dirty: false,
+        mdPreview: false,
+      }),
+    [openTab]
+  );
 
   /** Removes tabs matching `matches`, keeping the selection sensible: when
    * the active tab goes, the neighbour to their right takes over, falling back
@@ -114,8 +181,12 @@ export function useOpenTabs() {
         if (index === -1) return current;
         const remaining = current.filter((tab) => !matches(tabKey(tab)));
         if (remember) {
+          // Database tabs stay out of the reopen stack: a key alone can't
+          // rebuild one (a query tab also carries its connection's name), and
+          // they are one click away in the database panel regardless.
           const gone = current
             .filter((tab) => matches(tabKey(tab)))
+            .filter((tab) => tab.type === "file" || tab.type === "spec")
             .map(tabKey);
           closed.current = [...closed.current, ...gone].slice(-REOPEN_DEPTH);
         }
@@ -224,6 +295,8 @@ export function useOpenTabs() {
     anyDirty: tabs.some((tab) => tab.dirty),
     open,
     openSpec,
+    openTable,
+    openQuery,
     close,
     dropPath,
     rename,

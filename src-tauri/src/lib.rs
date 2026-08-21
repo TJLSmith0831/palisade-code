@@ -3,6 +3,7 @@ mod acp_events;
 mod acp_preflight;
 mod acp_registry;
 mod completion;
+mod db;
 mod executor;
 mod graph_nudge;
 mod grill_inject;
@@ -2115,6 +2116,17 @@ pub fn run() {
             save_run_commands,
             detect_run_commands,
             session_attribution,
+            commands::db_cmds::db_list_connections,
+            commands::db_cmds::db_add_connection,
+            commands::db_cmds::db_remove_connection,
+            commands::db_cmds::db_rename_connection,
+            commands::db_cmds::db_list_tables,
+            commands::db_cmds::db_table_columns,
+            commands::db_cmds::db_fetch_page,
+            commands::db_cmds::db_run_query,
+            commands::db_cmds::db_is_destructive,
+            commands::db_cmds::db_preview_edits,
+            commands::db_cmds::db_apply_edits,
             commands::openspec_cmds::list_spec_changes,
             commands::openspec_cmds::show_spec_change,
             commands::openspec_cmds::validate_spec_changes,

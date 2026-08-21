@@ -7,6 +7,7 @@ import {
   IconTopologyStar3,
   IconPlayerPlay,
   IconPlug,
+  IconDatabase,
   IconHistory,
   IconFolders,
   IconSettings,
@@ -40,6 +41,7 @@ const TOP_AGENT: RailItem[] = [
   { id: "codemap", label: "Codebase Map", Icon: IconTopologyStar3 },
   { id: "run", label: "Run configurations", Icon: IconPlayerPlay },
   { id: "mcp", label: "MCP Servers", Icon: IconPlug },
+  { id: "database", label: "Database", Icon: IconDatabase },
 ];
 
 const BOTTOM: RailItem[] = [

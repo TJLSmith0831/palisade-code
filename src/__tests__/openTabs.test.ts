@@ -291,4 +291,64 @@ describe("useOpenTabs", () => {
       expect(keys(view)).toEqual(["spec:vibe-spec-tabs"]);
     });
   });
+
+  describe("database tabs", () => {
+    it("keys a table tab by connection, so the same table on two is two tabs", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => {
+        view.result.current.openTable("c1", "dev", "public", "users");
+        view.result.current.openTable("c2", "staging", "public", "users");
+      });
+      expect(keys(view)).toEqual([
+        "table:c1:public:users",
+        "table:c2:public:users",
+      ]);
+    });
+
+    it("re-selects an already open table instead of duplicating it", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => {
+        view.result.current.openTable("c1", "dev", null, "users");
+        view.result.current.open("src/a.ts");
+        view.result.current.openTable("c1", "dev", null, "users");
+      });
+      expect(keys(view)).toEqual(["table:c1::users", "src/a.ts"]);
+      expect(view.result.current.activePath).toBe("table:c1::users");
+    });
+
+    it("gives a connection one SQL editor, not one per open", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => {
+        view.result.current.openQuery("c1", "dev");
+        view.result.current.openQuery("c1", "dev");
+      });
+      expect(keys(view)).toEqual(["query:c1"]);
+    });
+
+    // A key alone cannot rebuild a database tab, so Cmd+Shift+T skips them
+    // rather than reopening something half-formed.
+    it("does not put a closed database tab on the reopen stack", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => {
+        view.result.current.open("src/a.ts");
+        view.result.current.openTable("c1", "dev", null, "users");
+      });
+      act(() => view.result.current.close("table:c1::users"));
+      act(() => view.result.current.close("src/a.ts"));
+      act(() => view.result.current.reopenLast());
+      expect(keys(view)).toEqual(["src/a.ts"]);
+    });
+
+    it("leaves database tabs alone when files are renamed or deleted", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => {
+        view.result.current.open("src/a.ts");
+        view.result.current.openTable("c1", "dev", null, "users");
+        view.result.current.openQuery("c1", "dev");
+      });
+      act(() => view.result.current.rename("src", "lib"));
+      act(() => view.result.current.dropPath("lib"));
+      expect(keys(view)).toEqual(["table:c1::users", "query:c1"]);
+    });
+  });
 });

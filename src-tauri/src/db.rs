@@ -1,0 +1,1121 @@
+//! Database viewer/editor: saved connections, schema introspection, paged
+//! reads, and a conflict-checked transactional write path.
+//!
+//! Connection strings can embed a password, so they live under
+//! `~/.palisade-code/projects/<hash>/db-connections.json` (mode 0600) —
+//! structurally outside any target repo, the same reason the session store
+//! lives there. Every function takes the palisade home explicitly so tests can
+//! point at a tempdir, matching `store.rs`.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+pub type Res<T> = Result<T, String>;
+
+fn e(ctx: &str, err: impl std::fmt::Display) -> String {
+    format!("{ctx}: {err}")
+}
+
+// ------------------------------------------------------------------ backends
+
+/// Which concrete driver a connection URL selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    Postgres,
+    Sqlite,
+}
+
+/// Reads the driver off the URL scheme — the one thing `sqlx::Any` decides at
+/// runtime, so Palisade has to agree with it before saving a connection.
+pub fn backend_of(url: &str) -> Res<Backend> {
+    let scheme = url.split("://").next().unwrap_or("").trim().to_lowercase();
+    match scheme.as_str() {
+        "postgres" | "postgresql" => Ok(Backend::Postgres),
+        "sqlite" => Ok(Backend::Sqlite),
+        "" => Err("connection string is missing a scheme (expected postgres:// or sqlite://)".into()),
+        other => Err(format!(
+            "unsupported database scheme '{other}' — this build speaks postgres:// and sqlite://"
+        )),
+    }
+}
+
+// --------------------------------------------------------------- connections
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbConnection {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub backend: Backend,
+}
+
+fn connections_path(home: &Path, hash: &str) -> PathBuf {
+    crate::store::project_dir(home, hash).join("db-connections.json")
+}
+
+pub fn list_connections(home: &Path, hash: &str) -> Res<Vec<DbConnection>> {
+    let path = connections_path(home, hash);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|err| e(&format!("parse {}", path.display()), err)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(e(&format!("read {}", path.display()), err)),
+    }
+}
+
+/// Writes the whole list back at 0600. The mode is set before the bytes land,
+/// so a credential is never briefly world-readable.
+fn save_connections(home: &Path, hash: &str, list: &[DbConnection]) -> Res<()> {
+    let path = connections_path(home, hash);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| e("create dir", err))?;
+    }
+    let body = serde_json::to_string_pretty(list).map_err(|err| e("serialize", err))?;
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|err| e(&format!("write {}", path.display()), err))?;
+        f.write_all(body.as_bytes())
+            .map_err(|err| e(&format!("write {}", path.display()), err))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&path, body).map_err(|err| e(&format!("write {}", path.display()), err))?;
+    Ok(())
+}
+
+pub fn add_connection(home: &Path, hash: &str, name: &str, url: &str) -> Res<DbConnection> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("connection needs a name".into());
+    }
+    let url = url.trim();
+    let backend = backend_of(url)?;
+    let conn = DbConnection {
+        id: ulid::Ulid::new().to_string(),
+        name: name.to_string(),
+        url: url.to_string(),
+        backend,
+    };
+    let mut list = list_connections(home, hash)?;
+    list.push(conn.clone());
+    save_connections(home, hash, &list)?;
+    Ok(conn)
+}
+
+pub fn remove_connection(home: &Path, hash: &str, id: &str) -> Res<()> {
+    let mut list = list_connections(home, hash)?;
+    list.retain(|c| c.id != id);
+    save_connections(home, hash, &list)
+}
+
+pub fn rename_connection(home: &Path, hash: &str, id: &str, name: &str) -> Res<DbConnection> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("connection needs a name".into());
+    }
+    let mut list = list_connections(home, hash)?;
+    let found = list
+        .iter_mut()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("no connection {id}"))?;
+    found.name = name.to_string();
+    let updated = found.clone();
+    save_connections(home, hash, &list)?;
+    Ok(updated)
+}
+
+pub fn find_connection(home: &Path, hash: &str, id: &str) -> Res<DbConnection> {
+    list_connections(home, hash)?
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("no connection {id}"))
+}
+
+// ----------------------------------------------------------- SQL text shapes
+
+/// Quotes an identifier for the target backend. Both engines accept
+/// double-quoted identifiers; an embedded quote is doubled.
+pub fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Positional bind marker — Postgres numbers them, SQLite does not.
+pub fn placeholder(backend: Backend, index: usize) -> String {
+    match backend {
+        Backend::Postgres => format!("${index}"),
+        Backend::Sqlite => "?".to_string(),
+    }
+}
+
+/// Quotes a value for *display only* (the SQL preview). Execution always binds
+/// parameters — this string is never sent to a database.
+fn literal(value: Option<&String>) -> String {
+    match value {
+        None => "NULL".to_string(),
+        Some(v) => format!("'{}'", v.replace('\'', "''")),
+    }
+}
+
+/// Statement shapes that destroy or restructure data without a narrowing
+/// condition. A text-shape check, not a planner: `WHERE 1=1` slips past, which
+/// is an accepted gap (design.md — Risks).
+pub fn is_destructive(sql: &str) -> bool {
+    let stripped = strip_sql_noise(sql);
+    for statement in stripped.split(';') {
+        let s = statement.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let head = s.split_whitespace().next().unwrap_or("").to_uppercase();
+        let has_where = s
+            .split_whitespace()
+            .any(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("where"));
+        let destructive = match head.as_str() {
+            "DROP" | "TRUNCATE" | "ALTER" => true,
+            "DELETE" | "UPDATE" => !has_where,
+            _ => false,
+        };
+        if destructive {
+            return true;
+        }
+    }
+    false
+}
+
+/// Removes comments and string literals so keyword matching can't be fooled by
+/// a `-- drop` comment or a `'delete'` value.
+fn strip_sql_noise(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '-' if chars.peek() == Some(&'-') => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+                out.push(' ');
+            }
+            '\'' => {
+                out.push_str("''");
+                while let Some(c) = chars.next() {
+                    if c == '\'' {
+                        if chars.peek() == Some(&'\'') {
+                            chars.next();
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------- update builder
+
+/// One row's pending edits: the values it was fetched with, plus the columns
+/// the user changed. All values are the grid's text form (see `fetch_page`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowEdit {
+    /// Every column value as originally fetched — the conflict fingerprint.
+    pub original: BTreeMap<String, Option<String>>,
+    /// Only the columns the user changed.
+    pub changes: BTreeMap<String, Option<String>>,
+}
+
+/// A ready-to-run `UPDATE`: parameterised SQL plus its binds, and the same
+/// statement rendered with literals for the preview the user signs off on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Update {
+    pub sql: String,
+    pub binds: Vec<Option<String>>,
+    pub preview: String,
+}
+
+/// Builds the `UPDATE` for one edited row.
+///
+/// `WHERE` matches the primary key **and** every other originally fetched
+/// value (D10), compared as text so any column type participates: a zero-row
+/// result then means the row changed underneath the user, not that the row is
+/// gone. Casts are explicit because the grid round-trips everything as text.
+pub fn build_update(
+    backend: Backend,
+    table_ref: &str,
+    columns: &[ColumnInfo],
+    edit: &RowEdit,
+) -> Res<Update> {
+    if edit.changes.is_empty() {
+        return Err("no changes for this row".into());
+    }
+    let pk: Vec<&ColumnInfo> = columns.iter().filter(|c| c.primary_key).collect();
+    if pk.is_empty() {
+        return Err(format!(
+            "{table_ref} has no primary key among the fetched columns, so its rows can't be updated safely"
+        ));
+    }
+    let type_of = |name: &str| columns.iter().find(|c| c.name == name).map(|c| c.data_type.clone());
+
+    let mut binds: Vec<Option<String>> = Vec::new();
+    let mut set = Vec::new();
+    let mut set_preview = Vec::new();
+    for (col, value) in &edit.changes {
+        if type_of(col).is_none() {
+            return Err(format!("unknown column {col}"));
+        }
+        binds.push(value.clone());
+        let bound = cast(backend, &placeholder(backend, binds.len()), type_of(col).as_deref());
+        set.push(format!("{} = {bound}", quote_ident(col)));
+        set_preview.push(format!(
+            "{} = {}",
+            quote_ident(col),
+            cast(backend, &literal(value.as_ref()), type_of(col).as_deref())
+        ));
+    }
+
+    let mut wheres = Vec::new();
+    let mut where_preview = Vec::new();
+    // Primary key first so the preview reads the way the user thinks about the
+    // row, then the rest of the fingerprint.
+    let ordered = pk
+        .iter()
+        .map(|c| c.name.clone())
+        .chain(columns.iter().filter(|c| !c.primary_key).map(|c| c.name.clone()));
+    for col in ordered {
+        let Some(original) = edit.original.get(&col) else {
+            return Err(format!("row is missing original value for {col}"));
+        };
+        binds.push(original.clone());
+        let ph = placeholder(backend, binds.len());
+        wheres.push(text_match(backend, &col, &ph));
+        where_preview.push(text_match(backend, &col, &literal(original.as_ref())));
+    }
+
+    let render = |set: &[String], wheres: &[String]| {
+        format!("UPDATE {table_ref} SET {} WHERE {}", set.join(", "), wheres.join(" AND "))
+    };
+    Ok(Update {
+        sql: render(&set, &wheres),
+        binds,
+        preview: render(&set_preview, &where_preview),
+    })
+}
+
+/// NULL-safe text comparison. Postgres spells it `IS NOT DISTINCT FROM`;
+/// SQLite spells it `IS`. Both make a NULL original match a NULL current value
+/// instead of dropping the row from the match.
+fn text_match(backend: Backend, column: &str, value: &str) -> String {
+    let col = format!("CAST({} AS TEXT)", quote_ident(column));
+    match backend {
+        Backend::Postgres => format!("{col} IS NOT DISTINCT FROM {value}"),
+        Backend::Sqlite => format!("{col} IS {value}"),
+    }
+}
+
+/// Postgres refuses to assign text to a typed column, so every bind is cast
+/// back to the column's own type. SQLite is dynamically typed and needs none.
+fn cast(backend: Backend, value: &str, data_type: Option<&str>) -> String {
+    match (backend, data_type) {
+        (Backend::Postgres, Some(t)) => format!("CAST({value} AS {t})"),
+        _ => value.to_string(),
+    }
+}
+
+// ------------------------------------------------------------------ metadata
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub primary_key: bool,
+}
+
+// ------------------------------------------------------------------- runtime
+
+/// D15: fixed page size. Not a setting until someone wants a different number.
+pub const PAGE_SIZE: i64 = 200;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableInfo {
+    pub schema: Option<String>,
+    pub name: String,
+    /// `"table"` or `"view"` — D16 stops there.
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sort {
+    pub column: String,
+    pub descending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Filter {
+    pub column: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Page {
+    pub columns: Vec<ColumnInfo>,
+    /// Every value as text, `None` for SQL NULL — the grid needs those two
+    /// apart, and text is the one representation both backends can produce for
+    /// any column type through `sqlx::Any`.
+    pub rows: Vec<Vec<Option<String>>>,
+    pub page: i64,
+    pub page_size: i64,
+    pub has_more: bool,
+    /// False when no primary key is among the fetched columns (D9).
+    pub editable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+    /// Set for statements that return a count rather than rows.
+    pub rows_affected: Option<i64>,
+}
+
+fn pools() -> &'static std::sync::Mutex<std::collections::HashMap<String, sqlx::AnyPool>> {
+    static POOLS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, sqlx::AnyPool>>,
+    > = std::sync::OnceLock::new();
+    POOLS.get_or_init(Default::default)
+}
+
+/// One pool per connection URL, created on first use and kept for the life of
+/// the app — reconnecting per query would make every keystroke in a filter box
+/// a fresh handshake.
+pub async fn pool_for(conn: &DbConnection) -> Res<sqlx::AnyPool> {
+    if let Some(pool) = pools().lock().ok().and_then(|p| p.get(&conn.url).cloned()) {
+        return Ok(pool);
+    }
+    sqlx::any::install_default_drivers();
+    let pool = sqlx::any::AnyPoolOptions::new()
+        .max_connections(4)
+        .connect(&conn.url)
+        .await
+        .map_err(|err| e(&format!("connect to {}", conn.name), err))?;
+    if let Ok(mut map) = pools().lock() {
+        map.insert(conn.url.clone(), pool.clone());
+    }
+    Ok(pool)
+}
+
+/// Drops the cached pool so the next use reconnects — what a removed or
+/// renamed connection needs, and the only way a changed URL takes effect.
+pub fn forget_pool(url: &str) {
+    if let Ok(mut map) = pools().lock() {
+        map.remove(url);
+    }
+}
+
+fn table_ref(schema: Option<&str>, name: &str) -> String {
+    match schema {
+        Some(s) if !s.is_empty() => format!("{}.{}", quote_ident(s), quote_ident(name)),
+        _ => quote_ident(name),
+    }
+}
+
+/// Reads one column of one row as text. Values come back as text wherever
+/// Palisade writes the query (`fetch_page` casts everything), so the fallbacks
+/// only matter for user-written SQL selecting a type `sqlx::Any` can't decode.
+fn cell(row: &sqlx::any::AnyRow, i: usize) -> Option<String> {
+    use sqlx::{Row, ValueRef};
+    if row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(false) {
+        return None;
+    }
+    row.try_get::<String, _>(i)
+        .ok()
+        .or_else(|| row.try_get::<i64, _>(i).ok().map(|v| v.to_string()))
+        .or_else(|| row.try_get::<f64, _>(i).ok().map(|v| v.to_string()))
+        .or_else(|| row.try_get::<bool, _>(i).ok().map(|v| v.to_string()))
+        // ponytail: one honest placeholder beats a per-type decoder table;
+        // add decoding when a real column type shows up unreadable.
+        .or_else(|| Some("<unreadable value>".to_string()))
+}
+
+fn rows_of(rows: &[sqlx::any::AnyRow]) -> Vec<Vec<Option<String>>> {
+    use sqlx::Row;
+    rows.iter()
+        .map(|r| (0..r.len()).map(|i| cell(r, i)).collect())
+        .collect()
+}
+
+/// Tables and views, both backends, under one shape (D16).
+pub async fn list_tables(conn: &DbConnection) -> Res<Vec<TableInfo>> {
+    let pool = pool_for(conn).await?;
+    let sql = match conn.backend {
+        Backend::Postgres => {
+            "SELECT table_schema::text, table_name::text, \
+             CASE WHEN table_type = 'VIEW' THEN 'view' ELSE 'table' END \
+             FROM information_schema.tables \
+             WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY table_schema, table_name"
+        }
+        Backend::Sqlite => {
+            "SELECT NULL, name, type FROM sqlite_master \
+             WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
+             ORDER BY name"
+        }
+    };
+    let rows = sqlx::query(sql)
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| e("list tables", err))?;
+    Ok(rows_of(&rows)
+        .into_iter()
+        .map(|r| TableInfo {
+            schema: r.first().cloned().flatten(),
+            name: r.get(1).cloned().flatten().unwrap_or_default(),
+            kind: r.get(2).cloned().flatten().unwrap_or_else(|| "table".into()),
+        })
+        .collect())
+}
+
+/// Column names, their own type, and whether they're part of the primary key.
+/// The type is what a text bind gets cast back to on write (Postgres) and what
+/// decides whether the grid is editable at all (D9).
+pub async fn columns_of(conn: &DbConnection, schema: Option<&str>, table: &str) -> Res<Vec<ColumnInfo>> {
+    let pool = pool_for(conn).await?;
+    let rows = match conn.backend {
+        Backend::Postgres => {
+            sqlx::query(
+                "SELECT c.column_name::text, c.udt_name::text, (pk.attname IS NOT NULL)::text \
+                 FROM information_schema.columns c \
+                 LEFT JOIN ( \
+                   SELECT a.attname FROM pg_index i \
+                   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) \
+                   WHERE i.indrelid = format('%I.%I', $1::text, $2::text)::regclass AND i.indisprimary \
+                 ) pk ON pk.attname = c.column_name \
+                 WHERE c.table_schema = $1 AND c.table_name = $2 \
+                 ORDER BY c.ordinal_position",
+            )
+            .bind(schema.unwrap_or("public"))
+            .bind(table)
+            .fetch_all(&pool)
+            .await
+        }
+        Backend::Sqlite => {
+            sqlx::query(
+                "SELECT name, type, CAST(pk AS TEXT) FROM pragma_table_info(?) ORDER BY cid",
+            )
+            .bind(table)
+            .fetch_all(&pool)
+            .await
+        }
+    }
+    .map_err(|err| e(&format!("describe {table}"), err))?;
+
+    let columns: Vec<ColumnInfo> = rows_of(&rows)
+        .into_iter()
+        .map(|r| ColumnInfo {
+            name: r.first().cloned().flatten().unwrap_or_default(),
+            data_type: r.get(1).cloned().flatten().unwrap_or_default(),
+            primary_key: matches!(r.get(2).cloned().flatten().as_deref(), Some("true") | Some("t"))
+                || r.get(2)
+                    .cloned()
+                    .flatten()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .is_some_and(|v| v > 0),
+        })
+        .collect();
+    if columns.is_empty() {
+        return Err(format!("no such table: {table}"));
+    }
+    Ok(columns)
+}
+
+/// One page of a table. Every value is cast to text in SQL so any column type
+/// survives `sqlx::Any`, and NULL stays `None` rather than collapsing into an
+/// empty string.
+pub async fn fetch_page(
+    conn: &DbConnection,
+    schema: Option<&str>,
+    table: &str,
+    page: i64,
+    sort: Option<&Sort>,
+    filter: Option<&Filter>,
+) -> Res<Page> {
+    let pool = pool_for(conn).await?;
+    let columns = columns_of(conn, schema, table).await?;
+    let known = |name: &str| columns.iter().any(|c| c.name == name);
+
+    let projection = columns
+        .iter()
+        .map(|c| format!("CAST({0} AS TEXT) AS {0}", quote_ident(&c.name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut sql = format!("SELECT {projection} FROM {}", table_ref(schema, table));
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(f) = filter.filter(|f| !f.value.is_empty()) {
+        if !known(&f.column) {
+            return Err(format!("no column {} on {table}", f.column));
+        }
+        binds.push(format!("%{}%", f.value));
+        sql.push_str(&format!(
+            " WHERE CAST({} AS TEXT) LIKE {}",
+            quote_ident(&f.column),
+            placeholder(conn.backend, binds.len())
+        ));
+    }
+    if let Some(s) = sort {
+        if !known(&s.column) {
+            return Err(format!("no column {} on {table}", s.column));
+        }
+        sql.push_str(&format!(
+            " ORDER BY {} {}",
+            quote_ident(&s.column),
+            if s.descending { "DESC" } else { "ASC" }
+        ));
+    }
+    let page = page.max(0);
+    // One extra row is the whole pagination story: it answers "is there a next
+    // page" without a second COUNT(*) over the table.
+    sql.push_str(&format!(
+        " LIMIT {} OFFSET {}",
+        PAGE_SIZE + 1,
+        page * PAGE_SIZE
+    ));
+
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b.clone());
+    }
+    let rows = q.fetch_all(&pool).await.map_err(|err| e(&format!("read {table}"), err))?;
+    let mut rows = rows_of(&rows);
+    let has_more = rows.len() as i64 > PAGE_SIZE;
+    rows.truncate(PAGE_SIZE as usize);
+
+    Ok(Page {
+        editable: columns.iter().any(|c| c.primary_key),
+        columns,
+        rows,
+        page,
+        page_size: PAGE_SIZE,
+        has_more,
+    })
+}
+
+/// Runs user-written SQL. Statements that return rows are fetched; everything
+/// else reports an affected-row count.
+pub async fn run_query(conn: &DbConnection, sql: &str) -> Res<QueryResult> {
+    use sqlx::{Column, Executor, Row};
+    let pool = pool_for(conn).await?;
+    let head = sql
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_uppercase();
+    // ponytail: first-keyword split, not a parser. A statement that returns
+    // rows but isn't spelled this way just reports a count instead.
+    let returns_rows = matches!(
+        head.as_str(),
+        "SELECT" | "WITH" | "VALUES" | "SHOW" | "EXPLAIN" | "PRAGMA" | "TABLE"
+    );
+    if returns_rows {
+        let rows = pool.fetch_all(sql).await.map_err(|err| e("query", err))?;
+        let columns = rows
+            .first()
+            .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
+            .unwrap_or_default();
+        Ok(QueryResult { columns, rows: rows_of(&rows), rows_affected: None })
+    } else {
+        let done = pool.execute(sql).await.map_err(|err| e("query", err))?;
+        Ok(QueryResult {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            rows_affected: Some(done.rows_affected() as i64),
+        })
+    }
+}
+
+async fn updates_for(
+    conn: &DbConnection,
+    schema: Option<&str>,
+    table: &str,
+    edits: &[RowEdit],
+) -> Res<Vec<Update>> {
+    let columns = columns_of(conn, schema, table).await?;
+    let table_ref = table_ref(schema, table);
+    edits
+        .iter()
+        .map(|edit| build_update(conn.backend, &table_ref, &columns, edit))
+        .collect()
+}
+
+/// The exact statements `apply_edits` would run, before any of them run.
+pub async fn preview_edits(
+    conn: &DbConnection,
+    schema: Option<&str>,
+    table: &str,
+    edits: &[RowEdit],
+) -> Res<Vec<String>> {
+    Ok(updates_for(conn, schema, table, edits)
+        .await?
+        .into_iter()
+        .map(|u| u.preview + ";")
+        .collect())
+}
+
+/// Applies every pending edit inside one transaction (D11). A statement that
+/// touches no row means the row changed since it was fetched (D10) — that is a
+/// conflict, and it rolls the whole batch back rather than half-writing it.
+pub async fn apply_edits(
+    conn: &DbConnection,
+    schema: Option<&str>,
+    table: &str,
+    edits: &[RowEdit],
+) -> Res<i64> {
+    let updates = updates_for(conn, schema, table, edits).await?;
+    let pool = pool_for(conn).await?;
+    let mut tx = pool.begin().await.map_err(|err| e("begin transaction", err))?;
+    let mut applied = 0i64;
+    for (update, edit) in updates.iter().zip(edits) {
+        let mut q = sqlx::query(&update.sql);
+        for b in &update.binds {
+            q = q.bind(b.clone());
+        }
+        let done = match q.execute(&mut *tx).await {
+            Ok(done) => done,
+            // Dropping `tx` unsent rolls the batch back.
+            Err(err) => return Err(e("apply edits", err)),
+        };
+        if done.rows_affected() != 1 {
+            return Err(format!(
+                "conflict: {} changed in the database since it was loaded, so nothing was applied",
+                describe_row(edit)
+            ));
+        }
+        applied += 1;
+    }
+    tx.commit().await.map_err(|err| e("commit", err))?;
+    Ok(applied)
+}
+
+/// Names the row a conflict is about, in the user's own terms.
+fn describe_row(edit: &RowEdit) -> String {
+    let shown: Vec<String> = edit
+        .original
+        .iter()
+        .take(2)
+        .map(|(k, v)| format!("{k}={}", v.clone().unwrap_or_else(|| "NULL".into())))
+        .collect();
+    format!("the row where {}", shown.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cols() -> Vec<ColumnInfo> {
+        vec![
+            ColumnInfo { name: "id".into(), data_type: "int4".into(), primary_key: true },
+            ColumnInfo { name: "name".into(), data_type: "text".into(), primary_key: false },
+            ColumnInfo { name: "note".into(), data_type: "text".into(), primary_key: false },
+        ]
+    }
+
+    fn edit() -> RowEdit {
+        RowEdit {
+            original: BTreeMap::from([
+                ("id".to_string(), Some("7".to_string())),
+                ("name".to_string(), Some("ada".to_string())),
+                ("note".to_string(), None),
+            ]),
+            changes: BTreeMap::from([("name".to_string(), Some("Ada".to_string()))]),
+        }
+    }
+
+    #[test]
+    fn backend_comes_from_the_url_scheme() {
+        assert_eq!(backend_of("postgres://localhost/x"), Ok(Backend::Postgres));
+        assert_eq!(backend_of("postgresql://localhost/x"), Ok(Backend::Postgres));
+        assert_eq!(backend_of("sqlite://file.db"), Ok(Backend::Sqlite));
+        assert!(backend_of("mysql://localhost/x").is_err());
+        assert!(backend_of("just-a-path.db").is_err());
+    }
+
+    #[test]
+    fn connections_round_trip_and_are_not_world_readable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        assert_eq!(list_connections(home, "h").unwrap(), Vec::new());
+
+        let dev = add_connection(home, "h", "dev", "postgres://localhost/dev").unwrap();
+        let stg = add_connection(home, "h", "staging", "sqlite://stg.db").unwrap();
+        let all = list_connections(home, "h").unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].name, "dev");
+        assert_eq!(all[1].backend, Backend::Sqlite);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = connections_path(home, "h");
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "connection strings must not be group/world readable");
+        }
+
+        rename_connection(home, "h", &dev.id, "development").unwrap();
+        assert_eq!(list_connections(home, "h").unwrap()[0].name, "development");
+
+        remove_connection(home, "h", &stg.id).unwrap();
+        assert_eq!(list_connections(home, "h").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_broken_connection_string_is_never_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(add_connection(tmp.path(), "h", "bad", "mysql://x/y").is_err());
+        assert!(add_connection(tmp.path(), "h", "", "sqlite://x.db").is_err());
+        assert_eq!(list_connections(tmp.path(), "h").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn update_matches_primary_key_and_every_original_value() {
+        let u = build_update(Backend::Postgres, &quote_ident("users"), &cols(), &edit()).unwrap();
+        assert_eq!(
+            u.sql,
+            "UPDATE \"users\" SET \"name\" = CAST($1 AS text) WHERE \
+             CAST(\"id\" AS TEXT) IS NOT DISTINCT FROM $2 AND \
+             CAST(\"name\" AS TEXT) IS NOT DISTINCT FROM $3 AND \
+             CAST(\"note\" AS TEXT) IS NOT DISTINCT FROM $4"
+        );
+        assert_eq!(
+            u.binds,
+            vec![Some("Ada".into()), Some("7".into()), Some("ada".into()), None]
+        );
+    }
+
+    #[test]
+    fn preview_shows_the_same_statement_with_literals() {
+        let u = build_update(Backend::Postgres, &quote_ident("users"), &cols(), &edit()).unwrap();
+        assert!(u.preview.contains("SET \"name\" = CAST('Ada' AS text)"));
+        assert!(u.preview.contains("CAST(\"note\" AS TEXT) IS NOT DISTINCT FROM NULL"));
+        assert!(!u.preview.contains('$'));
+    }
+
+    #[test]
+    fn sqlite_uses_anonymous_placeholders_and_is_null_matching() {
+        let u = build_update(Backend::Sqlite, &quote_ident("users"), &cols(), &edit()).unwrap();
+        assert!(u.sql.starts_with("UPDATE \"users\" SET \"name\" = ? WHERE"));
+        assert!(u.sql.contains("CAST(\"note\" AS TEXT) IS ?"));
+        assert_eq!(u.binds.len(), 4);
+    }
+
+    #[test]
+    fn a_quote_in_a_value_cannot_break_out_of_the_preview() {
+        let mut edit = edit();
+        edit.changes.insert("name".into(), Some("O'Hara'; DROP TABLE users--".into()));
+        let u = build_update(Backend::Sqlite, &quote_ident("users"), &cols(), &edit).unwrap();
+        assert!(u.preview.contains("'O''Hara''; DROP TABLE users--'"));
+    }
+
+    #[test]
+    fn a_table_with_no_primary_key_cannot_be_updated() {
+        let cols = vec![ColumnInfo { name: "a".into(), data_type: "text".into(), primary_key: false }];
+        let edit = RowEdit {
+            original: BTreeMap::from([("a".to_string(), Some("x".to_string()))]),
+            changes: BTreeMap::from([("a".to_string(), Some("y".to_string()))]),
+        };
+        assert!(build_update(Backend::Sqlite, &quote_ident("t"), &cols, &edit).is_err());
+    }
+
+    // ------------------------------------------------------ against a real DB
+    //
+    // SQLite is the engine these run against: it's one of the two backends the
+    // change ships (D6) and needs no server, so the read, write, conflict and
+    // rollback paths are exercised for real rather than mocked.
+
+    async fn fixture(dir: &Path) -> DbConnection {
+        let conn = DbConnection {
+            id: "t".into(),
+            name: "test".into(),
+            url: format!("sqlite://{}?mode=rwc", dir.join("t.db").display()),
+            backend: Backend::Sqlite,
+        };
+        let pool = pool_for(&conn).await.unwrap();
+        for sql in [
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, note TEXT)",
+            "INSERT INTO users VALUES (1, 'ada', NULL), (2, 'grace', ''), (3, 'alan', 'x')",
+            "CREATE VIEW recent AS SELECT * FROM users WHERE id > 1",
+            "CREATE TABLE keyless (a TEXT)",
+            "INSERT INTO keyless VALUES ('only')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        conn
+    }
+
+    fn row_edit(id: &str, name: &str, note: Option<&str>, new_name: Option<&str>) -> RowEdit {
+        RowEdit {
+            original: BTreeMap::from([
+                ("id".to_string(), Some(id.to_string())),
+                ("name".to_string(), Some(name.to_string())),
+                ("note".to_string(), note.map(str::to_string)),
+            ]),
+            changes: BTreeMap::from([("name".to_string(), new_name.map(str::to_string))]),
+        }
+    }
+
+    #[tokio::test]
+    async fn lists_tables_and_views_but_not_engine_internals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let tables = list_tables(&conn).await.unwrap();
+        let names: Vec<(&str, &str)> = tables.iter().map(|t| (t.name.as_str(), t.kind.as_str())).collect();
+        assert!(names.contains(&("users", "table")));
+        assert!(names.contains(&("recent", "view")));
+        assert!(!names.iter().any(|(n, _)| n.starts_with("sqlite_")));
+    }
+
+    #[tokio::test]
+    async fn a_page_keeps_null_and_empty_string_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let page = fetch_page(&conn, None, "users", 0, None, None).await.unwrap();
+        assert!(page.editable, "users has a primary key");
+        assert_eq!(page.rows.len(), 3);
+        assert_eq!(page.rows[0][2], None, "NULL stays None");
+        assert_eq!(page.rows[1][2], Some(String::new()), "empty string stays empty string");
+        assert!(!page.has_more);
+    }
+
+    #[tokio::test]
+    async fn a_table_without_a_primary_key_comes_back_read_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let page = fetch_page(&conn, None, "keyless", 0, None, None).await.unwrap();
+        assert!(!page.editable);
+
+        let err = apply_edits(
+            &conn,
+            None,
+            "keyless",
+            &[RowEdit {
+                original: BTreeMap::from([("a".to_string(), Some("only".to_string()))]),
+                changes: BTreeMap::from([("a".to_string(), Some("nope".to_string()))]),
+            }],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("no primary key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn sorting_and_filtering_narrow_the_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let sorted = fetch_page(
+            &conn,
+            None,
+            "users",
+            0,
+            Some(&Sort { column: "name".into(), descending: false }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sorted.rows[0][1], Some("ada".into()));
+        assert_eq!(sorted.rows[2][1], Some("grace".into()));
+
+        let filtered = fetch_page(
+            &conn,
+            None,
+            "users",
+            0,
+            None,
+            Some(&Filter { column: "name".into(), value: "a".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filtered.rows.len(), 3, "every name contains an 'a'");
+
+        let narrower = fetch_page(
+            &conn,
+            None,
+            "users",
+            0,
+            None,
+            Some(&Filter { column: "name".into(), value: "an".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(narrower.rows.len(), 1, "only alan contains 'an'");
+
+        assert!(fetch_page(
+            &conn,
+            None,
+            "users",
+            0,
+            Some(&Sort { column: "nope".into(), descending: false }),
+            None
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn pages_stop_at_the_page_size_and_report_more() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let pool = pool_for(&conn).await.unwrap();
+        sqlx::query(&format!(
+            "INSERT INTO users (name) WITH RECURSIVE c(x) AS \
+             (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < {}) SELECT 'bulk' FROM c",
+            PAGE_SIZE + 5
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let first = fetch_page(&conn, None, "users", 0, None, None).await.unwrap();
+        assert_eq!(first.rows.len() as i64, PAGE_SIZE);
+        assert!(first.has_more);
+        let second = fetch_page(&conn, None, "users", 1, None, None).await.unwrap();
+        assert_eq!(second.rows.len() as i64, PAGE_SIZE + 8 - PAGE_SIZE);
+        assert!(!second.has_more);
+    }
+
+    #[tokio::test]
+    async fn preview_shows_the_statements_apply_will_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let preview = preview_edits(&conn, None, "users", &[row_edit("1", "ada", None, Some("Ada"))])
+            .await
+            .unwrap();
+        assert_eq!(preview.len(), 1);
+        assert!(preview[0].starts_with("UPDATE \"users\" SET \"name\" = 'Ada' WHERE"));
+        assert!(preview[0].ends_with(';'));
+    }
+
+    #[tokio::test]
+    async fn applying_edits_writes_them_together() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let applied = apply_edits(
+            &conn,
+            None,
+            "users",
+            &[
+                row_edit("1", "ada", None, Some("Ada")),
+                row_edit("2", "grace", Some(""), None),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied, 2);
+
+        let page = fetch_page(&conn, None, "users", 0, None, None).await.unwrap();
+        assert_eq!(page.rows[0][1], Some("Ada".into()));
+        assert_eq!(page.rows[1][1], None, "an explicit NULL edit lands as NULL");
+    }
+
+    #[tokio::test]
+    async fn a_row_changed_elsewhere_is_a_conflict_and_nothing_is_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let pool = pool_for(&conn).await.unwrap();
+        // Someone else edits row 2 after the grid loaded it.
+        sqlx::query("UPDATE users SET name = 'Grace' WHERE id = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = apply_edits(
+            &conn,
+            None,
+            "users",
+            &[
+                row_edit("1", "ada", None, Some("Ada")),
+                row_edit("2", "grace", Some(""), Some("GRACE")),
+            ],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("conflict"), "{err}");
+        assert!(err.contains("id=2"), "the conflicting row is named: {err}");
+
+        let page = fetch_page(&conn, None, "users", 0, None, None).await.unwrap();
+        assert_eq!(page.rows[0][1], Some("ada".into()), "the good edit rolled back too");
+        assert_eq!(page.rows[1][1], Some("Grace".into()), "the other writer's value survived");
+    }
+
+    #[tokio::test]
+    async fn queries_return_rows_or_a_count_or_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+
+        let read = run_query(&conn, "SELECT id, name FROM users ORDER BY id").await.unwrap();
+        assert_eq!(read.columns, vec!["id", "name"]);
+        assert_eq!(read.rows.len(), 3);
+        assert_eq!(read.rows_affected, None);
+
+        let write = run_query(&conn, "UPDATE users SET note = 'seen' WHERE id > 1").await.unwrap();
+        assert_eq!(write.rows_affected, Some(2));
+        assert!(write.rows.is_empty());
+
+        let err = run_query(&conn, "SELECT * FROM nope").await.unwrap_err();
+        assert!(err.contains("nope"), "the database's own message survives: {err}");
+    }
+
+    #[test]
+    fn destructive_shapes_are_the_ones_that_get_gated() {
+        for sql in [
+            "DELETE FROM users",
+            "delete from users;",
+            "UPDATE users SET a = 1",
+            "DROP TABLE users",
+            "TRUNCATE users",
+            "ALTER TABLE users ADD COLUMN x int",
+            "SELECT 1; DELETE FROM users",
+        ] {
+            assert!(is_destructive(sql), "expected gated: {sql}");
+        }
+        for sql in [
+            "SELECT * FROM users",
+            "DELETE FROM users WHERE id = 1",
+            "UPDATE users SET a = 1 WHERE id = 2",
+            "INSERT INTO users (a) VALUES (1)",
+            "SELECT 'delete from users' AS s",
+            "SELECT 1 -- drop table users",
+        ] {
+            assert!(!is_destructive(sql), "expected ungated: {sql}");
+        }
+    }
+}

@@ -74,7 +74,7 @@ fn index_path(home: &Path) -> PathBuf {
     home.join("projects.json")
 }
 
-fn project_dir(home: &Path, hash: &str) -> PathBuf {
+pub fn project_dir(home: &Path, hash: &str) -> PathBuf {
     home.join("projects").join(hash)
 }
 

@@ -1,3 +1,4 @@
+pub mod db_cmds;
 pub mod fs_ops;
 pub mod git_cmds;
 pub mod graphify_cmds;

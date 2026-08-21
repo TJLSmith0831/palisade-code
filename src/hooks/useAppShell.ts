@@ -24,6 +24,7 @@ export const PANEL_IDS = [
   "codemap",
   "run",
   "mcp",
+  "database",
   "history",
   "workspace",
   "settings",

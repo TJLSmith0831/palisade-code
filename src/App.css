@@ -4170,3 +4170,116 @@ details.graph-report-wrap > summary {
   display: flex;
   gap: 6px;
 }
+
+/* --- database viewer/editor ---------------------------------------------- */
+
+/* A table or SQL tab fills the centre column the way the editor does: a fixed
+   toolbar, a scrolling middle, and — when there are pending edits — a commit
+   bar pinned to the bottom, echoing the diff pane's stage/commit strip. */
+.ds-db-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--editor-bg);
+}
+
+.ds-db-toolbar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-db-commit {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.ds-db-grid-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ds-db-grid {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* Column headers double as sort buttons; they must not read as body text. */
+.ds-db-col {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.ds-db-col:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.ds-db-cell {
+  display: inline-block;
+  min-width: 1ch;
+  min-height: 1.2em;
+  border-radius: 4px;
+}
+
+.ds-db-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* An edited cell reads as staged-not-saved, the same idea as a dirty tab. */
+/* Twilight Glow is reserved for "the agent is in read-only planning mode"
+   (DESIGN.md); a staged edit is a different kind of pending state, so it uses
+   the same accent-tint recipe diff-add/diff-remove already use instead. */
+.ds-db-cell[data-staged] {
+  background: color-mix(in oklab, var(--accent), transparent 90%);
+  box-shadow: inset 2px 0 0 var(--accent);
+  padding-left: 4px;
+}
+
+.ds-db-sql {
+  flex: 1;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* CodeMirror's own .cm-scroller handles both-axis scrolling; the host just
+   needs to hand it full height, the same pattern the main editor uses. */
+.ds-db-sql .cm-editor {
+  height: 100%;
+  background: var(--editor-bg);
+  color: var(--fg);
+}
+
+.ds-db-sql .cm-editor.cm-focused {
+  outline: none;
+}
+
+.ds-db-sql .cm-gutters {
+  background: var(--editor-bg);
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+
+.ds-db-sql .cm-activeLine,
+.ds-db-sql .cm-activeLineGutter {
+  background: color-mix(in oklab, var(--fg), transparent 94%);
+}
+
+.ds-db-sql .cm-selectionBackground {
+  background: color-mix(in oklab, var(--accent), transparent 75%) !important;
+}
+
+.ds-db-sql .cm-cursor {
+  border-left-color: var(--accent);
+}

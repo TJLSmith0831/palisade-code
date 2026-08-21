@@ -101,6 +101,11 @@ import DiffPane from "./DiffPane";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
+// Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
+// nobody loads until they open the panel.
+const DatabasePanel = lazy(() => import("./DatabasePanel"));
+const DataGridTab = lazy(() => import("./DataGridTab"));
+const SqlQueryTab = lazy(() => import("./SqlQueryTab"));
 import RunPanel from "./RunPanel";
 import ProblemsPane from "./ProblemsPane";
 import EditorStatusBar from "./EditorStatusBar";
@@ -3738,6 +3743,68 @@ export default function App() {
 
   // The nine rail panels. Identical in both presets by construction — this
   // function is called from the one shared shell tree, not per branch.
+  // What the centre column shows for the active tab. A function rather than a
+  // ternary chain in the JSX: with file, spec, table and query tabs the chain
+  // was four deep and nothing could be read at a glance.
+  const renderCenterTab = () => {
+    if (!project) return null;
+    const tab = tabs.activeTab;
+    if (tab?.type === "spec") {
+      const specName = tab.specName;
+      return (
+        <SpecChangeTab
+          projectHash={project.hash}
+          specName={specName}
+          verifyPins={verifyPins[specName]}
+          onAddPin={(cmd) => addVerifyPin(specName, cmd)}
+          onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}
+        />
+      );
+    }
+    if (tab?.type === "table") {
+      return (
+        <Suspense fallback={<div style={{ padding: 12 }}>Loading table…</div>}>
+          <DataGridTab
+            projectHash={project.hash}
+            connectionId={tab.connectionId}
+            connectionName={tab.connectionName}
+            schema={tab.schema}
+            table={tab.table}
+          />
+        </Suspense>
+      );
+    }
+    if (tab?.type === "query") {
+      return (
+        <Suspense fallback={<div style={{ padding: 12 }}>Loading editor…</div>}>
+          <SqlQueryTab
+            projectHash={project.hash}
+            connectionId={tab.connectionId}
+            connectionName={tab.connectionName}
+          />
+        </Suspense>
+      );
+    }
+    return (
+      <FileEditorPane
+        projectHash={project.hash}
+        path={selectedFile}
+        projectName={project.displayName}
+        projectRoot={project.root}
+        onSave={handleFileSave}
+        onDirtyChange={tabs.setDirty}
+        externalChange={externalChange}
+        revealLine={revealLine}
+        initialCursor={selectedFile ? session?.cursors[selectedFile] : undefined}
+        onCursorChange={rememberCursor}
+        onCursorPosition={setCursorPosition}
+        onLspStatus={setLspStatus}
+        mdPreview={tabs.activeMdPreview}
+        onToggleMdPreview={toggleMdPreview}
+      />
+    );
+  };
+
   const renderSidePanel = () => {
     if (!project) return null;
     switch (shell.activePanel) {
@@ -3833,6 +3900,20 @@ export default function App() {
         );
       case "mcp":
         return <McpPane projectHash={project.hash} onError={fail} />;
+      case "database":
+        return (
+          <Suspense fallback={<div style={{ padding: 12 }}>Loading…</div>}>
+            <DatabasePanel
+              projectHash={project.hash}
+              onOpenTable={(connection, schema, table) =>
+                tabs.openTable(connection.id, connection.name, schema, table)
+              }
+              onOpenQuery={(connection) =>
+                tabs.openQuery(connection.id, connection.name)
+              }
+            />
+          </Suspense>
+        );
       case "history":
         return (
           <>
@@ -4252,43 +4333,7 @@ export default function App() {
                     onToggleMdPreview={toggleMdPreview}
                   />
                   {!shell.diffOpen ? (
-                    tabs.activeTab?.type === "spec" && project ? (
-                      (() => {
-                        const specName = tabs.activeTab.specName;
-                        return (
-                          <SpecChangeTab
-                            projectHash={project.hash}
-                            specName={specName}
-                            verifyPins={verifyPins[specName]}
-                            onAddPin={(cmd) => addVerifyPin(specName, cmd)}
-                            onRemovePin={(cmd) =>
-                              removeVerifyPin(specName, cmd)
-                            }
-                          />
-                        );
-                      })()
-                    ) : project ? (
-                      <FileEditorPane
-                        projectHash={project.hash}
-                        path={selectedFile}
-                        projectName={project.displayName}
-                        projectRoot={project.root}
-                        onSave={handleFileSave}
-                        onDirtyChange={tabs.setDirty}
-                        externalChange={externalChange}
-                        revealLine={revealLine}
-                        initialCursor={
-                          selectedFile
-                            ? session?.cursors[selectedFile]
-                            : undefined
-                        }
-                        onCursorChange={rememberCursor}
-                        onCursorPosition={setCursorPosition}
-                        onLspStatus={setLspStatus}
-                        mdPreview={tabs.activeMdPreview}
-                        onToggleMdPreview={toggleMdPreview}
-                      />
-                    ) : null
+                    renderCenterTab()
                   ) : (
                     <div className="messages" data-testid="messages">
                       {project && (
