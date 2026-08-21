@@ -246,7 +246,7 @@ const popupTheme = EditorView.theme({
 // --code-text CSS variable. The CSS variable indirection means this updates
 // live when applyAppearance() sets the override property — no compartment or
 // reconfigure needed.
-const codeColorTheme = EditorView.theme({
+export const codeColorTheme = EditorView.theme({
   ".cm-content": { color: "var(--code-text)" },
 });
 
@@ -261,7 +261,7 @@ const codeColorTheme = EditorView.theme({
 // any non-fallback highlighter exists, so adding a second
 // syntaxHighlighting() alongside defaultHighlightStyle({fallback:true})
 // silently disables every token type the fallback covered.
-const codeHighlightStyle = syntaxHighlighting(
+export const codeHighlightStyle = syntaxHighlighting(
   HighlightStyle.define([
     { tag: tags.keyword, color: "var(--code-keyword)" },
     {

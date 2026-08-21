@@ -786,3 +786,124 @@ export const setMcpServerEnabled = (
 
 export const searchMcpRegistry = (query: string, limit = 30) =>
   invoke<McpRegistryEntry[]>("search_mcp_registry", { query, limit });
+
+// ---------------------------------------------------------------- database
+//
+// Saved connections live in `~/.palisade-code`, never in the project — a
+// connection string can carry a password (D5/D8). The frontend therefore only
+// ever holds a connection *id*; the backend resolves the URL itself.
+
+export type DbBackend = "postgres" | "sqlite";
+
+export type DbConnection = {
+  id: string;
+  name: string;
+  url: string;
+  backend: DbBackend;
+};
+
+/** A table or view in the schema tree. `schema` is null on SQLite. */
+export type DbTable = {
+  schema: string | null;
+  name: string;
+  kind: "table" | "view";
+};
+
+export type DbColumn = {
+  name: string;
+  dataType: string;
+  primaryKey: boolean;
+};
+
+/** Cell values arrive as text with `null` for SQL NULL, so the grid can keep
+ *  NULL and the empty string visibly apart. */
+export type DbCell = string | null;
+
+export type DbPage = {
+  columns: DbColumn[];
+  rows: DbCell[][];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  /** False when the table has no primary key among its columns (D9). */
+  editable: boolean;
+};
+
+export type DbQueryResult = {
+  columns: string[];
+  rows: DbCell[][];
+  /** Set instead of rows for statements that report a count. */
+  rowsAffected: number | null;
+};
+
+export type DbSort = { column: string; descending: boolean };
+export type DbFilter = { column: string; value: string };
+
+/** One row's pending edits: the values it was fetched with (the conflict
+ *  fingerprint) plus only the columns the user changed. */
+export type DbRowEdit = {
+  original: Record<string, DbCell>;
+  changes: Record<string, DbCell>;
+};
+
+export const dbListConnections = (projectHash: string) =>
+  invoke<DbConnection[]>("db_list_connections", { projectHash });
+
+export const dbAddConnection = (projectHash: string, name: string, url: string) =>
+  invoke<DbConnection>("db_add_connection", { projectHash, name, url });
+
+export const dbRemoveConnection = (projectHash: string, connectionId: string) =>
+  invoke<void>("db_remove_connection", { projectHash, connectionId });
+
+export const dbRenameConnection = (
+  projectHash: string,
+  connectionId: string,
+  name: string
+) => invoke<DbConnection>("db_rename_connection", { projectHash, connectionId, name });
+
+export const dbListTables = (projectHash: string, connectionId: string) =>
+  invoke<DbTable[]>("db_list_tables", { projectHash, connectionId });
+
+export const dbFetchPage = (
+  projectHash: string,
+  connectionId: string,
+  schema: string | null,
+  table: string,
+  page: number,
+  sort: DbSort | null,
+  filter: DbFilter | null
+) =>
+  invoke<DbPage>("db_fetch_page", {
+    projectHash,
+    connectionId,
+    schema,
+    table,
+    page,
+    sort,
+    filter,
+  });
+
+export const dbRunQuery = (projectHash: string, connectionId: string, sql: string) =>
+  invoke<DbQueryResult>("db_run_query", { projectHash, connectionId, sql });
+
+/** Whether `sql` needs the confirm gate. Asked of the backend so there is one
+ *  matcher, not a copy here that can drift from it (D12). */
+export const dbIsDestructive = (sql: string) =>
+  invoke<boolean>("db_is_destructive", { sql });
+
+export const dbPreviewEdits = (
+  projectHash: string,
+  connectionId: string,
+  schema: string | null,
+  table: string,
+  edits: DbRowEdit[]
+) =>
+  invoke<string[]>("db_preview_edits", { projectHash, connectionId, schema, table, edits });
+
+export const dbApplyEdits = (
+  projectHash: string,
+  connectionId: string,
+  schema: string | null,
+  table: string,
+  edits: DbRowEdit[]
+) => invoke<number>("db_apply_edits", { projectHash, connectionId, schema, table, edits });
