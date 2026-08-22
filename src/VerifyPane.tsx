@@ -100,15 +100,14 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
 
   return (
     <Stack gap="xs" p="xs">
-      <Group justify="space-between">
-        <Text size="sm" fw={600}>
-          Verification
-        </Text>
-        {loading && <Loader size="xs" />}
-      </Group>
+      {loading && (
+        <Group justify="flex-end">
+          <Loader size="xs" />
+        </Group>
+      )}
 
       {error && (
-        <Alert color="red" variant="light">
+        <Alert color="danger" variant="light">
           {error}
         </Alert>
       )}

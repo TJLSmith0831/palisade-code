@@ -184,7 +184,7 @@ export default function DatabasePanel({
               <ActionIcon
                 size="sm"
                 variant="subtle"
-                color="gray"
+                color="neutral"
                 aria-label="Add connection"
                 onClick={() => setAdding(true)}
               >
@@ -199,7 +199,7 @@ export default function DatabasePanel({
         {error && (
           <Alert
             variant="light"
-            color="red"
+            color="danger"
             icon={<IconAlertTriangle size={14} />}
             title="Connection failed"
             m="xs"
@@ -277,7 +277,7 @@ export default function DatabasePanel({
                     <ActionIcon
                       size="sm"
                       variant="subtle"
-                      color="gray"
+                      color="neutral"
                       aria-label={`Rename ${connection.name}`}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -291,7 +291,7 @@ export default function DatabasePanel({
                     <ActionIcon
                       size="sm"
                       variant="subtle"
-                      color="gray"
+                      color="neutral"
                       aria-label={`SQL editor for ${connection.name}`}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -305,7 +305,7 @@ export default function DatabasePanel({
                     <ActionIcon
                       size="sm"
                       variant="subtle"
-                      color="gray"
+                      color="neutral"
                       aria-label={`Remove ${connection.name}`}
                       onClick={(event) => {
                         event.stopPropagation();

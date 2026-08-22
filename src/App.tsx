@@ -52,6 +52,8 @@ import {
   IconShieldOff,
   IconSunMoon,
   IconTerminal2,
+  IconPlus,
+  IconX,
 } from "@tabler/icons-react";
 import { useDebouncedCallback } from "@mantine/hooks";
 import { listen } from "@tauri-apps/api/event";
@@ -918,7 +920,7 @@ export const ChatSurface = memo(
                   }}
                   data-testid="thread-tab-close"
                 >
-                  ×
+                  <IconX size={12} />
                 </span>
               </button>
             ))}
@@ -928,7 +930,7 @@ export const ChatSurface = memo(
               onClick={() => onNewThread?.()}
               data-testid="thread-tab-new"
             >
-              +
+              <IconPlus size={13} />
             </button>
           </div>
         )}

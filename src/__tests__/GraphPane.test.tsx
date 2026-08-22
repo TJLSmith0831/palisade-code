@@ -1,5 +1,16 @@
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
+
+// GraphPane's form controls are Mantine components now, so they need the
+// provider in the tree the way every other pane test already does.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -86,7 +97,14 @@ describe("GraphPane", () => {
     expect(screen.getByLabelText(/subdirectory scope/i)).toBe(screen.getByTestId("graph-scope"));
     expect(screen.getByLabelText(/ask the graph/i)).toBe(screen.getByTestId("graph-question"));
 
-    fireEvent.change(screen.getByTestId("graph-subcommand"), { target: { value: "path" } });
+    // Mantine's Select is a combobox, not a native <select>, so the option is
+    // picked from the dropdown rather than set as a value on the input.
+    fireEvent.click(screen.getByTestId("graph-subcommand"));
+    // `hidden: true` because Mantine's Popover keeps the dropdown at
+    // `display: none` in jsdom, which has no layout to position it with.
+    fireEvent.click(
+      await screen.findByRole("option", { name: "path", hidden: true })
+    );
     expect(screen.getByLabelText(/node a/i)).toBe(screen.getByTestId("graph-question-a"));
     expect(screen.getByLabelText(/node b/i)).toBe(screen.getByTestId("graph-question-b"));
   });

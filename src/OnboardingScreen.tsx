@@ -245,6 +245,15 @@ export default function OnboardingScreen({
             >
               <IconFolderOpen size={13} /> Select a directory…
             </button>
+            {/* Sending with text in the box opens the directory picker and
+                does not carry the text into the project (Palisade is
+                project-scoped — PRODUCT.md). Saying so beats letting the
+                request look accepted and then vanish. */}
+            {draft.trim() && (
+              <span className="ds-onboarding-dir-hint">
+                Pick a project folder first — this request isn't sent yet.
+              </span>
+            )}
           </div>
         </div>
 

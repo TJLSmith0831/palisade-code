@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   IconBrandPython,
+  IconCheck,
   IconFileText,
   IconPhoto,
 } from "@tabler/icons-react";
@@ -171,7 +172,7 @@ export default function TextSearchPalette({
         color: checked ? "var(--fg)" : "var(--muted)",
         background: checked ? "var(--surface-warm)" : "transparent",
         border: `1px solid ${checked ? "var(--border)" : "transparent"}`,
-        borderRadius: 5,
+        borderRadius: 4,
         cursor: "pointer",
         fontFamily: "inherit",
         fontSize: 12,
@@ -188,12 +189,11 @@ export default function TextSearchPalette({
           color: checked ? "var(--fg)" : "var(--muted)",
           background: checked ? "var(--surface-warm)" : "var(--surface)",
           border: `1px solid ${checked ? "var(--border)" : "var(--border)"}`,
-          borderRadius: 3,
-          fontSize: 10,
+          borderRadius: 4,
           lineHeight: 1,
         }}
       >
-        {checked ? "✓" : ""}
+        {checked && <IconCheck size={10} stroke={2.5} />}
       </span>
       <span>{label}</span>
     </button>
@@ -263,11 +263,11 @@ export default function TextSearchPalette({
                 position: "relative",
                 display: "flex",
                 alignItems: "center",
-                minHeight: 36,
+                minHeight: 32,
                 padding: "0 10px",
                 color: active ? "var(--fg)" : "var(--muted)",
                 background: active ? "var(--surface-warm)" : "transparent",
-                borderRadius: 5,
+                borderRadius: 4,
                 cursor: "pointer",
                 fontSize: 13,
                 boxSizing: "border-box",
@@ -324,11 +324,11 @@ export default function TextSearchPalette({
               display: "flex",
               flexDirection: "column",
               gap: 3,
-              minHeight: 52,
+              minHeight: 44,
               padding: "7px 10px 7px 12px",
               color: active ? "var(--fg)" : "var(--muted)",
               background: active ? "var(--surface-warm)" : "transparent",
-              borderRadius: 5,
+              borderRadius: 4,
               cursor: "pointer",
               boxSizing: "border-box",
             }}

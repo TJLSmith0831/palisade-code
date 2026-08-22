@@ -145,7 +145,7 @@ export default function SqlQueryTab({
       {error && (
         <Alert
           variant="light"
-          color="red"
+          color="danger"
           icon={<IconAlertTriangle size={14} />}
           m="xs"
           data-testid="db-query-error"
@@ -191,7 +191,7 @@ export default function SqlQueryTab({
           <Button size="xs" variant="subtle" onClick={() => setConfirming(false)}>
             Cancel
           </Button>
-          <Button size="xs" color="red" onClick={() => execute(sql.trim())}>
+          <Button size="xs" color="danger" onClick={() => execute(sql.trim())}>
             Run it
           </Button>
         </Group>

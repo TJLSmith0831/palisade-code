@@ -18,6 +18,7 @@ import {
   IconAlertTriangle,
   IconArrowBackUp,
   IconArrowNarrowDown,
+  IconCircleOff,
   IconArrowNarrowUp,
   IconChevronLeft,
   IconChevronRight,
@@ -202,9 +203,14 @@ export default function DataGridTab({
           </button>
         </Tooltip>
         {type?.primaryKey && (
-          <Badge size="xs" variant="light" radius="sm" title="Primary key">
+          <Badge size="xs" variant="outline" title="Primary key">
             PK
           </Badge>
+        )}
+        {type?.dataType && (
+          <Text span size="xs" c="dimmed" ff="var(--mono)">
+            {type.dataType}
+          </Text>
         )}
       </Group>
     );
@@ -233,7 +239,7 @@ export default function DataGridTab({
             <ActionIcon
               size="xs"
               variant="subtle"
-              color="gray"
+              color="neutral"
               aria-label="Set to NULL"
               // Mousedown, not click: a real mouse click would blur the input
               // (closing the editor) before the click event ever landed.
@@ -246,7 +252,7 @@ export default function DataGridTab({
               }}
               onClick={() => stage(row, column, null)}
             >
-              ∅
+              <IconCircleOff size={12} />
             </ActionIcon>
           </Tooltip>
           {staged && (
@@ -257,7 +263,7 @@ export default function DataGridTab({
               <ActionIcon
                 size="xs"
                 variant="subtle"
-                color="gray"
+                color="neutral"
                 aria-label="Revert to original value"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -360,7 +366,7 @@ export default function DataGridTab({
             <Badge
               size="xs"
               variant="light"
-              color="gray"
+              color="neutral"
               leftSection={<IconLock size={11} />}
               title="No primary key among the fetched columns, so no row can be targeted safely"
             >
@@ -404,7 +410,7 @@ export default function DataGridTab({
           <ActionIcon
             size="sm"
             variant="subtle"
-            color="gray"
+            color="neutral"
             aria-label="Previous page"
             disabled={page === 0 || dirtyRows > 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
@@ -419,7 +425,7 @@ export default function DataGridTab({
           <ActionIcon
             size="sm"
             variant="subtle"
-            color="gray"
+            color="neutral"
             aria-label="Next page"
             disabled={!data?.hasMore || dirtyRows > 0}
             onClick={() => setPage((p) => p + 1)}
@@ -432,7 +438,7 @@ export default function DataGridTab({
       {error && (
         <Alert
           variant="light"
-          color="red"
+          color="danger"
           icon={<IconAlertTriangle size={14} />}
           m="xs"
           data-testid="db-grid-error"
@@ -532,7 +538,7 @@ export default function DataGridTab({
           </Button>
           <Button
             size="xs"
-            color="red"
+            color="danger"
             loading={applying}
             data-testid="db-confirm-apply-submit"
             onClick={() => {
