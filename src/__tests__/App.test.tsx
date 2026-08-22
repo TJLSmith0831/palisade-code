@@ -361,7 +361,7 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     );
     expect(screen.getByTestId("bottom-panel")).not.toHaveAttribute("hidden");
     expect(screen.getByTestId("bp-tab-terminal")).toHaveAttribute(
-      "aria-pressed",
+      "aria-selected",
       "true"
     );
   });
@@ -810,7 +810,7 @@ describe("Bottom panel (shell-redesign Phase 2)", () => {
     fireEvent.click(screen.getByTestId("toggle-terminal"));
     expect(screen.getByTestId("bottom-panel")).not.toHaveAttribute("hidden");
     expect(screen.getByTestId("bp-tab-terminal")).toHaveAttribute(
-      "aria-pressed",
+      "aria-selected",
       "true"
     );
     expect(await screen.findByTestId("terminal-pane")).toBeDefined();

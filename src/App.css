@@ -992,7 +992,7 @@ input[type="checkbox"] {
 /* --- editor tabs (v2) --------------------------------------------------- */
 
 .ds-editor-tabs {
-  height: 35px;
+  height: 28px;
   background: var(--chrome-bg);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -2719,6 +2719,13 @@ details.graph-report-wrap > summary {
   min-height: 0;
 }
 
+.ds-bp-tabs-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .ds-bp-tabs {
   display: flex;
   align-items: center;
@@ -2745,7 +2752,7 @@ details.graph-report-wrap > summary {
   color: var(--fg);
 }
 
-.ds-bp-tab.active {
+.ds-bp-tab[data-active] {
   color: var(--fg);
   border-bottom-color: var(--accent);
 }
@@ -2762,16 +2769,14 @@ details.graph-report-wrap > summary {
   flex-direction: column;
 }
 
-/* Tab bodies stay mounted and are hidden instead — see App.tsx. */
+/* Terminal's panel stays mounted (keepMounted on its Tabs.Panel) and is
+   hidden via Mantine's inline display:none instead — see App.tsx. Problems'
+   panel mounts/unmounts with the tab, matching its lack of live state. */
 .ds-bp-pane {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.ds-bp-pane[hidden] {
-  display: none;
 }
 
 /* --- preset arrangement --------------------------------------------------
