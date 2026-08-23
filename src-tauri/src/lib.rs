@@ -2,6 +2,9 @@ mod acp_client;
 mod acp_events;
 mod acp_preflight;
 mod acp_registry;
+mod chain_exec;
+mod chain_runner;
+mod chains;
 mod completion;
 mod db;
 mod executor;
@@ -96,7 +99,7 @@ async fn switch_project(app: tauri::AppHandle, hash: String) -> Res<Project> {
         ensure_graphify_mcp(&app, &harness, &project);
 
         let root = Path::new(&project.root);
-        // Auto-create .project-settings.json (D14/D15) so there's always a real
+        // Auto-create .palisade/project-settings.json (D14/D15) so there's always a real
         // file to open from the settings button — a no-op once it exists.
         if let Err(message) = settings::ensure_file(root) {
             let _ = app.emit("harness-warning", message);
@@ -458,6 +461,28 @@ impl Sink for AppSink {
             });
         }
 
+        // A chain run waiting on this session's turn collects its text here
+        // and is released by the Done/Crashed arms below. Nothing happens for
+        // an ordinary session — the watcher map is empty.
+        if let Some(watch) = self
+            .app
+            .state::<Harness>()
+            .turn_watchers
+            .lock()
+            .unwrap()
+            .get(&envelope_ref.session_id)
+            .cloned()
+        {
+            match &envelope_ref.event {
+                ExecutorEvent::Text { text } => watch.push_text(text),
+                ExecutorEvent::Done => watch.finish(executor::TurnEnd::Done),
+                ExecutorEvent::Crashed { message, .. } => {
+                    watch.finish(executor::TurnEnd::Crashed(message.clone()))
+                }
+                _ => {}
+            }
+        }
+
         match &envelope_ref.event {
             ExecutorEvent::Crashed { .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
@@ -542,9 +567,27 @@ pub(crate) fn thread_meta(project_hash: &str, thread_id: &str) -> Option<store::
         .find(|t| t.id == thread_id)
 }
 
+/// How a thread's executor slot names a saved chain rather than an agent
+/// (D5). Reusing the existing slot is what keeps this inside the two-mode
+/// invariant: a chain is one more thing go-mode's executor can resolve to,
+/// not a third mode.
+const CHAIN_EXECUTOR_PREFIX: &str = "chain:";
+
+/// The chain a thread's executor slot names, if it names one.
+fn selected_chain(project_hash: &str, thread_id: &str) -> Option<String> {
+    thread_meta(project_hash, thread_id)?
+        .executor?
+        .strip_prefix(CHAIN_EXECUTOR_PREFIX)
+        .map(str::to_string)
+}
+
 /// Resolves which agent a thread uses and its binary path. Selection order
 /// (D9/D18): the thread's own picker choice, then the project's
 /// `executorOverride`, then auto-detection (first installed agent).
+///
+/// A slot holding a chain (`chain:<name>`) is not an agent id, so it is
+/// skipped here and falls through to the normal resolution — `go_mode` is
+/// where the chain is actually noticed and run.
 fn selected_executor(
     app: &tauri::AppHandle,
     harness: &tauri::State<'_, Harness>,
@@ -561,7 +604,9 @@ fn selected_executor(
         }
         cached.clone().expect("preflight just populated")
     };
-    let thread_override = thread_id.and_then(|id| thread_meta(project_hash, id)?.executor);
+    let thread_override = thread_id
+        .and_then(|id| thread_meta(project_hash, id)?.executor)
+        .filter(|choice| !choice.starts_with(CHAIN_EXECUTOR_PREFIX));
     let override_id = thread_override.or_else(|| {
         project_root(project_hash)
             .ok()
@@ -583,14 +628,44 @@ fn selected_executor(
     Ok((agent.clone(), PathBuf::from(path)))
 }
 
+/// Resolves one specific agent by id against the same cached registry
+/// preflight auto-detection uses (D16), re-running detection once before
+/// giving up — preflight is a launch-time snapshot, so an agent installed
+/// while Palisade was running would otherwise read as missing.
+///
+/// A bound agent that really isn't installed is a hard error naming it, never
+/// a silent substitution (D17).
+fn resolve_agent(
+    harness: &tauri::State<'_, Harness>,
+    agent_id: &str,
+) -> Res<(acp_preflight::AgentStatus, PathBuf)> {
+    let mut flight = preflight_for_harness(harness, false);
+    if flight.agent(agent_id).is_none_or(|a| a.path.is_none()) {
+        flight = preflight_for_harness(harness, true);
+    }
+    let agent = flight
+        .agent(agent_id)
+        .ok_or_else(|| format!("`{agent_id}` isn't a known agent"))?;
+    let path = agent
+        .path
+        .clone()
+        .ok_or_else(|| format!("`{}` isn't installed or isn't on PATH", agent.name))?;
+    Ok((agent.clone(), PathBuf::from(path)))
+}
+
 /// The id of a live session on this thread running under `mode`, if any.
+///
+/// Chain-owned sessions are skipped (D25): a chain node runs with go-mode
+/// permissions, so without this a user pressing `/go` mid-run would be handed
+/// a node's session and start typing into the middle of a chain.
 fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode: &str) -> Option<String> {
+    let chain_owned = harness.chain_sessions.lock().unwrap();
     harness
         .acp_sessions
         .lock()
         .unwrap()
         .values()
-        .find(|s| s.thread_id == thread_id && s.mode == mode)
+        .find(|s| s.thread_id == thread_id && s.mode == mode && !chain_owned.contains(&s.id))
         .map(|s| s.id.clone())
 }
 
@@ -661,7 +736,26 @@ fn start_session(
     _model: Option<String>,
     bypass: bool,
 ) -> Res<String> {
-    let (agent, bin) = selected_executor(app, harness, project_hash, Some(thread_id))?;
+    start_session_as(app, harness, project_hash, thread_id, mode, bypass, None)
+}
+
+/// `start_session`, but able to pin the agent rather than resolving the
+/// thread's. Only a chain node passes `agent_override`: its agent binding is
+/// the point of the node (D16), unlike a normal thread where the executor is
+/// detected, not configured.
+fn start_session_as(
+    app: &tauri::AppHandle,
+    harness: &tauri::State<'_, Harness>,
+    project_hash: &str,
+    thread_id: &str,
+    mode: &str,
+    bypass: bool,
+    agent_override: Option<&str>,
+) -> Res<String> {
+    let (agent, bin) = match agent_override {
+        Some(id) => resolve_agent(harness, id)?,
+        None => selected_executor(app, harness, project_hash, Some(thread_id))?,
+    };
     let agent_id = agent.id.clone();
     let home = palisade_home();
     // The thread meta is the source of truth for the model choice; the IPC
@@ -948,6 +1042,15 @@ async fn go_mode(
         }
 
         let meta = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
+        // D5: when this thread's executor slot resolves to a saved chain, go
+        // mode runs the chain instead of bringing up one agent session. Still
+        // go mode — no third mode, just a different thing filling the same
+        // slot. The frontend starts the run once it sees this on the meta.
+        if let Some(chain) = selected_chain(&project_hash, &thread_id) {
+            let loaded = chains::load(&project_root(&project_hash)?, &chain)?;
+            check_agents_available(&harness, &loaded)?;
+            return Ok(meta);
+        }
         let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
         // Per amended D19: go-mode has no skill injection. The user toggles
         // go-mode to let the agent write code; grill-apply is a separate
@@ -1511,55 +1614,73 @@ async fn run_verify(
         // Fail fast on an unknown name, before spawning a thread that can only
         // report the same error later and less visibly.
         if !settings.verify.contains_key(&name) {
-            return Err(format!("no verify command named `{name}` in .project-settings.json"));
+            return Err(format!("no verify command named `{name}` in .palisade/project-settings.json"));
         }
 
         std::thread::spawn(move || {
-            // `-dirty` follows git-describe: a run against an uncommitted tree
-            // cannot claim the commit it started from, or the evidence is a lie.
-            let head = git_bin().ok().and_then(|bin| {
-                let head = git::rev_parse_head(&bin, &root)?;
-                Some(match git::porcelain_snapshot(&bin, &root).is_empty() {
-                    true => head,
-                    false => format!("{head}-dirty"),
-                })
-            });
-            let outcome = settings::run_verify(&settings, &root, &name);
-            let run = match outcome {
-                Ok(outcome) => store::VerificationRun {
-                    id: ulid::Ulid::new().to_string(),
-                    project_hash: project_hash.clone(),
-                    thread_id,
-                    session_id,
-                    name,
-                    command: outcome.command,
-                    exit_code: outcome.exit_code,
-                    output_tail: outcome.output_tail,
-                    git_head: head,
-                    at: chrono::Utc::now().to_rfc3339(),
-                },
-                // A command that couldn't start is a failed verification, not a
-                // missing one — recording nothing would leave it looking untested.
-                Err(message) => store::VerificationRun {
-                    id: ulid::Ulid::new().to_string(),
-                    project_hash: project_hash.clone(),
-                    thread_id,
-                    session_id,
-                    name,
-                    command: String::new(),
-                    exit_code: -1,
-                    output_tail: message,
-                    git_head: head,
-                    at: chrono::Utc::now().to_rfc3339(),
-                },
-            };
-            let _ = store::append_verification(&palisade_home(), &run);
-            let _ = app.emit("verification-finished", &run);
+            let _ = record_verification(&app, &project_hash, &name, thread_id, session_id);
         });
         Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Runs one named verify command to completion, persists the run, emits
+/// `verification-finished`, and hands back the exit code. Blocking — the IPC
+/// command spawns a thread around it; a chain's verify gate (D8) calls it
+/// directly, because a gate has to know the answer before deciding whether to
+/// cross the edge.
+pub(crate) fn record_verification(
+    app: &tauri::AppHandle,
+    project_hash: &str,
+    name: &str,
+    thread_id: Option<String>,
+    session_id: Option<String>,
+) -> Res<i32> {
+    let root = project_root(project_hash)?;
+    let (settings, _) = settings::load(&root);
+    // `-dirty` follows git-describe: a run against an uncommitted tree
+    // cannot claim the commit it started from, or the evidence is a lie.
+    let head = git_bin().ok().and_then(|bin| {
+        let head = git::rev_parse_head(&bin, &root)?;
+        Some(match git::porcelain_snapshot(&bin, &root).is_empty() {
+            true => head,
+            false => format!("{head}-dirty"),
+        })
+    });
+    let run = match settings::run_verify(&settings, &root, name) {
+        Ok(outcome) => store::VerificationRun {
+            id: ulid::Ulid::new().to_string(),
+            project_hash: project_hash.to_string(),
+            thread_id,
+            session_id,
+            name: name.to_string(),
+            command: outcome.command,
+            exit_code: outcome.exit_code,
+            output_tail: outcome.output_tail,
+            git_head: head,
+            at: chrono::Utc::now().to_rfc3339(),
+        },
+        // A command that couldn't start is a failed verification, not a
+        // missing one — recording nothing would leave it looking untested.
+        Err(message) => store::VerificationRun {
+            id: ulid::Ulid::new().to_string(),
+            project_hash: project_hash.to_string(),
+            thread_id,
+            session_id,
+            name: name.to_string(),
+            command: String::new(),
+            exit_code: -1,
+            output_tail: message,
+            git_head: head,
+            at: chrono::Utc::now().to_rfc3339(),
+        },
+    };
+    let exit_code = run.exit_code;
+    let _ = store::append_verification(&palisade_home(), &run);
+    let _ = app.emit("verification-finished", &run);
+    Ok(exit_code)
 }
 
 #[tauri::command]
@@ -1721,6 +1842,162 @@ async fn save_run_commands(project_hash: String, commands: Vec<(String, String)>
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/* -------------------------------------------------------------------------- */
+/* Agent chains                                                               */
+/* -------------------------------------------------------------------------- */
+
+/// Every chain saved in this project (D20: project-scoped), name-sorted. Feeds
+/// both the Chains panel's list and the `|=` popup's chain source.
+#[tauri::command]
+async fn list_chains(project_hash: String) -> Res<Vec<chains::Chain>> {
+    tokio::task::spawn_blocking(move || Ok(chains::list(&project_root(&project_hash)?)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Writes a chain, keyed by its own `name`. Validation lives in
+/// `chains::save`, so an ungated loop edge is refused here rather than at run
+/// time (D3).
+#[tauri::command]
+async fn save_chain(project_hash: String, chain: chains::Chain) -> Res<()> {
+    tokio::task::spawn_blocking(move || chains::save(&project_root(&project_hash)?, &chain))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn delete_chain(project_hash: String, name: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || chains::delete(&project_root(&project_hash)?, &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// D17: every node's bound agent must be installed before the run starts —
+/// blocked with the specific node and agent named, never silently swapped for
+/// whatever else is on PATH. Checked up front rather than per node, so a run
+/// can't get three nodes deep and then discover it can't finish.
+fn check_agents_available(harness: &tauri::State<'_, Harness>, chain: &chains::Chain) -> Res<()> {
+    unavailable_agents(chain, |agent| resolve_agent(harness, agent).is_ok())
+}
+
+/// The decision half of the pre-run check, separated from agent resolution so
+/// it can be tested without a live PATH.
+fn unavailable_agents(chain: &chains::Chain, installed: impl Fn(&str) -> bool) -> Res<()> {
+    let mut missing: Vec<String> = chain
+        .nodes
+        .values()
+        .filter(|node| !installed(&node.agent))
+        .map(|node| format!("`{}` needs {}", node.role, node.agent))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    missing.sort();
+    Err(format!(
+        "This chain can't run — {} not installed or not on PATH: {}.",
+        if missing.len() == 1 { "its agent is" } else { "some of its agents are" },
+        missing.join(", ")
+    ))
+}
+
+/// Starts a chain run and returns its id. The walk itself happens on a
+/// blocking task: a run can legitimately take its whole 30-minute budget
+/// (D19), so nothing waits on it here. Progress arrives as `chain-event`.
+#[tauri::command]
+async fn run_chain(
+    app: tauri::AppHandle,
+    project_hash: String,
+    chain_name: String,
+    seed_input: String,
+    thread_id: String,
+) -> Res<String> {
+    let run_id = ulid::Ulid::new().to_string();
+    let chain = {
+        let hash = project_hash.clone();
+        let name = chain_name.clone();
+        let app = app.clone();
+        tokio::task::spawn_blocking(move || {
+            let chain = chains::load(&project_root(&hash)?, &name)?;
+            let harness: tauri::State<'_, Harness> = app.state();
+            check_agents_available(&harness, &chain)?;
+            Ok::<_, String>(chain)
+        })
+        .await
+        .map_err(|e| e.to_string())??
+    };
+
+    let id = run_id.clone();
+    let summary_hash = project_hash.clone();
+    tokio::task::spawn_blocking(move || {
+        let budget = std::time::Duration::from_secs(chain.timeout_seconds);
+        let mut runner = chain_exec::AcpNodeRunner::new(
+            app.clone(),
+            project_hash.clone(),
+            thread_id.clone(),
+            id.clone(),
+            chain.clone(),
+        );
+        let mut gates = chain_exec::AcpGateEvaluator::new(
+            app.clone(),
+            project_hash,
+            thread_id.clone(),
+            id.clone(),
+            chain.name.clone(),
+            budget,
+        );
+        let mut run = chain_runner::ChainRun::new(id.clone(), chain.clone(), seed_input);
+        let outcome = run.walk(&mut runner, &mut gates);
+        runner.release();
+        chain_exec::post_thread_summary(
+            &app,
+            &summary_hash,
+            &thread_id,
+            &format!("Chain `{}` — {}", chain.name, chain_runner::describe(&outcome)),
+        );
+        let _ = app.emit(
+            "chain-event",
+            chain_exec::ChainEvent {
+                run_id: id,
+                thread_id,
+                chain: chain.name,
+                role: None,
+                state: None,
+                outcome: Some(outcome),
+                awaiting_approval: None,
+                session_id: None,
+            },
+        );
+    });
+    Ok(run_id)
+}
+
+/// D9: the three things a human can do at a paused approval gate. A decision
+/// for a run that isn't waiting is an error rather than a no-op — it means the
+/// UI is showing a gate that has already moved on.
+#[tauri::command]
+async fn resolve_chain_gate(
+    app: tauri::AppHandle,
+    run_id: String,
+    decision: String,
+    note: Option<String>,
+) -> Res<()> {
+    let approval = match decision.as_str() {
+        "approve" => chain_runner::Approval::Approve,
+        "reject" => chain_runner::Approval::Reject,
+        "sendBack" => chain_runner::Approval::SendBack(note.unwrap_or_default()),
+        other => return Err(format!("unknown gate decision `{other}`")),
+    };
+    let harness: tauri::State<'_, Harness> = app.state();
+    let sender = harness
+        .chain_gates
+        .lock()
+        .unwrap()
+        .get(&run_id)
+        .cloned()
+        .ok_or("that chain run isn't waiting at an approval gate")?;
+    sender.send(approval).map_err(|_| "that chain run is no longer listening".to_string())
 }
 
 /// What the project root suggests running. A proposal the user confirms —
@@ -2168,6 +2445,11 @@ pub fn run() {
             commands::fs_ops::rename_path,
             commands::fs_ops::delete_path,
             commands::fs_ops::create_directory,
+            list_chains,
+            save_chain,
+            delete_chain,
+            run_chain,
+            resolve_chain_gate,
             mac_rounded_corners::enable_rounded_corners,
             mac_rounded_corners::enable_modern_window_style,
             mac_rounded_corners::reposition_traffic_lights,
@@ -2214,6 +2496,63 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// D17: a chain whose bound agent isn't installed is blocked before it
+    /// starts, naming the node and the agent — never silently substituted.
+    mod chain_preflight {
+        use crate::chains::{Chain, ChainNode, RetryPolicy};
+        use std::collections::HashMap;
+
+        fn chain(agents: &[(&str, &str)]) -> Chain {
+            Chain {
+                name: "design-loop".into(),
+                nodes: agents
+                    .iter()
+                    .map(|(role, agent)| {
+                        (
+                            role.to_string(),
+                            ChainNode {
+                                role: role.to_string(),
+                                guideline: String::new(),
+                                agent: agent.to_string(),
+                                retry: None,
+                            },
+                        )
+                    })
+                    .collect::<HashMap<_, _>>(),
+                edges: Vec::new(),
+                entry: agents[0].0.to_string(),
+                timeout_seconds: 1800,
+                retry: RetryPolicy::default(),
+                layout: HashMap::new(),
+            }
+        }
+
+        #[test]
+        fn a_chain_whose_agents_are_all_installed_passes() {
+            let c = chain(&[("designer", "gemini-cli"), ("programmer", "claude-code")]);
+            assert!(crate::unavailable_agents(&c, |_| true).is_ok());
+        }
+
+        #[test]
+        fn a_missing_agent_names_both_the_node_and_the_agent() {
+            let c = chain(&[("designer", "gemini-cli"), ("programmer", "claude-code")]);
+            let err = crate::unavailable_agents(&c, |a| a != "gemini-cli").unwrap_err();
+            assert!(err.contains("`designer` needs gemini-cli"), "{err}");
+            assert!(!err.contains("claude-code"), "{err}");
+            assert!(err.contains("its agent is"), "{err}");
+        }
+
+        #[test]
+        fn several_missing_agents_are_listed_in_a_stable_order() {
+            let c = chain(&[("designer", "gemini-cli"), ("programmer", "claude-code")]);
+            let err = crate::unavailable_agents(&c, |_| false).unwrap_err();
+            assert!(err.contains("some of its agents are"), "{err}");
+            let designer = err.find("`designer`").unwrap();
+            let programmer = err.find("`programmer`").unwrap();
+            assert!(designer < programmer, "{err}");
+        }
+    }
 
     #[test]
     fn generate_describes_the_staged_diff_when_there_is_one() {

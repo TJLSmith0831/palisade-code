@@ -457,6 +457,56 @@ pub struct Harness {
     pub completion_enabled: Mutex<bool>,
     /// Configurable accept keybinding, stored as a CodeMirror key name.
     pub completion_keybinding: Mutex<String>,
+    /// Sessions a chain run owns, so `find_live_session` never hands one to a
+    /// user pressing `/go` on the same thread (D25). Chain nodes run with
+    /// go-mode permissions, which would otherwise make them look reusable.
+    pub chain_sessions: Mutex<std::collections::HashSet<String>>,
+    /// Per-session collectors letting a chain run await one node's turn:
+    /// the sink appends `Text` and resolves on `Done`/`Crashed`.
+    pub turn_watchers: Mutex<HashMap<String, std::sync::Arc<TurnWatch>>>,
+    /// Approval gates waiting on a human, keyed by run id (D9).
+    pub chain_gates: Mutex<HashMap<String, std::sync::mpsc::Sender<crate::chain_runner::Approval>>>,
+}
+
+/// How a chain run watches one node's turn. The sink owns the writing end;
+/// the runner blocks on `rx` until the turn ends.
+pub struct TurnWatch {
+    text: Mutex<String>,
+    tx: Mutex<Option<std::sync::mpsc::Sender<TurnEnd>>>,
+}
+
+/// How a node's turn finished, from the sink's point of view.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TurnEnd {
+    Done,
+    Crashed(String),
+}
+
+impl TurnWatch {
+    pub fn new(tx: std::sync::mpsc::Sender<TurnEnd>) -> Self {
+        Self { text: Mutex::new(String::new()), tx: Mutex::new(Some(tx)) }
+    }
+
+    pub fn push_text(&self, text: &str) {
+        let mut buffer = self.text.lock().unwrap();
+        if !buffer.is_empty() {
+            buffer.push_str("\n\n");
+        }
+        buffer.push_str(text);
+    }
+
+    /// Everything the node said this turn — what feeds the next node.
+    pub fn take_text(&self) -> String {
+        std::mem::take(&mut *self.text.lock().unwrap())
+    }
+
+    /// Resolves the turn exactly once; a second `Done` (or a `Crashed` after
+    /// one) is dropped rather than racing a later turn's receiver.
+    pub fn finish(&self, end: TurnEnd) {
+        if let Some(tx) = self.tx.lock().unwrap().take() {
+            let _ = tx.send(end);
+        }
+    }
 }
 
 impl Default for Harness {
@@ -475,6 +525,9 @@ impl Default for Harness {
             completion_crashes: Mutex::new(0),
             completion_enabled: Mutex::new(true),
             completion_keybinding: Mutex::new("Alt-Tab".into()),
+            chain_sessions: Default::default(),
+            turn_watchers: Default::default(),
+            chain_gates: Default::default(),
         }
     }
 }

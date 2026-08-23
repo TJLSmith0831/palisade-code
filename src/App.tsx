@@ -46,6 +46,7 @@ import {
   IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
   IconPlayerStopFilled,
+  IconRoute,
   IconSend2,
   IconSettings,
   IconShield,
@@ -74,7 +75,18 @@ import type {
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
-import { commandTrigger, matchCommands, slashQuery } from "./slashCommands";
+import {
+  commandTrigger,
+  matchCommands,
+  slashQuery,
+  chainCommands,
+  isChainCommand,
+  parseChainInvocation,
+  type MenuCommand,
+} from "./slashCommands";
+import ChainsPanel, { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
+import { CHAIN_EXECUTOR_PREFIX } from "./api";
+import ChainCanvas, { type RunView } from "./ChainCanvas";
 import { deriveStage, type SpecStage } from "./stage";
 import { RenameIcon, DeleteIcon } from "./icons";
 import {
@@ -122,6 +134,7 @@ import SettingsPanel, {
   loadAccentHue,
   applyAppearance,
   loadAppearance,
+  PROJECT_SETTINGS_FILE,
 } from "./SettingsPanel";
 import TerminalPane from "./TerminalPane";
 import OnboardingScreen from "./OnboardingScreen";
@@ -164,7 +177,12 @@ type ChatSurfaceProps = {
   onProbeModels: () => void;
   /** Slash commands the agent advertised for this thread (ACP
    *  `available_commands_update`) — skills, user commands and built-ins alike. */
-  commands: api.AgentCommand[];
+  /** Agent-advertised commands plus this project's saved chains (D14). */
+  commands: MenuCommand[];
+  /** Saved chains, offered in the executor picker as go-mode targets (D5).
+   *  Optional: a project with none is the ordinary case, and so is a test
+   *  fixture that doesn't care about chains. */
+  chains?: api.Chain[];
   draft: string;
   setDraft: (value: string) => void;
   onSend: () => void;
@@ -237,6 +255,7 @@ export const ChatSurface = memo(
     flightSelected,
     models,
     onPickExecutor,
+    chains = [],
     onPickModel,
     onProbeModels,
     commands,
@@ -304,8 +323,12 @@ export const ChatSurface = memo(
     useEffect(() => {
       setSwitchNotice(null);
     }, [thread?.id]);
+    // A chain in the executor slot is named, not identified: the stored value
+    // is `chain:design-loop`, but the picker should read "design-loop".
     const executorLabel = executor
-      ? (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
+      ? executor.startsWith(CHAIN_EXECUTOR_PREFIX)
+        ? executor.slice(CHAIN_EXECUTOR_PREFIX.length)
+        : (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
       : null;
     const modelError =
       models && typeof models === "object" && "error" in models
@@ -1110,6 +1133,15 @@ export const ChatSurface = memo(
                     onClick={() => pickCommand(command)}
                   >
                     <span className="ds-command-menu-name">
+                      {isChainCommand(command) && (
+                        <IconRoute
+                          size={12}
+                          // A chain runs several agents against each other —
+                          // a different kind of thing than a skill, and the
+                          // row says so before it is picked (D14).
+                          style={{ marginRight: 4, verticalAlign: "-1px" }}
+                        />
+                      )}
                       {commandTrigger(command).trimEnd()}
                     </span>
                     <span className="ds-command-menu-desc">
@@ -1296,6 +1328,32 @@ export const ChatSurface = memo(
                   <span className="hint" data-testid="no-executors-hint">
                     No ACP agents installed.
                   </span>
+                )}
+                {/* D5: a saved chain is one more thing this slot can
+                    resolve to. Picking one makes /go run the chain instead of
+                    a single agent — still go mode, not a third one. */}
+                {chains.length > 0 && (
+                  <>
+                    <Menu.Divider />
+                    <Menu.Label>Chain</Menu.Label>
+                    {chains.map((chain) => {
+                      const id = `${CHAIN_EXECUTOR_PREFIX}${chain.name}`;
+                      return (
+                        <Menu.Item
+                          key={id}
+                          className={`ds-model-opt ${executor === id ? "selected" : ""}`}
+                          data-testid={`executor-opt-${id}`}
+                          leftSection={<IconRoute size={14} />}
+                          onClick={() => {
+                            if (id !== executor) onPickExecutor(id);
+                            setPrefsMenuOpen(false);
+                          }}
+                        >
+                          {chain.name}
+                        </Menu.Item>
+                      );
+                    })}
+                  </>
                 )}
                 {hasLiveSession && (
                   <span className="hint" data-testid="next-session-hint">
@@ -1572,7 +1630,7 @@ const bindDrag =
     window.addEventListener("pointerup", onUp);
   };
 
-// D15: .project-settings.json's known v1 shape. The backend auto-creates
+// D15: .palisade/project-settings.json's known v1 shape. The backend auto-creates
 // this on every project open (settings::ensure_file); this is only a
 // fallback for the rare case a project's file was deleted after the fact
 // and the user re-opens it via the settings button before switching
@@ -1582,8 +1640,6 @@ const DEFAULT_PROJECT_SETTINGS = `{
   "executorOverride": null
 }
 `;
-const PROJECT_SETTINGS_FILE = ".project-settings.json";
-
 const lastThreadKey = (hash: string) => `palisade:lastThread:${hash}`;
 const threadPrefsKey = (hash: string, threadId: string) =>
   `palisade:thread-prefs:${hash}:${threadId}`;
@@ -2012,7 +2068,7 @@ export default function App() {
   const filesCache = useRef<Map<string, string[]>>(new Map());
   const { refreshToken: fileTreeRefreshToken, invalidate: invalidateFileTree } =
     useFileTreeCache();
-  // Verify pins from `.project-settings.json` (D8): spec change name → list
+  // Verify pins from `.palisade/project-settings.json` (D8): spec change name → list
   // of pinned verify command names. Machine-local UI state, loaded on project
   // switch and after a pin is added/removed.
   const [verifyPins, setVerifyPins] = useState<Record<string, string[]>>({});
@@ -2866,6 +2922,106 @@ export default function App() {
     api.preflight().then(setFlight, fail);
   }, []);
 
+  /* ---------------------------------------------------------------- chains */
+
+  // Saved chains, kept here rather than in the panel because the composer's
+  // `|=` menu needs the same list (D14).
+  const [chains, setChains] = useState<api.Chain[]>([]);
+  const [chainRun, setChainRun] = useState<
+    (RunView & { chain: string }) | null
+  >(null);
+
+  useEffect(() => {
+    if (!project) {
+      setChains([]);
+      return;
+    }
+    const load = () => api.listChains(project.hash).then(setChains, () => {});
+    void load();
+    window.addEventListener(CHAINS_CHANGED_EVENT, load);
+    return () => window.removeEventListener(CHAINS_CHANGED_EVENT, load);
+  }, [project]);
+
+  // The agent picker's options: the same installed agents auto-detection sees
+  // (D16), never a hand-maintained list.
+  const chainAgents = useMemo(
+    () =>
+      (flight?.agents ?? [])
+        .filter((agent) => !!agent.path)
+        .map((agent) => ({ id: agent.id, name: agent.name })),
+    [flight]
+  );
+  const [chainVerifyCommands, setChainVerifyCommands] = useState<string[]>([]);
+  useEffect(() => {
+    if (!project) return;
+    api
+      .verifyCommands(project.hash)
+      .then((pairs) => setChainVerifyCommands(pairs.map(([name]) => name)))
+      .catch(() => setChainVerifyCommands([]));
+  }, [project]);
+
+  // Live run progress. One run at a time on screen: a second `run_chain` while
+  // one is live replaces what the canvas is watching, which is what the user
+  // just asked for by starting it.
+  useEffect(() => {
+    const unlisten = listen<api.ChainEvent>("chain-event", ({ payload }) => {
+      setChainRun((previous) => {
+        const base =
+          previous?.runId === payload.runId
+            ? previous
+            : {
+                runId: payload.runId,
+                chain: payload.chain,
+                states: {},
+                awaiting: null,
+                outcome: null,
+              };
+        return {
+          ...base,
+          chain: payload.chain,
+          states: payload.role && payload.state
+            ? { ...base.states, [payload.role]: payload.state }
+            : base.states,
+          // A gate event sets it; a node starting its turn clears it, and so
+          // does the run ending — approving the last gate produces an outcome
+          // and no further node event, which used to leave the approve/reject
+          // bar on screen after the chain had already finished.
+          awaiting: payload.outcome
+            ? null
+            : (payload.awaitingApproval ?? (payload.state ? null : base.awaiting)),
+          outcome: payload.outcome ?? base.outcome,
+        };
+      });
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
+
+  /** Starts a chain on the active thread, opening its canvas to watch. */
+  const startChainRun = useCallback(
+    async (name: string, seed: string) => {
+      if (!project || !thread) return;
+      try {
+        tabs.openChain(name);
+        setChainRun({
+          runId: "",
+          chain: name,
+          states: {},
+          awaiting: null,
+          outcome: null,
+        });
+        await api.runChain(project.hash, name, seed, thread.id);
+      } catch (err) {
+        // A blocked run (a bound agent that isn't installed, D17) surfaces
+        // here with the missing node and agent named.
+        setChainRun(null);
+        fail(err);
+      }
+    },
+    [project, thread, tabs]
+  );
+
   // Executor output streams in live; once the turn ends, the persisted log
   // becomes the source of truth again so both paths can't drift.
   useEffect(() => {
@@ -3031,6 +3187,24 @@ export default function App() {
       const prefs = resolvePrefs(project.hash, thread.id);
       const meta = await api.goMode(project.hash, thread.id, prefs.bypass);
       await refresh();
+      // D5: this thread's executor slot can hold a saved chain instead of an
+      // agent. `goMode` has already checked the chain's agents are installed;
+      // starting the run is this side's job, because the run is watched here.
+      const chain = meta.executor?.startsWith(CHAIN_EXECUTOR_PREFIX)
+        ? meta.executor.slice(CHAIN_EXECUTOR_PREFIX.length)
+        : null;
+      if (chain) {
+        setBusy(false);
+        // Applying an open change is go-mode work, so it is what the chain
+        // is pointed at when one is linked.
+        await startChainRun(
+          chain,
+          meta.openSpecChangeName
+            ? `Apply the OpenSpec change "${meta.openSpecChangeName}".`
+            : ""
+        );
+        return;
+      }
       // A linked change means /grill-apply was just sent; otherwise we're idle.
       if (!meta.openSpecChangeName) setBusy(false);
     } catch (err) {
@@ -3232,6 +3406,14 @@ export default function App() {
     if (text === "/go") return onGo();
     if (text === "/spec") return onSpec();
     if (text === "/propose") return onPropose();
+    // `|=<chain> <seed>` runs a saved chain instead of prompting the agent
+    // (D6/D13). A name that isn't a saved chain falls through as an ordinary
+    // message rather than failing — the user may just be typing.
+    const invocation = parseChainInvocation(text);
+    if (invocation && chains.some((c) => c.name === invocation.name)) {
+      if (!thread) return;
+      return void startChainRun(invocation.name, invocation.seed);
+    }
     // D20: go-mode's empty composer has no thread yet — create it (+ set
     // go mode) on this, the first send, then fall through to the normal
     // send path below using the freshly created thread.
@@ -3542,7 +3724,7 @@ export default function App() {
       {
         id: "app.projectSettings",
         group: "App",
-        label: "Edit .project-settings.json",
+        label: "Edit .palisade/project-settings.json",
         keywords: "format on save executor",
         enabled: !!project,
         run: () => void onOpenSettings(),
@@ -3700,7 +3882,13 @@ export default function App() {
     },
     flightSelected: !!flight?.selected,
     flight,
-    commands: thread ? (commandsByThread.get(thread.id) ?? []) : [],
+    // Two sources, one menu: what the agent advertises, plus the project's
+    // saved chains (D14). Chains are available even with no live session.
+    commands: [
+      ...(thread ? (commandsByThread.get(thread.id) ?? []) : []),
+      ...chainCommands(chains),
+    ],
+    chains,
     draft,
     setDraft,
     onSend,
@@ -3783,6 +3971,20 @@ export default function App() {
             connectionName={tab.connectionName}
           />
         </Suspense>
+      );
+    }
+    if (tab?.type === "chain") {
+      return (
+        <ChainCanvas
+          projectHash={project.hash}
+          chainName={tab.chainName}
+          agents={chainAgents}
+          verifyCommands={chainVerifyCommands}
+          onRun={thread ? (name) => void startChainRun(name, "") : undefined}
+          // Only the chain that is actually running gets the watching state;
+          // opening a different chain mid-run still shows a normal canvas.
+          run={chainRun?.chain === tab.chainName ? chainRun : null}
+        />
       );
     }
     return (
@@ -3913,6 +4115,14 @@ export default function App() {
               }
             />
           </Suspense>
+        );
+      case "chains":
+        return (
+          <ChainsPanel
+            projectHash={project.hash}
+            onOpen={(name) => tabs.openChain(name)}
+            onRun={thread ? (name) => void startChainRun(name, "") : undefined}
+          />
         );
       case "history":
         return (

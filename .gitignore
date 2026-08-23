@@ -32,7 +32,7 @@ graphify-out/
 .impeccable/
 
 .mcp.json
-.project-settings.json
+.palisade/
 
 # Bundled sidecar and model (build inputs, not source; distribution needs an installer/fetcher in future).
 src-tauri/resources/models/

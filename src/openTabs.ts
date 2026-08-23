@@ -44,7 +44,15 @@ export type QueryTab = {
   mdPreview: false;
 };
 
-export type OpenTab = FileTab | SpecTab | TableTab | QueryTab;
+export type ChainTab = {
+  type: "chain";
+  /** The saved chain's name, or null for one being built from scratch. */
+  chainName: string | null;
+  dirty: false;
+  mdPreview: false;
+};
+
+export type OpenTab = FileTab | SpecTab | TableTab | QueryTab | ChainTab;
 
 /** The stable string key for a tab — its identity in `activePath`, the
  * Mantine `Tabs` component, and session save/restore. File tabs use their
@@ -59,6 +67,10 @@ export const tabKey = (tab: OpenTab): string => {
       return `table:${tab.connectionId}:${tab.schema ?? ""}:${tab.table}`;
     case "query":
       return `query:${tab.connectionId}`;
+    // A new chain and a saved one are different tabs, so an unsaved draft
+    // isn't replaced by clicking a saved chain in the sidebar.
+    case "chain":
+      return `chain:${tab.chainName ?? "new"}`;
     default:
       return tab.path;
   }
@@ -155,6 +167,14 @@ export function useOpenTabs() {
         dirty: false,
         mdPreview: false,
       }),
+    [openTab]
+  );
+
+  /** Open a chain on the canvas. The sidebar finds chains; the tab is where
+   * they're built (DESIGN.md's side-panel rule). */
+  const openChain = useCallback(
+    (chainName: string | null) =>
+      openTab({ type: "chain", chainName, dirty: false, mdPreview: false }),
     [openTab]
   );
 
@@ -296,6 +316,7 @@ export function useOpenTabs() {
     open,
     openSpec,
     openTable,
+    openChain,
     openQuery,
     close,
     dropPath,

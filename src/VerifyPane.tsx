@@ -116,7 +116,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
       {!loading && commands.length === 0 && (
         <Text size="xs" c="dimmed">
           No verify commands configured. Add a <Code>verify</Code> map to{" "}
-          <Code>.project-settings.json</Code>.
+          <Code>.palisade/project-settings.json</Code>.
         </Text>
       )}
 

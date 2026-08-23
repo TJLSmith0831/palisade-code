@@ -190,7 +190,7 @@ export default function RunPanel({
             <h2 className="ds-section-heading">Detected in this project</h2>
             <p className="hint">
               Nothing is configured yet. These are proposals — accept one to
-              write it to <code>.project-settings.json</code>.
+              write it to <code>.palisade/project-settings.json</code>.
             </p>
             {suggestions.map(([name, command]) => (
               <div

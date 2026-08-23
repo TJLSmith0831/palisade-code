@@ -5,6 +5,7 @@ import {
   IconNotebook,
   IconTable,
   IconTerminal2,
+  IconRoute,
 } from "@tabler/icons-react";
 import { isMarkdownPath, tabKey, type OpenTab } from "./openTabs";
 
@@ -33,6 +34,8 @@ export const tabLabel = (tab: OpenTab): string => {
       return tab.table;
     case "query":
       return `SQL — ${tab.connectionName}`;
+    case "chain":
+      return tab.chainName ?? "New chain";
     default:
       return basename(tab.path);
   }
@@ -46,6 +49,8 @@ const tabTooltip = (tab: OpenTab): string => {
       return tab.schema ? `${tab.schema}.${tab.table}` : tab.table;
     case "query":
       return `SQL editor for ${tab.connectionName}`;
+    case "chain":
+      return tab.chainName ? `Agent chain: ${tab.chainName}` : "New agent chain";
     default:
       return tab.path;
   }
@@ -55,6 +60,7 @@ const tabIcons = {
   spec: IconNotebook,
   table: IconTable,
   query: IconTerminal2,
+  chain: IconRoute,
 } as const;
 
 /**

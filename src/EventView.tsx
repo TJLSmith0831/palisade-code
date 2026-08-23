@@ -8,6 +8,7 @@ import {
   IconCircleX,
   IconGhost3Filled,
   IconLoader2,
+  IconRoute,
 } from "@tabler/icons-react";
 
 import type { ExecutorEvent, Message, Preflight } from "./api";
@@ -428,6 +429,23 @@ export const EventList = memo(function EventList({
       {items.map((item, index) => {
         switch (item.kind) {
           case "plain":
+            // A chain run's own commentary (D7): what the run did, or that
+            // it is waiting at a gate. Neutral, not danger — the text states
+            // the outcome, and "finished" reading as a crash is worse than
+            // no banner at all.
+            if (item.role === "chain") {
+              return (
+                <Alert
+                  key={index}
+                  color="gray"
+                  variant="light"
+                  icon={<IconRoute size={16} />}
+                  data-testid="chain-summary"
+                >
+                  <MDEditor.Markdown source={item.text} className="content" />
+                </Alert>
+              );
+            }
             // A crash is persisted as a system turn; it stays a banner on reload.
             if (item.role === "system") {
               return (

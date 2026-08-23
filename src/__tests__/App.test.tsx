@@ -1110,7 +1110,7 @@ describe("Settings panel (D14/D15)", () => {
     expect(screen.getByTestId("editor-font-select")).toBeDefined();
   });
 
-  it("opens an existing .project-settings.json in the editor without recreating it", async () => {
+  it("opens an existing .palisade/project-settings.json in the editor without recreating it", async () => {
     const writeCalls: unknown[] = [];
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
@@ -1179,13 +1179,13 @@ describe("Settings panel (D14/D15)", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("breadcrumbs").textContent).toContain(
-        ".project-settings.json"
+        ".palisade/project-settings.json"
       )
     );
     expect(writeCalls).toHaveLength(0);
   });
 
-  it("creates .project-settings.json with defaults when none exists yet", async () => {
+  it("creates .palisade/project-settings.json with defaults when none exists yet", async () => {
     const writeCalls: Record<string, unknown>[] = [];
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
@@ -1256,11 +1256,11 @@ describe("Settings panel (D14/D15)", () => {
     fireEvent.click(screen.getByTestId("open-project-settings"));
 
     await waitFor(() => expect(writeCalls).toHaveLength(1));
-    expect(writeCalls[0].relativePath).toBe(".project-settings.json");
+    expect(writeCalls[0].relativePath).toBe(".palisade/project-settings.json");
     expect(String(writeCalls[0].content)).toContain("formatOnSave");
     await waitFor(() =>
       expect(screen.getByTestId("breadcrumbs").textContent).toContain(
-        ".project-settings.json"
+        ".palisade/project-settings.json"
       )
     );
   });

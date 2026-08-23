@@ -18,7 +18,7 @@ const render = () =>
   });
 
 describe("left rail panel selection", () => {
-  it("exposes the rail panels the redesign specifies, plus MCP and Database", () => {
+  it("exposes the rail panels the redesign specifies, plus MCP, Database and Chains", () => {
     expect(PANEL_IDS).toEqual([
       "explorer",
       "search",
@@ -28,6 +28,7 @@ describe("left rail panel selection", () => {
       "run",
       "mcp",
       "database",
+      "chains",
       "history",
       "workspace",
       "settings",

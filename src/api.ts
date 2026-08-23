@@ -37,7 +37,10 @@ export type ThreadMeta = {
 export type Message = {
   seq: number;
   ts: string;
-  role: "user" | "assistant" | "system" | "tool";
+  /** `chain` is a chain run's own commentary in the thread (D7) — what the
+   *  run did, or that it is waiting at a gate. Distinct from `system`, which
+   *  the chat renders as a crash banner. */
+  role: "user" | "assistant" | "system" | "tool" | "chain";
   mode: Mode;
   content: string;
   /** Absent on messages written before sessions had identities. */
@@ -367,9 +370,111 @@ export const runVerify = (
   });
 export const listVerifications = (projectHash: string) =>
   invoke<VerificationRun[]>("list_verifications", { projectHash });
-/** `[name, command]` pairs from the project's `.project-settings.json`. */
+/** `[name, command]` pairs from the project's `.palisade/project-settings.json`. */
 export const verifyCommands = (projectHash: string) =>
   invoke<[string, string][]>("verify_commands", { projectHash });
+
+// ------------------------------------------------------------ agent chains
+
+/** What has to happen on an edge before the run crosses it (D3/D22). */
+export type ChainGate =
+  | { type: "verify"; command: string }
+  | { type: "approval" };
+
+export type ChainNode = {
+  /** Doubles as the node's key in `nodes` and the edge endpoint reference. */
+  role: string;
+  /** Persistent behavioural guideline, applied every turn this node takes. */
+  guideline: string;
+  /** ACP agent id — user-picked, unlike a normal thread's executor (D16). */
+  agent: string;
+  retry?: { maxAttempts: number };
+};
+
+export type ChainEdge = {
+  from: string;
+  to: string;
+  /** Optional on a forward pipe, required on a loop-closing edge. */
+  gate?: ChainGate;
+  maxIterations?: number;
+};
+
+export type Chain = {
+  name: string;
+  nodes: Record<string, ChainNode>;
+  edges: ChainEdge[];
+  entry: string;
+  timeoutSeconds: number;
+  retry: { maxAttempts: number };
+  /** Canvas positions, keyed by role. Presentation only. */
+  layout?: Record<string, { x: number; y: number }>;
+};
+
+/**
+ * How a thread's executor slot names a chain instead of an agent (D5).
+ * Reusing that slot is what keeps chains inside go mode rather than adding a
+ * third mode.
+ */
+export const CHAIN_EXECUTOR_PREFIX = "chain:";
+
+export const listChains = (projectHash: string) =>
+  invoke<Chain[]>("list_chains", { projectHash });
+/** Rejects an invalid chain (e.g. an ungated loop edge) rather than saving it. */
+export const saveChain = (projectHash: string, chain: Chain) =>
+  invoke<void>("save_chain", { projectHash, chain });
+export const deleteChain = (projectHash: string, name: string) =>
+  invoke<void>("delete_chain", { projectHash, name });
+
+/** Where one node is in its turn. Only one node is `executing` at a time. */
+export type ChainNodeState =
+  | "queued"
+  | "executing"
+  | { retrying: number }
+  | "done"
+  | "failed";
+
+/** Why a run stopped. Every terminal state names a reason. */
+export type ChainOutcome =
+  | { kind: "completed"; output: string }
+  | { kind: "rejected"; at: string }
+  | { kind: "gateFailed"; at: string; command: string }
+  | { kind: "capReached"; at: string; maxIterations: number }
+  | { kind: "timedOut"; at: string; afterSeconds: number }
+  | { kind: "retriesExhausted"; at: string; attempts: number; message: string }
+  | { kind: "blocked"; reason: string };
+
+/** Payload of the `chain-event` window event the live DAG view listens on. */
+export type ChainEvent = {
+  runId: string;
+  threadId: string;
+  chain: string;
+  /** Absent on run-level events (outcome, gate). */
+  role: string | null;
+  state: ChainNodeState | null;
+  outcome: ChainOutcome | null;
+  awaitingApproval: { from: string; to: string } | null;
+  /** The session backing this node's turn — click-through to its transcript. */
+  sessionId: string | null;
+};
+
+/**
+ * Starts a run and returns its id. Rejects up front when a node's bound agent
+ * isn't installed (D17) rather than failing partway through.
+ */
+export const runChain = (
+  projectHash: string,
+  chainName: string,
+  seedInput: string,
+  threadId: string
+) =>
+  invoke<string>("run_chain", { projectHash, chainName, seedInput, threadId });
+
+/** The three things a human can do at a paused approval gate (D9). */
+export const resolveChainGate = (
+  runId: string,
+  decision: "approve" | "reject" | "sendBack",
+  note?: string
+) => invoke<void>("resolve_chain_gate", { runId, decision, note: note ?? null });
 
 // --------------------------------------------------------- language servers
 
