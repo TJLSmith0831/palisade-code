@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Group } from "@mantine/core";
+import { ActionIcon, Alert, Button, Group } from "@mantine/core";
+import { IconMinus, IconPlus } from "@tabler/icons-react";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
 import { EditorState, Compartment } from "@codemirror/state";
@@ -856,35 +857,39 @@ export default function FileEditorPane({
           {mediaKind === "image" && (
             <>
               <span className="ds-editor-spacer" />
-              <button
+              <ActionIcon
+                variant="subtle"
                 className="ds-icon-btn"
                 onClick={() => setImageZoom((z) => clampZoom(z - 0.25))}
                 title="Zoom out"
                 aria-label="Zoom out"
                 data-testid="image-zoom-out"
               >
-                −
-              </button>
+                <IconMinus size={14} />
+              </ActionIcon>
               <span className="ds-zoom-level" data-testid="image-zoom-level">
                 {Math.round(imageZoom * 100)}%
               </span>
-              <button
+              <ActionIcon
+                variant="subtle"
                 className="ds-icon-btn"
                 onClick={() => setImageZoom((z) => clampZoom(z + 0.25))}
                 title="Zoom in"
                 aria-label="Zoom in"
                 data-testid="image-zoom-in"
               >
-                +
-              </button>
-              <button
+                <IconPlus size={14} />
+              </ActionIcon>
+              <Button
+                variant="subtle"
+                size="xs"
                 className="ds-icon-btn"
                 onClick={() => setImageZoom(1)}
                 title="Reset zoom"
                 data-testid="image-zoom-reset"
               >
                 Reset
-              </button>
+              </Button>
             </>
           )}
         </div>

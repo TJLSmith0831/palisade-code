@@ -30,6 +30,7 @@ import {
   Stack,
   UnstyledButton,
   Indicator,
+  Tabs,
 } from "@mantine/core";
 import {
   IconAlertTriangle,
@@ -53,6 +54,8 @@ import {
   IconShieldOff,
   IconSunMoon,
   IconTerminal2,
+  IconPlus,
+  IconX,
 } from "@tabler/icons-react";
 import { useDebouncedCallback } from "@mantine/hooks";
 import { listen } from "@tauri-apps/api/event";
@@ -941,7 +944,7 @@ export const ChatSurface = memo(
                   }}
                   data-testid="thread-tab-close"
                 >
-                  ×
+                  <IconX size={12} />
                 </span>
               </button>
             ))}
@@ -951,7 +954,7 @@ export const ChatSurface = memo(
               onClick={() => onNewThread?.()}
               data-testid="thread-tab-new"
             >
-              +
+              <IconPlus size={13} />
             </button>
           </div>
         )}
@@ -4230,7 +4233,8 @@ export default function App() {
                 disabled={shell.sessionListOpen || attentionThreads.size === 0}
                 data-testid="session-list-attention-badge"
               >
-                <button
+                <ActionIcon
+                  variant="subtle"
                   className="ds-icon-btn"
                   onClick={shell.toggleSessionList}
                   aria-label="Toggle session list"
@@ -4239,7 +4243,7 @@ export default function App() {
                   data-tauri-drag-region-exclude
                 >
                   <IconLayoutSidebar size={14} />
-                </button>
+                </ActionIcon>
               </Indicator>
             </Tooltip>
           )}
@@ -4273,13 +4277,14 @@ export default function App() {
                 })()}
                 <Menu withinPortal position="bottom-end">
                   <Menu.Target>
-                    <button
+                    <ActionIcon
+                      variant="subtle"
                       className="ds-icon-btn ds-run-chevron"
                       aria-label="Run commands"
                       data-testid="run-menu"
                     >
                       <IconChevronDown size={12} />
-                    </button>
+                    </ActionIcon>
                   </Menu.Target>
                   <Menu.Dropdown>
                     <Menu.Label>Run</Menu.Label>
@@ -4306,7 +4311,8 @@ export default function App() {
                 Both panel toggles need a project to have a panel at all. */}
             {project && (
             <Tooltip label="Toggle terminal panel (Cmd+`)">
-              <button
+              <ActionIcon
+                variant="subtle"
                 className="ds-icon-btn"
                 onClick={shell.toggleTerminal}
                 aria-label="Toggle terminal panel"
@@ -4315,13 +4321,14 @@ export default function App() {
                 data-tauri-drag-region-exclude
               >
                 <IconLayoutBottombar size={14} />
-              </button>
+              </ActionIcon>
             </Tooltip>
             )}
             {/* Editor only: in Vibe chat is the subject, not a panel. */}
             {project && shell.centerShell === "editor" && (
               <Tooltip label="Toggle chat panel (Cmd+J)">
-                <button
+                <ActionIcon
+                  variant="subtle"
                   className="ds-icon-btn"
                   onClick={shell.toggleChat}
                   aria-label="Toggle chat panel"
@@ -4330,11 +4337,12 @@ export default function App() {
                   data-tauri-drag-region-exclude
                 >
                   <IconLayoutSidebarRightFilled size={14} />
-                </button>
+                </ActionIcon>
               </Tooltip>
             )}
             <Tooltip label="Theme: click to cycle auto → light → dark">
-              <button
+              <ActionIcon
+                variant="subtle"
                 className="ds-icon-btn"
                 onClick={() => shell.setTheme(shell.nextTheme(shell.theme))}
                 aria-label={`Theme: ${shell.theme}`}
@@ -4342,14 +4350,15 @@ export default function App() {
                 data-tauri-drag-region-exclude
               >
                 <IconSunMoon size={14} />
-              </button>
+              </ActionIcon>
             </Tooltip>
             {/* The only always-visible way in to the command list. Every
                 shortcut this app has was previously reachable only by
                 already knowing a shortcut, which is fine for the person who
                 wrote them and a dead end for anyone else. */}
             <Tooltip label="Commands and shortcuts (Cmd+Shift+P)">
-              <button
+              <ActionIcon
+                variant="subtle"
                 className="ds-icon-btn"
                 onClick={() => setCommandPaletteOpen(true)}
                 aria-label="Commands and shortcuts"
@@ -4357,10 +4366,11 @@ export default function App() {
                 data-tauri-drag-region-exclude
               >
                 <IconCommand size={14} />
-              </button>
+              </ActionIcon>
             </Tooltip>
             <Tooltip label="Settings">
-              <button
+              <ActionIcon
+                variant="subtle"
                 className="ds-icon-btn"
                 onClick={() => setSettingsOpen(true)}
                 aria-label="Settings"
@@ -4368,7 +4378,7 @@ export default function App() {
                 data-tauri-drag-region-exclude
               >
                 <IconSettings size={14} />
-              </button>
+              </ActionIcon>
             </Tooltip>
           </div>
         </header>
@@ -4648,79 +4658,85 @@ export default function App() {
                     "row-resize"
                   )}
                 />
-                <div className="ds-bp-tabs">
-                  <button
-                    className={`ds-bp-tab${
-                      shell.bottomTab === "terminal" ? " active" : ""
-                    }`}
-                    onClick={() => shell.setBottomTab("terminal")}
-                    aria-pressed={shell.bottomTab === "terminal"}
-                    data-testid="bp-tab-terminal"
-                  >
-                    <IconTerminal2 size={13} />
-                    Terminal
-                  </button>
-                  <button
-                    className={`ds-bp-tab${
-                      shell.bottomTab === "problems" ? " active" : ""
-                    }`}
-                    onClick={() => shell.setBottomTab("problems")}
-                    aria-pressed={shell.bottomTab === "problems"}
-                    data-testid="bp-tab-problems"
-                  >
-                    <IconAlertTriangle size={13} />
-                    Problems
-                    {problemCount > 0 && (
-                      <span
-                        className="ds-bp-count"
-                        data-testid="bp-problem-count"
+                <Tabs
+                  className="ds-bp-tabs-root"
+                  variant="unstyled"
+                  value={shell.bottomTab}
+                  keepMounted={false}
+                  onChange={(v) =>
+                    v && shell.setBottomTab(v as "terminal" | "problems")
+                  }
+                >
+                  <div className="ds-bp-tabs">
+                    <Tabs.List>
+                      <Tabs.Tab
+                        value="terminal"
+                        className="ds-bp-tab"
+                        leftSection={<IconTerminal2 size={13} />}
+                        data-testid="bp-tab-terminal"
                       >
-                        {problemCount}
-                      </span>
+                        Terminal
+                      </Tabs.Tab>
+                      <Tabs.Tab
+                        value="problems"
+                        className="ds-bp-tab"
+                        leftSection={<IconAlertTriangle size={13} />}
+                        rightSection={
+                          problemCount > 0 ? (
+                            <span
+                              className="ds-bp-count"
+                              data-testid="bp-problem-count"
+                            >
+                              {problemCount}
+                            </span>
+                          ) : undefined
+                        }
+                        data-testid="bp-tab-problems"
+                      >
+                        Problems
+                      </Tabs.Tab>
+                    </Tabs.List>
+                    <div className="ds-bp-spacer" />
+                    {shell.bottomTab === "terminal" && (
+                      <Tooltip label="Move terminal to the sidebar" withinPortal>
+                        <ActionIcon
+                          variant="subtle"
+                          size="sm"
+                          aria-label="Move terminal to the sidebar"
+                          onClick={shell.toggleTerminalPlacement}
+                          data-testid="terminal-placement-toggle"
+                        >
+                          <IconLayoutSidebarRight size={14} />
+                        </ActionIcon>
+                      </Tooltip>
                     )}
-                  </button>
-                  <div className="ds-bp-spacer" />
-                  {shell.bottomTab === "terminal" && (
-                    <Tooltip label="Move terminal to the sidebar" withinPortal>
+                    <Tooltip label="Collapse panel" withinPortal>
                       <ActionIcon
                         variant="subtle"
                         size="sm"
-                        aria-label="Move terminal to the sidebar"
-                        onClick={shell.toggleTerminalPlacement}
-                        data-testid="terminal-placement-toggle"
+                        aria-label="Collapse panel"
+                        onClick={shell.toggleTerminal}
+                        data-testid="bp-collapse"
                       >
-                        <IconLayoutSidebarRight size={14} />
+                        <IconChevronDown size={14} />
                       </ActionIcon>
                     </Tooltip>
-                  )}
-                  <Tooltip label="Collapse panel" withinPortal>
-                    <ActionIcon
-                      variant="subtle"
-                      size="sm"
-                      aria-label="Collapse panel"
-                      onClick={shell.toggleTerminal}
-                      data-testid="bp-collapse"
-                    >
-                      <IconChevronDown size={14} />
-                    </ActionIcon>
-                  </Tooltip>
-                </div>
-                <div className="ds-bp-content">
-                  {/* The terminal is hidden, never unmounted: unmounting
-                      disposes the pty and kills whatever is running in it,
-                      so a glance at Problems would end your test run. */}
-                  {project && terminalEverOpened.current && (
-                    <div
-                      className="ds-bp-pane"
-                      hidden={shell.bottomTab !== "terminal"}
-                    >
-                      <TerminalPane projectHash={project.hash} />
-                    </div>
-                  )}
-                  {shell.bottomTab === "problems" && (
-                    <ProblemsPane onOpen={selectFile} />
-                  )}
-                </div>
+                  </div>
+                  <div className="ds-bp-content">
+                    {/* keepMounted on this panel only: the terminal must stay
+                        mounted while hidden, since unmounting disposes the pty
+                        and kills whatever is running in it. Problems has no
+                        such state, so it mounts/unmounts with the tab. */}
+                    <Tabs.Panel value="terminal" keepMounted className="ds-bp-pane">
+                      {project && terminalEverOpened.current && (
+                        <TerminalPane projectHash={project.hash} />
+                      )}
+                    </Tabs.Panel>
+                    <Tabs.Panel value="problems" className="ds-bp-pane">
+                      <ProblemsPane onOpen={selectFile} />
+                    </Tabs.Panel>
+                  </div>
+                </Tabs>
               </div>
             </div>
           </div>

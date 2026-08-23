@@ -16,6 +16,8 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconPlayerPlay,
+  IconSquare,
+  IconSquareCheck,
 } from "@tabler/icons-react";
 import MDEditor from "@uiw/react-md-editor";
 import { listen } from "@tauri-apps/api/event";
@@ -260,7 +262,7 @@ export default function SpecChangeTab({
                   </Button>
                 </Tooltip>
               )}
-              <Alert color="gray" variant="light" p="xs">
+              <Alert color="neutral" variant="light" p="xs">
                 <Text size="xs" c="dimmed">
                   Task checkboxes are the agent's self-report about its own work
                   — not evidence that anything runs. Only a verify command's
@@ -269,7 +271,7 @@ export default function SpecChangeTab({
               </Alert>
               {tasks.loading && <Loader size="xs" />}
               {tasks.error && (
-                <Alert color="red" variant="light">
+                <Alert color="danger" variant="light">
                   {tasks.error}
                 </Alert>
               )}
@@ -287,7 +289,12 @@ export default function SpecChangeTab({
                       textDecoration: task.checked ? "line-through" : undefined,
                     }}
                   >
-                    {task.checked ? "☑" : "☐"} {task.text}
+                    {task.checked ? (
+                      <IconSquareCheck size={13} />
+                    ) : (
+                      <IconSquare size={13} />
+                    )}{" "}
+                    {task.text}
                   </Text>
                 </Group>
               ))}
@@ -316,7 +323,7 @@ export default function SpecChangeTab({
                 </Text>
               </Group>
               {verifyError && (
-                <Alert color="red" variant="light">
+                <Alert color="danger" variant="light">
                   {verifyError}
                 </Alert>
               )}
@@ -359,7 +366,7 @@ export default function SpecChangeTab({
                             <Button
                               size="compact-xs"
                               variant="subtle"
-                              color="gray"
+                              color="neutral"
                               onClick={() => onRemovePin(name)}
                               data-testid={`spec-verify-unpin-${name}`}
                             >
@@ -417,7 +424,7 @@ function ArtifactView({ state }: { state: ArtifactState }) {
   if (state.loading) return <Loader size="xs" />;
   if (state.error)
     return (
-      <Alert color="red" variant="light">
+      <Alert color="danger" variant="light">
         {state.error}
       </Alert>
     );
@@ -496,7 +503,7 @@ function SpecDeltasView({
   if (loading) return <Loader size="xs" />;
   if (error)
     return (
-      <Alert color="red" variant="light">
+      <Alert color="danger" variant="light">
         {error}
       </Alert>
     );

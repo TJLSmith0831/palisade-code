@@ -175,7 +175,7 @@ export default function SpecPane({
         <Group gap="xs">
           {validating ? (
             <Loader
-              color="lime"
+              color="warn"
               type="dots"
               size="xs"
               data-testid="validates-loader"
@@ -183,18 +183,18 @@ export default function SpecPane({
           ) : (
             <>
               {valid === true && (
-                <Badge size="xs" color="green" variant="light">
+                <Badge size="xs" color="success" variant="light">
                   validates
                 </Badge>
               )}
               {valid === false && (
-                <Badge size="xs" color="orange" variant="light">
+                <Badge size="xs" color="warn" variant="light">
                   validation failed
                 </Badge>
               )}
               {valid === null && !loading && (
                 <Tooltip label="`openspec` is not on PATH, so validity is unknown — not invalid.">
-                  <Badge size="xs" color="gray" variant="light">
+                  <Badge size="xs" color="neutral" variant="light">
                     unknown
                   </Badge>
                 </Tooltip>
@@ -216,7 +216,7 @@ export default function SpecPane({
       </Group>
 
       {error && (
-        <Alert color="red" variant="light">
+        <Alert color="danger" variant="light">
           {error}
         </Alert>
       )}
@@ -271,7 +271,7 @@ export default function SpecPane({
               )}
               {archiving.has(change.name) ? (
                 <Loader
-                  color="blue"
+                  color="neutral"
                   type="dots"
                   size="xs"
                   data-testid="archive-loader"

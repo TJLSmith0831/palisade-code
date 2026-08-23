@@ -221,11 +221,18 @@ button:hover:not(:disabled) {
 }
 
 /* textarea is in this list because the commit-message box is one, and it
-   was the only control in the git flow with no focus indicator at all. */
+   was the only control in the git flow with no focus indicator at all.
+   The two `.mantine-focus-*` selectors exist because main.tsx sets
+   `focusRing: "never"` — Mantine components that don't render a bare
+   <button> would otherwise have no ring at all, and the ones that do would
+   have drawn a second, differently-shaped one on top of this. One recipe,
+   both libraries. */
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+.mantine-focus-auto:focus-visible,
+.mantine-focus-always:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
 }
@@ -803,6 +810,7 @@ input[type="checkbox"] {
 
 .ds-tree-row {
   font-size: 11px;
+  border-radius: 4px;
   padding-block: 3px;
   padding-inline-end: 10px;
   /* 10px base indent plus Mantine Tree's per-level offset (levelOffset={12}),
@@ -825,6 +833,17 @@ input[type="checkbox"] {
 .ds-tree-row.active {
   background: var(--active-row);
   color: var(--fg);
+}
+
+/* Custom rows are role="button" divs, so the global button/input focus rule
+   never reaches them. One recipe, applied to every such row in the shell. */
+.ds-tree-row:focus-visible,
+.ds-search-hit:focus-visible,
+.ds-sc-file:focus-visible,
+.ds-run-row:focus-visible,
+.ds-db-cell:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
 }
 
 .ds-tree-row.active .ds-chevron {
@@ -973,7 +992,7 @@ input[type="checkbox"] {
 /* --- editor tabs (v2) --------------------------------------------------- */
 
 .ds-editor-tabs {
-  height: 35px;
+  height: 28px;
   background: var(--chrome-bg);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -1093,7 +1112,7 @@ input[type="checkbox"] {
   align-items: center;
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel-bg);
+  background: var(--chrome-bg);
   font-size: 11px;
 }
 
@@ -1125,7 +1144,7 @@ input[type="checkbox"] {
   padding: 2px 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--panel-bg);
+  background: var(--chrome-bg);
   color: var(--fg);
   font-size: 11px;
   cursor: pointer;
@@ -1409,24 +1428,6 @@ input[type="checkbox"] {
   flex: 1;
 }
 
-.spec-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  background: linear-gradient(135deg, var(--twilight-glow), transparent 80%);
-  border-bottom: 1px solid var(--twilight-glow);
-}
-
-.spec-banner .spec-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -1466,6 +1467,11 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  border-radius: 9999px;
+  background: var(--twilight-glow);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 .ds-chat-bubble .message {
@@ -1474,8 +1480,8 @@ input[type="checkbox"] {
 
 .message {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 16px;
+  border-radius: 6px;
+  padding: 8px 12px;
   background: var(--surface-warm);
   color: var(--fg);
   max-width: 80%;
@@ -1496,11 +1502,12 @@ input[type="checkbox"] {
   border: none;
   color: var(--muted);
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 4px 12px;
 }
 
 .message .meta {
   display: block;
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
@@ -1697,91 +1704,34 @@ input[type="checkbox"] {
   gap: 14px;
 }
 
-/* Pinned so Fetch/Pull/Push and the commit box stay reachable no matter how
-   long the Changes/Staged lists (or Turn History below them) grow — they
-   used to scroll away with everything else inside `.messages`. Bleeds into
-   `.diff-pane`'s own padding so it's a flush, solid toolbar (no inset card
-   look, no seam at the edges) rather than floating content with gaps a
-   scrolled diff row could show through. */
-.diff-sticky-controls {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  background: var(--editor-bg);
-  margin: -10px -14px 0;
-  padding: 10px 14px;
+.diff-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  border-bottom: 1px solid var(--border);
-  /* Forces its own compositing layer — WKWebView can otherwise leave a
-     stale-paint sliver of scrolled-past content showing behind a sticky
-     element even though its computed position is already flush. */
-  transform: translateZ(0);
-  /* Belt-and-suspenders: paint a solid block above the element's own box,
-     since the compositing-layer fix alone still let a sub-pixel sliver of
-     the previous scrolled line show through the boundary in testing. */
-  box-shadow: 0 -40px 0 var(--editor-bg);
 }
 
-.diff-sync-bar {
+/* Rendered by DiffPane's single-file focus mode; had no rule at all, so the
+   "Show all changes" button sat flush against the path with no alignment. */
+.diff-focus-bar {
   display: flex;
-  gap: 6px;
-}
-
-.diff-sync-bar button {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface-warm);
-  color: var(--fg);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.diff-sync-bar button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.diff-commit-box {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.diff-commit-box textarea {
-  resize: vertical;
-  min-height: 56px;
-  padding: 8px 10px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
-  color: var(--fg);
   font-family: var(--mono);
-  font-size: 12px;
-}
-
-.diff-commit-box button {
-  align-self: flex-end;
-  padding: 4px 14px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--accent);
-  color: var(--accent-on);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.diff-commit-box button:disabled {
-  opacity: 0.4;
-  cursor: default;
-  background: var(--surface-warm);
+  font-size: 11px;
   color: var(--muted);
+}
+
+.diff-spacer {
+  flex: 1;
 }
 
 .ds-section-heading {
   margin: 0 0 8px;
+  font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2099,7 +2049,13 @@ details.graph-report-wrap > summary {
 
 .empty {
   margin: auto;
+  max-width: 46ch;
+  padding: 16px 12px;
   color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  text-wrap: balance;
 }
 
 .ds-onboarding-empty {
@@ -2619,7 +2575,7 @@ details.graph-report-wrap > summary {
   width: 32px;
   height: 32px;
   border-radius: 6px;
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -2629,6 +2585,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-rail-btn:hover {
+  border-color: var(--border);
   color: var(--fg);
   background: var(--surface-warm);
 }
@@ -2706,6 +2663,14 @@ details.graph-report-wrap > summary {
   flex-direction: column;
 }
 
+/* When a panel stacks two bodies (Run configurations + Verification), the
+   first sizes to its content and the last takes the remainder — otherwise
+   they split the column evenly and each leaves half a panel of dead space. */
+.ds-panel-body:not(:last-child) {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+
 /* --- centre column + bottom panel ---------------------------------------- */
 
 .ds-main {
@@ -2754,6 +2719,13 @@ details.graph-report-wrap > summary {
   min-height: 0;
 }
 
+.ds-bp-tabs-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .ds-bp-tabs {
   display: flex;
   align-items: center;
@@ -2772,7 +2744,7 @@ details.graph-report-wrap > summary {
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -2780,7 +2752,7 @@ details.graph-report-wrap > summary {
   color: var(--fg);
 }
 
-.ds-bp-tab.active {
+.ds-bp-tab[data-active] {
   color: var(--fg);
   border-bottom-color: var(--accent);
 }
@@ -2797,16 +2769,14 @@ details.graph-report-wrap > summary {
   flex-direction: column;
 }
 
-/* Tab bodies stay mounted and are hidden instead — see App.tsx. */
+/* Terminal's panel stays mounted (keepMounted on its Tabs.Panel) and is
+   hidden via Mantine's inline display:none instead — see App.tsx. Problems'
+   panel mounts/unmounts with the tab, matching its lack of live state. */
 .ds-bp-pane {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.ds-bp-pane[hidden] {
-  display: none;
 }
 
 /* --- preset arrangement --------------------------------------------------
@@ -2903,7 +2873,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-session-title {
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.35;
   color: var(--fg);
   display: -webkit-box;
@@ -2915,7 +2885,7 @@ details.graph-report-wrap > summary {
 
 .ds-session-meta {
   margin-top: 3px;
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
   display: flex;
@@ -3148,7 +3118,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-sc-fpath {
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
   overflow: hidden;
@@ -3169,7 +3139,7 @@ details.graph-report-wrap > summary {
 
 .ds-sc-status-warn { color: var(--warn); }
 .ds-sc-status-success { color: var(--success); }
-.ds-sc-status-bad { color: var(--bad); }
+.ds-sc-status-bad { color: var(--danger); }
 
 .ds-sc-graph-label {
   display: flex;
@@ -3219,7 +3189,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-sc-commit-msg {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3237,12 +3207,12 @@ details.graph-report-wrap > summary {
   align-items: center;
   gap: 3px;
   flex-shrink: 0;
-  font-size: 9.5px;
+  font-size: 9px;
   font-family: var(--mono);
   text-transform: uppercase;
   color: var(--accent);
   border: 1px solid color-mix(in oklab, var(--accent), transparent 65%);
-  border-radius: var(--r-pill, 999px);
+  border-radius: 9999px;
   padding: 1px 6px;
 }
 
@@ -3256,19 +3226,18 @@ details.graph-report-wrap > summary {
   cursor: pointer;
 }
 
-.ds-search-hit:hover,
-.ds-search-hit:focus-visible {
+.ds-search-hit:hover {
   background: var(--surface-warm);
 }
 
 .ds-search-hit-path {
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
 }
 
 .ds-search-hit-text {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--fg);
   font-family: var(--mono);
   overflow: hidden;
@@ -3374,10 +3343,15 @@ details.graph-report-wrap > summary {
   margin-top: 8px;
 }
 
+.ds-onboarding-dir-hint {
+  color: var(--warn);
+  font-size: 11px;
+}
+
 .ds-onboarding-dir-row {
   padding-top: 8px;
   border-top: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -3392,7 +3366,7 @@ details.graph-report-wrap > summary {
   background: none;
   border: none;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 11px;
   cursor: pointer;
   padding: 0;
   transition: color 150ms ease;
@@ -3410,10 +3384,10 @@ details.graph-report-wrap > summary {
   justify-content: center;
   margin: 16px 0 22px;
   padding: 7px 13px;
-  border-radius: var(--r-pill, 999px);
+  border-radius: 9999px;
   background: var(--surface);
   border: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -3475,7 +3449,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-onboarding-card-body {
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -3522,13 +3496,13 @@ details.graph-report-wrap > summary {
 }
 
 .ds-onboarding-recent-name {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--fg);
 }
 
 .ds-onboarding-recent-path {
-  font-size: 10.5px;
+  font-size: 10px;
   font-family: var(--mono);
 }
 
@@ -3572,7 +3546,7 @@ details.graph-report-wrap > summary {
   align-items: center;
   gap: 5px;
   padding: 0 8px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--accent);
   border-radius: 0;
@@ -3592,7 +3566,13 @@ details.graph-report-wrap > summary {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 2px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.ds-run-row:hover,
+.ds-run-row:focus-within {
+  background: var(--surface-warm);
 }
 
 .ds-run-text {
@@ -3603,13 +3583,13 @@ details.graph-report-wrap > summary {
 }
 
 .ds-run-name {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--fg);
 }
 
 .ds-run-command {
-  font-size: 10.5px;
+  font-size: 10px;
   font-family: var(--mono);
   color: var(--muted);
   overflow: hidden;
@@ -3643,12 +3623,13 @@ details.graph-report-wrap > summary {
 .ds-editor-status {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-shrink: 0;
   height: 24px;
-  padding: 0 10px;
-  background: var(--accent);
-  color: var(--accent-on);
+  padding: 0 8px;
+  background: var(--chrome-bg);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -3659,35 +3640,18 @@ details.graph-report-wrap > summary {
 .ds-status-item {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   padding: 2px 6px;
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
-  color: var(--accent-on);
+  color: var(--muted);
   font-size: 11px;
 }
 
 .ds-status-item:hover {
-  background: color-mix(in oklab, var(--accent-on), transparent 85%);
-}
-
-/* On the accent bar the dots need contrast against green, not against the
-   app background — semantic colours would vanish into it. */
-.ds-editor-status .ds-status-dot {
-  background: color-mix(in oklab, var(--accent-on), transparent 55%);
-}
-
-.ds-editor-status .ds-status-dot-success {
-  background: var(--accent-on);
-}
-
-.ds-editor-status .ds-status-dot-warn {
-  background: color-mix(in oklab, var(--warn), white 30%);
-}
-
-.ds-editor-status .ds-status-dot-bad {
-  background: color-mix(in oklab, var(--danger), white 25%);
+  background: var(--surface-warm);
+  color: var(--fg);
 }
 
 .ds-status-dot {
@@ -3702,7 +3666,7 @@ details.graph-report-wrap > summary {
 .ds-status-dot-bad { background: var(--danger); }
 
 .ds-status-note {
-  color: var(--accent-on);
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3745,7 +3709,7 @@ details.graph-report-wrap > summary {
 
 .ds-problem-where {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -3758,6 +3722,7 @@ details.graph-report-wrap > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 6px;
   width: 100%;
   min-height: 32px;
@@ -3769,9 +3734,12 @@ details.graph-report-wrap > summary {
 .ds-composer-picker {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  min-width: 0;
-  max-width: 45%;
+  gap: 6px;
+  /* Floor keeps icon + chevron + padding intact. Without it the chip shrank
+     past its own glyphs in the sidebar and rendered as an empty 24px box —
+     the opposite of what the comment above intends. */
+  min-width: 56px;
+  max-width: 100%;
   height: 34px;
   padding: 0 10px;
   border: 1px solid var(--border);
@@ -3782,6 +3750,10 @@ details.graph-report-wrap > summary {
   font-size: 12px;
   cursor: pointer;
   transition: all 120ms ease-out;
+}
+
+.ds-composer-picker > svg {
+  flex-shrink: 0;
 }
 
 .ds-composer-picker-label {
@@ -3872,7 +3844,7 @@ details.graph-report-wrap > summary {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--surface);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -4021,7 +3993,7 @@ details.graph-report-wrap > summary {
 
 .ds-command-menu-name {
   display: block;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--fg);
 }
@@ -4032,7 +4004,7 @@ details.graph-report-wrap > summary {
    you are picking by — the description only has to disambiguate. */
 .ds-command-menu-desc {
   display: block;
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 1.45;
   color: var(--muted);
   overflow: hidden;
@@ -4071,7 +4043,7 @@ details.graph-report-wrap > summary {
 
 .ds-mcp-empty {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--muted);
 }
@@ -4082,8 +4054,9 @@ details.graph-report-wrap > summary {
   min-width: 0;
 }
 
-.ds-mcp-row:hover {
-  background: var(--active-row);
+.ds-mcp-row:hover,
+.ds-mcp-row:focus-within {
+  background: var(--surface-warm);
 }
 
 /* A disabled server stays legible but visibly inactive — the switch alone is
@@ -4103,7 +4076,7 @@ details.graph-report-wrap > summary {
 .ds-mcp-name {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--fg);
   text-align: left;
@@ -4203,7 +4176,7 @@ details.graph-report-wrap > summary {
 
 .ds-db-grid {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -4229,12 +4202,11 @@ details.graph-report-wrap > summary {
   display: inline-block;
   min-width: 1ch;
   min-height: 1.2em;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   border-radius: 4px;
-}
-
-.ds-db-cell:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* An edited cell reads as staged-not-saved, the same idea as a dirty tab. */

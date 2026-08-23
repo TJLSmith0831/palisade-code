@@ -232,7 +232,7 @@ export default function McpPane({
                     <ActionIcon
                       size="sm"
                       variant="subtle"
-                      color="gray"
+                      color="neutral"
                       aria-label={`Remove ${server.name}`}
                       onClick={() =>
                         void act(api.removeMcpServer(projectHash, server.name))

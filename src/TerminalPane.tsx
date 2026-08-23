@@ -32,7 +32,9 @@ export default function TerminalPane({ projectHash }: Props) {
     if (!host) return;
 
     const term = new Terminal({
-      fontFamily: "'Geist Mono', 'SF Mono', ui-monospace, Menlo, monospace",
+      fontFamily: getComputedStyle(document.documentElement)
+        .getPropertyValue("--mono")
+        .trim(),
       fontSize: 12,
       cursorBlink: true,
       theme: {

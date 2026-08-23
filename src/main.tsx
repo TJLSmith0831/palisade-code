@@ -28,6 +28,20 @@ const statusTuple = (token: string) =>
 // Radius/font tokens mirror DESIGN.md's documented scale (rounded, typography).
 const theme = createTheme({
   radius: { xs: "4px", sm: "6px", md: "8px", lg: "12px", xl: "9999px" },
+  // Without these two, every `gap="xs"`/`p="md"`/`size="sm"` in the app
+  // resolved against Mantine's stock rem scale (10/12/16/20/32px spacing,
+  // 12/14/16/18/20px type) instead of DESIGN.md's. That was the single
+  // largest source of Mantine components sitting a few pixels off the
+  // hand-written CSS around them on every screen.
+  spacing: { xs: "4px", sm: "6px", md: "8px", lg: "12px", xl: "16px" },
+  fontSizes: { xs: "10px", sm: "11px", md: "12px", lg: "13px", xl: "16px" },
+  lineHeights: { xs: "1.3", sm: "1.4", md: "1.5", lg: "1.5", xl: "1.5" },
+  defaultRadius: "sm",
+  // App.css:225 already paints the documented accent ring on every focusable
+  // control. Left on "auto", Mantine layers its own ring on top for the
+  // components that don't render a bare <button>, so the same control could
+  // show two different rings depending on which library drew it.
+  focusRing: "never",
   fontFamily:
     '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif',
   // Defers to App.css's `--mono` rather than restating the stack: it was one
@@ -114,6 +128,12 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
       "color-mix(in oklab, var(--accent), transparent 65%)",
     "--mantine-primary-color-light-color": "var(--accent)",
     "--mantine-primary-color-contrast": "var(--accent-on)",
+    // Table reads its own vars rather than the default-border/hover ones, so
+    // without these the DB grid was the one surface in the shell drawing
+    // Mantine's stock gray borders and stripes instead of --border.
+    "--table-border-color": "var(--border)",
+    "--table-striped-color": "color-mix(in oklab, var(--surface), transparent 55%)",
+    "--table-highlight-on-hover-color": "var(--surface-warm)",
     ...accentPrimaryRamp,
     ...statusRamps,
   },

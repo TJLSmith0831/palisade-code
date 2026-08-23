@@ -266,8 +266,8 @@ export default function FilePalette({
       emptyState={emptyState}
       footer={
         <span className="hint">
-          ↑↓ to navigate · Enter to open{canCreate ? " or create" : ""} · ✎ to
-          rename/move · Esc to cancel
+          ↑↓ to navigate · Enter to open{canCreate ? " or create" : ""} · Esc
+          to cancel
         </span>
       }
     />

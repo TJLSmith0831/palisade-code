@@ -9,6 +9,7 @@ import {
   IconGhost3Filled,
   IconLoader2,
   IconRoute,
+  IconTerminal2,
 } from "@tabler/icons-react";
 
 import type { ExecutorEvent, Message, Preflight } from "./api";
@@ -27,11 +28,9 @@ function ChatAvatar({ executor }: { executor: Preflight["selected"] }) {
   return (
     <div className="ds-chat-avatar">
       {executor === "claude" ? (
-        <IconGhost3Filled size={24} style={{ color: "var(--accent)" }} />
-      ) : executor === "codex" ? (
-        "X"
+        <IconGhost3Filled size={18} />
       ) : (
-        "A"
+        <IconTerminal2 size={18} />
       )}
     </div>
   );
@@ -208,7 +207,7 @@ function ToolBlock({
   const [open, setOpen] = useState(false);
   const failed = output?.isError === true;
   const running = !output;
-  const badgeColor = pending ? "yellow" : running ? "gray" : failed ? "red" : "green";
+  const badgeColor = pending ? "warn" : running ? "neutral" : failed ? "danger" : "success";
   const preview = event.command.split("\n")[0].slice(0, 120);
 
   return (
@@ -336,7 +335,7 @@ function ToolBlock({
       </Box>
       {pending?.warning && (
         <Alert
-          color="orange"
+          color="warn"
           variant="light"
           p="xs"
           data-testid="permission-conflict-warning"

@@ -1,4 +1,4 @@
-import { Tooltip } from "@mantine/core";
+import { ActionIcon, Tooltip } from "@mantine/core";
 import {
   IconFolder,
   IconSearch,
@@ -70,7 +70,8 @@ export default function NavRail({
     const active = activePanel === id;
     return (
       <Tooltip key={id} label={label} position="right" withinPortal>
-        <button
+        <ActionIcon
+          variant="subtle"
           className={`ds-rail-btn${active ? " active" : ""}`}
           onClick={() => onSelect(id)}
           aria-label={label}
@@ -79,7 +80,7 @@ export default function NavRail({
         >
           <Icon size={18} stroke={1.6} />
           {id === "git" && dirtyGit && <span className="ds-rail-dot" />}
-        </button>
+        </ActionIcon>
       </Tooltip>
     );
   };

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Modal, Button, Switch } from "@mantine/core";
+import { Modal, Button, NumberInput, Select, Switch } from "@mantine/core";
 import * as api from "./api";
 import {
   COMPLETION_ENABLED_KEY,
@@ -490,14 +490,19 @@ export default function SettingsPanel({
   /* Design tokens                                                            */
   /* ------------------------------------------------------------------------ */
 
-  const panel = "#202224";
-  const field = "#17191c";
-  const border = "#33373c";
-  const borderSubtle = "#2a2e33";
-  const text = "#e5e7eb";
-  const muted = "#9299a2";
-  const dim = "#686f78";
-  const accent = `oklch(65% 0.18 ${accentHue})`;
+  /* These were a second, hand-picked hex palette that shadowed the real
+     tokens: it never followed light mode (the modal stayed dark on a light
+     shell), and its accent was computed at 65% lightness against the token's
+     88%, so the accent picker previewed a visibly different green from the
+     one it applied. Pointing them at the tokens keeps every call site below
+     unchanged while putting the modal back on the app's single palette. */
+  const panel = "var(--bg)";
+  const border = "var(--border)";
+  const borderSubtle = "color-mix(in oklab, var(--border), transparent 45%)";
+  const text = "var(--fg)";
+  const muted = "var(--muted)";
+  const dim = "color-mix(in oklab, var(--muted), transparent 30%)";
+  const accent = "var(--accent)";
 
   const sectionLabel = {
     color: text,
@@ -600,7 +605,7 @@ export default function SettingsPanel({
       centered
       size={700}
       padding={0}
-      radius={14}
+      radius="md"
       transitionProps={{
         duration: 120,
         transition: "fade",
@@ -614,7 +619,7 @@ export default function SettingsPanel({
         content: {
           background: panel,
           border: `1px solid ${border}`,
-          boxShadow: "0 28px 80px rgba(0,0,0,.55), 0 8px 28px rgba(0,0,0,.35)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
           overflow: "hidden",
         },
         header: {
@@ -633,7 +638,7 @@ export default function SettingsPanel({
           width: 32,
           height: 32,
           color: "#9ca3ab",
-          borderRadius: 7,
+          borderRadius: 6,
         },
         body: {
           padding: 0,
@@ -654,8 +659,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -707,8 +712,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -732,17 +737,22 @@ export default function SettingsPanel({
         </section>
 
         {/* ---------------------------------------------------------------- */}
-        {/* Shell accent                                                      */}
+        {/* Panel surfaces                                                    */}
+        {/*                                                                   */}
+        {/* Named "Shell accent" until it was noticed the override drives     */}
+        {/* --surface/--surface-warm/--editor-bg, not an accent — so it sat   */}
+        {/* next to "App shell" showing the same eight background swatches    */}
+        {/* under a label that promised a different kind of colour.           */}
         {/* ---------------------------------------------------------------- */}
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
-          <div style={sectionLabel}>Shell accent</div>
+          <div style={sectionLabel}>Panel &amp; editor surface</div>
 
           <SwatchRow
             label="Light"
@@ -767,8 +777,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -797,8 +807,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -827,8 +837,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -849,8 +859,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -863,70 +873,34 @@ export default function SettingsPanel({
               gap: 8,
             }}
           >
-            <select
+            <Select
               id="editorFontSelect"
+              flex={1}
+              allowDeselect={false}
               value={editorFont}
-              onChange={(event) => setEditorFont(event.target.value)}
+              onChange={(value) => value && setEditorFont(value)}
+              data={FONT_PRESETS.map((preset) => ({
+                value: preset.value,
+                label: preset.name,
+              }))}
+              aria-label="Editor font"
               data-testid="editor-font-select"
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: 42,
-                padding: "0 12px",
-                color: text,
-                background: field,
-                border: `1px solid ${border}`,
-                borderRadius: 7,
-                outline: "none",
-                fontFamily: "inherit",
-                fontSize: 13,
-                cursor: "pointer",
-                boxSizing: "border-box",
-              }}
-            >
-              {FONT_PRESETS.map((preset) => (
-                <option key={preset.value} value={preset.value}>
-                  {preset.name}
-                </option>
-              ))}
-            </select>
-
-            <input
-              id="editorFontSize"
-              type="number"
-              min={MIN_FONT_SIZE}
-              max={MAX_FONT_SIZE}
-              value={editorFontSize}
-              aria-label="Editor font size"
-              onChange={(event) =>
-                setEditorFontSize(Number(event.target.value))
-              }
-              data-testid="editor-font-size-input"
-              style={{
-                width: 72,
-                height: 42,
-                padding: "0 10px",
-                color: text,
-                background: field,
-                border: `1px solid ${border}`,
-                borderRadius: 7,
-                outline: "none",
-                fontFamily: "var(--mono)",
-                fontSize: 13,
-                textAlign: "center",
-                boxSizing: "border-box",
-              }}
             />
 
-            <span
-              style={{
-                color: muted,
-                fontSize: 12,
-                width: 18,
-              }}
-            >
-              px
-            </span>
+            <NumberInput
+              id="editorFontSize"
+              w={96}
+              min={MIN_FONT_SIZE}
+              max={MAX_FONT_SIZE}
+              clampBehavior="strict"
+              suffix=" px"
+              value={editorFontSize}
+              aria-label="Editor font size"
+              onChange={(value) => setEditorFontSize(Number(value))}
+              data-testid="editor-font-size-input"
+            />
+
+
           </div>
         </section>
 
@@ -939,7 +913,7 @@ export default function SettingsPanel({
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            paddingBottom: 18,
+            paddingBottom: 16,
             marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
@@ -966,46 +940,12 @@ export default function SettingsPanel({
             </div>
           </div>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={editorWrap}
-            aria-label="Wrap long lines"
-            onClick={() => setEditorWrap(!editorWrap)}
+          <Switch
+            checked={editorWrap}
+            onChange={(event) => setEditorWrap(event.currentTarget.checked)}
             data-testid="editor-wrap-toggle"
-            style={{
-              position: "relative",
-              width: 42,
-              height: 24,
-              padding: 2,
-              flexShrink: 0,
-              border: "none",
-              borderRadius: 999,
-              // Was a hardcoded charcoal, which stayed dark in light mode —
-              // the one control on this panel that ignored the theme.
-              background: editorWrap ? accent : "var(--surface-warm)",
-              cursor: "pointer",
-              transition: "background 120ms ease",
-              boxSizing: "border-box",
-            }}
-          >
-            <span
-              style={{
-                position: "absolute",
-                top: 4,
-                left: editorWrap ? 22 : 4,
-                width: 16,
-                height: 16,
-                borderRadius: "50%",
-                // Contrasts with whichever track it sits on: dark ink on the
-                // bright accent when on, foreground on the neutral track when
-                // off. A fixed white knob read as low-contrast on the accent.
-                background: editorWrap ? "var(--accent-on)" : "var(--fg)",
-                boxShadow: "0 1px 3px rgba(0,0,0,.35)",
-                transition: "left 120ms ease",
-              }}
-            />
-          </button>
+            aria-label="Wrap long lines"
+          />
         </section>
 
         {/* ---------------------------------------------------------------- */}
@@ -1014,8 +954,8 @@ export default function SettingsPanel({
 
         <section
           style={{
-            paddingBottom: 18,
-            marginBottom: 18,
+            paddingBottom: 16,
+            marginBottom: 16,
             borderBottom: `1px solid ${borderSubtle}`,
           }}
         >
@@ -1078,31 +1018,20 @@ export default function SettingsPanel({
           >
             Accept suggestion
           </label>
-          <select
+          <Select
             id="completion-keybinding-select"
+            w="100%"
+            allowDeselect={false}
             value={completionKeybinding}
-            onChange={(event) => handleCompletionKeybinding(event.target.value)}
+            onChange={(value) => value && handleCompletionKeybinding(value)}
             disabled={!completionEnabled}
+            data={[
+              { value: "Alt-Tab", label: "Option / Alt + Tab" },
+              { value: "Tab", label: "Tab" },
+            ]}
+            aria-label="Accept suggestion keybinding"
             data-testid="completion-keybinding-select"
-            style={{
-              flex: 1,
-              width: "100%",
-              height: 42,
-              padding: "0 12px",
-              color: text,
-              background: field,
-              border: `1px solid ${border}`,
-              borderRadius: 7,
-              outline: "none",
-              fontFamily: "inherit",
-              fontSize: 13,
-              cursor: completionEnabled ? "pointer" : "not-allowed",
-              boxSizing: "border-box",
-            }}
-          >
-            <option value="Alt-Tab">Option / Alt + Tab</option>
-            <option value="Tab">Tab</option>
-          </select>
+          />
         </section>
 
         {/* ---------------------------------------------------------------- */}
@@ -1154,7 +1083,7 @@ export default function SettingsPanel({
           style={{
             display: "flex",
             alignItems: "center",
-            marginTop: 18,
+            marginTop: 16,
             color: dim,
             fontFamily: "var(--mono)",
             fontSize: 11,

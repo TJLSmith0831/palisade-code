@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Badge, Modal as MantineModal, SegmentedControl } from "@mantine/core";
+import {
+  Alert,
+  Badge,
+  Button,
+  Group,
+  Modal as MantineModal,
+  SegmentedControl,
+  Text,
+} from "@mantine/core";
+import {
+  IconGitBranch,
+  IconMinus,
+  IconPlus,
+  IconTrash,
+} from "@tabler/icons-react";
 import type { StructuredPatch, StructuredPatchHunk } from "diff";
 
 import * as api from "./api";
@@ -57,23 +71,51 @@ function FileDiff({
         <span className="diff-file-path">{pathFromPatch(file)}</span>
         <span className="diff-spacer" />
         {onDiscard && (
-          <button onClick={onDiscard} disabled={busy} data-testid="discard-btn">
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            color="danger"
+            leftSection={<IconTrash size={12} />}
+            onClick={onDiscard}
+            disabled={busy}
+            data-testid="discard-btn"
+          >
             Discard
-          </button>
+          </Button>
         )}
         {onStageAll && (
-          <button onClick={onStageAll} disabled={busy} data-testid="stage-all-btn">
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            leftSection={<IconPlus size={12} />}
+            onClick={onStageAll}
+            disabled={busy}
+            data-testid="stage-all-btn"
+          >
             Stage all
-          </button>
+          </Button>
         )}
       </div>
       {file.hunks.map((hunk, i) => (
         <div key={i} className="diff-hunk">
           {onHunkAction && (
             <div className="diff-hunk-head">
-              <button onClick={() => onHunkAction(hunk)} disabled={busy} data-testid="hunk-action-btn">
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                leftSection={
+                  actionLabel === "Unstage hunk" ? (
+                    <IconMinus size={12} />
+                  ) : (
+                    <IconPlus size={12} />
+                  )
+                }
+                onClick={() => onHunkAction(hunk)}
+                disabled={busy}
+                data-testid="hunk-action-btn"
+              >
                 {actionLabel}
-              </button>
+              </Button>
             </div>
           )}
           <DiffRows rows={rowsFromHunk(hunk)} view={view} />
@@ -174,13 +216,16 @@ export default function DiffPane({
           </Alert>
         )}
         <p className="empty">This project isn't a git repository yet.</p>
-        <button
+        <Button
+          size="xs"
+          variant="default"
+          leftSection={<IconGitBranch size={13} />}
           onClick={() => run(() => api.gitInit(projectHash))}
           disabled={busy}
           data-testid="init-repo-btn"
         >
           Initialize Repository
-        </button>
+        </Button>
       </div>
     );
   }
@@ -303,20 +348,31 @@ export default function DiffPane({
                 <span className="diff-spacer" />
                 {!readOnly && (
                   <>
-                    <button
-                      onClick={() => setConfirmDiscard({ path: entry.path, untracked: true })}
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      color="danger"
+                      leftSection={<IconTrash size={12} />}
+                      onClick={() =>
+                        setConfirmDiscard({ path: entry.path, untracked: true })
+                      }
                       disabled={busy}
                       data-testid="discard-untracked-btn"
                     >
                       Discard
-                    </button>
-                    <button
-                      onClick={() => run(() => api.gitStageFile(projectHash, entry.path))}
+                    </Button>
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      leftSection={<IconPlus size={12} />}
+                      onClick={() =>
+                        run(() => api.gitStageFile(projectHash, entry.path))
+                      }
                       disabled={busy}
                       data-testid="stage-untracked-btn"
                     >
                       Stage
-                    </button>
+                    </Button>
                   </>
                 )}
               </div>
@@ -332,15 +388,27 @@ export default function DiffPane({
           title={`Discard changes to "${confirmDiscard.path}"?`}
           transitionProps={{ duration: 0 }}
         >
-          <label>
+          <Text size="sm">
             Discard changes to "{confirmDiscard.path}"? This can't be undone.
-          </label>
-          <div className="confirm-actions">
-            <button onClick={discard} className="danger" data-testid="confirm-discard" autoFocus>
+          </Text>
+          <Group justify="flex-end" gap="sm" mt="lg">
+            <Button
+              size="xs"
+              variant="default"
+              onClick={() => setConfirmDiscard(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              color="danger"
+              onClick={discard}
+              data-testid="confirm-discard"
+              autoFocus
+            >
               Discard
-            </button>
-            <button onClick={() => setConfirmDiscard(null)}>Cancel</button>
-          </div>
+            </Button>
+          </Group>
         </MantineModal>
       )}
     </div>

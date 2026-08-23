@@ -66,7 +66,7 @@ describe("SettingsPanel", () => {
     expect(localStorage.getItem(ACCENT_HUE_KEY)).toBe("250");
   });
 
-  it("changing the editor font persists it and notifies listeners", () => {
+  it("changing the editor font persists it and notifies listeners", async () => {
     const onFontChanged = vi.fn();
     window.addEventListener(EDITOR_FONT_CHANGED_EVENT, onFontChanged);
     render(
@@ -77,9 +77,10 @@ describe("SettingsPanel", () => {
       />
     );
 
-    fireEvent.change(screen.getByTestId("editor-font-select"), {
-      target: { value: "Menlo, ui-monospace, monospace" },
-    });
+    fireEvent.click(screen.getByTestId("editor-font-select"));
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Menlo", hidden: true })
+    );
 
     expect(localStorage.getItem(EDITOR_FONT_KEY)).toBe(
       "Menlo, ui-monospace, monospace"
@@ -123,9 +124,8 @@ describe("SettingsPanel", () => {
       />
     );
 
-    fireEvent.change(screen.getByTestId("completion-keybinding-select"), {
-      target: { value: "Tab" },
-    });
+    fireEvent.click(screen.getByTestId("completion-keybinding-select"));
+    fireEvent.click(await screen.findByRole("option", { name: "Tab", hidden: true }));
 
     expect(localStorage.getItem(COMPLETION_KEYBINDING_KEY)).toBe("Tab");
     expect(invokeMock).toHaveBeenCalledWith("set_completion_keybinding", {

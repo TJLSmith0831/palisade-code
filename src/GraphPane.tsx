@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { Alert } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Select,
+  TextInput,
+} from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
@@ -118,9 +124,10 @@ export default function GraphPane({ projectHash }: Props) {
   return (
     <div className="graph-pane" data-testid="graph-pane">
       <div className="pane-head">
-        <strong>Codebase Map</strong>
-        <input
+        <TextInput
           className="scope"
+          size="xs"
+          flex={1}
           value={subpath}
           onChange={(event) => {
             const next = event.target.value;
@@ -136,24 +143,34 @@ export default function GraphPane({ projectHash }: Props) {
           aria-label="Subdirectory scope"
           data-testid="graph-scope"
         />
-        {(["incremental", "deep"] as const).map((key) => (
-          <label key={key} className="toggle">
-            <input
-              type="checkbox"
-              checked={options[key]}
-              disabled={key === "incremental" && subpath.trim() !== ""}
-              onChange={(event) =>
-                setOptions({ ...options, [key]: event.target.checked })
-              }
-              data-testid={`graph-${key}`}
-            />
-            {key}
-          </label>
+        {(
+          [
+            ["incremental", "Incremental"],
+            ["deep", "Deep scan"],
+          ] as const
+        ).map(([key, label]) => (
+          <Checkbox
+            key={key}
+            size="xs"
+            label={label}
+            checked={options[key]}
+            disabled={key === "incremental" && subpath.trim() !== ""}
+            onChange={(event) =>
+              setOptions({ ...options, [key]: event.currentTarget.checked })
+            }
+            data-testid={`graph-${key}`}
+          />
         ))}
         <div className="spacer" />
-        <button onClick={onRun} disabled={busy} data-testid="graph-run">
-          {busy ? "running…" : run ? "Re-run" : "Run Graphify"}
-        </button>
+        <Button
+          size="xs"
+          variant="default"
+          onClick={onRun}
+          disabled={busy}
+          data-testid="graph-run"
+        >
+          {busy ? "Running…" : run ? "Re-run" : "Run Graphify"}
+        </Button>
       </div>
 
       {error && (
@@ -180,18 +197,21 @@ export default function GraphPane({ projectHash }: Props) {
           {run.graph && <GraphView graph={run.graph} />}
 
           <div className="graph-query">
-            <select
+            <Select
+              size="xs"
+              w={104}
+              allowDeselect={false}
               value={subcommand}
-              onChange={(event) => setSubcommand(event.target.value)}
+              onChange={(value) => value && setSubcommand(value)}
+              data={["query", "path", "explain"]}
+              aria-label="Query type"
               data-testid="graph-subcommand"
-            >
-              <option value="query">query</option>
-              <option value="path">path</option>
-              <option value="explain">explain</option>
-            </select>
+            />
             {subcommand === "path" ? (
               <>
-                <input
+                <TextInput
+                  size="xs"
+                  flex={1}
                   value={pathA}
                   onChange={(event) => setPathA(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && onQuery()}
@@ -199,7 +219,9 @@ export default function GraphPane({ projectHash }: Props) {
                   aria-label="Node A"
                   data-testid="graph-question-a"
                 />
-                <input
+                <TextInput
+                  size="xs"
+                  flex={1}
                   value={pathB}
                   onChange={(event) => setPathB(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && onQuery()}
@@ -209,7 +231,9 @@ export default function GraphPane({ projectHash }: Props) {
                 />
               </>
             ) : (
-              <input
+              <TextInput
+                size="xs"
+                flex={1}
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && onQuery()}
@@ -218,9 +242,15 @@ export default function GraphPane({ projectHash }: Props) {
                 data-testid="graph-question"
               />
             )}
-            <button onClick={onQuery} disabled={busy} data-testid="graph-ask">
+            <Button
+              size="xs"
+              variant="default"
+              onClick={onQuery}
+              disabled={busy}
+              data-testid="graph-ask"
+            >
               Ask
-            </button>
+            </Button>
           </div>
           {answer && (
             <pre className="tool-body" data-testid="graph-answer">
