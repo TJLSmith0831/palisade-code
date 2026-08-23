@@ -35,7 +35,7 @@
      literal fallback is what actually painted. */
   --danger-on: oklch(98% 0.02 25);
   /* Code editor colors — overridable by the Settings panel's appearance
-     pickers (project-scoped, via .project-settings.json). Defaults match
+     pickers (project-scoped, via .palisade/project-settings.json). Defaults match
      the original --fg/--muted so the editor looks unchanged until a
      project picks a non-default shell/comment/text color. */
   --code-comment: var(--code-comment-dark-override, oklch(66% 0.012 250));
@@ -4282,4 +4282,286 @@ details.graph-report-wrap > summary {
 
 .ds-db-sql .cm-cursor {
   border-left-color: var(--accent);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Agent chains — sidebar list and canvas                                     */
+/*                                                                            */
+/* The canvas is the one surface the app draws itself: DESIGN.md's            */
+/* implementation stack has no graph primitive. Everything inside a node is    */
+/* still Mantine, and every colour here is a documented token.                 */
+/* -------------------------------------------------------------------------- */
+
+.ds-chain-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.ds-chain-row:hover {
+  background: var(--surface-warm);
+}
+
+.ds-chain-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.ds-chain-row-icon {
+  color: var(--muted);
+  flex: none;
+}
+
+.ds-chain-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+/* Node count, not a status — quiet by design. */
+.ds-chain-row-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.ds-chain-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.ds-chain-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.ds-chain-surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  outline: none;
+}
+
+.ds-chain-surface:active {
+  cursor: grabbing;
+}
+
+.ds-chain-plane {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+.ds-chain-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ds-chain-edge {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+/* A loop reads differently from a pipe before you read any label on it. */
+.ds-chain-edge[data-loop] {
+  stroke-dasharray: 5 4;
+}
+
+.ds-chain-gate {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--surface-warm);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.ds-chain-gate:hover:not(:disabled) {
+  border-color: var(--muted);
+  color: var(--fg);
+}
+
+.ds-chain-gate[data-needs-gate] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.ds-chain-node {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-warm);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color 180ms cubic-bezier(0.2, 0, 0, 1),
+    background 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ds-chain-node:hover {
+  border-color: var(--muted);
+}
+
+.ds-chain-node[data-connecting] {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.ds-chain-node-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ds-chain-node-role {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-chain-node-entry {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ds-chain-node-agent {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ds-chain-node-guideline {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ds-chain-node-state {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* The One Accent Rule's payoff: at rest the canvas is entirely neutral, and
+   the executing node is the only accent-green thing on screen. Same active
+   treatment as a nav-rail button, rather than a third "this is live" idiom. */
+.ds-chain-node[data-state="executing"] {
+  background: var(--active-row);
+  border-color: var(--accent);
+}
+
+.ds-chain-node[data-state="executing"] .ds-chain-node-state {
+  color: var(--accent);
+}
+
+/* Past tense: a quiet tint, not a persistent fill competing with the live node. */
+.ds-chain-node[data-state="done"] {
+  border-color: color-mix(in oklab, var(--success), transparent 55%);
+}
+
+.ds-chain-node[data-state="retrying"] {
+  border-color: var(--warn);
+}
+
+.ds-chain-node[data-state="retrying"] .ds-chain-node-state {
+  color: var(--warn);
+}
+
+.ds-chain-node[data-state="failed"] {
+  border-color: var(--danger);
+}
+
+.ds-chain-node[data-state="failed"] .ds-chain-node-state {
+  color: var(--danger);
+}
+
+.ds-chain-node-port {
+  position: absolute;
+  right: -11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ds-chain-node:hover .ds-chain-node-port,
+.ds-chain-node-port:focus-visible {
+  opacity: 1;
+}
+
+.ds-chain-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Docked, never a modal takeover — the graph stays visible while deciding. */
+.ds-chain-approval {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--warn), transparent 92%);
 }

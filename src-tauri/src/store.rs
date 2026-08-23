@@ -685,7 +685,7 @@ pub struct VerificationRun {
     pub thread_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
-    /// The key from `.project-settings.json`'s `verify` map.
+    /// The key from `.palisade/project-settings.json`'s `verify` map.
     pub name: String,
     pub command: String,
     pub exit_code: i32,

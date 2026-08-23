@@ -128,7 +128,7 @@ pub fn resolve_executor(
         Some(_) => Ok((
             auto()?,
             Some(format!(
-                ".project-settings.json requests `{wanted}`, but it's not on PATH — falling back to auto-detection."
+                ".palisade/project-settings.json requests `{wanted}`, but it's not on PATH — falling back to auto-detection."
             )),
         )),
         None => {
@@ -136,7 +136,7 @@ pub fn resolve_executor(
             Ok((
                 auto()?,
                 Some(format!(
-                    ".project-settings.json requests unknown executor `{wanted}` (available: {}) — falling back to auto-detection.",
+                    ".palisade/project-settings.json requests unknown executor `{wanted}` (available: {}) — falling back to auto-detection.",
                     known.join(", ")
                 )),
             ))

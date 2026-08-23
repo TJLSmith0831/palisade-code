@@ -25,6 +25,7 @@ export const PANEL_IDS = [
   "run",
   "mcp",
   "database",
+  "chains",
   "history",
   "workspace",
   "settings",

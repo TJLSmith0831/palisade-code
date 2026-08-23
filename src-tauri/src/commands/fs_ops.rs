@@ -380,7 +380,7 @@ pub(crate) fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Pa
 /// the editor's backstop for a change that landed inside the filesystem
 /// watcher's debounce window, where the reload banner wouldn't have appeared
 /// yet. Callers that legitimately write blind (creating a file, seeding
-/// `.project-settings.json`) pass `None` and are unaffected.
+/// `.palisade/project-settings.json`) pass `None` and are unaffected.
 #[tauri::command]
 pub async fn write_file_content(
     app: tauri::AppHandle,

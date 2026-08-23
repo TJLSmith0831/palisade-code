@@ -1,4 +1,4 @@
-//! Project-level settings (`.project-settings.json`, D14/D15): format-on-save
+//! Project-level settings (`.palisade/project-settings.json`, D14/D15): format-on-save
 //! commands and an executor override. `ensure_file` auto-creates it (with
 //! self-documenting defaults) the moment a project is opened, so it's always
 //! there to edit — but every reader still tolerates it being missing or
@@ -46,12 +46,15 @@ pub struct ProjectSettings {
     pub run: HashMap<String, String>,
 }
 
-const FILE_NAME: &str = ".project-settings.json";
+/// Lives under `.palisade/` alongside `chains/` — one folder for everything
+/// Palisade writes into a project. No fallback to the old root-level
+/// `.project-settings.json` (D12: clean break).
+const FILE_NAME: &str = ".palisade/project-settings.json";
 
 const DEFAULT_CONTENTS: &str =
     "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {},\n  \"verifyPins\": {},\n  \"run\": {}\n}\n";
 
-/// Loads `.project-settings.json` from `project_root`. A missing file isn't
+/// Loads `.palisade/project-settings.json` from `project_root`. A missing file isn't
 /// an error — it's the common case (e.g. before `ensure_file` has run, or
 /// if it was deleted after the fact), and yields defaults so the IDE works
 /// without one. Malformed JSON also falls back to defaults (never blocks
@@ -71,16 +74,29 @@ pub fn load(project_root: &Path) -> (ProjectSettings, Option<String>) {
     }
 }
 
-/// Creates `.project-settings.json` with self-documenting defaults if the
-/// project doesn't have one yet — called on every project open so it's
+/// Creates `.palisade/project-settings.json` with self-documenting defaults if
+/// the project doesn't have one yet — called on every project open so it's
 /// there to edit without the user having to conjure the filename
 /// themselves. A no-op once it exists; never overwrites real content.
+/// Lazily creates `.palisade/` on the way, since this is usually the first
+/// thing to write into it.
 pub fn ensure_file(project_root: &Path) -> Res<()> {
     let path = project_root.join(FILE_NAME);
     if path.exists() {
         return Ok(());
     }
-    std::fs::write(&path, DEFAULT_CONTENTS).map_err(|err| format!("create {FILE_NAME}: {err}"))
+    write_file(project_root, DEFAULT_CONTENTS).map_err(|err| format!("create {FILE_NAME}: {err}"))
+}
+
+/// Writes the settings file, lazily creating `.palisade/` first — every
+/// writer goes through here so none of them has to remember the directory
+/// might not exist yet.
+fn write_file(project_root: &Path, body: &str) -> Res<()> {
+    let path = project_root.join(FILE_NAME);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
+    }
+    std::fs::write(&path, body).map_err(|err| err.to_string())
 }
 
 /// If `relative_path` matches one of `settings.format_on_save`'s regex keys,
@@ -143,12 +159,12 @@ pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<(
     }
     doc["run"] = serde_json::to_value(commands).map_err(|err| err.to_string())?;
     let body = serde_json::to_string_pretty(&doc).map_err(|err| err.to_string())?;
-    std::fs::write(&path, body + "\n").map_err(|err| format!("write {FILE_NAME}: {err}"))
+    write_file(project_root, &(body + "\n")).map_err(|err| format!("write {FILE_NAME}: {err}"))
 }
 
 /// Proposes run commands by looking at what's actually in the project root.
 /// Proposes only — the caller shows these to the user, and nothing reaches
-/// `.project-settings.json` until they accept (D12: detection proposes, it
+/// `.palisade/project-settings.json` until they accept (D12: detection proposes, it
 /// does not decide).
 pub fn detect_run(project_root: &Path) -> Vec<(String, String)> {
     let mut found = Vec::new();
@@ -253,7 +269,7 @@ mod tests {
     #[test]
     fn an_empty_settings_file_yields_defaults() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join(FILE_NAME), "{}").unwrap();
+        write_file(root.path(), "{}").unwrap();
         let (settings, warning) = load(root.path());
         assert_eq!(settings, ProjectSettings::default());
         assert!(warning.is_none());
@@ -275,7 +291,7 @@ mod tests {
     #[test]
     fn ensure_file_never_overwrites_existing_content() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join(FILE_NAME), r#"{"executorOverride":"codex"}"#).unwrap();
+        write_file(root.path(), r#"{"executorOverride":"codex"}"#).unwrap();
 
         ensure_file(root.path()).unwrap();
 
@@ -286,7 +302,7 @@ mod tests {
     #[test]
     fn malformed_json_falls_back_to_defaults_with_a_warning() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join(FILE_NAME), "{ not json").unwrap();
+        write_file(root.path(), "{ not json").unwrap();
         let (settings, warning) = load(root.path());
         assert_eq!(settings, ProjectSettings::default());
         assert!(warning.unwrap().contains(FILE_NAME));
@@ -295,8 +311,7 @@ mod tests {
     #[test]
     fn all_fields_load_correctly() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join(FILE_NAME),
+        write_file(root.path(),
             r#"{"formatOnSave":{"\\.rs$":"cargo fmt"},"executorOverride":"codex"}"#,
         )
         .unwrap();
@@ -309,8 +324,7 @@ mod tests {
     #[test]
     fn verify_pins_load_and_default_to_empty_when_missing() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join(FILE_NAME),
+        write_file(root.path(),
             r#"{"verifyPins":{"vibe-spec-tabs":["test","typecheck"]}}"#,
         )
         .unwrap();
@@ -324,8 +338,7 @@ mod tests {
     #[test]
     fn verify_pins_default_to_empty_for_an_old_settings_file() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join(FILE_NAME),
+        write_file(root.path(),
             r#"{"verify":{}}"#,
         )
         .unwrap();
@@ -448,8 +461,7 @@ mod tests {
     #[test]
     fn a_settings_file_without_verify_still_loads() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join(FILE_NAME),
+        write_file(root.path(),
             r#"{"formatOnSave": {"\\.rs$": "cargo fmt"}, "executorOverride": "codex"}"#,
         )
         .unwrap();
@@ -465,8 +477,7 @@ mod tests {
     #[test]
     fn a_settings_file_without_run_still_loads() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join(FILE_NAME),
+        write_file(root.path(),
             r#"{"formatOnSave": {}, "verify": {"test": "cargo test"}}"#,
         )
         .unwrap();
@@ -479,8 +490,7 @@ mod tests {
     #[test]
     fn saving_run_commands_keeps_every_other_setting() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join(FILE_NAME),
+        write_file(root.path(),
             r#"{"formatOnSave": {"\\.rs$": "cargo fmt"}, "executorOverride": "codex", "verify": {"test": "cargo test"}}"#,
         )
         .unwrap();

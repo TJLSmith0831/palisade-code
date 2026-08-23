@@ -14,7 +14,7 @@ export {
   COMPLETION_SETTINGS_CHANGED_EVENT,
 };
 
-// Personal display preferences — localStorage, not .project-settings.json.
+// Personal display preferences — localStorage, not .palisade/project-settings.json.
 export const ACCENT_HUE_KEY = "palisade:accentHue";
 export const EDITOR_FONT_KEY = "palisade:editorFont";
 export const EDITOR_FONT_SIZE_KEY = "palisade:editorFontSize";
@@ -24,7 +24,7 @@ export const EDITOR_FONT_CHANGED_EVENT = "palisade:editor-font-changed";
 export const EDITOR_WRAP_KEY = "palisade:editorWrap";
 export const EDITOR_WRAP_CHANGED_EVENT = "palisade:editor-wrap-changed";
 
-export const PROJECT_SETTINGS_FILE = ".project-settings.json";
+export const PROJECT_SETTINGS_FILE = ".palisade/project-settings.json";
 
 /* -------------------------------------------------------------------------- */
 /* Accent colors                                                              */
@@ -1142,7 +1142,7 @@ export default function SettingsPanel({
             cursor: "pointer",
           }}
         >
-          Edit .project-settings.json
+          Edit .palisade/project-settings.json
           <span style={{ fontSize: 14 }}>→</span>
         </button>
 

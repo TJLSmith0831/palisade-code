@@ -8,6 +8,7 @@ import {
   IconPlayerPlay,
   IconPlug,
   IconDatabase,
+  IconRoute,
   IconHistory,
   IconFolders,
   IconSettings,
@@ -42,6 +43,7 @@ const TOP_AGENT: RailItem[] = [
   { id: "run", label: "Run configurations", Icon: IconPlayerPlay },
   { id: "mcp", label: "MCP Servers", Icon: IconPlug },
   { id: "database", label: "Database", Icon: IconDatabase },
+  { id: "chains", label: "Agent Chains", Icon: IconRoute },
 ];
 
 const BOTTOM: RailItem[] = [

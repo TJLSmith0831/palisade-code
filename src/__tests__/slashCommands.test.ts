@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { slashQuery, matchCommands, commandTrigger } from "../slashCommands";
-import type { AgentCommand } from "../api";
+import {
+  slashQuery,
+  matchCommands,
+  commandTrigger,
+  chainCommands,
+  isChainCommand,
+  parseChainInvocation,
+} from "../slashCommands";
+import type { AgentCommand, Chain } from "../api";
 
 const cmds: AgentCommand[] = [
   { name: "review", description: "Review code changes for bugs" },
@@ -104,5 +111,121 @@ describe("agent sigils", () => {
   it("invokes a sigil name verbatim rather than double-prefixing it", () => {
     // "/$tdd" is not a command Codex knows.
     expect(commandTrigger({ name: "$tdd", description: "" })).toBe("$tdd ");
+  });
+});
+
+// `|=` is Palisade's own sigil for saved agent chains (D6/D13/D14). It is two
+// characters, which is what forced sigil matching to be length-aware.
+const chain = (name: string, extra: Partial<Chain> = {}): Chain => ({
+  name,
+  nodes: {
+    designer: { role: "designer", guideline: "", agent: "gemini-cli" },
+    programmer: { role: "programmer", guideline: "", agent: "claude-code" },
+  },
+  edges: [{ from: "designer", to: "programmer" }],
+  entry: "designer",
+  timeoutSeconds: 1800,
+  retry: { maxAttempts: 2 },
+  ...extra,
+});
+
+describe("the chain sigil", () => {
+  it("opens the menu on a leading `|=` and closes on the first space", () => {
+    expect(slashQuery("|=des")).toBe("des");
+    expect(slashQuery("|=")).toBe("");
+    expect(slashQuery("|=design-loop build a page")).toBeNull();
+  });
+
+  it("does not open on a bare pipe or a mid-sentence one", () => {
+    expect(slashQuery("| = something")).toBeNull();
+    expect(slashQuery("a || b")).toBeNull();
+    expect(slashQuery("run it |=design-loop")).toBeNull();
+  });
+
+  it("reads `|=` as one sigil rather than slicing a single character", () => {
+    // slice(1) would have left "=des" and matched nothing.
+    expect(slashQuery("|=des")).not.toBe("=des");
+  });
+
+  it("finds a chain by name without the user typing the sigil", () => {
+    const rows = chainCommands([chain("ship-it"), chain("design-loop")]);
+    // Both rows mention "designer" in their summary, so both match — but a
+    // name hit outranks a description hit, so the named one comes first.
+    expect(matchCommands(rows, "design")[0].name).toBe("|=design-loop");
+    expect(matchCommands(rows, "|=design")[0].name).toBe("|=design-loop");
+  });
+
+  it("summarises a chain by the roles it walks, in order", () => {
+    expect(chainCommands([chain("design-loop")])[0].description).toBe(
+      "designer → programmer"
+    );
+  });
+
+  it("summarises a looping chain without walking forever", () => {
+    const looping = chain("design-loop", {
+      edges: [
+        { from: "designer", to: "programmer" },
+        {
+          from: "programmer",
+          to: "designer",
+          gate: { type: "approval" },
+          maxIterations: 3,
+        },
+      ],
+    });
+    expect(chainCommands([looping])[0].description).toBe("designer → programmer");
+  });
+
+  it("invokes a chain row verbatim, keeping its own sigil", () => {
+    const [row] = chainCommands([chain("design-loop")]);
+    expect(commandTrigger(row)).toBe("|=design-loop ");
+  });
+
+  it("tells a chain row apart from an agent command", () => {
+    expect(isChainCommand(chainCommands([chain("x")])[0])).toBe(true);
+    expect(isChainCommand({ name: "review", description: "" })).toBe(false);
+    expect(isChainCommand({ name: "$tdd", description: "" })).toBe(false);
+  });
+
+  it("merges chains alongside agent commands in one menu", () => {
+    const merged = [...cmds, ...chainCommands([chain("review-loop")])];
+    const hits = matchCommands(merged, "review");
+    expect(hits.map((h) => h.name)).toContain("review");
+    expect(hits.map((h) => h.name)).toContain("|=review-loop");
+  });
+});
+
+describe("parsing a chain invocation", () => {
+  it("takes the first token as the name and the rest as the seed", () => {
+    expect(parseChainInvocation("|=design-loop build a settings page")).toEqual({
+      name: "design-loop",
+      seed: "build a settings page",
+    });
+  });
+
+  it("accepts a bare invocation with an empty seed", () => {
+    expect(parseChainInvocation("|=design-loop")).toEqual({
+      name: "design-loop",
+      seed: "",
+    });
+  });
+
+  it("treats the trailing space the menu leaves as an empty seed", () => {
+    expect(parseChainInvocation("|=design-loop ")).toEqual({
+      name: "design-loop",
+      seed: "",
+    });
+  });
+
+  it("keeps the seed's own internal spacing but trims its edges", () => {
+    expect(parseChainInvocation("|=x   two   words  ")?.seed).toBe("two   words");
+  });
+
+  it("is null for anything that is not a chain invocation", () => {
+    expect(parseChainInvocation("/review")).toBeNull();
+    expect(parseChainInvocation("just a message")).toBeNull();
+    // A bare sigil is an unfinished draft, not an invocation of nothing.
+    expect(parseChainInvocation("|=")).toBeNull();
+    expect(parseChainInvocation("|= design-loop")).toBeNull();
   });
 });

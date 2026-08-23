@@ -191,14 +191,14 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     invokeMock.mockReset();
   });
 
-  it("loads .project-settings.json on mount and highlights the matching app-shell swatch", async () => {
+  it("loads .palisade/project-settings.json on mount and highlights the matching app-shell swatch", async () => {
     // Nord is the third shell preset (index 2: Default=0, One Dark=1,
     // Nord=2). Stored as the project's appShellColor.
     invokeMock.mockImplementation(
       (cmd: string, args: Record<string, unknown>) => {
         if (
           cmd === "read_file_content" &&
-          args?.relativePath === ".project-settings.json"
+          args?.relativePath === ".palisade/project-settings.json"
         ) {
           return Promise.resolve(
             JSON.stringify({
@@ -234,7 +234,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     });
   });
 
-  it("tolerates a missing/malformed .project-settings.json without crashing and leaves no swatch active", async () => {
+  it("tolerates a missing/malformed .palisade/project-settings.json without crashing and leaves no swatch active", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "read_file_content")
         return Promise.reject(new Error("not found"));
@@ -267,7 +267,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       (cmd: string, args: Record<string, unknown>) => {
         if (
           cmd === "read_file_content" &&
-          args?.relativePath === ".project-settings.json"
+          args?.relativePath === ".palisade/project-settings.json"
         ) {
           return Promise.resolve(
             JSON.stringify({
@@ -331,7 +331,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       (cmd: string, args: Record<string, unknown>) => {
         if (
           cmd === "read_file_content" &&
-          args?.relativePath === ".project-settings.json"
+          args?.relativePath === ".palisade/project-settings.json"
         ) {
           return Promise.resolve(
             JSON.stringify({
@@ -391,7 +391,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       (cmd: string, args: Record<string, unknown>) => {
         if (
           cmd === "read_file_content" &&
-          args?.relativePath === ".project-settings.json"
+          args?.relativePath === ".palisade/project-settings.json"
         ) {
           return Promise.resolve(
             JSON.stringify({
