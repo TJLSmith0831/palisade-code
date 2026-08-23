@@ -883,7 +883,9 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
 
   it("opens no panel by default, opens Explorer on click, and closes it on a second click", async () => {
     render(<App />);
-    await openProject();
+    const rows = await screen.findAllByTestId("recent-project");
+    fireEvent.click(rows[0]);
+    await screen.findByTestId("shell-toggle");
     expect(screen.queryByTestId("side-panel")).toBeNull();
 
     fireEvent.click(screen.getByTestId("rail-explorer"));
