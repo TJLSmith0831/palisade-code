@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-21T21:35:00Z",
+  "generatedAt": "2026-08-23T19:41:19Z",
   "title": "Design System: Palisade Code",
   "extensions": {
     "colorMeta": {
@@ -228,6 +228,231 @@
           "oklch(86% 0.13 25)",
           "oklch(95% 0.07 25)"
         ]
+      },
+      "danger-on": {
+        "role": "semantic",
+        "displayName": "Danger On-Ink",
+        "canonical": "oklch(98% 0.02 25)",
+        "tonalRamp": [
+          "oklch(85% 0.02 25)",
+          "oklch(90% 0.02 25)",
+          "oklch(93% 0.02 25)",
+          "oklch(95% 0.02 25)",
+          "oklch(97% 0.02 25)",
+          "oklch(98% 0.02 25)",
+          "oklch(99% 0.02 25)",
+          "oklch(99.5% 0.02 25)"
+        ]
+      },
+      "code-comment": {
+        "role": "syntax",
+        "displayName": "Code Comment",
+        "canonical": "oklch(66% 0.012 250)",
+        "tonalRamp": [
+          "oklch(15% 0.012 250)",
+          "oklch(26% 0.012 250)",
+          "oklch(36% 0.012 250)",
+          "oklch(48% 0.012 250)",
+          "oklch(60% 0.012 250)",
+          "oklch(72% 0.012 250)",
+          "oklch(84% 0.012 250)",
+          "oklch(95% 0.012 250)"
+        ]
+      },
+      "code-text": {
+        "role": "syntax",
+        "displayName": "Code Text",
+        "canonical": "oklch(96% 0.003 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 250)",
+          "oklch(26% 0.003 250)",
+          "oklch(36% 0.003 250)",
+          "oklch(48% 0.003 250)",
+          "oklch(60% 0.003 250)",
+          "oklch(72% 0.003 250)",
+          "oklch(84% 0.003 250)",
+          "oklch(95% 0.003 250)"
+        ]
+      },
+      "code-keyword": {
+        "role": "syntax",
+        "displayName": "Code Keyword Violet",
+        "canonical": "oklch(73% 0.17 280)",
+        "tonalRamp": [
+          "oklch(15% 0.17 280)",
+          "oklch(26% 0.17 280)",
+          "oklch(36% 0.17 280)",
+          "oklch(48% 0.17 280)",
+          "oklch(60% 0.17 280)",
+          "oklch(72% 0.17 280)",
+          "oklch(84% 0.17 280)",
+          "oklch(95% 0.17 280)"
+        ]
+      },
+      "code-atom": {
+        "role": "syntax",
+        "displayName": "Code Atom Green",
+        "canonical": "oklch(72% 0.15 160)",
+        "tonalRamp": [
+          "oklch(15% 0.15 160)",
+          "oklch(26% 0.15 160)",
+          "oklch(36% 0.15 160)",
+          "oklch(48% 0.15 160)",
+          "oklch(60% 0.15 160)",
+          "oklch(72% 0.15 160)",
+          "oklch(84% 0.15 160)",
+          "oklch(95% 0.15 160)"
+        ]
+      },
+      "code-number": {
+        "role": "syntax",
+        "displayName": "Code Number Amber",
+        "canonical": "oklch(78% 0.12 95)",
+        "tonalRamp": [
+          "oklch(15% 0.12 95)",
+          "oklch(26% 0.12 95)",
+          "oklch(36% 0.12 95)",
+          "oklch(48% 0.12 95)",
+          "oklch(60% 0.12 95)",
+          "oklch(72% 0.12 95)",
+          "oklch(84% 0.12 95)",
+          "oklch(95% 0.12 95)"
+        ]
+      },
+      "code-string": {
+        "role": "syntax",
+        "displayName": "Code String Orange",
+        "canonical": "oklch(72% 0.11 50)",
+        "tonalRamp": [
+          "oklch(15% 0.11 50)",
+          "oklch(26% 0.11 50)",
+          "oklch(36% 0.11 50)",
+          "oklch(48% 0.11 50)",
+          "oklch(60% 0.11 50)",
+          "oklch(72% 0.11 50)",
+          "oklch(84% 0.11 50)",
+          "oklch(95% 0.11 50)"
+        ]
+      },
+      "code-regexp": {
+        "role": "syntax",
+        "displayName": "Code Regexp Red",
+        "canonical": "oklch(72% 0.15 25)",
+        "tonalRamp": [
+          "oklch(15% 0.15 25)",
+          "oklch(26% 0.15 25)",
+          "oklch(36% 0.15 25)",
+          "oklch(48% 0.15 25)",
+          "oklch(60% 0.15 25)",
+          "oklch(72% 0.15 25)",
+          "oklch(84% 0.15 25)",
+          "oklch(95% 0.15 25)"
+        ]
+      },
+      "code-variable": {
+        "role": "syntax",
+        "displayName": "Code Variable Blue",
+        "canonical": "oklch(82% 0.04 240)",
+        "tonalRamp": [
+          "oklch(15% 0.04 240)",
+          "oklch(26% 0.04 240)",
+          "oklch(36% 0.04 240)",
+          "oklch(48% 0.04 240)",
+          "oklch(60% 0.04 240)",
+          "oklch(72% 0.04 240)",
+          "oklch(84% 0.04 240)",
+          "oklch(95% 0.04 240)"
+        ]
+      },
+      "code-variable-def": {
+        "role": "syntax",
+        "displayName": "Code Variable-Def Blue",
+        "canonical": "oklch(82% 0.08 240)",
+        "tonalRamp": [
+          "oklch(15% 0.08 240)",
+          "oklch(26% 0.08 240)",
+          "oklch(36% 0.08 240)",
+          "oklch(48% 0.08 240)",
+          "oklch(60% 0.08 240)",
+          "oklch(72% 0.08 240)",
+          "oklch(84% 0.08 240)",
+          "oklch(95% 0.08 240)"
+        ]
+      },
+      "code-type": {
+        "role": "syntax",
+        "displayName": "Code Type Teal",
+        "canonical": "oklch(75% 0.1 180)",
+        "tonalRamp": [
+          "oklch(15% 0.1 180)",
+          "oklch(26% 0.1 180)",
+          "oklch(36% 0.1 180)",
+          "oklch(48% 0.1 180)",
+          "oklch(60% 0.1 180)",
+          "oklch(72% 0.1 180)",
+          "oklch(84% 0.1 180)",
+          "oklch(95% 0.1 180)"
+        ]
+      },
+      "code-property": {
+        "role": "syntax",
+        "displayName": "Code Property Blue",
+        "canonical": "oklch(82% 0.04 240)",
+        "tonalRamp": [
+          "oklch(15% 0.04 240)",
+          "oklch(26% 0.04 240)",
+          "oklch(36% 0.04 240)",
+          "oklch(48% 0.04 240)",
+          "oklch(60% 0.04 240)",
+          "oklch(72% 0.04 240)",
+          "oklch(84% 0.04 240)",
+          "oklch(95% 0.04 240)"
+        ]
+      },
+      "code-function": {
+        "role": "syntax",
+        "displayName": "Code Function Amber",
+        "canonical": "oklch(82% 0.11 95)",
+        "tonalRamp": [
+          "oklch(15% 0.11 95)",
+          "oklch(26% 0.11 95)",
+          "oklch(36% 0.11 95)",
+          "oklch(48% 0.11 95)",
+          "oklch(60% 0.11 95)",
+          "oklch(72% 0.11 95)",
+          "oklch(84% 0.11 95)",
+          "oklch(95% 0.11 95)"
+        ]
+      },
+      "code-meta": {
+        "role": "syntax",
+        "displayName": "Code Meta Muted",
+        "canonical": "oklch(66% 0.01 250)",
+        "tonalRamp": [
+          "oklch(15% 0.01 250)",
+          "oklch(26% 0.01 250)",
+          "oklch(36% 0.01 250)",
+          "oklch(48% 0.01 250)",
+          "oklch(60% 0.01 250)",
+          "oklch(72% 0.01 250)",
+          "oklch(84% 0.01 250)",
+          "oklch(95% 0.01 250)"
+        ]
+      },
+      "code-invalid": {
+        "role": "syntax",
+        "displayName": "Code Invalid Red",
+        "canonical": "oklch(64% 0.22 25)",
+        "tonalRamp": [
+          "oklch(15% 0.22 25)",
+          "oklch(26% 0.22 25)",
+          "oklch(36% 0.22 25)",
+          "oklch(48% 0.22 25)",
+          "oklch(60% 0.22 25)",
+          "oklch(72% 0.22 25)",
+          "oklch(84% 0.22 25)",
+          "oklch(95% 0.22 25)"
+        ]
       }
     },
     "typographyMeta": {
@@ -404,24 +629,36 @@
       "description": "Free-form CodeMirror SQL console for one connection, reusing the same on-demand SQL language pack a .sql file gets in the main editor. \u2318\u21b5 runs the statement. A statement matching a destructive shape (DELETE/DROP/TRUNCATE/ALTER, or UPDATE/DELETE with no WHERE) is gated behind a confirm Modal that shows the exact SQL text, not generic copy.",
       "html": "<div class=\"ds-db-sql\"></div>",
       "css": ".ds-db-sql { flex-shrink: 0; max-height: 45%; overflow: auto; border-bottom: 1px solid var(--border); }"
+    },
+    {
+      "name": "Nav Rail Button",
+      "kind": "nav",
+      "refersTo": "rail-btn",
+      "description": "44px-rail icon button; active state adds active-row fill plus a 2px accent edge bar instead of the plain icon-button hover-only treatment.",
+      "html": "<button class=\"ds-rail-btn active\" aria-label=\"Specs\" aria-pressed=\"true\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\"><path d=\"M9 4h6a2 2 0 0 1 2 2v13a1 1 0 0 1-1.5.87L12 18l-3.5 1.87A1 1 0 0 1 7 19V6a2 2 0 0 1 2-2z\"/></svg></button>",
+      "css": ".ds-rail-btn { width: 32px; height: 32px; border-radius: 6px; background: transparent; color: var(--muted); border: none; display: flex; align-items: center; justify-content: center; position: relative; } .ds-rail-btn:hover { color: var(--fg); } .ds-rail-btn.active { color: var(--accent); background: var(--active-row); } .ds-rail-btn.active::before { content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px; background: var(--accent); border-radius: 1px; }"
+    },
+    {
+      "name": "Side Panel (head/body)",
+      "kind": "custom",
+      "refersTo": "modal",
+      "description": "Shared wrapper for all eleven NavRail destinations: an 11px uppercase panel-head label over a scrollable body.",
+      "html": "<div class=\"ds-panel-head\">Specs</div><div class=\"ds-panel-body\">\u2026</div>",
+      "css": ".ds-panel-head { font-family: ui-monospace, \"SF Mono\", \"JetBrains Mono\", Menlo, monospace; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 10px 12px 6px; } .ds-panel-body { flex: 1; overflow-y: auto; padding: 0 4px 8px; }"
     }
   ],
   "narrative": {
     "northStar": "The Dragon Fire Workbench",
     "overview": "Palisade Code is a desktop IDE for driving a coding agent (Claude Code or Codex) against a real project \u2014 file tree, CodeMirror editor, git diff/staging, a PTY terminal, and a live force-directed map of the codebase, wrapped around an agent chat and diff console. It reads as a serious developer tool first: near-black, dense, monospace-leaning, native macOS window chrome. One color \u2014 Dragon Fire Green \u2014 cuts through that neutrality to mark whatever is live, active, or agent-touched: the active file-tree row, the active tab, diff additions, the focus ring, the codebase-map's pulse. Everything else stays a disciplined charcoal.\n\nThis is the same visual language the product has carried since its chat-console days (--accent, --bg, --surface-warm are unchanged), retargeted at an IDE shell: a three-column workspace (resizable file explorer, tabbed editor/chat/diff center, resizable threads/codebase-map/terminal sidebar) replaced the earlier fixed-width chat cockpit as the product moved from \"watch the agent talk\" to \"work alongside the agent in the same files.\"",
     "keyCharacteristics": [
-      "One-ink dark field, native chrome. A near-black background with three charcoal surface steps (surface, surface-warm, editor-bg); window traffic lights are native macOS controls, not drawn in CSS. Light mode exists as a full token-for-token mirror.",
-      "Scarce glowing accent. Dragon Fire Green marks the active tree row, active tab underline, active thread rail, diff additions, focus rings, and the codebase-map's live node \u2014 never decoration.",
-      "Three-column, both rails resizable. Left file-explorer rail (193px default, 160-420px) and right threads/codebase-map/terminal panel (300px default, 260-820px) both drag-resize and collapse via Cmd+\\ / Cmd+J, sliding fully out of the layout so the center workspace reclaims their width.",
-      "Mono for anything machine-shaped. File paths, line numbers, tab labels, uppercase micro-labels, diff content, and the terminal all use the monospace stack; the sans stack carries everything read as a sentence.",
-      "Command-bar family for every transient surface. The file palette (Cmd+P), find-in-files (Cmd+Shift+F), settings, and every confirm/rename/branch-picker prompt share one Modal component: blurred-backdrop overlay, role=dialog, Tab-trapped focus."
+      "One-ink dark field, native chrome",
+      "Scarce glowing accent",
+      "A narrow icon rail gates eleven panels, not a fixed file tree",
+      "Two shell arrangements, one DOM (Vibe/Editor preset flip)",
+      "Mono for anything machine-shaped, syntax palette included",
+      "Command-bar family for every transient surface"
     ],
     "rules": [
-      {
-        "name": "The One Accent Rule",
-        "body": "Dragon Fire Green never appears on borders, dividers, or static chrome \u2014 only on something live: an active state, an addition, a focus ring, a link between two files the agent just touched.",
-        "section": "colors"
-      },
       {
         "name": "The Two-Voice Rule",
         "body": "If it's read as a path, a key, or a label, it's mono; if it's read as a sentence, it's sans. This split predates the IDE pivot and hasn't moved.",
@@ -431,6 +668,16 @@
         "name": "The No-Skipped-Heading Rule",
         "body": "The app has exactly one h1 (visually hidden, the product name); every section heading routes through h2. No heading level is ever skipped, and no bare h4 exists with nothing above it.",
         "section": "typography"
+      },
+      {
+        "name": "The One Accent Rule",
+        "body": "Dragon Fire Green never appears on borders, dividers, or static chrome \u2014 only on something live: an active state, an addition, a focus ring, a link between two files the agent just touched.",
+        "section": "colors"
+      },
+      {
+        "name": "The Governing Rule",
+        "body": "Vibe and Editor presets share one panel inventory and differ only in arrangement (flexbox order), never in content \u2014 a new panel is added once, not per preset.",
+        "section": "layout"
       }
     ],
     "dos": [
@@ -439,7 +686,8 @@
       "Do collapse the resizable rails by sliding them fully out of the flex layout, never by overlaying the workspace.",
       "Do route every transient prompt (confirm, rename, palette, settings) through the shared Modal component rather than a bespoke overlay div.",
       "Do give every tree/list row real keyboard operability (role=button tabIndex=0 + Enter/Space), not click-only.",
-      "Do pair color with a second signal (a glyph, text, an icon) for anything status-bearing \u2014 never color alone."
+      "Do pair color with a second signal (a glyph, text, an icon) for anything status-bearing \u2014 never color alone.",
+      "Do keep a new NavRail panel to the shared ds-panel-head/ds-panel-body convention rather than framing it with a bespoke wrapper."
     ],
     "donts": [
       "Don't hand-roll a widget Mantine already ships, and don't draw an inline <svg> where a Tabler icon exists \u2014 see Components \u00a7Implementation stack.",
@@ -447,7 +695,9 @@
       "Don't shadow a resting panel, row, or tab \u2014 shadows are for floating layers and the active mode button only.",
       "Don't use a radius outside the documented five steps (4px, 5-6px, 8px, pill, and the one-off 12px window shell).",
       "Don't skip a heading level.",
-      "Don't rely on placeholder as an input's only accessible name \u2014 every primary input carries its own aria-label alongside the placeholder."
+      "Don't rely on placeholder as an input's only accessible name \u2014 every primary input carries its own aria-label alongside the placeholder.",
+      "Don't add a new var(--r-pill, ...)-style fallback for an undefined variable \u2014 reference the pill token directly.",
+      "Don't put a heavy, edit-capable surface (a data grid, a big form) inside a NavRail side panel \u2014 the panel finds things, a center-workspace tab is where they're worked on."
     ]
   }
 }
