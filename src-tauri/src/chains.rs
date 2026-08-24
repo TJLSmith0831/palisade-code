@@ -30,6 +30,10 @@ pub struct ChainNode {
     /// normal auto-detection uses (D16). Deliberately user-selectable, unlike
     /// a normal thread's executor.
     pub agent: String,
+    /// Model this node's agent runs on. Unset follows the thread's model,
+    /// which is what every node did before the picker existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Overrides the chain-level retry policy for this node alone (D21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicy>,
@@ -304,6 +308,7 @@ mod tests {
             role: role.into(),
             guideline: format!("You are the {role}."),
             agent: agent.into(),
+            model: None,
             retry: None,
         }
     }
@@ -335,6 +340,24 @@ mod tests {
     #[test]
     fn a_forward_only_chain_needs_no_gates() {
         assert!(chain(vec![forward()]).validate().is_ok());
+    }
+
+    #[test]
+    fn a_nodes_model_survives_save_and_load() {
+        // Without this the picker would look like it worked and every node
+        // would still run on the thread's default model.
+        let dir = std::env::temp_dir().join(format!("chain-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = chain(vec![forward()]);
+        c.nodes.get_mut("designer").unwrap().model = Some("gemini-3-pro".into());
+        save(&dir, &c).unwrap();
+
+        let back = load(&dir, "design-loop").unwrap();
+        assert_eq!(back.nodes["designer"].model.as_deref(), Some("gemini-3-pro"));
+        // A node that never picked one stays unset, so it keeps following
+        // the thread's model rather than being pinned to something.
+        assert_eq!(back.nodes["programmer"].model, None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

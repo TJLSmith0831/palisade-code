@@ -82,12 +82,12 @@ impl AcpNodeRunner {
             }
             self.sessions.remove(role);
         }
-        let agent = &self
+        let node = self
             .chain
             .nodes
             .get(role)
-            .ok_or_else(|| format!("chain has no node `{role}`"))?
-            .agent;
+            .ok_or_else(|| format!("chain has no node `{role}`"))?;
+        let (agent, model) = (&node.agent, node.model.clone());
         let id = crate::start_session_as(
             &self.app,
             &self.harness(),
@@ -97,6 +97,7 @@ impl AcpNodeRunner {
             "go",
             false,
             Some(agent),
+            model,
         )?;
         self.harness().chain_sessions.lock().unwrap().insert(id.clone());
         self.sessions.insert(role.to_string(), id.clone());

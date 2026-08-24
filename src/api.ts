@@ -300,6 +300,8 @@ export type SessionStatus = {
   agentId: string;
   mode: Mode;
   busy: boolean;
+  /** The model the agent settled on for this session, as it reported it. */
+  model?: string | null;
 };
 
 export const executorStatus = () => invoke<SessionStatus[]>("executor_status");
@@ -388,6 +390,8 @@ export type ChainNode = {
   guideline: string;
   /** ACP agent id — user-picked, unlike a normal thread's executor (D16). */
   agent: string;
+  /** Model this node's agent runs on. Unset follows the thread's model. */
+  model?: string | null;
   retry?: { maxAttempts: number };
 };
 

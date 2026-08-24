@@ -736,7 +736,7 @@ fn start_session(
     _model: Option<String>,
     bypass: bool,
 ) -> Res<String> {
-    start_session_as(app, harness, project_hash, thread_id, mode, bypass, None)
+    start_session_as(app, harness, project_hash, thread_id, mode, bypass, None, None)
 }
 
 /// `start_session`, but able to pin the agent rather than resolving the
@@ -751,6 +751,7 @@ fn start_session_as(
     mode: &str,
     bypass: bool,
     agent_override: Option<&str>,
+    model_override: Option<String>,
 ) -> Res<String> {
     let (agent, bin) = match agent_override {
         Some(id) => resolve_agent(harness, id)?,
@@ -760,7 +761,9 @@ fn start_session_as(
     let home = palisade_home();
     // The thread meta is the source of truth for the model choice; the IPC
     // `model` parameter is legacy and ignored (the frontend passes null).
-    let model = thread_meta(project_hash, thread_id).and_then(|t| t.model);
+    // A chain node's own pick wins over it — that is the whole point of
+    // binding a model per node rather than per thread.
+    let model = model_override.or_else(|| thread_meta(project_hash, thread_id).and_then(|t| t.model));
 
     let project = project_root(project_hash)?;
     // Two threads in one project used to share this working tree, and all
@@ -1521,6 +1524,9 @@ struct SessionStatus {
     agent_id: String,
     mode: String,
     busy: bool,
+    /// The model the agent actually settled on for this session — what a
+    /// chain node's model pick has to survive into to have meant anything.
+    model: Option<String>,
 }
 
 #[tauri::command]
@@ -1538,6 +1544,7 @@ async fn executor_status(app: tauri::AppHandle) -> Res<Vec<SessionStatus>> {
                 agent_id: s.agent_id.clone(),
                 mode: s.mode.clone(),
                 busy: s.is_busy(),
+                model: s.models.current.clone(),
             })
             .collect();
         statuses.sort_by(|a, b| a.id.cmp(&b.id));
@@ -2524,6 +2531,7 @@ mod tests {
                                 role: role.to_string(),
                                 guideline: String::new(),
                                 agent: agent.to_string(),
+                                model: None,
                                 retry: None,
                             },
                         )

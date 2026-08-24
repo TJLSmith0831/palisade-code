@@ -425,6 +425,7 @@ mod tests {
             role: role.into(),
             guideline: format!("You are the {role}."),
             agent: "claude-code".into(),
+            model: None,
             retry: None,
         }
     }

@@ -151,6 +151,7 @@ export default function ChainCanvas({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [models, setModels] = useState<api.ModelInfo[]>([]);
   const surface = useRef<HTMLDivElement>(null);
 
   // Editing is disabled while this chain is running — the canvas is watching,
@@ -174,6 +175,25 @@ export default function ChainCanvas({
       live = false;
     };
   }, [projectHash, chainName]);
+
+  // The open node's agent decides which models are offerable, so the list is
+  // re-read whenever that changes — the same `list_models` probe the chat
+  // composer's picker uses.
+  const editingAgent = editing ? draft.nodes[editing]?.agent : undefined;
+  useEffect(() => {
+    if (!editingAgent) {
+      setModels([]);
+      return;
+    }
+    let live = true;
+    api
+      .listModels(projectHash, editingAgent)
+      .then((state) => live && setModels(state.models))
+      .catch(() => live && setModels([]));
+    return () => {
+      live = false;
+    };
+  }, [projectHash, editingAgent]);
 
   const roles = useMemo(() => Object.keys(draft.nodes), [draft.nodes]);
   const loops = useMemo(() => loopEdgeIndices(draft), [draft]);
@@ -593,6 +613,11 @@ export default function ChainCanvas({
                   {agents.find((a) => a.id === draft.nodes[role].agent)?.name ??
                     draft.nodes[role].agent ??
                     "no agent"}
+                  {draft.nodes[role].model && (
+                    <span className="ds-chain-node-model">
+                      {draft.nodes[role].model}
+                    </span>
+                  )}
                 </div>
                 <div className="ds-chain-node-guideline">
                   {draft.nodes[role].guideline || "No guideline yet"}
@@ -658,6 +683,30 @@ export default function ChainCanvas({
                 }))
               }
               data-testid="node-agent"
+            />
+            <Select
+              label="Model"
+              description="Which model that agent runs on. Left empty, the node follows the thread's model."
+              placeholder={models.length ? "Agent default" : "No models offered"}
+              disabled={!models.length}
+              clearable
+              // Agents offer well over a hundred models; an unfiltered list
+              // is unscrollable in practice, the same reason the chat's
+              // picker has a search box.
+              searchable
+              nothingFoundMessage="No model by that name"
+              data={models.map((m) => ({ value: m.id, label: m.name }))}
+              value={node.model ?? null}
+              onChange={(value) =>
+                setDraft((d) => ({
+                  ...d,
+                  nodes: {
+                    ...d.nodes,
+                    [editing]: { ...d.nodes[editing], model: value },
+                  },
+                }))
+              }
+              data-testid="node-model"
             />
             <Textarea
               label="Guideline"

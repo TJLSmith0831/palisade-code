@@ -4437,6 +4437,10 @@ details.graph-report-wrap > summary {
   margin-top: 2px;
 }
 
+.ds-chain-node-model::before {
+  content: " · ";
+}
+
 .ds-chain-node-guideline {
   font-size: 11px;
   color: var(--muted);
