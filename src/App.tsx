@@ -3003,8 +3003,11 @@ export default function App() {
 
   /** Starts a chain on the active thread, opening its canvas to watch. */
   const startChainRun = useCallback(
-    async (name: string, seed: string) => {
-      if (!project || !thread) return;
+    async (name: string, seed: string, onThread?: ThreadMeta) => {
+      // The composer's first send creates the thread it runs on, so it passes
+      // that fresh one in rather than waiting for state to catch up.
+      const target = onThread ?? thread;
+      if (!project || !target) return;
       try {
         tabs.openChain(name);
         setChainRun({
@@ -3014,7 +3017,7 @@ export default function App() {
           awaiting: null,
           outcome: null,
         });
-        await api.runChain(project.hash, name, seed, thread.id);
+        await api.runChain(project.hash, name, seed, target.id);
       } catch (err) {
         // A blocked run (a bound agent that isn't installed, D17) surfaces
         // here with the missing node and agent named.
@@ -3412,11 +3415,15 @@ export default function App() {
     // `|=<chain> <seed>` runs a saved chain instead of prompting the agent
     // (D6/D13). A name that isn't a saved chain falls through as an ordinary
     // message rather than failing — the user may just be typing.
+    // The run itself happens *after* the thread-creation block below: a chain
+    // needs a thread to run on, and go-mode's composer is exactly where none
+    // exists yet, so bailing here made the first `|=` typed into a fresh
+    // composer do nothing at all.
     const invocation = parseChainInvocation(text);
-    if (invocation && chains.some((c) => c.name === invocation.name)) {
-      if (!thread) return;
-      return void startChainRun(invocation.name, invocation.seed);
-    }
+    const chainToRun =
+      invocation && chains.some((c) => c.name === invocation.name)
+        ? invocation
+        : null;
     // D20: go-mode's empty composer has no thread yet — create it (+ set
     // go mode) on this, the first send, then fall through to the normal
     // send path below using the freshly created thread.
@@ -3441,6 +3448,9 @@ export default function App() {
         fail(err);
         return;
       }
+    }
+    if (chainToRun) {
+      return void startChainRun(chainToRun.name, chainToRun.seed, activeThread);
     }
     try {
       setBusy(true);

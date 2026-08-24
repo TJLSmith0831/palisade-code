@@ -707,6 +707,78 @@ describe("Picking a provider/model before the thread exists", () => {
   });
 });
 
+describe("Running a chain from the deferred composer", () => {
+  it("creates the thread the chain needs instead of silently doing nothing", async () => {
+    // `|=<chain>` used to bail on `!thread` before the D20 creation block
+    // below it ever ran, so the very first thing typed into a go-mode
+    // composer — the one case where no thread exists yet — cleared the
+    // input and did nothing at all: no run, no error, no message.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "list_chains")
+          return Promise.resolve([
+            {
+              name: "ship",
+              nodes: {
+                designer: { role: "designer", guideline: "", agent: "claude" },
+              },
+              edges: [],
+              entry: "designer",
+            },
+          ]);
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            graphify: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        if (cmd === "create_thread" || cmd === "set_thread_mode")
+          return Promise.resolve({
+            id: "t-new",
+            projectHash: "proj-1",
+            title: "New thread",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "go",
+            openSpecChangeName: null,
+          });
+        if (cmd === "run_chain") return Promise.resolve("run-1");
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    fireEvent.change(await screen.findByTestId("composer-input"), {
+      target: { value: "|=ship add a --shout flag" },
+    });
+    fireEvent.click(screen.getByTestId("composer-send"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("run_chain", {
+        projectHash: "proj-1",
+        chainName: "ship",
+        seedInput: "add a --shout flag",
+        threadId: "t-new",
+      })
+    );
+    // The seed is the chain's input, not a chat turn — it must not also be
+    // sent to the agent as an ordinary message.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "send_message",
+      expect.anything()
+    );
+  });
+});
+
 describe("Collapsing chat (Cmd+J)", () => {
   it("leaves Vibe's chat alone — it is the primary surface there", async () => {
     render(<App />);
