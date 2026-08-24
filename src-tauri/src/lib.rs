@@ -1472,6 +1472,15 @@ async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res
                 },
             };
             let _ = app.emit("executor-event", &envelope);
+            // This event is emitted straight at the frontend rather than
+            // through the sink, so a chain waiting on this session's turn
+            // never saw it — the node sat "executing" and the canvas sat
+            // "running" until the 20-minute turn timeout finally fired.
+            // Release that watcher here, the same way the sink's Crashed arm
+            // would have.
+            if let Some(watch) = harness.turn_watchers.lock().unwrap().get(&id).cloned() {
+                watch.finish(executor::TurnEnd::Crashed("Cancelled by user".into()));
+            }
             end_session(&harness, &thread_id, &id, "cancelled");
         }
         Ok(())
