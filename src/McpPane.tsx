@@ -84,7 +84,9 @@ export default function McpPane({
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<api.McpRegistryEntry[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
@@ -98,22 +100,44 @@ export default function McpPane({
 
   useEffect(reload, [reload]);
 
-  const search = useCallback(
-    (text: string) => {
-      setSearching(true);
-      setSearchError(null);
-      api
-        .searchMcpRegistry(text)
-        .then(setResults)
-        .catch((e) => setSearchError(String(e)))
-        .finally(() => setSearching(false));
-    },
-    []
-  );
+  // A fresh search (new query, or opening Browse) replaces the list and
+  // starts a new page walk; `search("")` browses the registry's newest
+  // entries rather than showing an empty box before the user has typed
+  // anything.
+  const search = useCallback((text: string) => {
+    setSearching(true);
+    setSearchError(null);
+    api
+      .searchMcpRegistry(text)
+      .then((page) => {
+        setResults(page.servers);
+        setNextCursor(page.nextCursor);
+      })
+      .catch((e) => setSearchError(String(e)))
+      .finally(() => setSearching(false));
+  }, []);
 
-  // Opening Browse shows the registry's newest entries rather than an empty
-  // box with a prompt — there is something to look at before you know what
-  // you want. Re-fetching on every visit is avoided by the results check.
+  // Scrolling near the bottom continues the same page walk (D-scroll) —
+  // the registry only ever handed back its first page before this, so
+  // anything past it was unreachable.
+  const loadMore = useCallback(() => {
+    if (!nextCursor || loadingMore || searching) return;
+    setLoadingMore(true);
+    api
+      .searchMcpRegistry(query, nextCursor)
+      .then((page) => {
+        setResults((prev) => [...prev, ...page.servers]);
+        setNextCursor(page.nextCursor);
+      })
+      .catch((e) => setSearchError(String(e)))
+      .finally(() => setLoadingMore(false));
+  }, [query, nextCursor, loadingMore, searching]);
+
+  const handleBrowseScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) loadMore();
+  };
+
   useEffect(() => {
     if (tab === "browse" && results.length === 0 && !searchError) search("");
   }, [tab, results.length, searchError, search]);
@@ -350,7 +374,11 @@ export default function McpPane({
         )}
 
         {tab === "browse" && (
-          <div className="ds-mcp-list" data-testid="mcp-browse">
+          <div
+            className="ds-mcp-list"
+            data-testid="mcp-browse"
+            onScroll={handleBrowseScroll}
+          >
             {searching && <Loader size="xs" />}
             {searchError && (
               <p className="ds-mcp-empty">
@@ -403,6 +431,11 @@ export default function McpPane({
                 <div className="ds-mcp-detail">{entry.description}</div>
               </div>
             ))}
+            {loadingMore && (
+              <div className="ds-mcp-loading-more">
+                <Loader size="xs" />
+              </div>
+            )}
           </div>
         )}
       </div>

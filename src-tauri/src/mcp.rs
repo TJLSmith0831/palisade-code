@@ -279,6 +279,15 @@ pub struct RegistryEntry {
     pub server: Option<McpServer>,
 }
 
+/// One page of a registry search. `next_cursor` is `None` once the browse
+/// list has been walked to its end — the frontend stops asking for more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryPage {
+    pub servers: Vec<RegistryEntry>,
+    pub next_cursor: Option<String>,
+}
+
 /// A `.mcp.json`-safe key: lowercase, runs of anything else collapsed to one
 /// dash. `"inference.sh"` → `"inference-sh"`.
 fn slug(text: &str) -> String {
@@ -509,13 +518,23 @@ fn is_current(record: &serde_json::Value) -> bool {
 
 /// Search the official MCP registry. An empty query browses the newest
 /// entries, which is what the pane shows before the user types anything.
-pub fn search_registry(query: &str, limit: u32) -> Result<Vec<RegistryEntry>, String> {
+/// `cursor` continues a previous page (D-scroll): pass the `next_cursor` of
+/// the prior page to keep walking the registry instead of restarting at the
+/// top, which is what let the Browse tab only ever show its first page.
+pub fn search_registry(
+    query: &str,
+    limit: u32,
+    cursor: Option<&str>,
+) -> Result<RegistryPage, String> {
     let limit = limit.clamp(1, 100).to_string();
     let mut request = ureq::get(REGISTRY_API)
         .set("User-Agent", "palisade-code")
         .query("limit", &limit);
     if !query.trim().is_empty() {
         request = request.query("search", query.trim());
+    }
+    if let Some(cursor) = cursor.filter(|c| !c.is_empty()) {
+        request = request.query("cursor", cursor);
     }
     let body = request
         .call()
@@ -524,7 +543,7 @@ pub fn search_registry(query: &str, limit: u32) -> Result<Vec<RegistryEntry>, St
         .map_err(|e| format!("read MCP registry response: {e}"))?;
     let doc: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("parse MCP registry response: {e}"))?;
-    Ok(doc
+    let servers = doc
         .get("servers")
         .and_then(|v| v.as_array())
         .map(|records| {
@@ -534,7 +553,13 @@ pub fn search_registry(query: &str, limit: u32) -> Result<Vec<RegistryEntry>, St
                 .filter_map(parse_registry_entry)
                 .collect()
         })
-        .unwrap_or_default())
+        .unwrap_or_default();
+    let next_cursor = doc
+        .get("metadata")
+        .and_then(|m| m.get("nextCursor"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok(RegistryPage { servers, next_cursor })
 }
 
 // ------------------------------------------------------------------ tests
@@ -1036,10 +1061,10 @@ mod live {
     #[test]
     #[ignore = "network"]
     fn the_official_registry_returns_installable_entries() {
-        let entries = super::search_registry("filesystem", 20).unwrap();
-        assert!(!entries.is_empty(), "registry returned nothing");
+        let page = super::search_registry("filesystem", 20, None).unwrap();
+        assert!(!page.servers.is_empty(), "registry returned nothing");
         assert!(
-            entries.iter().any(|e| e.installable),
+            page.servers.iter().any(|e| e.installable),
             "no entry in the first page could be installed from config alone"
         );
     }

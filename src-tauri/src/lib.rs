@@ -2291,8 +2291,12 @@ async fn set_mcp_server_enabled(
 }
 
 #[tauri::command]
-async fn search_mcp_registry(query: String, limit: u32) -> Res<Vec<mcp::RegistryEntry>> {
-    tokio::task::spawn_blocking(move || mcp::search_registry(&query, limit))
+async fn search_mcp_registry(
+    query: String,
+    limit: u32,
+    cursor: Option<String>,
+) -> Res<mcp::RegistryPage> {
+    tokio::task::spawn_blocking(move || mcp::search_registry(&query, limit, cursor.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }

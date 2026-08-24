@@ -35,6 +35,20 @@ const SIGILS = ["/", "$", CHAIN_SIGIL];
 const sigilOf = (name: string) =>
   [...SIGILS].sort((a, b) => b.length - a.length).find((s) => name.startsWith(s));
 
+/**
+ * Which of the two `/`-menu kinds a draft is opening. The two sigil families
+ * never overlap in a single draft — `|=` and `/`/`$` can't both be typed at
+ * once — so a draft opens exactly one of these, never a blend of both, and
+ * the menu can commit to one label instead of hedging with "commands".
+ */
+export type MenuKind = "skills" | "chains";
+
+export function menuKind(draft: string): MenuKind | null {
+  const sigil = sigilOf(draft.trimStart());
+  if (!sigil) return null;
+  return sigil === CHAIN_SIGIL ? "chains" : "skills";
+}
+
 /** The name without its sigil, for matching and display. */
 const bareName = (name: string) => {
   const sigil = sigilOf(name);
@@ -121,6 +135,26 @@ export function parseChainInvocation(
   if (!name) return null;
   const seed = firstSpace === -1 ? "" : rest.slice(firstSpace).trim();
   return { name, seed };
+}
+
+/**
+ * The command a draft *opens with*, if any — the trigger Cursor/Windsurf
+ * collapse into a pill once picked. Matched against the full trigger
+ * (`commandTrigger`, trailing space included) so a draft mid-typing (no
+ * space yet, still filtering the menu) never flashes a chip early; the pill
+ * only appears once the name is complete and the argument position begins.
+ */
+export function leadingCommand<T extends AgentCommand>(
+  commands: T[],
+  draft: string
+): T | null {
+  const text = draft.trimStart();
+  return (
+    commands.find((command) => {
+      const trigger = commandTrigger(command);
+      return text === trigger.trimEnd() || text.startsWith(trigger);
+    }) ?? null
+  );
 }
 
 /** Commands matching `query`, best first. Empty query keeps the agent's order. */

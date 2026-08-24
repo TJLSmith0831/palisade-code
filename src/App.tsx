@@ -55,6 +55,7 @@ import {
   IconSunMoon,
   IconTerminal2,
   IconPlus,
+  IconWand,
   IconX,
 } from "@tabler/icons-react";
 import { useDebouncedCallback } from "@mantine/hooks";
@@ -82,6 +83,8 @@ import {
   commandTrigger,
   matchCommands,
   slashQuery,
+  menuKind,
+  leadingCommand,
   chainCommands,
   isChainCommand,
   parseChainInvocation,
@@ -261,7 +264,7 @@ export const ChatSurface = memo(
     chains = [],
     onPickModel,
     onProbeModels,
-    commands,
+    commands = [],
     draft,
     setDraft,
     onSend,
@@ -362,11 +365,31 @@ export const ChatSurface = memo(
     // ACP takes the whole line as the prompt, so the rest is the command's
     // own input and there is nothing left to complete.
     const commandQuery = slashQuery(draft);
-    const commandMatches = useMemo(
-      () => (commandQuery === null ? [] : matchCommands(commands, commandQuery)),
-      [commands, commandQuery]
+    // Which of the two menus is open — skills (`/`, `$`) or chains (`|=`).
+    // The sigils never overlap in one draft, so this is never ambiguous, and
+    // the header can name the list instead of the generic "commands".
+    const openMenuKind = menuKind(draft);
+    // Every command of the typed sigil's kind, before the query narrows it —
+    // an empty pool means the agent hasn't advertised anything yet (skills)
+    // or the project has no saved chains, which reads differently from a
+    // query that just has no matches, so the menu tells them apart.
+    const commandPool = useMemo(
+      () =>
+        openMenuKind === null
+          ? []
+          : commands.filter(
+              (command) => menuKind(commandTrigger(command)) === openMenuKind
+            ),
+      [commands, openMenuKind]
     );
-    const commandMenuOpen = commandMatches.length > 0;
+    const commandMatches = useMemo(
+      () => (commandQuery === null ? [] : matchCommands(commandPool, commandQuery)),
+      [commandPool, commandQuery]
+    );
+    // The menu stays open on a valid sigil even with nothing to show — a
+    // silently-closed menu looked identical to a stray `/` that did nothing,
+    // and gave no way to tell "nothing advertised yet" from "typo".
+    const commandMenuOpen = commandQuery !== null;
     const [commandIndex, setCommandIndex] = useState(0);
     // A new query can be shorter than the old list; clamping here rather than
     // in the key handler keeps the highlight on a row that actually exists.
@@ -380,6 +403,28 @@ export const ChatSurface = memo(
     const pickCommand = (command: api.AgentCommand) => {
       setDraft(commandTrigger(command));
     };
+
+    // The command a draft *opens with* (D-chip): once the name is complete
+    // and typing has moved past it into argument position, the composer
+    // collapses the sigil+name back into a stylized pill instead of raw text
+    // — the same treatment Cursor/Windsurf give a picked slash command.
+    const chipCommand = useMemo(
+      () => leadingCommand(commands, draft),
+      [commands, draft]
+    );
+    const chipRemainder = useMemo(() => {
+      if (!chipCommand) return "";
+      const text = draft.trimStart();
+      const trigger = commandTrigger(chipCommand);
+      return text === trigger.trimEnd() ? "" : text.slice(trigger.length);
+    }, [chipCommand, draft]);
+    const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+    // Refocus whichever box is now on screen — picking a command, or
+    // Backspacing a chip away, swaps in a different <textarea> element and
+    // would otherwise drop focus out of the composer entirely.
+    useEffect(() => {
+      composerInputRef.current?.focus();
+    }, [!!chipCommand]);
 
     // Re-arm auto-scroll on send, then let the effect below pin to bottom.
     const handleSend = () => {
@@ -1119,11 +1164,36 @@ export const ChatSurface = memo(
               radius="md"
               className="ds-command-menu"
               data-testid="command-menu"
+              data-kind={openMenuKind ?? undefined}
               role="listbox"
-              aria-label="Agent commands"
+              aria-label={openMenuKind === "chains" ? "Chains" : "Skills"}
             >
+              <div className="ds-command-menu-header">
+                {openMenuKind === "chains" ? (
+                  <>
+                    <IconRoute size={12} />
+                    Chains
+                  </>
+                ) : (
+                  <>
+                    <IconWand size={12} />
+                    Skills
+                  </>
+                )}
+              </div>
               <div className="ds-command-menu-scroll">
-                {commandMatches.map((command, index) => (
+                {commandPool.length === 0 ? (
+                  <p className="ds-command-menu-empty">
+                    {openMenuKind === "chains"
+                      ? "No chains saved for this project yet."
+                      : "No skills advertised for this session yet — send a message to start one."}
+                  </p>
+                ) : commandMatches.length === 0 ? (
+                  <p className="ds-command-menu-empty">
+                    No matches for “{commandQuery}”.
+                  </p>
+                ) : (
+                  commandMatches.map((command, index) => (
                   <UnstyledButton
                     key={command.name}
                     role="option"
@@ -1151,7 +1221,8 @@ export const ChatSurface = memo(
                       {command.description}
                     </span>
                   </UnstyledButton>
-                ))}
+                  ))
+                )}
               </div>
             </Paper>
           )}
@@ -1216,70 +1287,145 @@ export const ChatSurface = memo(
             </Popover.Dropdown>
           </Popover>
 
-          {/* Message input */}
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              // The menu owns the arrows, Tab, Enter and Escape while it is
-              // open — otherwise Enter would send a half-typed command name.
-              if (commandMenuOpen) {
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  const step = event.key === "ArrowDown" ? 1 : -1;
-                  setCommandIndex(
-                    (i) =>
-                      (i + step + commandMatches.length) % commandMatches.length
-                  );
-                  return;
+          {/* Message input. Once the draft opens with a complete command, the
+              sigil+name collapses into a pill (D-chip) and only the argument
+              text stays in an editable box — the composer never asks the
+              user to hand-edit `/adversarial-persona-testing` as raw text
+              again once they've picked it from the menu. */}
+          {chipCommand ? (
+            <div className="ds-composer-chip-row">
+              <span
+                className="ds-composer-chip"
+                data-kind={isChainCommand(chipCommand) ? "chain" : "skill"}
+                data-testid="composer-chip"
+              >
+                {isChainCommand(chipCommand) ? (
+                  <IconRoute size={12} />
+                ) : (
+                  <IconWand size={12} />
+                )}
+                {commandTrigger(chipCommand).trimEnd()}
+              </span>
+              <Textarea
+                ref={composerInputRef}
+                value={chipRemainder}
+                onChange={(event) =>
+                  setDraft(commandTrigger(chipCommand) + event.target.value)
                 }
-                if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
-                  event.preventDefault();
-                  if (activeCommand) pickCommand(activeCommand);
-                  return;
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Backspace" &&
+                    event.currentTarget.selectionStart === 0 &&
+                    event.currentTarget.selectionEnd === 0
+                  ) {
+                    // Backspacing at the argument's start eats the whole
+                    // pill in one keystroke, same as Cursor/Windsurf — not a
+                    // character at a time out of a sigil the user can no
+                    // longer see.
+                    event.preventDefault();
+                    setDraft(chipRemainder);
+                    return;
+                  }
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    if (!busy && draft.trim()) {
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }
+                }}
+                placeholder="Argument…"
+                aria-label="Command argument"
+                data-testid="composer-input"
+                minRows={1}
+                maxRows={6}
+                styles={{
+                  root: { flex: 1, minWidth: 0 },
+                  // No padding of its own — the row's 10px/12px padding is
+                  // shared with the pill, so text starts flush with where a
+                  // plain message would, not offset in its own little box.
+                  input: {
+                    width: "100%",
+                    minHeight: 21,
+                    padding: 0,
+                    border: 0,
+                    background: "transparent",
+                    boxShadow: "none",
+                    resize: "none",
+                    fontSize: 14,
+                    lineHeight: 1.5,
+                  },
+                }}
+              />
+            </div>
+          ) : (
+            <Textarea
+              ref={composerInputRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                // The menu owns the arrows, Tab, Enter and Escape while it is
+                // open — otherwise Enter would send a half-typed command name.
+                if (commandMenuOpen) {
+                  if (
+                    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                    commandMatches.length > 0
+                  ) {
+                    event.preventDefault();
+                    const step = event.key === "ArrowDown" ? 1 : -1;
+                    setCommandIndex(
+                      (i) =>
+                        (i + step + commandMatches.length) % commandMatches.length
+                    );
+                    return;
+                  }
+                  if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+                    event.preventDefault();
+                    if (activeCommand) pickCommand(activeCommand);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    // Closing without choosing: keep what was typed, drop the
+                    // sigil, so Escape never destroys the user's text.
+                    setDraft(draft.replace(/^(\s*)[/$]/, "$1"));
+                    return;
+                  }
                 }
-                if (event.key === "Escape") {
+                if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  // Closing without choosing: keep what was typed, drop the
-                  // sigil, so Escape never destroys the user's text.
-                  setDraft(draft.replace(/^(\s*)[/$]/, "$1"));
-                  return;
-                }
-              }
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
 
-                if (!busy && draft.trim()) {
-                  event.currentTarget.form?.requestSubmit();
+                  if (!busy && draft.trim()) {
+                    event.currentTarget.form?.requestSubmit();
+                  }
                 }
+              }}
+              placeholder={
+                flightSelected
+                  ? "Message, or / for commands"
+                  : "Chat-only — no executor on PATH"
               }
-            }}
-            placeholder={
-              flightSelected
-                ? "Message, or / for commands"
-                : "Chat-only — no executor on PATH"
-            }
-            aria-label="Message"
-            data-testid="composer-input"
-            minRows={1}
-            maxRows={6}
-            styles={{
-              root: {
-                width: "100%",
-              },
-              input: {
-                width: "100%",
-                minHeight: 42,
-                padding: "10px 12px",
-                border: 0,
-                background: "transparent",
-                boxShadow: "none",
-                resize: "none",
-                fontSize: 14,
-                lineHeight: 1.5,
-              },
-            }}
-          />
+              aria-label="Message"
+              data-testid="composer-input"
+              minRows={1}
+              maxRows={6}
+              styles={{
+                root: {
+                  width: "100%",
+                },
+                input: {
+                  width: "100%",
+                  minHeight: 42,
+                  padding: "10px 12px",
+                  border: 0,
+                  background: "transparent",
+                  boxShadow: "none",
+                  resize: "none",
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                },
+              }}
+            />
+          )}
 
           {/* Bottom controls. Class, not inline styles: at the Editor
               preset's 300px default the row has to wrap and its labels have

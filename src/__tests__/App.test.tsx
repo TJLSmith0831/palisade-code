@@ -4671,12 +4671,23 @@ describe("Agent command menu", () => {
       commands,
     });
 
-  it("stays shut until the agent has advertised something", async () => {
+  it("opens with an empty state until the agent has advertised something", async () => {
     await openThread();
     fireEvent.change(screen.getByTestId("composer-input"), {
       target: { value: "/" },
     });
-    expect(screen.queryByTestId("command-menu")).not.toBeInTheDocument();
+    const menu = await screen.findByTestId("command-menu");
+    expect(menu).toHaveTextContent(/no skills advertised/i);
+  });
+
+  it("distinguishes a query with no matches from an empty pool", async () => {
+    await openThread();
+    advertise([{ name: "review", description: "Review code changes" }]);
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "/zzz" },
+    });
+    const menu = await screen.findByTestId("command-menu");
+    expect(menu).toHaveTextContent(/no matches for.*zzz/i);
   });
 
   it("lists the agent's commands, project skills included", async () => {
@@ -4706,9 +4717,12 @@ describe("Agent command menu", () => {
     expect(menu).not.toHaveTextContent("/propose");
 
     fireEvent.keyDown(input, { key: "Enter" });
-    // ACP invokes a command by sending "/name" as the prompt; the trailing
-    // space both closes the menu and is where an argument would go.
-    await waitFor(() => expect(input).toHaveValue("/review "));
+    // ACP invokes a command by sending "/name" as the prompt; picking one
+    // collapses it into a pill and leaves the argument box empty.
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-chip")).toHaveTextContent("/review")
+    );
+    expect(screen.getByTestId("composer-input")).toHaveValue("");
     expect(screen.queryByTestId("command-menu")).not.toBeInTheDocument();
   });
 
@@ -4720,7 +4734,9 @@ describe("Agent command menu", () => {
     await screen.findByTestId("command-menu");
 
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(input).toHaveValue("/review "));
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-chip")).toHaveTextContent("/review")
+    );
     expect(invokeMock).not.toHaveBeenCalledWith(
       "send_message",
       expect.anything()
@@ -4739,7 +4755,9 @@ describe("Agent command menu", () => {
 
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(input).toHaveValue("/revert "));
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-chip")).toHaveTextContent("/revert")
+    );
   });
 
   it("keeps the typed text when Escape dismisses the menu", async () => {
@@ -4766,7 +4784,9 @@ describe("Agent command menu", () => {
     expect(menu).not.toHaveTextContent("/$tdd");
 
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(input).toHaveValue("$tdd "));
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-chip")).toHaveTextContent("$tdd")
+    );
   });
 
   it("finds a sigil command from a slash, since the user need not know", async () => {
@@ -4775,7 +4795,27 @@ describe("Agent command menu", () => {
     const input = screen.getByTestId("composer-input");
     fireEvent.change(input, { target: { value: "/tdd" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(input).toHaveValue("$tdd "));
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-chip")).toHaveTextContent("$tdd")
+    );
+  });
+
+  it("backspacing at the start of the argument eats the whole pill", async () => {
+    await openThread();
+    advertise([{ name: "review", description: "Review code changes" }]);
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "/rev" } });
+    await screen.findByTestId("command-menu");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByTestId("composer-chip");
+
+    fireEvent.keyDown(screen.getByTestId("composer-input"), {
+      key: "Backspace",
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("composer-chip")).not.toBeInTheDocument()
+    );
+    expect(screen.getByTestId("composer-input")).toHaveValue("");
   });
 
   it("replaces the list when the agent re-advertises mid-session", async () => {

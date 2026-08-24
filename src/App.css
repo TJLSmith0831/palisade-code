@@ -3977,6 +3977,26 @@ details.graph-report-wrap > summary {
   overflow-y: auto;
 }
 
+/* Names the menu before the list scrolls into it, so "Skills" and "Chains"
+   read as two distinct places rather than one list that happens to change
+   contents depending on which sigil was typed. */
+.ds-command-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-command-menu[data-kind="chains"] .ds-command-menu-header {
+  color: var(--code-keyword);
+}
+
 .ds-command-menu-row {
   display: block;
   width: 100%;
@@ -4010,6 +4030,56 @@ details.graph-report-wrap > summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ds-command-menu-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* --- the composer's picked-command pill -----------------------------------
+   Once a skill or chain is picked, the sigil+name stop being editable text
+   and become this chip; only the argument after it stays a plain box. Mirrors
+   the menu row it came from: same icon, same accent split between skill and
+   chain. */
+.ds-composer-chip-row {
+  display: flex;
+  /* flex-start, not center: once the argument grows past one line the pill
+     must stay pinned to the first line rather than re-centering against the
+     whole multi-line block. */
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  /* Matches the plain textarea's own input padding exactly, so picking a
+     command never changes the composer's height or inset — the pill reads
+     as the start of the same line of text, not a separate compact strip. */
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+
+.ds-composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  /* Nudges the pill down to align its center with the argument text's first
+     line, which sits lower once the row's padding is shared with it. */
+  margin-top: 1px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--active-row);
+  color: var(--accent);
+}
+
+.ds-composer-chip[data-kind="chain"] {
+  color: var(--code-keyword);
+  background: color-mix(in oklch, var(--code-keyword) 16%, var(--active-row));
 }
 
 /* --- MCP servers panel ----------------------------------------------------
@@ -4046,6 +4116,12 @@ details.graph-report-wrap > summary {
   font-size: 11px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+.ds-mcp-loading-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
 }
 
 .ds-mcp-row {

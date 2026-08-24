@@ -29,6 +29,11 @@ const mocked = api as unknown as {
   searchMcpRegistry: ReturnType<typeof vi.fn>;
 };
 
+const page = (
+  servers: api.McpRegistryEntry[],
+  nextCursor: string | null = null
+): api.McpRegistryPage => ({ servers, nextCursor });
+
 const server = (over: Partial<api.McpServer> = {}): api.McpServer => ({
   name: "graphify",
   transport: "stdio",
@@ -46,7 +51,7 @@ beforeEach(() => {
   mocked.saveMcpServer.mockReset().mockResolvedValue(undefined);
   mocked.removeMcpServer.mockReset().mockResolvedValue(undefined);
   mocked.setMcpServerEnabled.mockReset().mockResolvedValue(undefined);
-  mocked.searchMcpRegistry.mockReset().mockResolvedValue([]);
+  mocked.searchMcpRegistry.mockReset().mockResolvedValue(page([]));
 });
 
 const props = { projectHash: "p1", onError: vi.fn() };
@@ -176,14 +181,14 @@ describe("McpPane registry browsing", () => {
   };
 
   it("shows registry entries without making the user search first", async () => {
-    mocked.searchMcpRegistry.mockResolvedValue([entry()]);
+    mocked.searchMcpRegistry.mockResolvedValue(page([entry()]));
     await openBrowse();
     expect(await screen.findByText("Filesystem")).toBeInTheDocument();
     expect(mocked.searchMcpRegistry).toHaveBeenCalledWith("");
   });
 
   it("searches the registry on submit", async () => {
-    mocked.searchMcpRegistry.mockResolvedValue([entry()]);
+    mocked.searchMcpRegistry.mockResolvedValue(page([entry()]));
     await openBrowse();
     await screen.findByText("Filesystem");
     fireEvent.change(screen.getByTestId("mcp-search"), {
@@ -196,7 +201,7 @@ describe("McpPane registry browsing", () => {
   });
 
   it("installing opens the prefilled form instead of writing straight to disk", async () => {
-    mocked.searchMcpRegistry.mockResolvedValue([entry()]);
+    mocked.searchMcpRegistry.mockResolvedValue(page([entry()]));
     await openBrowse();
     fireEvent.click(await screen.findByLabelText("Install Filesystem"));
 
@@ -208,9 +213,9 @@ describe("McpPane registry browsing", () => {
   });
 
   it("points an uninstallable entry at its repository", async () => {
-    mocked.searchMcpRegistry.mockResolvedValue([
-      entry({ installable: false, server: null }),
-    ]);
+    mocked.searchMcpRegistry.mockResolvedValue(
+      page([entry({ installable: false, server: null })])
+    );
     await openBrowse();
     const link = await screen.findByText("Manual setup");
     expect(link).toHaveAttribute(

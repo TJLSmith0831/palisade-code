@@ -896,8 +896,19 @@ export const setMcpServerEnabled = (
   enabled: boolean
 ) => invoke<void>("set_mcp_server_enabled", { projectHash, name, enabled });
 
-export const searchMcpRegistry = (query: string, limit = 30) =>
-  invoke<McpRegistryEntry[]>("search_mcp_registry", { query, limit });
+/** One page of a registry search — `nextCursor` is null once Browse has
+ *  reached the end of the list. */
+export type McpRegistryPage = {
+  servers: McpRegistryEntry[];
+  nextCursor: string | null;
+};
+
+export const searchMcpRegistry = (
+  query: string,
+  cursor?: string | null,
+  limit = 30
+) =>
+  invoke<McpRegistryPage>("search_mcp_registry", { query, limit, cursor: cursor ?? null });
 
 // ---------------------------------------------------------------- database
 //
