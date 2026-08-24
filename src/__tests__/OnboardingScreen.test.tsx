@@ -44,26 +44,76 @@ const base = {
   onPickModel: vi.fn(),
   onOpenProject: vi.fn(),
   onCloneRepository: vi.fn(),
+  onComposerSend: vi.fn(),
   onSelectProject: vi.fn(),
 };
 
-describe("OnboardingScreen model picker", () => {
+// Amendment 9 (shape brief, 2026-08-24): project creation is the primary
+// action; the composer (with its executor/model pickers) is secondary and
+// collapsed until asked for.
+describe("OnboardingScreen project-first layout", () => {
+  it("leads with New Project as the primary tile", () => {
+    render(<OnboardingScreen {...base} />);
+    const tile = screen.getByTestId("add-project");
+    expect(tile).toHaveTextContent("New Project");
+    expect(tile.className).toContain("primary");
+  });
+
+  it("keeps the composer collapsed behind a quiet toggle until asked for", () => {
+    render(<OnboardingScreen {...base} />);
+    expect(screen.queryByTestId("onboarding-composer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("onboarding-agent-pill")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("onboarding-composer-toggle"));
+    expect(screen.getByTestId("onboarding-composer")).toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-agent-pill")).toBeInTheDocument();
+  });
+
+  it("sends the typed request through onComposerSend, not onOpenProject", () => {
+    const onComposerSend = vi.fn();
+    render(<OnboardingScreen {...base} onComposerSend={onComposerSend} />);
+    fireEvent.click(screen.getByTestId("onboarding-composer-toggle"));
+    fireEvent.change(screen.getByTestId("onboarding-composer"), {
+      target: { value: "Add dark mode toggle" },
+    });
+    fireEvent.click(screen.getByTestId("onboarding-send"));
+    expect(onComposerSend).toHaveBeenCalledWith("Add dark mode toggle");
+    expect(base.onOpenProject).not.toHaveBeenCalled();
+  });
+
+  it("gives the missing-agent state a distinct, warn-toned status pill", () => {
+    render(
+      <OnboardingScreen
+        {...base}
+        flight={{ ...flight, selected: null } as unknown as Preflight}
+      />,
+    );
+    const status = screen.getByTestId("onboarding-status");
+    expect(status.className).toContain("bad");
+    expect(status).toHaveTextContent(/No coding agent found/i);
+  });
+
+  it("shows a checking state instead of a false 'no agent found' while preflight is still in flight", () => {
+    render(<OnboardingScreen {...base} flight={null} />);
+    const status = screen.getByTestId("onboarding-status");
+    expect(status.className).toContain("loading");
+    expect(status.className).not.toContain("bad");
+    expect(status).toHaveTextContent(/Checking for installed agents/i);
+    expect(status).not.toHaveTextContent(/No coding agent found/i);
+  });
+});
+
+describe("OnboardingScreen composer picker", () => {
   it("labels the pill with the agent's own selected model, not 'default'", () => {
     render(<OnboardingScreen {...base} />);
+    fireEvent.click(screen.getByTestId("onboarding-composer-toggle"));
     expect(screen.getByTestId("onboarding-model-pill").textContent).toContain(
       "Model 3"
     );
   });
 
-  it("prefers the user's explicit pick over the agent's selection", () => {
-    render(<OnboardingScreen {...base} model="m-9" />);
-    expect(screen.getByTestId("onboarding-model-pill").textContent).toContain(
-      "Model 9"
-    );
-  });
-
   it("filters a long model list by the search box", async () => {
     render(<OnboardingScreen {...base} />);
+    fireEvent.click(screen.getByTestId("onboarding-composer-toggle"));
     fireEvent.click(screen.getByTestId("onboarding-model-pill"));
     expect(
       (await screen.findAllByTestId(/^onboarding-model-opt-/)).length
@@ -76,36 +126,39 @@ describe("OnboardingScreen model picker", () => {
     expect(shown).toHaveLength(1);
     expect(shown[0].textContent).toContain("SWE-1.7 Max");
   });
-
-  it("says so when the search matches nothing", async () => {
-    render(<OnboardingScreen {...base} />);
-    fireEvent.click(screen.getByTestId("onboarding-model-pill"));
-    fireEvent.change(await screen.findByTestId("onboarding-model-search"), {
-      target: { value: "zzzz" },
-    });
-    expect(screen.queryAllByTestId(/^onboarding-model-opt-/)).toHaveLength(0);
-    expect(screen.getByTestId("onboarding-models-no-matches")).toBeDefined();
-  });
-
-  it("clears the query when the menu is reopened", async () => {
-    render(<OnboardingScreen {...base} />);
-    fireEvent.click(screen.getByTestId("onboarding-model-pill"));
-    fireEvent.change(await screen.findByTestId("onboarding-model-search"), {
-      target: { value: "swe" },
-    });
-    fireEvent.click(screen.getByTestId("onboarding-model-pill"));
-    fireEvent.click(screen.getByTestId("onboarding-model-pill"));
-    expect(await screen.findByTestId("onboarding-model-search")).toHaveValue(
-      ""
-    );
-  });
 });
 
 describe("OnboardingScreen recent projects", () => {
   const projects = [
-    { hash: "h1", displayName: "palisade-code", root: "/w/palisade" },
-    { hash: "h2", displayName: "other", root: "/w/other" },
+    {
+      hash: "h1",
+      displayName: "palisade-code",
+      root: "/w/palisade",
+      lastAccessedAt: "2026-08-24T00:00:00Z",
+    },
+    {
+      hash: "h2",
+      displayName: "other",
+      root: "/w/other",
+      lastAccessedAt: "2026-08-23T00:00:00Z",
+    },
   ] as unknown as Project[];
+
+  it("greets a first-timer differently from a returning user", () => {
+    const { rerender } = render(<OnboardingScreen {...base} />);
+    expect(screen.getByText("Welcome to Palisade")).toBeInTheDocument();
+    rerender(
+      <MantineProvider>
+        <OnboardingScreen {...base} projects={projects} />
+      </MantineProvider>,
+    );
+    expect(screen.getByText("Welcome back")).toBeInTheDocument();
+  });
+
+  it("shows an empty-state line instead of an empty table on first run", () => {
+    render(<OnboardingScreen {...base} />);
+    expect(screen.getByText(/No projects yet/i)).toBeInTheDocument();
+  });
 
   it("shows the row is opening rather than looking dead while the switch runs", () => {
     render(<OnboardingScreen {...base} projects={projects} openingHash="h1" />);
@@ -129,14 +182,14 @@ describe("OnboardingScreen recent projects", () => {
   });
 });
 
-// Pre-release: the first screen is the icon and the composer. No pitch copy,
-// no "Local" execution-target tag (there is only one target), and no
-// sign-in claim — account gating is coming, so promising its absence would
-// become a lie the moment it ships.
+// Pre-release: no pitch copy, no "Local" execution-target tag (there is only
+// one target), and no sign-in claim — account gating is coming, so promising
+// its absence would become a lie the moment it ships. A plain greeting
+// ("Welcome back" / "Welcome to Palisade") makes no such claim and is the
+// headline DESIGN.md's reserved display step was waiting for.
 describe("OnboardingScreen header and footer", () => {
-  it("leads with the Palisade icon instead of a headline and pitch", () => {
+  it("makes no pitch or billing claim", () => {
     render(<OnboardingScreen {...base} />);
-    expect(screen.getByAltText("Palisade")).toBeInTheDocument();
     expect(
       screen.queryByText(/Drive your own coding agent/i),
     ).not.toBeInTheDocument();
@@ -148,10 +201,6 @@ describe("OnboardingScreen header and footer", () => {
   it("drops the Local execution-target tag", () => {
     render(<OnboardingScreen {...base} />);
     expect(screen.queryByText("Local")).not.toBeInTheDocument();
-    // the directory picker beside it survives
-    expect(
-      screen.getByTestId("onboarding-select-directory"),
-    ).toBeInTheDocument();
   });
 
   it("makes no no-account claim", () => {
