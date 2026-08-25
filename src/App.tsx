@@ -10,6 +10,7 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import {
   Menu,
@@ -35,8 +36,10 @@ import {
 import {
   IconAlertTriangle,
   IconArchive,
+  IconBolt,
   IconBox,
   IconChevronDown,
+  IconListCheck,
   IconCode,
   IconCommand,
   IconLayoutSidebarRight,
@@ -245,6 +248,149 @@ type ChatSurfaceProps = {
   onCloseThread?: (thread: ThreadMeta) => void;
   onNewThread?: () => void;
 };
+
+/** Segments typed into a mode card's live preview on hover/focus — the
+ *  card shows what the mode actually does (a live edit, an interview
+ *  question) instead of only describing it in prose. */
+const MODE_LIVE_PREVIEWS: Record<
+  api.Mode,
+  { text: string; cls?: string }[]
+> = {
+  go: [{ text: "> editing " }, { text: "src/api.ts", cls: "diff-add" }],
+  spec: [{ text: '> "What are we building?"' }],
+};
+
+function ModeCard({
+  mode,
+  icon,
+  title,
+  description,
+  primary,
+  onPick,
+  autoFocus,
+  testId,
+}: {
+  mode: api.Mode;
+  icon: ReactNode;
+  title: string;
+  description: string;
+  primary?: boolean;
+  onPick: () => void;
+  autoFocus?: boolean;
+  testId: string;
+}) {
+  const [active, setActive] = useState(false);
+  const [typed, setTyped] = useState<{ text: string; cls?: string }[]>([]);
+  const [done, setDone] = useState(false);
+  const cardRef = useRef<HTMLButtonElement>(null);
+
+  // Command Deck: cursor-tracked tilt + glow. Mutates the DOM directly on
+  // pointermove (rAF-throttled) rather than through React state — a 3D
+  // transform recalculated every frame has no business going through a
+  // render. Skips entirely under reduced motion; keyboard focus still gets
+  // the plain CSS lift from :focus-visible.
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      return;
+    const maxTilt = 6;
+    let raf = 0;
+    const onMove = (e: PointerEvent) => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const rect = card.getBoundingClientRect();
+        const px = (e.clientX - rect.left) / rect.width;
+        const py = (e.clientY - rect.top) / rect.height;
+        const rotateY = (px - 0.5) * 2 * maxTilt;
+        const rotateX = -(py - 0.5) * 2 * maxTilt;
+        card.style.setProperty("--glow-x", `${px * 100}%`);
+        card.style.setProperty("--glow-y", `${py * 100}%`);
+        card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-2px)`;
+      });
+    };
+    const onEnter = () => card.classList.add("tracking");
+    const onLeave = () => {
+      card.classList.remove("tracking");
+      card.style.transform = "";
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+    };
+    card.addEventListener("pointermove", onMove);
+    card.addEventListener("pointerenter", onEnter);
+    card.addEventListener("pointerleave", onLeave);
+    return () => {
+      card.removeEventListener("pointermove", onMove);
+      card.removeEventListener("pointerenter", onEnter);
+      card.removeEventListener("pointerleave", onLeave);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    const segments = MODE_LIVE_PREVIEWS[mode];
+    const reduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    if (reduced) {
+      setTyped(segments);
+      setDone(true);
+      return;
+    }
+    const built = segments.map((s) => ({ ...s, text: "" }));
+    setTyped(built);
+    setDone(false);
+    let segIdx = 0;
+    let charIdx = 0;
+    const id = setInterval(() => {
+      if (segIdx >= segments.length) {
+        clearInterval(id);
+        setDone(true);
+        return;
+      }
+      const seg = segments[segIdx];
+      if (charIdx < seg.text.length) {
+        charIdx++;
+        built[segIdx] = { ...built[segIdx], text: seg.text.slice(0, charIdx) };
+        setTyped([...built]);
+      } else {
+        segIdx++;
+        charIdx = 0;
+      }
+    }, 26);
+    return () => clearInterval(id);
+  }, [active, mode]);
+
+  return (
+    <button
+      ref={cardRef}
+      className={`ds-mode-card${primary ? " ds-mode-card-primary" : ""}`}
+      onClick={onPick}
+      // Hover-only: focus (e.g. Go's autoFocus on mount) would otherwise
+      // show the preview before the user ever touches a card, and a
+      // mouse-only user who never tabs through would never see the
+      // typewriter at all.
+      onMouseEnter={() => setActive(true)}
+      onMouseLeave={() => setActive(false)}
+      data-testid={testId}
+      autoFocus={autoFocus}
+    >
+      <span className="ds-mode-card-glow" aria-hidden="true" />
+      {icon}
+      <strong>{title}</strong>
+      <span>{description}</span>
+      <span className="ds-live-preview" aria-hidden="true">
+        {typed.map((s, i) => (
+          <span key={i} className={s.cls}>
+            {s.text}
+          </span>
+        ))}
+        {done && <span className="cursor" />}
+      </span>
+    </button>
+  );
+}
 
 export const ChatSurface = memo(
   function ChatSurface({
@@ -649,37 +795,32 @@ export const ChatSurface = memo(
             className={`ds-new-thread-picker${showEmptyModePicker ? " ds-vibe-empty-picker" : ""}`}
             data-testid="mode-picker"
           >
+            <p className="ds-mode-picker-prompt">How do you want to start?</p>
             <div className="ds-mode-picker">
-              <button
-                className="ds-mode-card"
-                onClick={() => onPickMode("go")}
-                data-testid="pick-go"
+              <ModeCard
+                mode="go"
+                icon={<IconBolt size={22} stroke={1.6} aria-hidden="true" />}
+                title="Go"
+                description="Start building — the agent can edit code right away."
+                primary
+                onPick={() => onPickMode("go")}
                 autoFocus
-              >
-                <strong>Go</strong>
-                <span>
-                  Start building — the agent can edit code right away.
-                </span>
-              </button>
-              <button
-                className="ds-mode-card"
-                onClick={() => onPickMode("spec")}
-                data-testid="pick-spec"
-              >
-                <strong>Spec</strong>
-                <span>
-                  {/* Amendment 6: lead with what the mode does — a structured
-                      interview — not with what it forbids. "Read-only
-                      planning" was accurate and told a first-time user
-                      nothing about the questions they're about to be
-                      asked. */}
-                  Write the spec together — the agent asks one question at a
-                  time to shape requirements, design and tasks. Nothing gets
-                  built until you approve the plan.
-                </span>
-              </button>
+                testId="pick-go"
+              />
+              {/* Amendment 6: lead with what the mode does — a structured
+                  interview — not with what it forbids. "Read-only planning"
+                  was accurate and told a first-time user nothing about the
+                  questions they're about to be asked. */}
+              <ModeCard
+                mode="spec"
+                icon={<IconListCheck size={22} stroke={1.6} aria-hidden="true" />}
+                title="Spec"
+                description="Write the spec together, one question at a time. Nothing gets built until you approve the plan."
+                onPick={() => onPickMode("spec")}
+                testId="pick-spec"
+              />
             </div>
-            <span className="hint">
+            <span className="hint ds-mode-picker-hint">
               You can switch modes any time from the composer.
             </span>
           </div>

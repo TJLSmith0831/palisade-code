@@ -1409,10 +1409,35 @@ input[type="checkbox"] {
   justify-content: center;
   gap: 14px;
   padding: 24px;
+  position: relative;
+  /* The choice between Go and Spec decides whether the agent enters
+     read-only planning — twilight-glow is the token already reserved for
+     exactly that state (see the assistant avatar). Pooling it behind the
+     picker gives the surrounding space a reason to be there instead of
+     reading as unclaimed. */
+  background: radial-gradient(
+    ellipse 640px 420px at 50% 50%,
+    var(--twilight-glow),
+    transparent 70%
+  );
 }
 
 .ds-vibe-empty-picker {
   padding: 32px;
+}
+
+.ds-mode-picker-prompt {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-mode-picker-hint {
+  /* `.hint` is monospace app-wide for label/metadata text; this line reads
+     as a sentence, so it opts back into the inherited sans stack locally
+     rather than changing the shared class. */
+  font-family: inherit;
 }
 
 .pane-head {
@@ -2193,6 +2218,10 @@ details.graph-report-wrap > summary {
 .ds-mode-picker {
   display: flex;
   gap: 10px;
+  width: 100%;
+  max-width: 560px;
+  /* Both cards tilt in one shared 3D space rather than independently. */
+  perspective: 1000px;
 }
 
 .ds-mode-card {
@@ -2207,11 +2236,86 @@ details.graph-report-wrap > summary {
   color: var(--fg);
   text-align: left;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transform-style: preserve-3d;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 160ms ease;
 }
 
-.ds-mode-card:hover {
+/* While the pointer is tracking, the card's own JS sets transform every
+   frame — no CSS transition should smooth those (that's what makes it
+   feel tactile instead of laggy); the 220ms spring-ish ease above only
+   plays on the way back to rest via .ds-mode-card:hover/:focus-visible. */
+.ds-mode-card.tracking {
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.ds-mode-card svg,
+.ds-mode-card strong,
+.ds-mode-card > span {
+  position: relative;
+  z-index: 1;
+}
+
+.ds-mode-card svg {
+  color: var(--muted);
+  transition: color 160ms ease;
+}
+
+.ds-mode-card:hover,
+.ds-mode-card:focus-visible {
   border-color: var(--accent);
   background: var(--surface-warm);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.ds-mode-card:hover svg,
+.ds-mode-card:focus-visible svg {
+  color: var(--accent);
+}
+
+/* Magnetic glow — follows the pointer inside the card, accent-tinted at
+   low opacity. The hover itself is the "live" moment the One Accent Rule
+   asks for, so this earns the accent color rather than borrowing it. */
+.ds-mode-card-glow {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  background: radial-gradient(
+    220px circle at var(--glow-x, 50%) var(--glow-y, 50%),
+    color-mix(in oklab, var(--accent), transparent 82%),
+    transparent 70%
+  );
+}
+
+.ds-mode-card:hover .ds-mode-card-glow,
+.ds-mode-card:focus-visible .ds-mode-card-glow {
+  opacity: 1;
+}
+
+/* Go is the default, more common path (D19's autoFocus already says so) —
+   the card carries that at rest, the same way the composer's send button
+   is filled accent at rest rather than only on hover (see .ds-icon-btn
+   send styling). Spec earns the same accent treatment the instant it's
+   touched, via the shared hover rule above. */
+.ds-mode-card-primary {
+  border-color: color-mix(in oklab, var(--accent), var(--border) 40%);
+  background: color-mix(in oklab, var(--accent), var(--surface) 92%);
+}
+
+.ds-mode-card-primary svg {
+  color: var(--accent);
 }
 
 .ds-mode-card strong {
@@ -2222,6 +2326,58 @@ details.graph-report-wrap > summary {
   font-size: 12px;
   color: var(--muted);
   line-height: 1.4;
+}
+
+/* Live preview — the card shows what the mode actually does (an edit
+   landing, a question being asked) instead of only describing it in
+   prose. Types in on hover/focus via ModeCard's own interval; visibility
+   is CSS-driven so it works the same for mouse and keyboard. */
+.ds-live-preview {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+  white-space: pre;
+}
+
+/* Hover-only: ModeCard no longer flips `active` on focus, so this rule
+   matches. A focus-visible card still lifts and borders (the fallback CSS
+   rule above already covers that) — only the typewriter is pointer-gated. */
+.ds-mode-card:hover .ds-live-preview {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ds-live-preview .diff-add {
+  color: var(--success);
+}
+
+.ds-live-preview .cursor {
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  background: currentColor;
+  vertical-align: -2px;
+  margin-left: 1px;
+  animation: ds-live-preview-blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-live-preview .cursor {
+    animation: none;
+  }
+}
+
+@keyframes ds-live-preview-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 .file-palette {
