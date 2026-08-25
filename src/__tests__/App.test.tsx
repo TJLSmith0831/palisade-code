@@ -2411,18 +2411,21 @@ describe("First-run onboarding", () => {
 
   it("surfaces executor detection on the first screen, before any project is open", async () => {
     render(<App />);
-    const detect = await screen.findByTestId("onboarding-detect");
-    expect(detect.textContent).toMatch(/no coding agent found/i);
+    const status = await screen.findByTestId("onboarding-status");
+    expect(status.textContent).toMatch(/no coding agent found/i);
   });
 
-  it("lets the provider and the model be swapped before a project is open", async () => {
+  it("the onboarding composer's send picks a folder, creates a go-mode thread with the chosen agent, and sends the typed message", async () => {
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "preflight")
+        calls.push({ cmd, args });
+        if (cmd === "list_projects") return Promise.resolve([]);
+        if (cmd === "preflight") {
           return Promise.resolve({
             agents: [
-              { id: "claude", name: "Claude Code", label: "Claude Code" },
-              { id: "codex", name: "Codex", label: "Codex" },
+              { id: "claude", name: "Claude Code" },
+              { id: "codex", name: "Codex" },
             ],
             selected: "claude",
             openspec: true,
@@ -2433,37 +2436,105 @@ describe("First-run onboarding", () => {
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
-        if (cmd === "list_models")
+        }
+        if (cmd === "add_project") {
           return Promise.resolve({
-            models: [
-              { id: "m-fast", name: "Fast" },
-              { id: "m-deep", name: "Deep" },
-            ],
-            selected: "m-fast",
+            hash: "proj-new",
+            root: "/tmp/new-repo",
+            displayName: "new-repo",
+            createdAt: "2026-08-24T00:00:00Z",
+            lastAccessedAt: "2026-08-24T00:00:00Z",
           });
-        return defaultInvoke(cmd, args);
+        }
+        if (cmd === "switch_project") {
+          return Promise.resolve({
+            hash: "proj-new",
+            root: "/tmp/new-repo",
+            displayName: "new-repo",
+            createdAt: "2026-08-24T00:00:00Z",
+            lastAccessedAt: "2026-08-24T00:00:00Z",
+          });
+        }
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "git_branches") return Promise.resolve([]);
+        if (cmd === "list_directory") return Promise.resolve([]);
+        if (cmd === "list_models") {
+          return Promise.resolve({ models: [], current: null, configId: null });
+        }
+        if (cmd === "create_thread") {
+          return Promise.resolve({
+            id: "thread-new",
+            projectHash: "proj-new",
+            title: "New thread",
+            createdAt: "2026-08-24T00:00:00Z",
+            updatedAt: "2026-08-24T00:00:00Z",
+            currentMode: "go",
+            openSpecChangeName: null,
+          });
+        }
+        if (cmd === "set_thread_mode" || cmd === "set_thread_executor") {
+          return Promise.resolve({
+            id: "thread-new",
+            projectHash: "proj-new",
+            title: "New thread",
+            createdAt: "2026-08-24T00:00:00Z",
+            updatedAt: "2026-08-24T00:00:00Z",
+            currentMode: "go",
+            openSpecChangeName: null,
+            executor: (args?.executor as string) ?? "claude",
+            model: (args?.model as string) ?? null,
+          });
+        }
+        if (cmd === "send_message") {
+          return Promise.resolve({
+            seq: 1,
+            ts: "2026-08-24T00:00:01Z",
+            role: "user",
+            mode: "go",
+            content: args?.content ?? "",
+          });
+        }
+        return Promise.resolve([]);
       }
     );
 
     render(<App />);
-    const providerPill = await screen.findByTestId("onboarding-agent-pill");
-    expect(providerPill.textContent).toMatch(/Claude Code/);
-    fireEvent.click(providerPill);
+    await screen.findByTestId("onboarding");
+
+    // Open the composer and pick the non-default provider — the framing
+    // choice this writes must survive through project creation.
+    fireEvent.click(screen.getByTestId("onboarding-composer-toggle"));
+    fireEvent.click(await screen.findByTestId("onboarding-agent-pill"));
     fireEvent.click(await screen.findByTestId("onboarding-executor-opt-codex"));
+
+    fireEvent.change(screen.getByTestId("onboarding-composer"), {
+      target: { value: "Add dark mode toggle to settings" },
+    });
+
+    vi.mocked(open).mockResolvedValueOnce("/tmp/new-repo");
+    fireEvent.click(screen.getByTestId("onboarding-send"));
+
+    // Lands in the real, live thread — not back on an empty shell.
+    await screen.findByTestId("vibe-shell");
     await waitFor(() =>
-      expect(
-        screen.getByTestId("onboarding-agent-pill").textContent
-      ).toMatch(/Codex/)
+      expect(calls.some((c) => c.cmd === "send_message")).toBe(true)
     );
 
-    const modelPill = screen.getByTestId("onboarding-model-pill");
-    fireEvent.click(modelPill);
-    fireEvent.click(await screen.findByTestId("onboarding-model-opt-m-deep"));
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("onboarding-model-pill").textContent
-      ).toMatch(/Deep/)
-    );
+    expect(
+      calls.find((c) => c.cmd === "add_project")?.args
+    ).toEqual({ path: "/tmp/new-repo" });
+    expect(
+      calls.find((c) => c.cmd === "set_thread_mode")?.args
+    ).toMatchObject({ mode: "go" });
+    expect(
+      calls.find((c) => c.cmd === "set_thread_executor")?.args
+    ).toMatchObject({ executor: "codex" });
+    expect(
+      calls.find((c) => c.cmd === "send_message")?.args
+    ).toMatchObject({
+      content: "Add dark mode toggle to settings",
+      mode: "go",
+    });
   });
 
   it("opens a recent project on click instead of auto-entering it on launch", async () => {

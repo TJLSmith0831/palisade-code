@@ -39,6 +39,7 @@ import {
   IconBolt,
   IconBox,
   IconChevronDown,
+  IconBrandTelegram,
   IconListCheck,
   IconCode,
   IconCommand,
@@ -51,7 +52,6 @@ import {
   IconLayoutSidebarRightFilled,
   IconPlayerStopFilled,
   IconRoute,
-  IconSend2,
   IconSettings,
   IconShield,
   IconShieldOff,
@@ -1872,7 +1872,7 @@ export const ChatSurface = memo(
                     },
                   }}
                 >
-                  <IconSend2 size={17} />
+                  <IconBrandTelegram size={17} />
                 </ActionIcon>
               )}
             </div>
@@ -2218,6 +2218,7 @@ export default function App() {
         kind: "input";
         label: string;
         value: string;
+        placeholder?: string;
         submit: (value: string) => void;
       }
     | {
@@ -2751,6 +2752,7 @@ export default function App() {
       kind: "input",
       label: "Repository URL to clone",
       value: "",
+      placeholder: "https://github.com/user/repo.git",
       submit: async (url) => {
         setBar(null);
         try {
@@ -2767,6 +2769,52 @@ export default function App() {
         }
       },
     });
+  };
+
+  // The onboarding composer's send: unlike the plain New Project tile, a
+  // typed request has somewhere to go once a folder is picked — open the
+  // project, create a fresh go-mode thread (reusing onSend's first-send
+  // shape below, but against the just-picked project's hash directly rather
+  // than closured `project`/`thread` state, which wouldn't be fresh yet),
+  // carry the framing-menu's executor/model pick onto it, send the message,
+  // and land in Vibe so the run is visible immediately instead of the empty
+  // shell the New Project path leaves you on.
+  const onOnboardingComposerSend = async (text: string) => {
+    try {
+      const picked = await open({ directory: true, title: "Add a project" });
+      if (typeof picked !== "string") return;
+      const added = await api.addProject(picked);
+      setProjects(await api.listProjects());
+      await selectProjectNow(added);
+      const created = await api.createThread(added.hash, "New thread");
+      let activeThread = await api.setThreadMode(added.hash, created.id, "go");
+      const persisted = await persistFramingChoice(added.hash, activeThread.id);
+      if (persisted) activeThread = persisted;
+      setThreads(await api.listThreads(added.hash));
+      await selectThread(added.hash, activeThread);
+      shell.setCenterShell("vibe");
+      setBusy(true);
+      const prefs = resolvePrefs(added.hash, activeThread.id);
+      const sent = await api.sendMessage(
+        added.hash,
+        activeThread.id,
+        text,
+        "go",
+        prefs.bypass
+      );
+      setMessages((prev) =>
+        prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
+      );
+      api.listThreads(added.hash).then((found) => {
+        setThreads(found);
+        const mine = found.find((t) => t.id === activeThread.id);
+        if (mine) setThread(mine);
+      }, () => {});
+      if (!flight?.selected) setBusy(false);
+    } catch (err) {
+      setBusy(false);
+      fail(err);
+    }
   };
 
   const onRenameProject = () => {
@@ -4753,8 +4801,10 @@ export default function App() {
               projects={projects}
               flight={flight}
               /* Reuses the framing-menu state (D21) — the same "chosen
-                 before a thread exists" slot, so the pick carries into the
-                 first thread instead of being a throwaway. */
+                 before a thread exists" slot the in-thread empty composer
+                 uses, so the pick carries into the go-mode thread
+                 onOnboardingComposerSend creates rather than being a
+                 throwaway. */
               executor={framingExecutor}
               model={framingModel}
               models={
@@ -4764,6 +4814,7 @@ export default function App() {
               onPickModel={onPickFramingModel}
               onOpenProject={onAddProject}
               onCloneRepository={onCloneRepository}
+              onComposerSend={onOnboardingComposerSend}
               onSelectProject={selectProject}
               openingHash={openingProject}
             />
@@ -5088,13 +5139,13 @@ export default function App() {
 
         {bar && bar.kind === "input" && (
           <MantineModal opened onClose={() => setBar(null)} title={bar.label}>
-            <input
+            <TextInput
               id="barInput"
               name="barInput"
               autoFocus
               autoComplete="off"
               defaultValue={bar.value}
-              placeholder={bar.value ? undefined : "filename"}
+              placeholder={bar.value ? undefined : bar.placeholder}
               aria-label={bar.label}
               data-testid="note-name-input"
               onKeyDown={(event) => {
@@ -5108,7 +5159,9 @@ export default function App() {
                 }
               }}
             />
-            <span className="hint">Enter to confirm · Esc to cancel</span>
+            <span className="hint" style={{ display: "block", marginTop: 8 }}>
+              Enter to confirm · Esc to cancel
+            </span>
           </MantineModal>
         )}
 

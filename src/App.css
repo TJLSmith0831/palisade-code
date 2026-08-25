@@ -3401,11 +3401,11 @@ details.graph-report-wrap > summary {
   white-space: nowrap;
 }
 
-/* --- onboarding / first run (Amendment 8) -------------------------------- */
+/* --- onboarding / first run (Amendment 9: project-first) ----------------- */
 
-/* The first screen never scrolls as a page: the pitch, the composer and the
-   two cards stay put, and only the Recent Projects list scrolls inside its
-   own box. A user should never have to scroll to find the composer. */
+/* The first screen never scrolls as a page: the header, greeting, cards and
+   composer-toggle stay put, and only the Recent Projects list scrolls inside
+   its own box. */
 .ds-onboarding {
   flex: 1;
   min-height: 0;
@@ -3423,9 +3423,8 @@ details.graph-report-wrap > summary {
   padding: clamp(16px, 5vh, 48px) 20px clamp(12px, 3vh, 28px);
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   text-align: center;
-  animation: ds-onboarding-in 420ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes ds-onboarding-in {
@@ -3435,8 +3434,21 @@ details.graph-report-wrap > summary {
   }
 }
 
+/* Each landmark arrives on its own beat instead of the whole column fading
+   in as one block — a considered reveal rather than a single blob appearing.
+   Same keyframe, same easing, just walked down the column. */
+.ds-onboarding-inner > * {
+  animation: ds-onboarding-in 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ds-onboarding-inner > *:nth-child(1) { animation-delay: 0ms; }
+.ds-onboarding-inner > *:nth-child(2) { animation-delay: 70ms; }
+.ds-onboarding-inner > *:nth-child(3) { animation-delay: 130ms; }
+.ds-onboarding-inner > *:nth-child(4) { animation-delay: 190ms; }
+.ds-onboarding-inner > *:nth-child(5) { animation-delay: 230ms; }
+.ds-onboarding-inner > *:nth-child(6) { animation-delay: 260ms; }
+
 @media (prefers-reduced-motion: reduce) {
-  .ds-onboarding-inner {
+  .ds-onboarding-inner > * {
     animation: none;
   }
 }
@@ -3447,16 +3459,120 @@ details.graph-report-wrap > summary {
   flex-shrink: 0;
 }
 
-/* The wordmark is the whole header now — no headline, no pitch — so it is
-   sized by width against the 560px column rather than by height like the
-   square chip it replaced. Transparent art, so it sits on the shell
-   background with no plate behind it. The file carries a wide glow margin,
-   hence the tight bottom spacing: the art already supplies its own. */
+/* Wordmark + detection status share a header row now that project creation,
+   not the mark, is the screen's focal point (Amendment 9). */
+.ds-onboarding-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+/* The one deliberate "second consumer" of twilight-glow noted in DESIGN.md:
+   a slow ambient pulse behind the wordmark, still the one place the screen
+   should feel alive before the user has done anything — just compact now
+   that it shares the header row instead of standing alone as the hero. */
+.ds-onboarding-mark-wrap {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  flex-shrink: 0;
+}
+
+.ds-onboarding-mark-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -20% -10%;
+  background: radial-gradient(
+    ellipse at center,
+    var(--twilight-glow) 0%,
+    transparent 70%
+  );
+  opacity: 0.55;
+  filter: blur(2px);
+  animation: ds-onboarding-glow 4200ms ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes ds-onboarding-glow {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-onboarding-mark-wrap::before {
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
 .ds-onboarding-mark {
-  width: min(300px, 62%);
+  position: relative;
+  width: 132px;
   height: auto;
-  margin-bottom: clamp(2px, 1vh, 10px);
   user-select: none;
+}
+
+/* Detection-only status pill — a picker used to live here (Amendment 8);
+   the shape brief (2026-08-24) confirmed dropping it: executor/model choice
+   now happens in-thread, after a project opens. The missing-agent state is a
+   launch blocker, so it gets warn-toned weight instead of sharing the
+   detected state's quiet styling — the P1 the critique flagged. */
+.ds-onboarding-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 5px 12px;
+}
+
+.ds-onboarding-status strong {
+  color: var(--fg);
+}
+
+.ds-onboarding-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.ds-onboarding-status.bad {
+  white-space: normal;
+  text-align: left;
+  max-width: 300px;
+  color: var(--warn);
+  background: color-mix(in oklab, var(--warn), transparent 90%);
+  border-color: color-mix(in oklab, var(--warn), transparent 55%);
+}
+
+.ds-onboarding-status.bad .ds-onboarding-status-dot {
+  background: var(--warn);
+}
+
+/* Preflight hasn't resolved yet — neither green (nothing confirmed working)
+   nor warn (nothing confirmed missing either). */
+.ds-onboarding-status.loading .ds-onboarding-status-dot {
+  background: var(--muted);
+}
+
+.ds-onboarding-greeting {
+  align-self: flex-start;
+  text-align: left;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 20px;
+  color: var(--fg);
 }
 
 /* The wordmark is drawn for one background: the dark variant glows white and
@@ -3477,93 +3593,68 @@ details.graph-report-wrap > summary {
 
 .ds-onboarding-composer {
   width: 100%;
+  margin-bottom: 8px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   text-align: left;
-  transition: border-color 150ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 /* The composer gave zero feedback on focus (Mantine's `unstyled` Textarea
-   strips its own ring) — the first thing a new user clicks felt inert. */
+   strips its own ring) — the first thing a new user clicks felt inert. A
+   single border-color shift plus one soft ambient shadow reads as one lit
+   edge; stacking a second same-color box-shadow ring directly on top of the
+   border (the previous version) read as two nested boxes instead. */
 .ds-onboarding-composer:focus-within {
-  border-color: color-mix(in oklab, var(--accent), transparent 55%);
+  border-color: var(--accent);
+  box-shadow: 0 4px 20px color-mix(in oklab, var(--accent), transparent 88%);
 }
 
-.ds-onboarding-composer-row,
-.ds-onboarding-dir-row {
+/* Provider pill, model pill, and send button — the same row shape as the
+   in-thread composer's `.ds-composer-controls`, minus the Spec/Go toggle
+   (nothing to toggle before a thread exists; a send from here always runs
+   go mode). */
+.ds-onboarding-composer-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
 }
 
-.ds-onboarding-dir-hint {
-  color: var(--warn);
-  font-size: 11px;
-}
-
-.ds-onboarding-dir-row {
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--muted);
-}
-
 .ds-onboarding-spacer {
   flex: 1;
 }
 
-.ds-onboarding-dir-pick {
+/* The quiet, collapsed entry point to the composer above — one line, no
+   border, easy to miss on purpose (New Project is the loud action). */
+.ds-onboarding-composer-toggle {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 8px;
   background: none;
   border: none;
+  padding: 4px 2px;
   color: var(--muted);
   font-size: 11px;
+  text-align: left;
   cursor: pointer;
-  padding: 0;
   transition: color 150ms ease;
 }
 
-.ds-onboarding-dir-pick:hover {
+.ds-onboarding-composer-toggle:hover,
+.ds-onboarding-composer-toggle:focus-visible {
   color: var(--fg);
 }
 
-.ds-onboarding-detect {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-  justify-content: center;
-  margin: 16px 0 22px;
-  padding: 7px 13px;
-  border-radius: 9999px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--muted);
+.ds-onboarding-inner .ds-section-heading {
+  align-self: flex-start;
+  text-align: left;
+  margin-top: 12px;
 }
-
-.ds-onboarding-detect strong {
-  color: var(--fg);
-}
-
-.ds-onboarding-detect-note {
-  opacity: 0.75;
-}
-
-.ds-onboarding-detect-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.ds-onboarding-detect-dot.ok { background: var(--success); }
-.ds-onboarding-detect-dot.bad { background: var(--warn); }
 
 .ds-onboarding-cards {
   flex-shrink: 0;
@@ -3596,6 +3687,47 @@ details.graph-report-wrap > summary {
   border-color: color-mix(in oklab, var(--accent), transparent 60%);
   background: var(--surface-warm);
   color: var(--fg);
+}
+
+/* Same accent-tinted fill the NavRail gives its active icon — reused here
+   so the card's icon, not just its border, answers the hover/focus. */
+.ds-onboarding-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.ds-onboarding-card:hover:not(:disabled) .ds-onboarding-card-icon,
+.ds-onboarding-card:focus-visible .ds-onboarding-card-icon {
+  background: var(--active-row);
+  color: var(--accent);
+}
+
+/* New Project is the primary action on this screen now (Amendment 9) — it
+   carries accent weight at rest instead of only on hover, same fill/on-fill
+   pairing the send button already uses for "the one thing that matters". */
+.ds-onboarding-card.primary {
+  border-color: color-mix(in oklab, var(--accent), transparent 45%);
+  background: linear-gradient(
+    165deg,
+    color-mix(in oklab, var(--accent), transparent 88%),
+    var(--surface) 60%
+  );
+}
+
+.ds-onboarding-card.primary .ds-onboarding-card-icon {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.ds-onboarding-card.primary:hover:not(:disabled),
+.ds-onboarding-card.primary:focus-visible {
+  border-color: var(--accent);
 }
 
 .ds-onboarding-card-title {
@@ -3660,6 +3792,17 @@ details.graph-report-wrap > summary {
 .ds-onboarding-recent-path {
   font-size: 10px;
   font-family: var(--mono);
+}
+
+.ds-onboarding-recent-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.ds-onboarding-recent-empty {
+  align-self: center;
+  margin: 8px 0 0;
 }
 
 /* --- responsive: keep the shell usable on a small laptop -----------------
