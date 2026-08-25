@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "postinstall": "scripts/link-sidecar.sh || true",
     "start": "tauri dev",
     "dev": "vite",
     "build": "tsc && vite build",
