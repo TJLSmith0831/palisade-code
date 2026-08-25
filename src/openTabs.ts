@@ -52,7 +52,21 @@ export type ChainTab = {
   mdPreview: false;
 };
 
-export type OpenTab = FileTab | SpecTab | TableTab | QueryTab | ChainTab;
+export type PreviewTab = {
+  type: "preview";
+  /** The URL loaded in the iframe, or null before anything is navigated to. */
+  url: string | null;
+  dirty: false;
+  mdPreview: false;
+};
+
+export type OpenTab =
+  | FileTab
+  | SpecTab
+  | TableTab
+  | QueryTab
+  | ChainTab
+  | PreviewTab;
 
 /** The stable string key for a tab — its identity in `activePath`, the
  * Mantine `Tabs` component, and session save/restore. File tabs use their
@@ -71,6 +85,10 @@ export const tabKey = (tab: OpenTab): string => {
     // isn't replaced by clicking a saved chain in the sidebar.
     case "chain":
       return `chain:${tab.chainName ?? "new"}`;
+    // Singleton: opening Preview again renavigates the one tab, it never
+    // makes a second one (design.md, PreviewTab shape).
+    case "preview":
+      return "preview";
     default:
       return tab.path;
   }
@@ -190,6 +208,32 @@ export function useOpenTabs() {
       }),
     [openTab]
   );
+
+  /** Open the singleton Preview tab, or focus/renavigate the one already
+   * open. The single entry point for both the "+" menu (no url) and
+   * dev-server auto-detection (a url) — D9/D11/D13. Passing no url keeps
+   * whatever is already loaded. */
+  const openPreview = useCallback((url?: string) => {
+    setTabs((current) => {
+      const existing = current.find((t) => t.type === "preview");
+      if (!existing)
+        return [
+          ...current,
+          {
+            type: "preview" as const,
+            url: url ?? null,
+            dirty: false as const,
+            mdPreview: false as const,
+          },
+        ];
+      if (url === undefined || existing.url === url) return current;
+      return current.map((t) =>
+        t.type === "preview" ? { ...t, url } : t
+      );
+    });
+    setActivePath("preview");
+    closed.current = closed.current.filter((k) => k !== "preview");
+  }, []);
 
   /** Removes tabs matching `matches`, keeping the selection sensible: when
    * the active tab goes, the neighbour to their right takes over, falling back
@@ -318,6 +362,7 @@ export function useOpenTabs() {
     openTable,
     openChain,
     openQuery,
+    openPreview,
     close,
     dropPath,
     rename,

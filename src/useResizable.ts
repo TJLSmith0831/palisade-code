@@ -28,12 +28,23 @@ export interface UseResizableResult {
   };
 }
 
-const load = (storageKey: string, defaultSize: number, defaultCollapsed: boolean): Persisted => {
+const load = (
+  storageKey: string,
+  defaultSize: number,
+  defaultCollapsed: boolean,
+  min: number,
+  max: number,
+): Persisted => {
   const raw = localStorage.getItem(storageKey);
   if (!raw) return { size: defaultSize, collapsed: defaultCollapsed };
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed.size === "number" && typeof parsed.collapsed === "boolean") return parsed;
+    if (typeof parsed.size === "number" && typeof parsed.collapsed === "boolean") {
+      // Clamp on read: a size saved under an older, looser min would
+      // otherwise stick forever — which is how a chat pane saved at 270px
+      // kept clipping its own send button after the floor was raised.
+      return { ...parsed, size: Math.min(max, Math.max(min, parsed.size)) };
+    }
   } catch {
     // fall through to default
   }
@@ -42,7 +53,9 @@ const load = (storageKey: string, defaultSize: number, defaultCollapsed: boolean
 
 export function useResizable(options: UseResizableOptions): UseResizableResult {
   const { storageKey, defaultSize, min, max, axis, reverse, defaultCollapsed = false } = options;
-  const [state, setState] = useState<Persisted>(() => load(storageKey, defaultSize, defaultCollapsed));
+  const [state, setState] = useState<Persisted>(() =>
+    load(storageKey, defaultSize, defaultCollapsed, min, max),
+  );
   const drag = useRef<{ start: number; startSize: number } | null>(null);
 
   // storageKey changes when the active project changes (`palisade:layout:<hash>:...`).
@@ -51,7 +64,7 @@ export function useResizable(options: UseResizableOptions): UseResizableResult {
   const prevKey = useRef(storageKey);
   if (prevKey.current !== storageKey) {
     prevKey.current = storageKey;
-    setState(load(storageKey, defaultSize, defaultCollapsed));
+    setState(load(storageKey, defaultSize, defaultCollapsed, min, max));
   }
 
   const persist = useCallback(

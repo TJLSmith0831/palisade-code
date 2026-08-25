@@ -1406,7 +1406,7 @@ describe("Right sidebar (merged-design v2)", () => {
 
     const handle = screen.getByTestId("resize-right-panel");
     fireEvent.pointerDown(handle, { clientX: 700 });
-    fireEvent.pointerMove(window, { clientX: 760 });
+    fireEvent.pointerMove(window, { clientX: 760, buttons: 1 });
     fireEvent.pointerUp(window);
 
     expect(
@@ -1424,7 +1424,7 @@ describe("Resizable layout persistence", () => {
     fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), {
       clientX: 200,
     });
-    fireEvent.pointerMove(window, { clientX: 260 });
+    fireEvent.pointerMove(window, { clientX: 260, buttons: 1 });
     fireEvent.pointerUp(window);
     expect(
       screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
@@ -1453,11 +1453,38 @@ describe("Resizable layout persistence", () => {
     });
     expect(document.body.style.userSelect).toBe("none");
 
-    fireEvent.pointerMove(window, { clientX: 260 });
+    fireEvent.pointerMove(window, { clientX: 260, buttons: 1 });
     expect(document.body.style.userSelect).toBe("none");
 
     fireEvent.pointerUp(window);
     expect(document.body.style.userSelect).not.toBe("none");
+  });
+
+  // A native window drag, a pointercancel, or releasing outside the window
+  // all swallow the pointerup — without a self-heal the handle then tracked
+  // the cursor forever with no way to let go.
+  it("ends a drag whose pointerup never arrives", async () => {
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+
+    fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), {
+      clientX: 200,
+    });
+    expect(document.body.style.userSelect).toBe("none");
+
+    // The button is already up: this move is proof the release was lost.
+    fireEvent.pointerMove(window, { clientX: 260, buttons: 0 });
+    expect(document.body.style.userSelect).not.toBe("none");
+
+    const settled = screen
+      .getByTestId("side-panel")
+      .style.getPropertyValue("--panel-w");
+    // Further movement must no longer resize anything.
+    fireEvent.pointerMove(window, { clientX: 420, buttons: 0 });
+    expect(
+      screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
+    ).toBe(settled);
   });
 
   // Cmd+\\ and the rail icon drive the same `activePanel` state — there is

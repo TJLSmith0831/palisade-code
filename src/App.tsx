@@ -107,6 +107,8 @@ import FileEditorPane, {
   evictProjectSessions,
 } from "./FileEditorPane";
 import TabBar from "./TabBar";
+import PreviewPane from "./PreviewPane";
+import { useDevServerPreview } from "./useDevServerPreview";
 import { isMarkdownPath, tabKey, useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
@@ -1504,11 +1506,18 @@ export const ChatSurface = memo(
                     })}
                   </>
                 )}
+                {/* Stale copy fixed: this said "Next session will use <the
+                    agent you already have>", describing a switch that had
+                    already happened, and then repeated the handoff sentence
+                    the post-pick banner (Amendment 5) now owns. It's a
+                    pre-pick caveat now — what a switch would cost, not a
+                    report of one. */}
                 {hasLiveSession && (
                   <span className="hint" data-testid="next-session-hint">
-                    Next session will use {executorLabel ?? "auto-detected"}
-                    {threadBypass ? " · bypass on" : ""}. Switching hands the
-                    conversation off as text context.
+                    A session is running. Picking another agent starts the
+                    next session with it
+                    {threadBypass ? " (bypass on)" : ""} — this one keeps
+                    going as {executorLabel ?? "the current agent"}.
                   </span>
                 )}
               </Menu.Dropdown>
@@ -1607,7 +1616,11 @@ export const ChatSurface = memo(
                 size="xs"
                 styles={{
                   root: {
+                    // Flexible, not fixed: 190px is the comfortable size, but
+                    // a rigid block here is what forced the controls row to
+                    // wrap in a narrow chat pane.
                     width: 190,
+                    minWidth: 104,
                     height: 36,
 
                     padding: 2,
@@ -1767,16 +1780,30 @@ const bindDrag =
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
     document.body.style.cursor = cursor;
-    const onMove = (e: PointerEvent) => handle.onPointerMove(e);
+    const onMove = (e: PointerEvent) => {
+      // Self-heal: if the button is already up, the pointerup never reached
+      // us (a native window drag, a pointercancel, or a release outside the
+      // window all swallow it) and the drag would otherwise track the cursor
+      // forever with no way to let go.
+      if (e.buttons === 0) {
+        onUp();
+        return;
+      }
+      handle.onPointerMove(e);
+    };
     const onUp = () => {
       handle.onPointerUp();
       document.body.style.userSelect = previousUserSelect;
       document.body.style.cursor = previousCursor;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("blur", onUp);
   };
 
 // D15: .palisade/project-settings.json's known v1 shape. The backend auto-creates
@@ -2685,6 +2712,35 @@ export default function App() {
     },
     [tabs, project]
   );
+
+  // The tab bar's "+" → New File (D14, amended). The explorer's own inline
+  // create input can't serve this: FileTree only mounts while the Explorer
+  // panel is open, and in Vibe mode it isn't on screen at all.
+  // Reuses the app's existing `kind: "input"` prompt rather than adding a
+  // second name-entry modal.
+  const newFileAtRoot = useCallback(() => {
+    if (!project) return;
+    setBar({
+      kind: "input",
+      label: "New file",
+      value: "",
+      submit: async (name) => {
+        setBar(null);
+        try {
+          await api.writeFileContent(project.hash, name, "");
+          filesCache.current.delete(project.hash);
+          invalidateFileTree(name);
+          tabs.open(name);
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
+  }, [project, tabs, invalidateFileTree]);
+
+  // Auto-open Preview when either output stream prints a dev-server URL
+  // (D9/D11) — same helper the "+" menu uses, so both paths behave alike.
+  useDevServerPreview(useCallback((url: string) => tabs.openPreview(url), [tabs]));
 
   // Opens project-settings.json (D14/D15) in the editor, creating it with a
   // self-documenting default first if the project doesn't have one yet.
@@ -3851,9 +3907,14 @@ export default function App() {
       {
         id: "view.rightPanel",
         group: "View",
-        label: "Toggle chat panel",
+        // The chord means "hide the pane that isn't the subject", which is
+        // chat in Editor and the editor column in Vibe.
+        label:
+          shell.centerShell === "vibe"
+            ? "Toggle editor panel"
+            : "Toggle chat panel",
         chord: "Mod+J",
-        run: () => shell.toggleChat(),
+        run: () => toggleSidePane(),
       },
       {
         // One state, two entry points: this and the rail icon both drive
@@ -3965,6 +4026,13 @@ export default function App() {
   // alone on screen, which is just Editor with the panels on the wrong side.
   // So the collapse (and its toggle, and Cmd+J) applies to Editor only.
   const chatCollapsed = shell.centerShell === "editor" && shell.chatCollapsed;
+  // Vibe's mirror image: chat is the subject there, so the pane you can send
+  // away is the editor column. Same affordance, same chord, other side.
+  const editorCollapsed =
+    shell.centerShell === "vibe" && shell.editorCollapsed;
+  /** Whichever pane the current preset lets you collapse. */
+  const toggleSidePane =
+    shell.centerShell === "vibe" ? shell.toggleEditor : shell.toggleChat;
 
   // The strip shows opened threads, not every thread the project has ever
   // had — a hundred threads is a hundred tabs otherwise. The active thread
@@ -4130,6 +4198,11 @@ export default function App() {
             connectionName={tab.connectionName}
           />
         </Suspense>
+      );
+    }
+    if (tab?.type === "preview") {
+      return (
+        <PreviewPane url={tab.url} onNavigate={(url) => tabs.openPreview(url)} />
       );
     }
     if (tab?.type === "chain") {
@@ -4480,7 +4553,9 @@ export default function App() {
               </ActionIcon>
             </Tooltip>
             )}
-            {/* Editor only: in Vibe chat is the subject, not a panel. */}
+            {/* Each preset can send away its secondary pane: chat in Editor,
+                the editor column in Vibe. Same chord, same corner, the icon
+                points at whichever side actually collapses. */}
             {project && shell.centerShell === "editor" && (
               <Tooltip label="Toggle chat panel (Cmd+J)">
                 <ActionIcon
@@ -4490,6 +4565,21 @@ export default function App() {
                   aria-label="Toggle chat panel"
                   aria-pressed={!shell.chatCollapsed}
                   data-testid="toggle-chat"
+                  data-tauri-drag-region-exclude
+                >
+                  <IconLayoutSidebarRightFilled size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+            {project && shell.centerShell === "vibe" && (
+              <Tooltip label="Toggle editor panel (Cmd+J)">
+                <ActionIcon
+                  variant="subtle"
+                  className="ds-icon-btn"
+                  onClick={shell.toggleEditor}
+                  aria-label="Toggle editor panel"
+                  aria-pressed={!shell.editorCollapsed}
+                  data-testid="toggle-editor"
                   data-tauri-drag-region-exclude
                 >
                   <IconLayoutSidebarRightFilled size={14} />
@@ -4638,6 +4728,7 @@ export default function App() {
             className="ds-shell-contents"
             data-preset={shell.centerShell}
             data-chat={chatCollapsed ? "collapsed" : undefined}
+            data-editor={editorCollapsed ? "collapsed" : undefined}
             data-testid={
               shell.centerShell === "vibe" ? "vibe-shell" : "editor-shell"
             }
@@ -4694,6 +4785,7 @@ export default function App() {
 
             <div className="ds-main" data-testid="main-pane">
               <div className="ds-work-row">
+                {!editorCollapsed && (
                 <main className="ds-editor-col" data-testid="editor-col">
                   <TabBar
                     tabs={tabs.tabs}
@@ -4707,6 +4799,15 @@ export default function App() {
                     onToggleDiff={() => shell.setDiffOpen((open) => !open)}
                     activeMdPreview={tabs.activeMdPreview}
                     onToggleMdPreview={toggleMdPreview}
+                    onNewFile={newFileAtRoot}
+                    onNewPreview={() => {
+                      shell.setDiffOpen(false);
+                      tabs.openPreview();
+                    }}
+                    onNewChain={() => {
+                      shell.setDiffOpen(false);
+                      tabs.openChain(null);
+                    }}
                   />
                   {!shell.diffOpen ? (
                     renderCenterTab()
@@ -4761,6 +4862,7 @@ export default function App() {
                     </div>
                   )}
                 </main>
+                )}
 
                 {!chatCollapsed && (
                   <>
@@ -4769,14 +4871,17 @@ export default function App() {
                         subject in Vibe and swamps the editor in Editor.
                         Two resizables, so a drag in one preset doesn't
                         resize the other. */}
-                    <div
-                      className="ds-resize-handle ds-resize-handle-x"
-                      data-testid="resize-right-panel"
-                      onPointerDown={bindDrag(
-                        chatPanel.handleProps,
-                        "col-resize"
-                      )}
-                    />
+                    {/* Nothing to size against once the other pane is gone. */}
+                    {!editorCollapsed && (
+                      <div
+                        className="ds-resize-handle ds-resize-handle-x"
+                        data-testid="resize-right-panel"
+                        onPointerDown={bindDrag(
+                          chatPanel.handleProps,
+                          "col-resize"
+                        )}
+                      />
+                    )}
                     <aside
                       className="ds-chat-rail"
                       data-testid="right-sidebar"
