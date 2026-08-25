@@ -77,6 +77,16 @@ export function useAppShell(projectHash: string | undefined) {
     []
   );
 
+  // The mirror of the above for Vibe: there the editor column is the
+  // secondary pane, so that is what collapses. Separate state rather than one
+  // shared flag — collapsing chat in Editor should not hide the tabs the next
+  // time you switch to Vibe.
+  const [editorCollapsed, setEditorCollapsed] = useState(false);
+  const toggleEditor = useCallback(
+    () => setEditorCollapsed((collapsed) => !collapsed),
+    []
+  );
+
   const [bottomTab, setBottomTab] = useState<BottomTab>("terminal");
 
   // Which threads have a tab in the chat strip. Like editor tabs: selecting
@@ -120,7 +130,10 @@ export function useAppShell(projectHash: string | undefined) {
   const rightPanel = useResizable({
     storageKey: `palisade:layout:${layoutHash}:right`,
     defaultSize: 300,
-    min: 260,
+    // Floor raised from 260 to the 300px default: below 300 the composer's
+    // own controls row (agent + model chips at their floor, Spec/Go, send)
+    // no longer fits, and the send button was clipped off the pane's edge.
+    min: 300,
     max: 820,
     axis: "horizontal",
     reverse: true,
@@ -184,6 +197,8 @@ export function useAppShell(projectHash: string | undefined) {
       toggleSessionList,
       chatCollapsed,
       toggleChat,
+      editorCollapsed,
+      toggleEditor,
       bottomTab,
       setBottomTab,
       openThreadIds,
@@ -212,6 +227,8 @@ export function useAppShell(projectHash: string | undefined) {
       toggleSessionList,
       chatCollapsed,
       toggleChat,
+      editorCollapsed,
+      toggleEditor,
       bottomTab,
       openThreadIds,
       openThread,

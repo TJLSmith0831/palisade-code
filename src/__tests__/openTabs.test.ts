@@ -351,4 +351,27 @@ describe("useOpenTabs", () => {
       expect(keys(view)).toEqual(["table:c1::users", "query:c1"]);
     });
   });
+
+  describe("preview tab", () => {
+    it("is a singleton that renavigates rather than duplicating", () => {
+      const view = withTabs("a.ts");
+      act(() => view.result.current.openPreview());
+      act(() => view.result.current.openPreview("http://localhost:5173"));
+      expect(keys(view)).toEqual(["a.ts", "preview"]);
+      const tab = view.result.current.tabs.find((t) => t.type === "preview");
+      expect(tab).toMatchObject({ url: "http://localhost:5173" });
+      expect(view.result.current.activePath).toBe("preview");
+    });
+
+    it("keeps the loaded URL when reopened from the + menu", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => view.result.current.openPreview("http://127.0.0.1:3000"));
+      act(() => view.result.current.open("a.ts"));
+      act(() => view.result.current.openPreview());
+      expect(
+        view.result.current.tabs.find((t) => t.type === "preview")
+      ).toMatchObject({ url: "http://127.0.0.1:3000" });
+      expect(view.result.current.activePath).toBe("preview");
+    });
+  });
 });

@@ -387,7 +387,11 @@ input[type="checkbox"] {
 }
 
 .ds-model-opt {
-  display: block;
+  /* Flex, not block: `display: block` dropped Mantine's leftSection onto its
+     own line, stacking a chain's icon above its name instead of beside it. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 5px 6px;
   border-radius: 6px;
@@ -407,8 +411,17 @@ input[type="checkbox"] {
   color: var(--accent);
 }
 
+/* The menu's own note is UI text, not terminal output: inheriting the global
+   mono `.hint` face made one sentence read as a wide slab of code and forced
+   the dropdown far past its 220px. */
 .ds-model-menu .hint {
-  padding: 6px 6px 2px;
+  margin-top: 4px;
+  padding: 6px 6px 0;
+  border-top: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  text-wrap: pretty;
 }
 
 .ds-bypass-row {
@@ -2977,6 +2990,16 @@ details.graph-report-wrap > summary {
 }
 [data-preset="vibe"] .ds-editor-col { order: 1; flex: 1 1 auto; }
 
+/* Editor column collapsed (Vibe's mirror of Editor's chat collapse): chat is
+   sized from its own resizable, so without this it keeps its 520px and leaves
+   the reclaimed space empty. Editor needs no equivalent — the editor column
+   there is already `flex: 1 1 auto` and fills on its own. */
+[data-preset="vibe"][data-editor="collapsed"] .ds-chat-rail {
+  width: auto;
+  flex: 1 1 auto;
+  border-right: none;
+}
+
 /* --- Vibe session list --------------------------------------------------- */
 
 .ds-sessions {
@@ -4017,14 +4040,46 @@ details.graph-report-wrap > summary {
    The Editor preset's chat column defaults to 300px, so this row wraps
    rather than letting the provider/model buttons overlap the mode toggle. */
 
+/* Two clusters, one row: [agent · model] reads as context on the left,
+   [mode · send] is the action and pins right. `nowrap` on purpose — with
+   wrap, flexbox breaks the line *before* it shrinks anything, so one long
+   model name threw the Spec/Go control onto its own row. Now the labels
+   ellipsize down to their glyph floor instead, and the row keeps this shape
+   at every resize point. */
 .ds-composer-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* Wrap is the last resort, not the first: the chips below shrink to a
+     56px floor before the line can break, so the row stays single at every
+     ordinary size — and when it truly cannot fit, the send button drops to a
+     second row instead of being clipped off the pane's edge. */
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  min-height: 32px;
+  min-height: 34px;
+}
+
+/* Mode + send: the action pair, always last, never shrinks. A truncated
+   model name still reads; a clipped Go button does not. */
+.ds-composer-controls > :last-child {
+  /* Shrinks only down to its own content (the Spec/Go control's own 104px
+     floor plus the send button), so it compresses instead of forcing a wrap,
+     but can never squeeze the send button out of reach. */
+  flex: 0 1 auto;
+  min-width: min-content;
+  margin-left: auto;
+}
+
+/* Context chips absorb all of the shrink, and the model chip — long
+   vendor-prefixed ids — gives up width well before the agent name does. */
+/* Basis is the 56px floor, not the label width: flexbox decides whether to
+   wrap from the basis, so a long model name would otherwise break the line
+   before it ever agreed to truncate. They grow back into whatever space the
+   action pair leaves, capped at the text they actually have. */
+.ds-composer-controls > .ds-composer-picker {
+  flex: 1 1 56px;
+  min-width: 56px;
+  max-width: max-content;
 }
 
 /* The composer's two chips: icon · name · chevron, matching the mockup.

@@ -1,11 +1,14 @@
-import { ActionIcon, CloseButton, Tabs, Tooltip } from "@mantine/core";
+import { ActionIcon, CloseButton, Menu, Tabs, Tooltip } from "@mantine/core";
 import {
+  IconFilePlus,
   IconGitCompare,
   IconMarkdown,
   IconNotebook,
+  IconPlus,
   IconTable,
   IconTerminal2,
   IconRoute,
+  IconWorld,
 } from "@tabler/icons-react";
 import { isMarkdownPath, tabKey, type OpenTab } from "./openTabs";
 
@@ -20,6 +23,12 @@ type Props = {
   /** Whether the active Markdown tab is showing its preview pane. */
   activeMdPreview: boolean;
   onToggleMdPreview: () => void;
+  /** "+" menu: creates an untitled file at the project root (D14). */
+  onNewFile: () => void;
+  /** "+" menu: opens/focuses the singleton Preview tab (D13). */
+  onNewPreview: () => void;
+  /** "+" menu: opens a blank agent-chain tab (D16). */
+  onNewChain: () => void;
 };
 
 /** `src/components/Foo.tsx` -> `Foo.tsx`. The full path is the tooltip. */
@@ -36,6 +45,8 @@ export const tabLabel = (tab: OpenTab): string => {
       return `SQL — ${tab.connectionName}`;
     case "chain":
       return tab.chainName ?? "New chain";
+    case "preview":
+      return "Preview";
     default:
       return basename(tab.path);
   }
@@ -51,6 +62,8 @@ const tabTooltip = (tab: OpenTab): string => {
       return `SQL editor for ${tab.connectionName}`;
     case "chain":
       return tab.chainName ? `Agent chain: ${tab.chainName}` : "New agent chain";
+    case "preview":
+      return tab.url ?? "Preview — no URL loaded";
     default:
       return tab.path;
   }
@@ -61,6 +74,7 @@ const tabIcons = {
   table: IconTable,
   query: IconTerminal2,
   chain: IconRoute,
+  preview: IconWorld,
 } as const;
 
 /**
@@ -79,6 +93,9 @@ export default function TabBar({
   onToggleDiff,
   activeMdPreview,
   onToggleMdPreview,
+  onNewFile,
+  onNewPreview,
+  onNewChain,
 }: Props) {
   return (
     <div className="ds-editor-tabs" data-testid="editor-tabs">
@@ -150,6 +167,44 @@ export default function TabBar({
               </Tooltip>
             );
           })}
+
+          {/* Sits inline right after the last tab, Chrome-style — not with
+              the right-aligned diff/preview toggles. */}
+          <Menu position="bottom-start" withinPortal>
+            <Menu.Target>
+              <ActionIcon
+                variant="subtle"
+                aria-label="New tab"
+                data-testid="new-tab"
+                style={{ alignSelf: "center", flexShrink: 0 }}
+              >
+                <IconPlus size={16} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconFilePlus size={14} />}
+                data-testid="new-tab-file"
+                onClick={onNewFile}
+              >
+                New File
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconWorld size={14} />}
+                data-testid="new-tab-preview"
+                onClick={onNewPreview}
+              >
+                New Preview
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconRoute size={14} />}
+                data-testid="new-tab-chain"
+                onClick={onNewChain}
+              >
+                New Chain
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
         </Tabs.List>
       </Tabs>
 
