@@ -1562,6 +1562,39 @@ input[type="checkbox"] {
   display: none;
 }
 
+/* A crash banner whose text is an auth-shaped CLI failure (session expired,
+   not logged in, …) gets a plain-language line above the raw error instead
+   of only the raw error — "Internal error: ... authentication_failed" reads
+   as an app bug, not an external, fixable login problem. */
+.ds-crash-banner-auth-summary {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.ds-crash-banner-detail {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.ds-crash-banner-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  border: 1px solid color-mix(in oklab, var(--danger), transparent 45%);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.ds-crash-banner-retry:hover {
+  background: color-mix(in oklab, var(--danger), transparent 85%);
+}
+
 /* --- executor handoff --------------------------------------------------- */
 
 .working {
@@ -3538,11 +3571,14 @@ details.graph-report-wrap > summary {
   user-select: none;
 }
 
-/* Detection-only status pill — a picker used to live here (Amendment 8);
-   the shape brief (2026-08-24) confirmed dropping it: executor/model choice
-   now happens in-thread, after a project opens. The missing-agent state is a
-   launch blocker, so it gets warn-toned weight instead of sharing the
-   detected state's quiet styling — the P1 the critique flagged. */
+/* Status pill — a provider *picker* used to live here (Amendment 8) and was
+   deliberately dropped: executor/model choice happens in-thread, after a
+   project opens, and this chip stayed read-only. It's a dropdown again, but
+   still not that picker — it reports every installed agent's health (found
+   on PATH is not the same as "its login still works"), it doesn't set which
+   one the composer below uses. The missing-agent state keeps the same
+   warn-toned weight instead of sharing the detected state's quiet styling —
+   the P1 the critique flagged. */
 .ds-onboarding-status {
   display: flex;
   align-items: center;
@@ -3550,11 +3586,17 @@ details.graph-report-wrap > summary {
   flex-shrink: 0;
   white-space: nowrap;
   font-size: 11px;
+  font-family: inherit;
   color: var(--muted);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 9999px;
   padding: 5px 12px;
+  cursor: default;
+}
+
+button.ds-onboarding-status {
+  cursor: pointer;
 }
 
 .ds-onboarding-status strong {
@@ -3586,6 +3628,160 @@ details.graph-report-wrap > summary {
    nor warn (nothing confirmed missing either). */
 .ds-onboarding-status.loading .ds-onboarding-status-dot {
   background: var(--muted);
+}
+
+/* Wider than the plain `.ds-model-menu` base — a row needs room for a name
+   plus a status word or a "Reauthenticate" button without wrapping.
+   `!important` because Mantine's floating-ui positioning sets an inline
+   `width: max-content` on this element for its own measurement pass — a
+   plain class-level width loses to that inline style, so a raw CLI error
+   (Codex's is a multi-line JSON dump) stretched the dropdown to the width
+   of its longest unbroken line instead of wrapping inside a fixed box. */
+.ds-onboarding-status-menu {
+  width: 272px !important;
+  max-width: 272px !important;
+}
+
+/* Menu.Item wraps its children in Mantine's own `itemLabel` div — a class on
+   the item itself only reaches that single wrapper, not the two things
+   inside it, so the name/status split has to be a nested flex row rather
+   than styles on the item directly (that shipped once already, and read as
+   the name and status text mashed together with no space between them). */
+.ds-onboarding-agent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.ds-onboarding-agent-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ds-onboarding-agent-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-onboarding-agent-row-default {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.ds-onboarding-agent-row-ok,
+.ds-onboarding-agent-row-warn,
+.ds-onboarding-agent-row-checking {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.ds-onboarding-agent-row-ok {
+  color: var(--success);
+}
+
+.ds-onboarding-agent-row-warn {
+  color: var(--warn);
+}
+
+.ds-onboarding-agent-row-checking {
+  color: var(--muted);
+}
+
+/* The resolve line: what broke, and the one thing to do about it. Sits under
+   the name/status line rather than in a `title` tooltip, so it's readable
+   without hovering — on touch, or with a screen reader, a tooltip is not
+   readable at all. */
+.ds-onboarding-agent-row-detail {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--warn), transparent 92%);
+}
+
+/* A raw CLI failure can be a one-line message or (Codex, when no API key is
+   configured) a multi-line JSON dump — clamped rather than left to run on,
+   since the box only earns back a fixed width if content can't force it
+   wider. The full text still reaches the DOM (and `title`), just not every
+   character of it on screen. */
+.ds-onboarding-agent-row-detail-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--warn);
+  font-size: 10.5px;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The reauth row's inline action — same warn tone as the "Issue" label it
+   replaces, just outlined so it still reads as a button. The plain "Check
+   status" action (an unchecked row, not a known failure) reuses the same
+   shape toned down to neutral instead of warn. */
+.ds-onboarding-status-action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in oklab, var(--warn), transparent 45%);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.ds-onboarding-status-action:hover {
+  background: color-mix(in oklab, var(--warn), transparent 85%);
+}
+
+.ds-onboarding-status-action.subtle {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.ds-onboarding-status-action.subtle:hover {
+  background: var(--surface-warm);
+  color: var(--fg);
+}
+
+.ds-onboarding-status-footnote {
+  margin-top: 6px;
+  padding: 6px 6px 0;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  text-wrap: pretty;
 }
 
 .ds-onboarding-greeting {

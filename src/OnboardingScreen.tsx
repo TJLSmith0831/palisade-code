@@ -1,16 +1,21 @@
 import { useState } from "react";
 import { ActionIcon, Box, Menu, Textarea, TextInput } from "@mantine/core";
 import {
+  IconAlertTriangle,
   IconBox,
   IconBrandTelegram,
   IconChevronDown,
+  IconCircleCheck,
   IconFolder,
   IconGitFork,
+  IconLoader2,
   IconMessage,
+  IconRefresh,
 } from "@tabler/icons-react";
 import palisadeWordmark from "../assets/palisade-wordmark-darkmode-no-bg.png";
 import { relativeTime } from "./SessionList";
 import type { ModelState, Preflight, Project } from "./api";
+import { isAuthError } from "./errors";
 
 // Amendment 9's project-first first-run screen (shape brief, 2026-08-24):
 // project creation is the primary action, not the composer. Replaces
@@ -34,8 +39,10 @@ export default function OnboardingScreen({
   executor,
   model,
   models,
+  agentModels,
   onPickExecutor,
   onPickModel,
+  onProbeAgent,
   onOpenProject,
   onCloneRepository,
   onComposerSend,
@@ -48,8 +55,19 @@ export default function OnboardingScreen({
   executor: string | null;
   model: string | null;
   models: Models;
+  /** Every agent's own probed model/auth state, keyed by agent id — what the
+   *  detection chip's dropdown lists so a user can see every installed
+   *  agent's status at once, not just the one currently active in the
+   *  composer below. */
+  agentModels?: Record<string, Models>;
   onPickExecutor: (agentId: string) => void;
   onPickModel: (modelId: string) => void;
+  /** Probes (or re-probes) one agent's models — doubles as the reauth retry
+   *  action for a row in the detection chip's dropdown, since a fresh probe
+   *  is exactly what "try again" means here. Omitted where there's nowhere
+   *  to route it (no such caller today), in which case the dropdown reports
+   *  status only, with no retry action. */
+  onProbeAgent?: (agentId: string) => void;
   onOpenProject: () => void;
   onCloneRepository: () => void;
   /** Opens a project folder, then creates a go-mode thread and sends this
@@ -63,9 +81,30 @@ export default function OnboardingScreen({
   const [draft, setDraft] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const detected = flight?.selected ?? null;
   const detectedName =
     flight?.agents?.find((a) => a.id === detected)?.name ?? detected;
+
+  // The chip only speaks to whether an agent binary was *found* on PATH —
+  // finding it says nothing about whether its own login is still good. A
+  // model probe is what actually knows that, but probing means spawning the
+  // agent's own CLI, and for some agents that spawn is not read-only — an
+  // unauthenticated Devin CLI kicked off its own reauth flow the moment it
+  // was probed just to populate this list. So nothing here is probed
+  // automatically, on mount or on open: every row starts at whatever's
+  // already cached from actual use (e.g. the composer's own model picker),
+  // and a check is only ever run from an explicit click on that row.
+  const agentStatus = (
+    id: string
+  ): "checking" | "ready" | "reauth" | "error" | "unknown" => {
+    const state = agentModels?.[id];
+    if (state === "loading") return "checking";
+    if (state && typeof state === "object" && "error" in state)
+      return isAuthError(state.error) ? "reauth" : "error";
+    return state ? "ready" : "unknown";
+  };
+  const detectedStatus = detected ? agentStatus(detected) : "unknown";
 
   // The picker's own choice wins over detection; detection is the default,
   // not a lock — the same precedence the in-thread picker uses.
@@ -112,30 +151,156 @@ export default function OnboardingScreen({
             />
           </div>
 
-          {/* Detection-only status: no picker lives here, that's the
-              composer's job below. A missing agent is a launch blocker, so
-              it earns a distinct, warn-toned treatment rather than sharing
-              the detected state's styling. `flight === null` means the
-              preflight request just hasn't resolved yet — that read as a
-              false "no agent found" flash on every launch until this was
-              split from the genuinely-empty case. */}
-          <div
-            className={`ds-onboarding-status${
-              flight ? (detectedName ? "" : " bad") : " loading"
-            }`}
-            data-testid="onboarding-status"
-          >
-            <span className="ds-onboarding-status-dot" />
-            {!flight ? (
-              "Checking for installed agents…"
-            ) : detectedName ? (
-              <>
-                Detected: <strong>{detectedName}</strong>
-              </>
-            ) : (
-              "No coding agent found — install Claude Code or Codex, then reopen Palisade."
-            )}
-          </div>
+          {/* A missing agent is a launch blocker, so it earns a distinct,
+              warn-toned treatment rather than sharing the detected state's
+              styling. `flight === null` means the preflight request just
+              hasn't resolved yet — that read as a false "no agent found"
+              flash on every launch until this was split from the
+              genuinely-empty case. Once at least one agent is found, the
+              chip becomes a dropdown — the composer below still owns
+              *picking* a provider, but a user has no other way to see
+              which installed agents are actually usable versus needing to
+              sign back in. */}
+          {flight && detectedName ? (
+            <Menu
+              opened={statusMenuOpen}
+              onChange={setStatusMenuOpen}
+              withinPortal
+              position="bottom-start"
+            >
+              <Menu.Target>
+                <button
+                  type="button"
+                  className={`ds-onboarding-status${
+                    detectedStatus === "reauth" || detectedStatus === "error"
+                      ? " bad"
+                      : ""
+                  }`}
+                  data-testid="onboarding-status"
+                >
+                  <span className="ds-onboarding-status-dot" />
+                  Detected: <strong>{detectedName}</strong>
+                  <IconChevronDown size={12} />
+                </button>
+              </Menu.Target>
+              <Menu.Dropdown
+                className="ds-model-menu ds-onboarding-status-menu"
+                data-testid="onboarding-status-menu"
+              >
+                <Menu.Label>Installed agents</Menu.Label>
+                {flight.agents.map((a) => {
+                  const status = agentStatus(a.id);
+                  const state = agentModels?.[a.id];
+                  const error =
+                    state && typeof state === "object" && "error" in state
+                      ? state.error
+                      : null;
+                  return (
+                    <Menu.Item
+                      key={a.id}
+                      component="div"
+                      data-testid={`onboarding-agent-status-${a.id}`}
+                      className={`status-${status}`}
+                      closeMenuOnClick={false}
+                    >
+                      <div className="ds-onboarding-agent-row">
+                        <div className="ds-onboarding-agent-row-top">
+                          <span className="ds-onboarding-agent-row-name">
+                            {a.name}
+                            {a.id === detected && (
+                              <span className="ds-onboarding-agent-row-default">
+                                default
+                              </span>
+                            )}
+                          </span>
+                          {status === "checking" && (
+                            <span className="ds-onboarding-agent-row-checking">
+                              <IconLoader2 size={13} className="ds-spin" />
+                              Checking…
+                            </span>
+                          )}
+                          {status === "ready" && (
+                            <span className="ds-onboarding-agent-row-ok">
+                              <IconCircleCheck size={13} />
+                              Ready
+                            </span>
+                          )}
+                          {status === "unknown" && (
+                            <button
+                              type="button"
+                              className="ds-onboarding-status-action subtle"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onProbeAgent?.(a.id);
+                              }}
+                              data-testid={`onboarding-check-${a.id}`}
+                            >
+                              Check status
+                            </button>
+                          )}
+                          {status === "error" && (
+                            <span className="ds-onboarding-agent-row-warn">
+                              <IconAlertTriangle size={13} />
+                              Issue
+                            </span>
+                          )}
+                          {status === "reauth" && (
+                            <span className="ds-onboarding-agent-row-warn">
+                              <IconAlertTriangle size={13} />
+                              Needs reauth
+                            </span>
+                          )}
+                        </div>
+                        {/* The failure text stayed in a `title` tooltip
+                            before this — invisible on touch, and to a screen
+                            reader. What broke and how to fix it are both
+                            shown outright now, not hidden behind hover. */}
+                        {(status === "error" || status === "reauth") && (
+                          <div className="ds-onboarding-agent-row-detail">
+                            <span
+                              className="ds-onboarding-agent-row-detail-text"
+                              title={error ?? undefined}
+                            >
+                              {error}
+                            </span>
+                            <button
+                              type="button"
+                              className="ds-onboarding-status-action"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onProbeAgent?.(a.id);
+                              }}
+                              data-testid={
+                                status === "reauth"
+                                  ? `onboarding-reauth-${a.id}`
+                                  : `onboarding-retry-${a.id}`
+                              }
+                            >
+                              <IconRefresh size={12} />
+                              {status === "reauth" ? "Reauthenticate" : "Retry"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </Menu.Item>
+                  );
+                })}
+                <div className="ds-onboarding-status-footnote">
+                  Checking an agent runs it briefly — only done on request.
+                </div>
+              </Menu.Dropdown>
+            </Menu>
+          ) : (
+            <div
+              className={`ds-onboarding-status${flight ? " bad" : " loading"}`}
+              data-testid="onboarding-status"
+            >
+              <span className="ds-onboarding-status-dot" />
+              {!flight
+                ? "Checking for installed agents…"
+                : "No coding agent found — install Claude Code or Codex, then reopen Palisade."}
+            </div>
+          )}
         </div>
 
         <h1 className="ds-onboarding-greeting">

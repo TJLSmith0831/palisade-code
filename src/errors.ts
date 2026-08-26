@@ -5,3 +5,14 @@ export function describeError(err: unknown): string {
   const detail = err instanceof Error ? err.message : String(err);
   return `Couldn't complete that — ${detail}`;
 }
+
+/** Whether a surfaced error reads as "the agent's own login expired or was
+ *  never completed" rather than a generic failure — the phrasing an ACP
+ *  agent's CLI (Claude Code, Codex, …) uses when it isn't authenticated.
+ *  There's no structured error code from any of them, so this is a text
+ *  match on their observed wording rather than a machine-checkable status. */
+export function isAuthError(message: string): boolean {
+  return /unauthoriz|not logged in|not authenticated|please (log|sign) in|log in (again|to)|authentication (failed|required|expired)|re-?auth|session expired|token (expired|invalid)|credentials (expired|invalid)|\b401\b/i.test(
+    message
+  );
+}

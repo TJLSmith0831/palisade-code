@@ -293,3 +293,97 @@ describe("EventList chat spacing", () => {
     expect(getComputedStyle(li!).marginBottom).toBe("4px");
   });
 });
+
+// A crashed turn shows up as a persisted "system" message — previously
+// rendered as a raw internal-error dump with no way to act on it. An
+// auth-shaped one now gets a plain-language line and a Retry button that
+// resends the prompt that led to the crash.
+describe("EventList crash banner", () => {
+  const items: Item[] = [
+    { kind: "plain", role: "user", mode: "spec", text: "Hello?" },
+    {
+      kind: "plain",
+      role: "system",
+      mode: "spec",
+      text: 'prompt failed: Internal error: Failed to authenticate: OAuth session expired and could not be refreshed: { "errorKind": "authentication_failed" }',
+    },
+  ];
+
+  it("adds a plain-language summary and a Retry button for an auth-shaped crash", () => {
+    renderWithMantine(
+      <EventList items={items} executor={null} onRetry={() => {}} />
+    );
+    expect(screen.getByTestId("crash-banner-auth-summary")).toHaveTextContent(
+      /login expired or failed to refresh/i
+    );
+    expect(screen.getByTestId("crash-banner")).toHaveTextContent(
+      "authentication_failed"
+    );
+    expect(screen.getByTestId("crash-banner-retry")).toHaveTextContent(
+      "Retry"
+    );
+  });
+
+  it("resends the prompt that led to the crash when Retry is clicked", () => {
+    const onRetry = vi.fn();
+    renderWithMantine(
+      <EventList items={items} executor={null} onRetry={onRetry} />
+    );
+    fireEvent.click(screen.getByTestId("crash-banner-retry"));
+    expect(onRetry).toHaveBeenCalledWith("Hello?");
+  });
+
+  it("still finds the prompt to retry when the agent left a partial reply before crashing", () => {
+    // The exact shape a live crash actually persists as: the agent's own
+    // text (its last words before the RPC itself failed) sits between the
+    // user's turn and the system crash marker. Retry must walk past that
+    // assistant item, not stop at it.
+    const withPartialReply: Item[] = [
+      { kind: "plain", role: "user", mode: "go", text: "Hello?" },
+      {
+        kind: "plain",
+        role: "assistant",
+        mode: "go",
+        text: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      },
+      {
+        kind: "plain",
+        role: "system",
+        mode: "go",
+        text: 'prompt failed: Internal error: Failed to authenticate: OAuth session expired and could not be refreshed: { "errorKind": "authentication_failed" }',
+      },
+    ];
+    const onRetry = vi.fn();
+    renderWithMantine(
+      <EventList items={withPartialReply} executor={null} onRetry={onRetry} />
+    );
+    expect(screen.getByTestId("crash-banner-retry")).toBeDefined();
+    fireEvent.click(screen.getByTestId("crash-banner-retry"));
+    expect(onRetry).toHaveBeenCalledWith("Hello?");
+  });
+
+  it("omits the summary and Retry for a non-auth crash", () => {
+    const genericItems: Item[] = [
+      { kind: "plain", role: "user", mode: "spec", text: "Hello?" },
+      {
+        kind: "plain",
+        role: "system",
+        mode: "spec",
+        text: "prompt failed: connection reset",
+      },
+    ];
+    renderWithMantine(
+      <EventList items={genericItems} executor={null} onRetry={() => {}} />
+    );
+    expect(
+      screen.queryByTestId("crash-banner-auth-summary")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("crash-banner-retry")).not.toBeInTheDocument();
+  });
+
+  it("omits Retry when no onRetry handler is wired up (read-only render paths)", () => {
+    renderWithMantine(<EventList items={items} executor={null} />);
+    expect(screen.getByTestId("crash-banner-auth-summary")).toBeDefined();
+    expect(screen.queryByTestId("crash-banner-retry")).not.toBeInTheDocument();
+  });
+});
