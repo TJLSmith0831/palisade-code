@@ -91,10 +91,30 @@ impl DapConnection {
             waiters: Arc::new(Mutex::new(HashMap::new())),
             reader: Mutex::new(None),
         });
+
+        // Events are handed to a second thread rather than run inline on the
+        // reader.
+        //
+        // The natural response to `stopped` is to go and fetch the call
+        // stack, and a handler running on the reader thread could never get
+        // an answer: the reply it waits for can only be delivered by the
+        // thread it is blocking. Live, that left the debuggee paused at a
+        // breakpoint forever with the UI none the wiser. A channel keeps the
+        // reader free to read, and — because it is a queue — events still
+        // reach the handler in the order the adapter sent them, so a
+        // `continued` can never overtake the `stopped` before it.
+        let (events_tx, events_rx) = mpsc::channel::<(String, Value)>();
+        thread::spawn(move || {
+            while let Ok((event, body)) = events_rx.recv() {
+                on_event(&event, body);
+            }
+        });
+
         let pump_target = Arc::downgrade(&connection);
         let waiters = Arc::clone(&connection.waiters);
+        let dispatch = events_tx.clone();
         let handle = thread::spawn(move || {
-            pump(reader, &waiters, &on_event, &pump_target);
+            pump(reader, &waiters, &dispatch, &pump_target);
             // The stream ended: the adapter exited, cleanly or otherwise.
             // Every caller still waiting has to be told, or they block until
             // their timeout with no idea why.
@@ -102,10 +122,7 @@ impl DapConnection {
             for (_, tx) in orphaned {
                 let _ = tx.send(Err("debug adapter disconnected".to_string()));
             }
-            if let Some(connection) = pump_target.upgrade() {
-                on_event("__closed", Value::Null);
-                drop(connection);
-            }
+            let _ = dispatch.send(("__closed".to_string(), Value::Null));
         });
         *connection.reader.lock().unwrap() = Some(handle);
         connection
@@ -189,7 +206,7 @@ impl DapConnection {
 fn pump(
     mut reader: impl Read,
     waiters: &Waiters,
-    on_event: &(impl Fn(&str, Value) + ?Sized),
+    dispatch: &mpsc::Sender<(String, Value)>,
     connection: &std::sync::Weak<DapConnection>,
 ) {
     let mut buffer: Vec<u8> = Vec::new();
@@ -216,7 +233,9 @@ fn pump(
                         });
                     }
                 }
-                Incoming::Event { event, body } => on_event(&event, body),
+                Incoming::Event { event, body } => {
+                    let _ = dispatch.send((event, body));
+                }
                 Incoming::ReverseRequest { seq, command, arguments } => {
                     if let Some(connection) = connection.upgrade() {
                         // Palisade runs debuggees in its own terminal, so
@@ -225,7 +244,7 @@ fn pump(
                         // stops waiting on it.
                         let _ = connection.respond(seq, &command, true, Value::Null);
                     }
-                    on_event(&format!("reverse:{command}"), arguments);
+                    let _ = dispatch.send((format!("reverse:{command}"), arguments));
                 }
             }
         }
@@ -538,6 +557,79 @@ pub fn failed_evaluate(expression: &str, error: impl Into<String>) -> Watch {
         expandable: false,
         error: Some(error.into()),
     }
+}
+
+// ------------------------------------------------- launch configuration
+
+/// Turns one of the project's `run` commands into a DAP launch configuration.
+///
+/// Deliberately derived from the `run` map in
+/// `.palisade/project-settings.json` rather than a second config surface of
+/// its own: that map is already the answer to "how is this project run", and
+/// asking the user to write the same thing twice — once to run, once to
+/// debug — is how launch.json ended up as a thing people dread.
+///
+/// `None` when there is nothing a debugger could attach to. An honest
+/// refusal beats a config invented from a shell pipeline the adapter cannot
+/// run — which is what the empty `{}` config did in practice: debugpy simply
+/// never answered, and Start span for thirty seconds saying nothing.
+pub fn launch_config(command: &str, language: &str) -> Option<Value> {
+    let words = shell_words(command);
+    let (interpreter, rest) = words.split_first()?;
+
+    let (dap_type, is_interpreter) = match language {
+        "python" => ("python", interpreter.contains("python")),
+        "javascript" | "typescript" => ("pwa-node", interpreter.contains("node")),
+        _ => return None,
+    };
+    if !is_interpreter {
+        return None;
+    }
+
+    let mut config = json!({
+        "request": "launch",
+        "type": dap_type,
+        // Palisade owns its terminals; the adapter's output comes back as
+        // `output` events instead of being handed a terminal to drive.
+        "console": "internalConsole",
+        "cwd": ".",
+    });
+
+    // Interpreter flags (`-u`, `--`) come before the program; `-m name` names
+    // a module and there is no program file at all.
+    let mut index = 0;
+    while index < rest.len() {
+        let word = &rest[index];
+        if word == "-m" {
+            let module = rest.get(index + 1)?;
+            config["module"] = json!(module);
+            config["args"] = json!(rest[index + 2..]);
+            return Some(config);
+        }
+        if word.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        break;
+    }
+
+    let program = rest.get(index)?;
+    // A shell operator means this is a pipeline, not a program.
+    if program.starts_with('-') || program.contains('&') || program.contains('|') {
+        return None;
+    }
+    config["program"] = json!(program);
+    config["args"] = json!(rest[index + 1..]);
+    Some(config)
+}
+
+/// Splits a command the way a shell would for the simple cases, and gives up
+/// on anything with operators in it — those aren't a program to launch.
+fn shell_words(command: &str) -> Vec<String> {
+    if command.contains("&&") || command.contains("||") || command.contains('|') {
+        return vec![];
+    }
+    command.split_whitespace().map(str::to_string).collect()
 }
 
 // ----------------------------------------------------------------- adapters
@@ -1013,6 +1105,67 @@ mod tests {
         assert_eq!(body["output"], "hello\n");
     }
 
+    #[test]
+    fn a_request_issued_from_an_event_handler_does_not_deadlock() {
+        // Dogfood regression, and the one that actually mattered: hitting a
+        // breakpoint emits `stopped`, and the only useful response to that is
+        // to go and fetch the call stack. If events are dispatched on the
+        // same thread that reads the socket, that request can never be
+        // answered — the reader is blocked waiting for a reply only it could
+        // deliver. Live, the program sat paused forever and the UI never
+        // heard about it.
+        let (tx, rx) = mpsc::channel::<Res<Value>>();
+        let holder: Arc<Mutex<Option<Arc<DapConnection>>>> = Arc::new(Mutex::new(None));
+        let for_handler = Arc::clone(&holder);
+
+        let (connection, mut adapter) = FakeAdapter::pair(move |event, _body| {
+            if event != "stopped" {
+                return;
+            }
+            let connection = for_handler.lock().unwrap().clone().expect("connection");
+            let _ = tx.send(connection.request_with_timeout(
+                "stackTrace",
+                json!({"threadId": 1}),
+                Duration::from_secs(3),
+            ));
+        });
+        *holder.lock().unwrap() = Some(Arc::clone(&connection));
+
+        adapter.send(json!({
+            "seq": 1,
+            "type": "event",
+            "event": "stopped",
+            "body": {"reason": "breakpoint", "threadId": 1},
+        }));
+
+        // The handler's request has to reach the adapter while the reader
+        // keeps reading.
+        let request = adapter.next_request();
+        assert_eq!(request["command"], "stackTrace");
+        adapter.respond(&request, json!({"stackFrames": [{"id": 7, "name": "subtotal"}]}));
+
+        let answer = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the event handler's request never completed — the reader thread is blocked")
+            .expect("request failed");
+        assert_eq!(answer["stackFrames"][0]["name"], "subtotal");
+    }
+
+    #[test]
+    fn events_still_arrive_in_order_when_a_handler_is_slow() {
+        // Dispatching events off the reader thread must not reorder them: a
+        // `continued` overtaking the `stopped` before it would leave the UI
+        // showing a stack for a program that is running.
+        let (sink, events) = event_channel();
+        let (_connection, mut adapter) = FakeAdapter::pair(sink);
+        for name in ["stopped", "continued", "terminated"] {
+            adapter.send(json!({"seq": 1, "type": "event", "event": name, "body": {}}));
+        }
+        assert_eq!(next_event(&events).0, "stopped");
+        assert_eq!(next_event(&events).0, "continued");
+        assert_eq!(next_event(&events).0, "terminated");
+    }
+
     // ---------------------------------------------------------------- framing
 
     #[test]
@@ -1459,6 +1612,59 @@ mod tests {
         // array would leave the old breakpoints armed in the target.
         let arguments = set_breakpoints_arguments("/p/a.rs", &[]);
         assert_eq!(arguments["breakpoints"].as_array().unwrap().len(), 0);
+    }
+
+    // ------------------------------------------------- launch configuration
+
+    #[test]
+    fn a_python_run_command_becomes_a_python_launch_config() {
+        // Dogfood regression: the Start button sent `{}`. debugpy never
+        // answers a launch with no program, so the button span 30 seconds
+        // and then gave up — no session, no error, no explanation.
+        let config = launch_config("python3 app.py", "python").unwrap();
+        assert_eq!(config["request"], "launch");
+        assert_eq!(config["type"], "python");
+        assert_eq!(config["program"], "app.py");
+        assert_eq!(config["console"], "internalConsole");
+        assert_eq!(config["cwd"], ".");
+    }
+
+    #[test]
+    fn a_run_commands_arguments_are_carried_into_the_launch() {
+        let config = launch_config("python3 -u app.py --verbose out.csv", "python").unwrap();
+        assert_eq!(config["program"], "app.py");
+        assert_eq!(config["args"], json!(["--verbose", "out.csv"]));
+    }
+
+    #[test]
+    fn a_module_run_command_launches_the_module_not_a_file() {
+        // `python -m pytest` has no program file at all.
+        let config = launch_config("python3 -m pytest -q", "python").unwrap();
+        assert_eq!(config["module"], "pytest");
+        assert!(config.get("program").is_none());
+        assert_eq!(config["args"], json!(["-q"]));
+    }
+
+    #[test]
+    fn a_node_run_command_becomes_a_node_launch_config() {
+        let config = launch_config("node server.js --port 3000", "javascript").unwrap();
+        assert_eq!(config["type"], "pwa-node");
+        assert_eq!(config["program"], "server.js");
+        assert_eq!(config["args"], json!(["--port", "3000"]));
+    }
+
+    #[test]
+    fn a_run_command_with_no_debuggable_program_is_declined_not_guessed() {
+        // Better an honest "nothing to debug here" than a launch config
+        // invented from a shell pipeline the adapter can't run.
+        assert!(launch_config("make build && ./run.sh", "python").is_none());
+        assert!(launch_config("", "python").is_none());
+        assert!(launch_config("python3", "python").is_none(), "no script named");
+    }
+
+    #[test]
+    fn a_language_the_config_builder_does_not_know_is_declined() {
+        assert!(launch_config("cobc -x main.cob", "cobol").is_none());
     }
 
     // ------------------------------------------------------------ adapters

@@ -6,6 +6,7 @@ import {
   Button,
   Code,
   Group,
+  Select,
   Stack,
   Text,
   TextInput,
@@ -23,7 +24,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 
 import * as api from "./api";
-import type { DebugAdapterInfo, StackFrame, StoppedState, Watch } from "./api";
+import type { DebugAdapterInfo, DebugLaunch, StackFrame, StoppedState, Watch } from "./api";
 import { describeError } from "./errors";
 
 type Props = {
@@ -56,6 +57,8 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [launches, setLaunches] = useState<DebugLaunch[]>([]);
+  const [launchName, setLaunchName] = useState<string | null>(null);
 
   useEffect(() => {
     if (!language) {
@@ -71,6 +74,24 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
       cancelled = true;
     };
   }, [language]);
+
+  // What Start will actually launch. Derived from the project's `run` map:
+  // asking for the same command twice, once to run and once to debug, is how
+  // launch.json became something people dread.
+  useEffect(() => {
+    if (!language) {
+      setLaunches([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .debugLaunchOptions(projectHash, language)
+      .then((options) => !cancelled && setLaunches(options))
+      .catch(() => !cancelled && setLaunches([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [projectHash, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,12 +160,17 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
     };
   }, [evaluateWatches]);
 
+  const launch = useMemo(
+    () => launches.find((l) => l.name === launchName) ?? launches[0] ?? null,
+    [launches, launchName]
+  );
+
   const start = useCallback(() => {
-    if (!language) return;
+    if (!language || !launch) return;
     setStarting(true);
     setError(null);
     api
-      .debugStart(projectHash, language, {})
+      .debugStart(projectHash, language, launch.configuration)
       .then((status) => {
         setSessionId(status.sessionId);
         setStopped(status.stopped);
@@ -156,7 +182,7 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
         setError(describeError(err));
       })
       .finally(() => setStarting(false));
-  }, [projectHash, language]);
+  }, [projectHash, language, launch]);
 
   const stop = useCallback(() => {
     api.debugStop().catch((err) => setError(describeError(err)));
@@ -205,7 +231,7 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
   );
 
   const live = sessionId != null;
-  const canStart = adapter?.installed === true && !live && !starting;
+  const canStart = adapter?.installed === true && launch != null && !live && !starting;
 
   return (
     <Stack gap="xs" p="xs">
@@ -311,9 +337,30 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
         </Alert>
       )}
 
-      {!live && adapter?.installed && (
+      {!live && adapter?.installed && launches.length > 1 && (
+        <Select
+          size="xs"
+          aria-label="What to debug"
+          data={launches.map((l) => l.name)}
+          value={launch?.name ?? null}
+          onChange={setLaunchName}
+          data-testid="debug-launch-select"
+        />
+      )}
+
+      {!live && adapter?.installed && launch && (
         <Text size="xs" c="dimmed" data-testid="debug-idle">
-          Not running. Set a breakpoint in the gutter, then Start.
+          {"Not running. Set a breakpoint in the gutter, then Start — this debugs "}
+          <Code fz="10px">{launch.command}</Code>.
+        </Text>
+      )}
+
+      {!live && adapter?.installed && launches.length === 0 && (
+        <Text size="xs" c="dimmed" data-testid="debug-nothing-to-launch">
+          {"Nothing here can be debugged yet. Add a `run` command that starts "}
+          {"this project to "}
+          <Code fz="10px">.palisade/project-settings.json</Code>
+          {" — the debugger launches whatever Run does."}
         </Text>
       )}
 

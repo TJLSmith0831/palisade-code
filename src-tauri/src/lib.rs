@@ -2453,6 +2453,7 @@ pub fn run() {
             commands::debug_cmds::debug_clear_breakpoints,
             commands::debug_cmds::debug_adapter,
             commands::debug_cmds::debug_status,
+            commands::debug_cmds::debug_launch_options,
             commands::debug_cmds::debug_start,
             commands::debug_cmds::debug_stop,
             commands::debug_cmds::debug_step,

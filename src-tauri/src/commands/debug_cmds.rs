@@ -143,6 +143,45 @@ pub async fn debug_adapter(language: String) -> Res<Option<dap::AdapterInfo>> {
         .map_err(|e| e.to_string())?
 }
 
+/// What Start would actually launch: the `run` command it derives from, and
+/// the configuration it builds. `None` when the project has no run command a
+/// debugger could attach to — the panel disables Start and says so, rather
+/// than sending an empty config the adapter answers by never answering.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugLaunch {
+    /// The key from the project's `run` map.
+    pub name: String,
+    pub command: String,
+    pub configuration: Value,
+}
+
+#[tauri::command]
+pub async fn debug_launch_options(
+    project_hash: String,
+    language: String,
+) -> Res<Vec<DebugLaunch>> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        let (settings, _) = crate::settings::load(&root);
+        let mut options: Vec<DebugLaunch> = settings
+            .run
+            .iter()
+            .filter_map(|(name, command)| {
+                Some(DebugLaunch {
+                    name: name.clone(),
+                    command: command.clone(),
+                    configuration: dap::launch_config(command, &language)?,
+                })
+            })
+            .collect();
+        options.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(options)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn debug_status(app: tauri::AppHandle, project_hash: String) -> Res<DebugStatus> {
     tokio::task::spawn_blocking(move || {
@@ -172,6 +211,18 @@ pub async fn debug_start(
         // adapter holding the debuggee, so the old one is stopped first.
         if let Some(previous) = harness.debug_session.lock().unwrap().take() {
             previous.stop();
+        }
+
+        // An empty configuration is not something to send and hope: an
+        // adapter's answer to a launch with no program is to never answer at
+        // all, which showed up as a Start button spinning for thirty seconds
+        // and then failing with nothing useful to say.
+        if configuration.as_object().is_none_or(|c| c.is_empty()) {
+            return Err(
+                "nothing to launch: add a `run` command to \
+                 .palisade/project-settings.json that starts this project"
+                    .to_string(),
+            );
         }
 
         let root = project_root(&project_hash)?;

@@ -47,11 +47,27 @@ export function useDevServerPreview(onDetect: (url: string) => void) {
 
     let buffer = "";
     let settle: ReturnType<typeof setTimeout> | undefined;
-    const terminal = listen<string>("terminal-output", ({ payload }) => {
-      // Same base64 PTY bytes TerminalPane consumes. Latin-1 decoding is
-      // enough here: the URL pattern is ASCII, and a mangled multi-byte
-      // character elsewhere in the buffer can't produce a false match.
-      buffer = (buffer + atob(payload)).slice(-BUFFER_CHARS);
+    const terminal = listen<{ terminalId: string; data: string }>(
+      "terminal-output",
+      ({ payload }) => {
+      // Same base64 PTY bytes TerminalPane consumes, tagged with the tab they
+      // came from now that a project can hold several shells at once. Every
+      // tab is watched, not just the first: a dev server is as likely to be
+      // started in the second one.
+      //
+      // Decoded defensively — this runs in an event handler, and a throw here
+      // takes the whole render tree down with it (which is exactly what an
+      // untagged `atob(payload)` did once the payload became an object).
+      let chunk: string;
+      try {
+        chunk = atob(payload?.data ?? "");
+      } catch {
+        return;
+      }
+      // Latin-1 decoding is enough: the URL pattern is ASCII, and a mangled
+      // multi-byte character elsewhere in the buffer can't produce a false
+      // match.
+      buffer = (buffer + chunk).slice(-BUFFER_CHARS);
       // Scan once the burst goes quiet, not per chunk. A shell's line editor
       // repaints the command you typed using cursor escapes, so mid-burst the
       // buffer holds half-drawn text — `…:4402/` briefly reads as `…:44`,
@@ -59,7 +75,8 @@ export function useDevServerPreview(onDetect: (url: string) => void) {
       // Settling first means we only ever match the finished output.
       clearTimeout(settle);
       settle = setTimeout(() => report(stripAnsi(buffer)), SETTLE_MS);
-    });
+      }
+    );
 
     const agent = listen<Envelope>("executor-event", ({ payload: { event } }) => {
       // Each tool result is already a complete string — no buffering needed.

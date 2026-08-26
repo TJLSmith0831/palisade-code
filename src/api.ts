@@ -422,6 +422,19 @@ export const debugClearBreakpoints = (projectHash: string) =>
 /** Which adapter Palisade would use for a language, and whether it is there. */
 export const debugAdapter = (language: string) =>
   invoke<DebugAdapterInfo | null>("debug_adapter", { language });
+/** What Start would launch: derived from the project's `run` map rather than
+ *  a second config surface of its own. Empty means nothing in this project
+ *  can be debugged, which the panel says rather than hanging on a launch. */
+export type DebugLaunch = {
+  /** The key from the project's `run` map. */
+  name: string;
+  command: string;
+  configuration: Record<string, unknown>;
+};
+
+export const debugLaunchOptions = (projectHash: string, language: string) =>
+  invoke<DebugLaunch[]>("debug_launch_options", { projectHash, language });
+
 export const debugStatus = (projectHash: string) =>
   invoke<DebugStatus>("debug_status", { projectHash });
 export const debugStart = (

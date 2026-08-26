@@ -63,6 +63,14 @@ const backend = (over: Record<string, unknown> = {}) =>
     if (cmd === "debug_adapter")
       return Promise.resolve({ language: "rust", command: "lldb-dap", args: [], installed: true });
     if (cmd === "debug_evaluate") return Promise.resolve([]);
+    if (cmd === "debug_launch_options")
+      return Promise.resolve([
+        {
+          name: "app",
+          command: "python3 app.py",
+          configuration: { request: "launch", type: "python", program: "app.py" },
+        },
+      ]);
     if (cmd === "debug_scopes") return Promise.resolve([]);
     if (cmd === "debug_start") return Promise.resolve(status({ sessionId: "s1", language: "rust" }));
     return Promise.resolve(undefined);
@@ -317,6 +325,10 @@ describe("DebugPanel", () => {
       if (cmd === "debug_status") return Promise.resolve(status());
       if (cmd === "debug_adapter")
         return Promise.resolve({ language: "rust", command: "lldb-dap", args: [], installed: true });
+      if (cmd === "debug_launch_options")
+        return Promise.resolve([
+          { name: "app", command: "cargo run", configuration: { program: "./target/debug/x" } },
+        ]);
       if (cmd === "debug_start")
         return Promise.reject(new Error("launch failed: no such program ./target/debug/x"));
       return Promise.resolve(undefined);
@@ -326,5 +338,50 @@ describe("DebugPanel", () => {
     fireEvent.click(screen.getByTestId("debug-start"));
     await waitFor(() => expect(screen.getByText(/no such program/)).toBeDefined());
     expect(screen.getByTestId("debug-idle")).toBeDefined();
+  });
+
+  describe("what Start actually launches", () => {
+    it("launches the project's run command, not an empty configuration", async () => {
+      // Dogfood regression: Start sent `{}`. debugpy never answers a launch
+      // with no program, so the button span for thirty seconds and then gave
+      // up with nothing to show for it.
+      backend();
+      render(<DebugPanel projectHash="p" language="python" />);
+      await waitFor(() => expect(screen.getByTestId("debug-start")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("debug-start"));
+
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("debug_start", {
+          projectHash: "p",
+          language: "python",
+          configuration: { request: "launch", type: "python", program: "app.py" },
+        }),
+      );
+    });
+
+    it("names the command it will debug, so Start is not a mystery button", async () => {
+      backend();
+      render(<DebugPanel projectHash="p" language="python" />);
+      await waitFor(() => expect(screen.getByText(/python3 app\.py/)).toBeDefined());
+    });
+
+    it("refuses to start when nothing in the project can be debugged", async () => {
+      backend({ debug_launch_options: [] });
+      render(<DebugPanel projectHash="p" language="python" />);
+      // Disabled with a reason beats a button that hangs for half a minute.
+      await waitFor(() => expect(screen.getByTestId("debug-start")).toBeDisabled());
+      expect(screen.getByTestId("debug-nothing-to-launch")).toBeDefined();
+    });
+
+    it("lets a project with several runnable commands choose between them", async () => {
+      backend({
+        debug_launch_options: [
+          { name: "app", command: "python3 app.py", configuration: { program: "app.py" } },
+          { name: "worker", command: "python3 worker.py", configuration: { program: "worker.py" } },
+        ],
+      });
+      render(<DebugPanel projectHash="p" language="python" />);
+      await waitFor(() => expect(screen.getByTestId("debug-launch-select")).toBeDefined());
+    });
   });
 });
