@@ -4735,6 +4735,7 @@ export default function App() {
                 language={debugLanguage}
                 onOpen={openAtLine}
                 onStoppedAt={(path, line) => setDebugStop(path && line ? { path, line } : null)}
+                onBreakpointsChange={setBreakpoints}
               />
             </div>
           </>

@@ -384,4 +384,42 @@ describe("DebugPanel", () => {
       await waitFor(() => expect(screen.getByTestId("debug-launch-select")).toBeDefined());
     });
   });
+
+  it("reports the adapter's breakpoint verdicts so the gutter stops saying unknown", async () => {
+    // Dogfood gap: a session bound the breakpoint and said so, but the
+    // editor gutter went on drawing it as "not yet asked". Once an adapter
+    // has answered, "unknown" is no longer honest.
+    const onBreakpoints = vi.fn();
+    backend({
+      debug_start: {
+        sessionId: "s1",
+        language: "python",
+        stopped: null,
+        breakpoints: {
+          "app.py": [
+            {
+              path: "app.py",
+              line: 8,
+              enabled: true,
+              condition: null,
+              verified: true,
+              actualLine: null,
+              message: null,
+            },
+          ],
+        },
+      },
+    });
+    render(
+      <DebugPanel projectHash="p" language="python" onBreakpointsChange={onBreakpoints} />,
+    );
+    await waitFor(() => expect(screen.getByTestId("debug-start")).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId("debug-start"));
+
+    await waitFor(() =>
+      expect(onBreakpoints).toHaveBeenCalledWith({
+        "app.py": [expect.objectContaining({ line: 8, verified: true })],
+      }),
+    );
+  });
 });

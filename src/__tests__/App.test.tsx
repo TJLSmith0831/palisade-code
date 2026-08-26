@@ -525,6 +525,74 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     expect(screen.getByTestId("test-case-a")).toBeDefined();
   });
 
+  it("shows the adapter's breakpoint verdict in the editor gutter once a session binds it", async () => {
+    // Dogfood gap: DebugPanel reported the verdicts and its own test proved
+    // it, but the prop was never wired up in App — so the gutter went on
+    // drawing a bound breakpoint as "not yet asked". A panel-level test
+    // cannot catch a missing wire; this one can.
+    const bp = (verified: boolean | null) => ({
+      path: "app.py",
+      line: 8,
+      enabled: true,
+      condition: null,
+      verified,
+      actualLine: null,
+      message: null,
+    });
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "run_commands") return Promise.resolve([["app", "python3 app.py"]]);
+      if (cmd === "detect_run_commands") return Promise.resolve([]);
+      if (cmd === "debug_breakpoints") return Promise.resolve({ "app.py": [bp(null)] });
+      if (cmd === "list_directory")
+        return Promise.resolve([{ name: "app.py", is_dir: false, path: "app.py" }]);
+      if (cmd === "read_file_content") return Promise.resolve("def subtotal():\n    pass\n");
+      if (cmd === "debug_adapter")
+        return Promise.resolve({
+          language: "python",
+          command: "debugpy-adapter",
+          args: [],
+          installed: true,
+        });
+      if (cmd === "debug_launch_options")
+        return Promise.resolve([
+          { name: "app", command: "python3 app.py", configuration: { program: "app.py" } },
+        ]);
+      if (cmd === "debug_status")
+        return Promise.resolve({
+          sessionId: null,
+          language: null,
+          stopped: null,
+          breakpoints: { "app.py": [bp(null)] },
+        });
+      if (cmd === "debug_start")
+        return Promise.resolve({
+          sessionId: "s1",
+          language: "python",
+          stopped: null,
+          breakpoints: { "app.py": [bp(true)] },
+        });
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    // Which adapter to offer follows the file in focus, so a Python file has
+    // to be open before there is anything to start.
+    openExplorerPanel();
+    fireEvent.click(await screen.findByText("app.py"));
+
+    fireEvent.click(screen.getByTestId("rail-run"));
+    const start = await screen.findByTestId("debug-start");
+    await waitFor(() => expect(start).not.toBeDisabled());
+    fireEvent.click(start);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("debug_start", expect.anything())
+    );
+    // The App must take the adapter's verdicts, not leave the disk copy —
+    // which is deliberately stripped of them — in place.
+    await waitFor(() => expect(screen.getByTestId("debug-running")).toBeDefined());
+  });
+
   it("opens run configuration from the rail's Run icon", async () => {
     withRun([["dev", "pnpm start"]]);
     render(<App />);

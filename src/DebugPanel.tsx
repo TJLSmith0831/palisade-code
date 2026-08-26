@@ -35,6 +35,10 @@ type Props = {
   onOpen?: (path: string, line: number) => void;
   /** Where execution is stopped, so the editor can highlight the line. */
   onStoppedAt?: (path: string | null, line: number | null) => void;
+  /** The adapter's verdicts on the project's breakpoints, once a session has
+   *  asked for them — the gutter draws "unknown" until it hears back, which
+   *  stops being honest the moment an adapter has answered. */
+  onBreakpointsChange?: (breakpoints: Record<string, api.Breakpoint[]>) => void;
 };
 
 /**
@@ -47,7 +51,13 @@ type Props = {
  * the project is shown but marked, because hiding frames makes a call stack
  * lie about how execution got where it is.
  */
-export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt }: Props) {
+export default function DebugPanel({
+  projectHash,
+  language,
+  onOpen,
+  onStoppedAt,
+  onBreakpointsChange,
+}: Props) {
   const [adapter, setAdapter] = useState<DebugAdapterInfo | null | undefined>(undefined);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [stopped, setStopped] = useState<StoppedState | null>(null);
@@ -114,6 +124,8 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
   watchesRef.current = watches;
   const onStoppedAtRef = useRef(onStoppedAt);
   onStoppedAtRef.current = onStoppedAt;
+  const onBreakpointsRef = useRef(onBreakpointsChange);
+  onBreakpointsRef.current = onBreakpointsChange;
 
   const evaluateWatches = useCallback((expressions: string[], frameId: number | undefined) => {
     if (expressions.length === 0) {
@@ -174,6 +186,7 @@ export default function DebugPanel({ projectHash, language, onOpen, onStoppedAt 
       .then((status) => {
         setSessionId(status.sessionId);
         setStopped(status.stopped);
+        onBreakpointsRef.current?.(status.breakpoints);
       })
       .catch((err) => {
         // A failed launch must not leave the panel looking live: there is no
