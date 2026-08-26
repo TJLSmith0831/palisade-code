@@ -1232,6 +1232,42 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
     );
   });
 
+  // Dogfood gap: the commit box says "commit on main" from a branch list read
+  // once at project-open, so an agent turn that switches branches leaves the
+  // UI naming the wrong branch on a write action. The branch has to ride the
+  // same refresh the dirty dot does.
+  it("renames the commit target when the branch changes under it", async () => {
+    let current = "main";
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "git_branches")
+          return Promise.resolve([
+            { name: current, isCurrent: true, isRemote: false },
+          ]);
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+    const box = () =>
+      screen
+        .getAllByRole("textbox")
+        .find((el) => /commit on/.test(el.getAttribute("placeholder") ?? ""))!;
+    await waitFor(() =>
+      expect(box().getAttribute("placeholder")).toContain("commit on main")
+    );
+
+    current = "dogfood-branch";
+    act(() => emit("fs-changed", { projectHash: "proj-1", paths: ["a.ts"] }));
+
+    await waitFor(() =>
+      expect(box().getAttribute("placeholder")).toContain(
+        "commit on dogfood-branch"
+      )
+    );
+  });
+
   it("shows a rail dot on Source Control when the tree is dirty", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {

@@ -2669,6 +2669,13 @@ export default function App() {
     }
   }, []);
 
+  // The branch label sits on a write action ("commit on X"), so it cannot be
+  // read once at project open: an agent turn that switches branches would
+  // leave the commit box naming a branch the commit won't land on.
+  useEffect(() => {
+    if (project) refreshBranches(project.hash);
+  }, [project?.hash, diffRefreshToken, refreshBranches]);
+
   const selectProjectNow = useCallback(
     async (next: Project) => {
       // Switching is several round-trips (switch_project, a read per restored
@@ -3546,6 +3553,10 @@ export default function App() {
       // code changes here, so staleness cannot hang off the editor's own save
       // handler alone — that only sees what the user typed.
       setLastEditAt(Date.now());
+      // The same write also moves the working tree — and an agent that runs
+      // `git checkout` moves HEAD with it. Everything keyed on this token
+      // (dirty dot, diff pane, branch label) is stale until it bumps.
+      setDiffRefreshToken((t) => t + 1);
       for (const path of payload.paths) {
         invalidateFileTree(path);
       }
