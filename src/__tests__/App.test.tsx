@@ -450,6 +450,32 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     expect(await screen.findByTestId("run-primary")).toBeDefined();
   });
 
+  it("hosts the debugger alongside run and verify, not on a tenth rail icon", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "run_commands") return Promise.resolve([["dev", "pnpm start"]]);
+      if (cmd === "detect_run_commands") return Promise.resolve([]);
+      if (cmd === "debug_adapter")
+        return Promise.resolve({
+          language: "rust",
+          command: "lldb-dap",
+          args: [],
+          installed: true,
+        });
+      if (cmd === "debug_status")
+        return Promise.resolve({
+          sessionId: null,
+          language: null,
+          stopped: null,
+          breakpoints: {},
+        });
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-run"));
+    expect(await screen.findByTestId("debug-start")).toBeDefined();
+  });
+
   it("opens run configuration from the rail's Run icon", async () => {
     withRun([["dev", "pnpm start"]]);
     render(<App />);

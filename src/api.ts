@@ -333,6 +333,115 @@ export const leaveThread = (threadId: string) =>
  * Render the code and the commit — never summarise a set of these into
  * "complete" or "satisfied".
  */
+// ---------------------------------------------------------------- debugger
+
+/**
+ * A breakpoint the user set.
+ *
+ * `verified` is tri-state on purpose: `null` means no adapter has been asked
+ * yet, which is not the same as rejected and must not be drawn as one.
+ */
+export type Breakpoint = {
+  path: string;
+  /** 1-based, where the user placed it. Never overwritten by the adapter. */
+  line: number;
+  enabled: boolean;
+  condition: string | null;
+  /** What the adapter said last: true bound, false refused, null unasked. */
+  verified: boolean | null;
+  /** Where it actually bound, when the adapter moved it off `line`. */
+  actualLine: number | null;
+  message: string | null;
+};
+
+export type StackFrame = {
+  id: number;
+  name: string;
+  /** Project-relative inside the project, absolute outside, null with no source. */
+  path: string | null;
+  line: number;
+  column: number;
+  /** Not the user's code — a dependency, the stdlib, or a frame with no source. */
+  isLibrary: boolean;
+};
+
+export type StoppedState = {
+  threadId: number;
+  /** The adapter's own word: "breakpoint", "step", "exception", "pause". */
+  reason: string;
+  description: string | null;
+  frames: StackFrame[];
+};
+
+export type DebugVariable = {
+  name: string;
+  value: string;
+  type: string | null;
+  variablesReference: number;
+  expandable: boolean;
+};
+
+export type Watch = {
+  expression: string;
+  /** null when it could not be evaluated — never a stale value. */
+  value: string | null;
+  type: string | null;
+  variablesReference: number;
+  expandable: boolean;
+  error: string | null;
+};
+
+export type DebugAdapterInfo = {
+  language: string;
+  command: string;
+  args: string[];
+  installed: boolean;
+};
+
+export type DebugStatus = {
+  sessionId: string | null;
+  language: string | null;
+  stopped: StoppedState | null;
+  /** Every breakpoint in the project, keyed by project-relative path. */
+  breakpoints: Record<string, Breakpoint[]>;
+};
+
+export const debugBreakpoints = (projectHash: string) =>
+  invoke<Record<string, Breakpoint[]>>("debug_breakpoints", { projectHash });
+/** A gutter click: places a breakpoint or removes the one already there. */
+export const debugToggleBreakpoint = (projectHash: string, path: string, line: number) =>
+  invoke<Breakpoint[]>("debug_toggle_breakpoint", { projectHash, path, line });
+export const debugSetBreakpointEnabled = (
+  projectHash: string,
+  path: string,
+  line: number,
+  enabled: boolean
+) => invoke<Breakpoint[]>("debug_set_breakpoint_enabled", { projectHash, path, line, enabled });
+export const debugClearBreakpoints = (projectHash: string) =>
+  invoke<void>("debug_clear_breakpoints", { projectHash });
+/** Which adapter Palisade would use for a language, and whether it is there. */
+export const debugAdapter = (language: string) =>
+  invoke<DebugAdapterInfo | null>("debug_adapter", { language });
+export const debugStatus = (projectHash: string) =>
+  invoke<DebugStatus>("debug_status", { projectHash });
+export const debugStart = (
+  projectHash: string,
+  language: string,
+  configuration: Record<string, unknown>
+) => invoke<DebugStatus>("debug_start", { projectHash, language, configuration });
+export const debugStop = () => invoke<void>("debug_stop");
+export type DebugAction = "continue" | "stepOver" | "stepIn" | "stepOut" | "pause" | "restart";
+export const debugStep = (action: DebugAction, threadId?: number) =>
+  invoke<void>("debug_step", { action, threadId: threadId ?? null });
+export const debugScopes = (frameId: number) =>
+  invoke<[string, number][]>("debug_scopes", { frameId });
+export const debugVariables = (variablesReference: number) =>
+  invoke<DebugVariable[]>("debug_variables", { variablesReference });
+/** Batched: watches are re-evaluated together on every stop, and one
+ *  failure must not take the others with it. */
+export const debugEvaluate = (expressions: string[], frameId?: number) =>
+  invoke<Watch[]>("debug_evaluate", { expressions, frameId: frameId ?? null });
+
 /** How one test finished. `errored` is a crash, not a failed assertion. */
 export type TestStatus = "passed" | "failed" | "skipped" | "errored";
 

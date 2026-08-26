@@ -150,7 +150,9 @@ import SettingsPanel, {
 } from "./SettingsPanel";
 import TerminalTabs from "./TerminalTabs";
 import TestExplorer from "./TestExplorer";
+import DebugPanel from "./DebugPanel";
 import { markersForFile, resolveTestPath } from "./testGutter";
+import { languageForPath } from "./lsp";
 import OnboardingScreen from "./OnboardingScreen";
 import NavRail from "./NavRail";
 import SessionList from "./SessionList";
@@ -4341,6 +4343,12 @@ export default function App() {
   // rows) and the editor gutter (which marks the failing lines) so the two
   // can never disagree about what the last run said.
   const [testReport, setTestReport] = useState<api.TestReport | null>(null);
+  // Every breakpoint in the project, keyed by project-relative path. Held
+  // here rather than in the debug panel: the editor gutter needs them
+  // whether or not that panel is open.
+  const [breakpoints, setBreakpoints] = useState<Record<string, api.Breakpoint[]>>({});
+  // Where execution is stopped, so the editor can highlight the line.
+  const [debugStop, setDebugStop] = useState<{ path: string; line: number } | null>(null);
   // When the project was last written to. Results from before it describe
   // code that no longer exists, and the explorer says so rather than
   // presenting them as current.
@@ -4383,6 +4391,53 @@ export default function App() {
       finished.then((un) => un());
     };
   }, [project?.hash]);
+
+  // Breakpoints outlive both the debug session and the app, so they are read
+  // from disk on project open rather than starting empty every launch.
+  useEffect(() => {
+    if (!project) {
+      setBreakpoints({});
+      return;
+    }
+    let cancelled = false;
+    api
+      .debugBreakpoints(project.hash)
+      .then((stored) => !cancelled && setBreakpoints(stored))
+      .catch(() => !cancelled && setBreakpoints({}));
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.hash]);
+
+  const toggleBreakpoint = useCallback(
+    (line: number) => {
+      if (!project || !selectedFile) return;
+      const path = selectedFile;
+      api
+        .debugToggleBreakpoint(project.hash, path, line)
+        .then((file) => setBreakpoints((previous) => ({ ...previous, [path]: file })))
+        .catch(fail);
+    },
+    [project?.hash, selectedFile]
+  );
+
+  // Which adapter to offer: the language of the file in focus.
+  const debugLanguage = useMemo(
+    () => (selectedFile ? languageForPath(selectedFile) : null),
+    [selectedFile]
+  );
+
+  const editorBreakpoints = useMemo(
+    () => (selectedFile ? breakpoints[selectedFile] ?? [] : []),
+    [breakpoints, selectedFile]
+  );
+
+  // Only the file that is actually stopped in gets the highlight; the same
+  // line number in another file is not where execution is.
+  const editorDebugLine = useMemo(
+    () => (debugStop && debugStop.path === selectedFile ? debugStop.line : null),
+    [debugStop, selectedFile]
+  );
 
   // The markers for the file currently on screen. Recomputed from the same
   // report the Tests tab renders, so the gutter and the explorer can never
@@ -4567,6 +4622,9 @@ export default function App() {
         onCursorPosition={setCursorPosition}
         onLspStatus={setLspStatus}
         testMarkers={editorTestMarkers}
+        breakpoints={editorBreakpoints}
+        onToggleBreakpoint={toggleBreakpoint}
+        debugLine={editorDebugLine}
         mdPreview={tabs.activeMdPreview}
         onToggleMdPreview={toggleMdPreview}
       />
@@ -4663,6 +4721,16 @@ export default function App() {
             <div className="ds-panel-body">
               <h2 className="ds-section-heading">Verification</h2>
               <VerifyPane projectHash={project.hash} threadId={thread?.id} />
+              {/* The debugger shares this panel for the same reason verify
+                  does: it is a project command surface, and the rail's icon
+                  groups are deliberately capped at four. */}
+              <h2 className="ds-section-heading">Debug</h2>
+              <DebugPanel
+                projectHash={project.hash}
+                language={debugLanguage}
+                onOpen={openAtLine}
+                onStoppedAt={(path, line) => setDebugStop(path && line ? { path, line } : null)}
+              />
             </div>
           </>
         );

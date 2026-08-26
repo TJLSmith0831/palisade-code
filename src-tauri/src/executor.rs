@@ -442,6 +442,9 @@ pub struct Harness {
     pub pending_prefix: Mutex<HashMap<String, String>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
     pub watch: Mutex<Option<crate::integrations::Watcher>>,
+    /// The one live debug session, if any. Single by design: two debuggers
+    /// attached to one project fight over breakpoints and the debuggee.
+    pub debug_session: Mutex<Option<std::sync::Arc<crate::dap::DebugSession>>>,
     /// Every live terminal tab, keyed by tab id (several per project).
     pub terminals: crate::terminal::TerminalRegistry,
     pub fswatch: Mutex<Option<crate::fswatch::FsWatcher>>,
@@ -518,6 +521,7 @@ impl Default for Harness {
             pending_prefix: Default::default(),
             pending_propose: Default::default(),
             watch: Default::default(),
+            debug_session: Default::default(),
             terminals: Default::default(),
             fswatch: Default::default(),
             session_log_writer: crate::session_log_writer::shared_session_log_writer(),

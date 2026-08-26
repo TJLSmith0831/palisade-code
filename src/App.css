@@ -1002,6 +1002,53 @@ input[type="checkbox"] {
   background: transparent !important;
 }
 
+/* --- debugger ----------------------------------------------------------- */
+
+.ds-debug-frame {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.ds-debug-frame:hover {
+  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+}
+
+.ds-debug-frame.is-selected {
+  background: var(--hover-bg, rgba(127, 127, 127, 0.18));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Library frames are shown, never hidden — a stack with frames removed lies
+   about how execution got here — but dimmed so the user's own code reads
+   first. */
+.ds-debug-frame.is-library .ds-debug-frame-name {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.ds-debug-frame-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-debug-watch {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 4px;
+  min-width: 0;
+}
+
+.ds-debug-watch-name {
+  font-family: var(--mono);
+  flex-shrink: 0;
+}
+
 /* --- test explorer ------------------------------------------------------ */
 
 .ds-test-case {

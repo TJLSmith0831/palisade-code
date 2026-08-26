@@ -339,6 +339,207 @@ pub fn set_breakpoints_arguments(path: &str, breakpoints: &[Breakpoint]) -> Valu
     })
 }
 
+// ------------------------------------------------------------- session flow
+
+/// What Palisade tells the adapter it can do.
+///
+/// Only what is actually implemented: an adapter that believes a claimed
+/// capability will use it, and a claim we can't honour hangs the session.
+/// `runInTerminal` in particular is declined — Palisade owns its terminals
+/// and does not hand one to a debug adapter.
+pub fn initialize_arguments() -> Value {
+    json!({
+        "clientID": "palisade",
+        "clientName": "Palisade Code",
+        "adapterID": "palisade",
+        "locale": "en-US",
+        "linesStartAt1": true,
+        "columnsStartAt1": true,
+        "pathFormat": "path",
+        "supportsVariableType": true,
+        "supportsVariablePaging": false,
+        "supportsRunInTerminalRequest": false,
+        "supportsMemoryReferences": false,
+        "supportsProgressReporting": false,
+    })
+}
+
+/// One file's worth of breakpoints and how the adapter answered.
+pub type BoundFile = (String, Vec<Breakpoint>);
+
+/// The configuration phase of a launch, in DAP's required order.
+///
+/// This runs *after* the adapter's `initialized` event and *before* the
+/// program is let go: breakpoints sent earlier are silently dropped by many
+/// adapters, and breakpoints sent later are missed because execution has
+/// already run past them. Ordering is the whole point of this function.
+pub fn configure(connection: &DapConnection, files: Vec<BoundFile>) -> Res<Vec<BoundFile>> {
+    configure_with(connection, files, true)
+}
+
+pub fn configure_with(
+    connection: &DapConnection,
+    files: Vec<BoundFile>,
+    supports_configuration_done: bool,
+) -> Res<Vec<BoundFile>> {
+    let mut bound = Vec::with_capacity(files.len());
+    for (path, mut breakpoints) in files {
+        match connection.request("setBreakpoints", set_breakpoints_arguments(&path, &breakpoints)) {
+            Ok(body) => apply_set_breakpoints_response(&mut breakpoints, &body),
+            // One unusable source (deleted, generated, outside the build)
+            // must not abort the launch and lose every other breakpoint.
+            // It is recorded as unverified, with the adapter's reason.
+            Err(message) => {
+                for breakpoint in breakpoints.iter_mut() {
+                    breakpoint.verified = Some(false);
+                    breakpoint.message = Some(message.clone());
+                }
+            }
+        }
+        bound.push((path, breakpoints));
+    }
+    if supports_configuration_done {
+        connection.request("configurationDone", json!({}))?;
+    }
+    Ok(bound)
+}
+
+// ----------------------------------------------------------- call stack
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackFrame {
+    /// The adapter's frame id — needed to scope a watch to this frame.
+    pub id: i64,
+    pub name: String,
+    /// Project-relative when the frame is in the project, absolute when it
+    /// isn't, `None` when the frame has no source at all.
+    pub path: Option<String>,
+    pub line: u32,
+    pub column: u32,
+    /// Not the user's code: a dependency, the standard library, or a frame
+    /// with no source. Shown anyway — hiding frames makes a stack lie about
+    /// how execution got here — but marked, so "step into" landing in
+    /// library code is legible rather than baffling.
+    pub is_library: bool,
+}
+
+pub fn parse_stack_trace(body: &Value, project_root: &std::path::Path) -> Vec<StackFrame> {
+    let Some(frames) = body.get("stackFrames").and_then(Value::as_array) else {
+        return vec![];
+    };
+    frames
+        .iter()
+        .map(|frame| {
+            let source = frame.get("source").and_then(|s| s.get("path")).and_then(Value::as_str);
+            let relative = source.and_then(|path| {
+                std::path::Path::new(path)
+                    .strip_prefix(project_root)
+                    .ok()
+                    .map(|rest| rest.to_string_lossy().into_owned())
+            });
+            StackFrame {
+                id: frame.get("id").and_then(Value::as_i64).unwrap_or(-1),
+                name: frame
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unnamed>")
+                    .to_string(),
+                path: relative.clone().or_else(|| source.map(str::to_string)),
+                line: frame.get("line").and_then(Value::as_i64).unwrap_or(0) as u32,
+                column: frame.get("column").and_then(Value::as_i64).unwrap_or(0) as u32,
+                is_library: relative.is_none(),
+            }
+        })
+        .collect()
+}
+
+// ------------------------------------------------------------- variables
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Variable {
+    pub name: String,
+    pub value: String,
+    #[serde(rename = "type")]
+    pub type_name: Option<String>,
+    /// Non-zero when this value has children; the handle to fetch them.
+    pub variables_reference: i64,
+    pub expandable: bool,
+}
+
+pub fn parse_variables(body: &Value) -> Vec<Variable> {
+    let Some(variables) = body.get("variables").and_then(Value::as_array) else {
+        return vec![];
+    };
+    variables
+        .iter()
+        .map(|variable| {
+            let reference =
+                variable.get("variablesReference").and_then(Value::as_i64).unwrap_or(0);
+            Variable {
+                name: variable.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                value: variable.get("value").and_then(Value::as_str).unwrap_or("").to_string(),
+                type_name: variable.get("type").and_then(Value::as_str).map(str::to_string),
+                variables_reference: reference,
+                expandable: reference > 0,
+            }
+        })
+        .collect()
+}
+
+// ------------------------------------------------------ watch expressions
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Watch {
+    pub expression: String,
+    /// `None` when the expression couldn't be evaluated — never a stale
+    /// value from a previous stop, which would be worse than no value.
+    pub value: Option<String>,
+    #[serde(rename = "type")]
+    pub type_name: Option<String>,
+    pub variables_reference: i64,
+    pub expandable: bool,
+    pub error: Option<String>,
+}
+
+/// A watch is always evaluated *in the selected frame*: without `frameId`
+/// the adapter evaluates in global scope, where every local reads as
+/// "not found".
+pub fn evaluate_arguments(expression: &str, frame_id: Option<i64>) -> Value {
+    let mut arguments = json!({ "expression": expression, "context": "watch" });
+    if let Some(frame_id) = frame_id {
+        arguments["frameId"] = json!(frame_id);
+    }
+    arguments
+}
+
+pub fn parse_evaluate(expression: &str, body: &Value) -> Watch {
+    let reference = body.get("variablesReference").and_then(Value::as_i64).unwrap_or(0);
+    Watch {
+        expression: expression.to_string(),
+        value: body.get("result").and_then(Value::as_str).map(str::to_string),
+        type_name: body.get("type").and_then(Value::as_str).map(str::to_string),
+        variables_reference: reference,
+        expandable: reference > 0,
+        error: None,
+    }
+}
+
+/// A watch the adapter refused. The reason replaces the value rather than
+/// sitting beside a stale one.
+pub fn failed_evaluate(expression: &str, error: impl Into<String>) -> Watch {
+    Watch {
+        expression: expression.to_string(),
+        value: None,
+        type_name: None,
+        variables_reference: 0,
+        expandable: false,
+        error: Some(error.into()),
+    }
+}
+
 // ----------------------------------------------------------------- adapters
 
 /// Language → the adapter binary Palisade looks for and how to run it.
@@ -384,11 +585,215 @@ pub fn adapter(language: &str) -> Option<AdapterInfo> {
     adapter_for(language, &|binary| crate::executor::find_on_path(binary).is_some())
 }
 
+// ----------------------------------------------------------- live session
+
+/// Where a stopped program is, and everything the UI shows about it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoppedState {
+    pub thread_id: i64,
+    /// "breakpoint", "step", "exception", "pause" — the adapter's own word.
+    pub reason: String,
+    pub description: Option<String>,
+    pub frames: Vec<StackFrame>,
+}
+
+/// One running debug session: an adapter process plus its connection.
+pub struct DebugSession {
+    pub id: String,
+    pub project_hash: String,
+    pub project_root: std::path::PathBuf,
+    pub language: String,
+    connection: Arc<DapConnection>,
+    child: Mutex<Option<std::process::Child>>,
+    /// The adapter's declared capabilities, from the `initialize` response.
+    /// Consulted rather than assumed: sending `configurationDone` to an
+    /// adapter that never declared it hangs some of them.
+    capabilities: Mutex<Value>,
+    /// Where the program is stopped, if it is.
+    stopped: Mutex<Option<StoppedState>>,
+}
+
+impl DebugSession {
+    /// Spawns `adapter` and completes the `initialize` handshake.
+    ///
+    /// Returns as soon as the adapter has answered `initialize` — the caller
+    /// then sends `launch`/`attach`, waits for the `initialized` event, and
+    /// calls `configure`. That order is DAP's, not ours.
+    pub fn start(
+        id: String,
+        project_hash: String,
+        project_root: std::path::PathBuf,
+        language: String,
+        adapter: &AdapterInfo,
+        on_event: impl Fn(&str, Value) + Send + 'static,
+    ) -> Res<Arc<Self>> {
+        if !adapter.installed {
+            return Err(format!(
+                "no debug adapter for {language}: `{}` is not on PATH",
+                adapter.command
+            ));
+        }
+        let executable = crate::executor::find_on_path(&adapter.command)
+            .unwrap_or_else(|| std::path::PathBuf::from(&adapter.command));
+        let mut child = std::process::Command::new(executable)
+            .args(&adapter.args)
+            .current_dir(&project_root)
+            .env("PATH", crate::executor::child_path_env())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|err| format!("start {}: {err}", adapter.command))?;
+
+        let stdout = child.stdout.take().ok_or("debug adapter has no stdout")?;
+        let stdin = child.stdin.take().ok_or("debug adapter has no stdin")?;
+        // The adapter's own last words. A crash with a reason is actionable;
+        // a crash without one is a mystery, so stderr is forwarded as output.
+        if let Some(stderr) = child.stderr.take() {
+            thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                    eprintln!("[dap] {line}");
+                }
+            });
+        }
+
+        let connection = DapConnection::new(stdout, stdin, on_event);
+        let session = Arc::new(DebugSession {
+            id,
+            project_hash,
+            project_root,
+            language,
+            connection,
+            child: Mutex::new(Some(child)),
+            capabilities: Mutex::new(Value::Null),
+            stopped: Mutex::new(None),
+        });
+
+        let capabilities = session.connection.request("initialize", initialize_arguments())?;
+        *session.capabilities.lock().unwrap() = capabilities;
+        Ok(session)
+    }
+
+    pub fn request(&self, command: &str, arguments: Value) -> Res<Value> {
+        self.connection.request(command, arguments)
+    }
+
+    fn supports(&self, capability: &str) -> bool {
+        self.capabilities
+            .lock()
+            .unwrap()
+            .get(capability)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Sends every file's breakpoints, then `configurationDone` if supported.
+    pub fn configure(&self, files: Vec<BoundFile>) -> Res<Vec<BoundFile>> {
+        configure_with(&self.connection, files, self.supports("supportsConfigurationDoneRequest"))
+    }
+
+    /// Re-sends one file's breakpoints while the program is running — how a
+    /// breakpoint added mid-session takes effect.
+    pub fn set_breakpoints(&self, path: &str, mut breakpoints: Vec<Breakpoint>) -> Res<Vec<Breakpoint>> {
+        let body = self
+            .connection
+            .request("setBreakpoints", set_breakpoints_arguments(path, &breakpoints))?;
+        apply_set_breakpoints_response(&mut breakpoints, &body);
+        Ok(breakpoints)
+    }
+
+    /// Records where the program stopped and pulls its call stack.
+    ///
+    /// A stack-trace failure is not fatal: the stop itself is real and worth
+    /// showing, with an empty stack, rather than swallowing the whole event.
+    pub fn on_stopped(&self, body: &Value) -> StoppedState {
+        let thread_id = body.get("threadId").and_then(Value::as_i64).unwrap_or(0);
+        let frames = self
+            .connection
+            .request("stackTrace", json!({"threadId": thread_id, "startFrame": 0, "levels": 64}))
+            .map(|body| parse_stack_trace(&body, &self.project_root))
+            .unwrap_or_default();
+        let state = StoppedState {
+            thread_id,
+            reason: body
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            description: body
+                .get("description")
+                .or_else(|| body.get("text"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            frames,
+        };
+        *self.stopped.lock().unwrap() = Some(state.clone());
+        state
+    }
+
+    /// Running again: the stack and frame ids from the last stop are now
+    /// invalid, and holding them would let a watch evaluate against a frame
+    /// that no longer exists.
+    pub fn on_continued(&self) {
+        *self.stopped.lock().unwrap() = None;
+    }
+
+    pub fn stopped(&self) -> Option<StoppedState> {
+        self.stopped.lock().unwrap().clone()
+    }
+
+    /// The frame a watch evaluates in: the caller's choice, else the topmost
+    /// frame of the current stop, else none (and the adapter uses globals).
+    pub fn frame_for(&self, requested: Option<i64>) -> Option<i64> {
+        requested.or_else(|| {
+            self.stopped.lock().unwrap().as_ref().and_then(|s| s.frames.first().map(|f| f.id))
+        })
+    }
+
+    pub fn evaluate(&self, expression: &str, frame_id: Option<i64>) -> Watch {
+        let frame = self.frame_for(frame_id);
+        match self.connection.request("evaluate", evaluate_arguments(expression, frame)) {
+            Ok(body) => parse_evaluate(expression, &body),
+            Err(message) => failed_evaluate(expression, message),
+        }
+    }
+
+    /// Ends the session: asks the adapter to detach, then makes sure the
+    /// process is actually gone.
+    ///
+    /// Best-effort by design — a wedged adapter must not be able to stop the
+    /// user from closing the debugger, so a failed `disconnect` falls through
+    /// to a kill rather than surfacing as an error the user can't act on.
+    pub fn stop(&self) {
+        let _ = self.connection.request_with_timeout(
+            "disconnect",
+            json!({"terminateDebuggee": true}),
+            Duration::from_secs(3),
+        );
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for DebugSession {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 // ------------------------------------------------------------------- tests
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::io::BufRead;
     use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc::Receiver;
@@ -718,6 +1123,235 @@ mod tests {
         assert_eq!(reply["type"], "response");
         assert_eq!(reply["request_seq"], 11);
         assert_eq!(next_event(&events).0, "reverse:runInTerminal");
+    }
+
+
+    // ------------------------------------------------------- handshake order
+
+    #[test]
+    fn the_handshake_sets_breakpoints_between_initialized_and_configuration_done() {
+        // The classic DAP mistake: sending setBreakpoints before the
+        // `initialized` event, where adapters silently drop them, or after
+        // configurationDone, where the program is already running past them.
+        let (sink, _events) = event_channel();
+        let (connection, mut adapter) = FakeAdapter::pair(sink);
+
+        let files = vec![(
+            "/p/src/lib.rs".to_string(),
+            vec![Breakpoint::new("src/lib.rs", 9)],
+        )];
+        let worker = {
+            let connection = Arc::clone(&connection);
+            thread::spawn(move || configure(&connection, files))
+        };
+
+        let set = adapter.next_request();
+        assert_eq!(set["command"], "setBreakpoints");
+        assert_eq!(set["arguments"]["source"]["path"], "/p/src/lib.rs");
+        adapter.respond(&set, json!({"breakpoints": [{"verified": true, "line": 9}]}));
+
+        let done = adapter.next_request();
+        assert_eq!(done["command"], "configurationDone");
+        adapter.respond(&done, json!({}));
+
+        let bound = worker.join().unwrap().unwrap();
+        assert_eq!(bound[0].1[0].verified, Some(true));
+    }
+
+    #[test]
+    fn configuration_continues_even_when_one_file_is_rejected() {
+        // One bad path (a deleted file, a breakpoint in a generated source)
+        // must not abort the whole launch and lose every other breakpoint.
+        let (sink, _events) = event_channel();
+        let (connection, mut adapter) = FakeAdapter::pair(sink);
+        let files = vec![
+            ("/p/gone.rs".to_string(), vec![Breakpoint::new("gone.rs", 1)]),
+            ("/p/ok.rs".to_string(), vec![Breakpoint::new("ok.rs", 2)]),
+        ];
+        let worker = {
+            let connection = Arc::clone(&connection);
+            thread::spawn(move || configure(&connection, files))
+        };
+
+        let first = adapter.next_request();
+        adapter.send(json!({
+            "seq": 40,
+            "type": "response",
+            "request_seq": first["seq"],
+            "success": false,
+            "command": "setBreakpoints",
+            "message": "no such source",
+        }));
+        let second = adapter.next_request();
+        adapter.respond(&second, json!({"breakpoints": [{"verified": true, "line": 2}]}));
+        let done = adapter.next_request();
+        adapter.respond(&done, json!({}));
+
+        let bound = worker.join().unwrap().unwrap();
+        assert_eq!(bound[0].1[0].verified, Some(false), "a rejected file is not verified");
+        assert!(bound[0].1[0].message.is_some(), "and says why");
+        assert_eq!(bound[1].1[0].verified, Some(true), "the good file still bound");
+    }
+
+    #[test]
+    fn configuration_done_is_skipped_when_the_adapter_does_not_support_it() {
+        let (sink, _events) = event_channel();
+        let (connection, mut adapter) = FakeAdapter::pair(sink);
+        let worker = {
+            let connection = Arc::clone(&connection);
+            thread::spawn(move || {
+                configure_with(&connection, vec![], /* supports_configuration_done */ false)
+            })
+        };
+        // Nothing but the (absent) breakpoints: no configurationDone at all.
+        // Sending it to an adapter that never declared support hangs some.
+        let probe = {
+            let connection = Arc::clone(&connection);
+            thread::spawn(move || connection.request("threads", json!({})))
+        };
+        let request = adapter.next_request();
+        assert_eq!(request["command"], "threads", "configurationDone must not have been sent");
+        adapter.respond(&request, json!({"threads": []}));
+        probe.join().unwrap().unwrap();
+        worker.join().unwrap().unwrap();
+    }
+
+    // ------------------------------------------------------- initialize args
+
+    #[test]
+    fn initialize_claims_only_capabilities_palisade_actually_implements() {
+        let arguments = initialize_arguments();
+        assert_eq!(arguments["adapterID"], "palisade");
+        assert_eq!(arguments["linesStartAt1"], true);
+        assert_eq!(arguments["columnsStartAt1"], true);
+        assert_eq!(arguments["pathFormat"], "path");
+        assert_eq!(arguments["supportsVariableType"], true);
+        // Claiming runInTerminal would make adapters route the debuggee into
+        // a terminal Palisade would then have to own. It declines instead.
+        assert_eq!(arguments["supportsRunInTerminalRequest"], false);
+    }
+
+    // ----------------------------------------------------------- call stack
+
+    fn stack_body() -> Value {
+        json!({"stackFrames": [
+            {
+                "id": 1000,
+                "name": "compute",
+                "line": 12,
+                "column": 5,
+                "source": {"path": "/p/src/lib.rs", "name": "lib.rs"},
+            },
+            {
+                "id": 1001,
+                "name": "core::iter::next",
+                "line": 88,
+                "column": 1,
+                "source": {"path": "/rustup/lib/core/iter.rs", "name": "iter.rs"},
+            },
+            {
+                "id": 1002,
+                "name": "<unknown>",
+                "line": 0,
+                "column": 0,
+            },
+        ]})
+    }
+
+    #[test]
+    fn a_stack_frame_in_the_project_is_openable_and_relative() {
+        let frames = parse_stack_trace(&stack_body(), Path::new("/p"));
+        assert_eq!(frames[0].name, "compute");
+        assert_eq!(frames[0].path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(frames[0].line, 12);
+        assert_eq!(frames[0].column, 5);
+        assert!(!frames[0].is_library, "a project file is not library code");
+    }
+
+    #[test]
+    fn a_frame_outside_the_project_is_marked_as_library_code() {
+        // Stepping into a dependency: still shown (hiding it makes a stack
+        // lie about how you got here), but marked, and its path stays
+        // absolute because it is not the project's to open relatively.
+        let frames = parse_stack_trace(&stack_body(), Path::new("/p"));
+        assert!(frames[1].is_library);
+        assert_eq!(frames[1].path.as_deref(), Some("/rustup/lib/core/iter.rs"));
+    }
+
+    #[test]
+    fn a_frame_with_no_source_is_kept_rather_than_dropped() {
+        // Optimised-out and JIT frames have no source. Dropping them would
+        // silently renumber the stack and hide real recursion.
+        let frames = parse_stack_trace(&stack_body(), Path::new("/p"));
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[2].path, None);
+        assert!(frames[2].is_library, "a frame with no source is not the user's code");
+    }
+
+    #[test]
+    fn an_empty_stack_is_empty_not_an_error() {
+        assert!(parse_stack_trace(&json!({"stackFrames": []}), Path::new("/p")).is_empty());
+        assert!(parse_stack_trace(&json!({}), Path::new("/p")).is_empty());
+    }
+
+    // ------------------------------------------------------------ variables
+
+    #[test]
+    fn variables_carry_their_value_type_and_whether_they_expand() {
+        let body = json!({"variables": [
+            {"name": "count", "value": "3", "type": "i32", "variablesReference": 0},
+            {"name": "items", "value": "Vec(2)", "type": "Vec<i32>", "variablesReference": 42},
+        ]});
+        let variables = parse_variables(&body);
+        assert_eq!(variables[0].name, "count");
+        assert_eq!(variables[0].value, "3");
+        assert_eq!(variables[0].type_name.as_deref(), Some("i32"));
+        assert!(!variables[0].expandable, "a scalar has no children to expand");
+        assert!(variables[1].expandable);
+        assert_eq!(variables[1].variables_reference, 42);
+    }
+
+    #[test]
+    fn a_variables_response_with_no_array_is_empty_not_a_panic() {
+        assert!(parse_variables(&json!({})).is_empty());
+    }
+
+    // ----------------------------------------------------- watch expressions
+
+    #[test]
+    fn a_watch_is_evaluated_in_the_selected_frame() {
+        // Without frameId the adapter evaluates in the global scope, where a
+        // local is "not found" — the single most confusing watch bug.
+        let arguments = evaluate_arguments("count * 2", Some(1000));
+        assert_eq!(arguments["expression"], "count * 2");
+        assert_eq!(arguments["frameId"], 1000);
+        assert_eq!(arguments["context"], "watch");
+    }
+
+    #[test]
+    fn a_watch_with_no_frame_omits_frame_id_rather_than_sending_null() {
+        let arguments = evaluate_arguments("1 + 1", None);
+        assert!(arguments.get("frameId").is_none());
+    }
+
+    #[test]
+    fn a_watch_result_reports_its_value_and_whether_it_expands() {
+        let watch = parse_evaluate(
+            "items",
+            &json!({"result": "Vec(2)", "type": "Vec<i32>", "variablesReference": 7}),
+        );
+        assert_eq!(watch.expression, "items");
+        assert_eq!(watch.value.as_deref(), Some("Vec(2)"));
+        assert_eq!(watch.type_name.as_deref(), Some("Vec<i32>"));
+        assert!(watch.expandable);
+        assert_eq!(watch.error, None);
+    }
+
+    #[test]
+    fn a_watch_that_cannot_be_evaluated_shows_the_reason_not_a_stale_value() {
+        let watch = failed_evaluate("gone", "no symbol named 'gone'");
+        assert_eq!(watch.value, None);
+        assert_eq!(watch.error.as_deref(), Some("no symbol named 'gone'"));
     }
 
     // --------------------------------------------------------- breakpoints

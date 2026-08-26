@@ -60,6 +60,11 @@ import {
   type TestMarker,
 } from "./testGutter";
 import {
+  breakpointGutter,
+  setBreakpoints as setEditorBreakpoints,
+  setDebugLine,
+} from "./breakpointGutter";
+import {
   EDITOR_FONT_CHANGED_EVENT,
   EDITOR_WRAP_CHANGED_EVENT,
   loadEditorFont,
@@ -97,6 +102,12 @@ type Props = {
    * additive: an empty list (or a run nobody has done) leaves the editor
    * exactly as it was. */
   testMarkers?: TestMarker[];
+  /** Breakpoints to draw in the gutter for this file. */
+  breakpoints?: api.Breakpoint[];
+  /** A gutter click: places a breakpoint or removes the one already there. */
+  onToggleBreakpoint?: (line: number) => void;
+  /** The line execution is stopped on, when it is stopped in this file. */
+  debugLine?: number | null;
   /** Whether to show the Markdown preview pane alongside the WYSIWYG editor.
    * Only honored for `.md`/`.markdown` files; ignored otherwise. */
   mdPreview?: boolean;
@@ -333,6 +344,9 @@ export default function FileEditorPane({
   onCursorPosition,
   onLspStatus,
   testMarkers,
+  breakpoints,
+  onToggleBreakpoint,
+  debugLine,
   mdPreview = false,
   onToggleMdPreview,
 }: Props) {
@@ -357,6 +371,8 @@ export default function FileEditorPane({
   initialCursorRef.current = initialCursor;
   const onToggleMdPreviewRef = useRef(onToggleMdPreview);
   onToggleMdPreviewRef.current = onToggleMdPreview;
+  const onToggleBreakpointRef = useRef(onToggleBreakpoint);
+  onToggleBreakpointRef.current = onToggleBreakpoint;
 
   const [mediaSrc, setMediaSrc] = useState<string | null>(null);
   // The controlled value for the WYSIWYG Markdown editor. The CodeMirror doc
@@ -491,6 +507,9 @@ export default function FileEditorPane({
       ),
       lspCompartment.current.of([]),
       testMarkerGutter(),
+      // Read through a ref: the extension list is built once per file load,
+      // and closing over the callback directly would freeze the first one.
+      breakpointGutter((line) => onToggleBreakpointRef.current?.(line)),
       definitionClick(),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },
@@ -791,6 +810,21 @@ export default function FileEditorPane({
     if (!view || viewSeq === 0) return;
     view.dispatch({ effects: setTestMarkers.of(testMarkers ?? []) });
   }, [testMarkers, viewSeq, path]);
+
+  // Push breakpoints and the stopped line into the view. Keyed on viewSeq so
+  // re-opening a file restores its breakpoints rather than showing a bare
+  // gutter until the next toggle.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || viewSeq === 0) return;
+    view.dispatch({ effects: setEditorBreakpoints.of(breakpoints ?? []) });
+  }, [breakpoints, viewSeq, path]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || viewSeq === 0) return;
+    view.dispatch({ effects: setDebugLine.of(debugLine ?? null) });
+  }, [debugLine, viewSeq, path]);
 
   // Seed the WYSIWYG editor from the CodeMirror doc whenever a Markdown file
   // is loaded. CodeMirror stays the source of truth, so this is a one-way

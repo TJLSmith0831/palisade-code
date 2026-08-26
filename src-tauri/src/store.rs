@@ -749,6 +749,49 @@ pub fn read_verifications(home: &Path, hash: &str) -> Res<Vec<VerificationRun>> 
     Ok(runs)
 }
 
+// ------------------------------------------------------------- breakpoints
+
+fn breakpoints_path(home: &Path, hash: &str) -> PathBuf {
+    project_dir(home, hash).join("breakpoints.json")
+}
+
+/// Every breakpoint the user has set in a project, keyed by project-relative
+/// path.
+///
+/// Persisted, and deliberately: a breakpoint you have to re-place on every
+/// launch is a breakpoint you stop using. Survives both a debug-session
+/// restart and an app restart, and is not tied to a thread or a worktree —
+/// breakpoints belong to the code, not to a run of it.
+pub type BreakpointsByFile = std::collections::BTreeMap<String, Vec<crate::dap::Breakpoint>>;
+
+pub fn read_breakpoints(home: &Path, hash: &str) -> Res<BreakpointsByFile> {
+    let mut stored: BreakpointsByFile = read_json(&breakpoints_path(home, hash))?;
+    // `verified` / `actualLine` describe what one adapter said in one
+    // session, about a build that no longer exists. Reading them back as
+    // still-true would show a green, confidently-placed breakpoint for code
+    // that has been edited and never re-launched. Only what the user set —
+    // the file, the line, the condition, whether it's enabled — survives.
+    for breakpoints in stored.values_mut() {
+        for breakpoint in breakpoints.iter_mut() {
+            breakpoint.verified = None;
+            breakpoint.actual_line = None;
+            breakpoint.message = None;
+        }
+    }
+    Ok(stored)
+}
+
+pub fn write_breakpoints(home: &Path, hash: &str, breakpoints: &BreakpointsByFile) -> Res<()> {
+    // Files whose last breakpoint was removed are dropped rather than kept
+    // as empty arrays, so the file doesn't grow forever with dead paths.
+    let live: BreakpointsByFile = breakpoints
+        .iter()
+        .filter(|(_, list)| !list.is_empty())
+        .map(|(path, list)| (path.clone(), list.clone()))
+        .collect();
+    write_json(&breakpoints_path(home, hash), &live)
+}
+
 // --------------------------------------------------------- session storage
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -927,6 +970,89 @@ fn log_corrupt_line(home: &Path, thread_id: &str, offset: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --------------------------------------------------------- breakpoints
+
+    #[test]
+    fn breakpoints_survive_a_restart() {
+        let home = tempfile::tempdir().unwrap();
+        let mut set = BreakpointsByFile::new();
+        set.insert(
+            "src/lib.rs".into(),
+            vec![
+                crate::dap::Breakpoint::new("src/lib.rs", 9),
+                crate::dap::Breakpoint {
+                    condition: Some("i > 3".into()),
+                    ..crate::dap::Breakpoint::new("src/lib.rs", 22)
+                },
+            ],
+        );
+        write_breakpoints(home.path(), "p1", &set).unwrap();
+
+        // A fresh read is what the next launch of the app does.
+        let restored = read_breakpoints(home.path(), "p1").unwrap();
+        assert_eq!(restored, set);
+        assert_eq!(restored["src/lib.rs"][1].condition.as_deref(), Some("i > 3"));
+    }
+
+    #[test]
+    fn a_project_with_no_breakpoints_reads_as_empty_not_as_an_error() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(read_breakpoints(home.path(), "never-seen").unwrap().is_empty());
+    }
+
+    #[test]
+    fn breakpoints_are_scoped_to_their_own_project() {
+        let home = tempfile::tempdir().unwrap();
+        let mut one = BreakpointsByFile::new();
+        one.insert("a.rs".into(), vec![crate::dap::Breakpoint::new("a.rs", 1)]);
+        write_breakpoints(home.path(), "p1", &one).unwrap();
+        write_breakpoints(home.path(), "p2", &BreakpointsByFile::new()).unwrap();
+
+        assert_eq!(read_breakpoints(home.path(), "p1").unwrap().len(), 1);
+        assert!(read_breakpoints(home.path(), "p2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn clearing_a_files_last_breakpoint_drops_the_file_entirely() {
+        let home = tempfile::tempdir().unwrap();
+        let mut set = BreakpointsByFile::new();
+        set.insert("a.rs".into(), vec![crate::dap::Breakpoint::new("a.rs", 1)]);
+        write_breakpoints(home.path(), "p1", &set).unwrap();
+
+        set.insert("a.rs".into(), vec![]);
+        write_breakpoints(home.path(), "p1", &set).unwrap();
+        assert!(
+            read_breakpoints(home.path(), "p1").unwrap().is_empty(),
+            "an emptied file must not linger as a dead entry"
+        );
+    }
+
+    #[test]
+    fn adapter_verification_is_not_persisted_as_fact_across_restarts() {
+        // `verified` describes what one adapter said in one session. Reading
+        // it back as still-true would show a green breakpoint for a program
+        // that has since been edited and never re-launched.
+        let home = tempfile::tempdir().unwrap();
+        let mut set = BreakpointsByFile::new();
+        set.insert(
+            "a.rs".into(),
+            vec![crate::dap::Breakpoint {
+                verified: Some(true),
+                actual_line: Some(4),
+                ..crate::dap::Breakpoint::new("a.rs", 3)
+            }],
+        );
+        write_breakpoints(home.path(), "p1", &set).unwrap();
+
+        let restored = read_breakpoints(home.path(), "p1").unwrap();
+        let breakpoint = &restored["a.rs"][0];
+        assert_eq!(breakpoint.line, 3, "the user's own line is what persists");
+        assert_eq!(breakpoint.verified, None, "verification is per-session, not stored");
+        assert_eq!(breakpoint.actual_line, None);
+    }
+
+
 
     fn home() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
