@@ -1,0 +1,36 @@
+npm warn exec The following package was not found and will be installed: vitest@4.1.11
+
+ RUN  v4.1.11 /private/tmp/claude-501/-Users-tjlsmith0831-dev-palisade-code--claude-worktrees-palisade-debugger-terminal-tests-599336/8f9ddff2-3d1c-4e8f-83f6-38c7fa7afe46/scratchpad/vtdemo
+
+ ❯ sample.test.ts (3 tests | 1 failed | 1 skipped) 3ms
+     ✓ adds 1ms
+     × subtracts wrongly 2ms
+     ↓ is skipped
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  sample.test.ts > math > subtracts wrongly
+AssertionError: expected 2 to be 5 // Object.is equality
+
+- Expected
++ Received
+
+- 5
++ 2
+
+ ❯ sample.test.ts:4:49
+      2| describe("math", () => {
+      3|   it("adds", () => { expect(1 + 1).toBe(2); });
+      4|   it("subtracts wrongly", () => { expect(3 - 1).toBe(5); });
+       |                                                 ^
+      5|   it.skip("is skipped", () => {});
+      6| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed | 1 skipped (3)
+   Start at  09:03:25
+   Duration  86ms (transform 10ms, setup 0ms, import 15ms, tests 3ms, environment 0ms)
+

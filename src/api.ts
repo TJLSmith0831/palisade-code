@@ -333,6 +333,36 @@ export const leaveThread = (threadId: string) =>
  * Render the code and the commit — never summarise a set of these into
  * "complete" or "satisfied".
  */
+/** How one test finished. `errored` is a crash, not a failed assertion. */
+export type TestStatus = "passed" | "failed" | "skipped" | "errored";
+
+export type TestCase = {
+  name: string;
+  status: TestStatus;
+  /** Source file the runner named, relative to wherever it ran. */
+  file: string | null;
+  /** 1-based. */
+  line: number | null;
+  message: string | null;
+};
+
+/**
+ * Per-test results parsed out of one verify run's output.
+ *
+ * A view of a run, never evidence in its own right: the run's exit code and
+ * commit remain the only thing that says a spec is green (D3). `parsed:
+ * false` means no runner was recognised — the UI must show the raw log
+ * rather than an empty explorer, because "no failures parsed" is not "no
+ * failures".
+ */
+export type TestReport = {
+  framework: string;
+  cases: TestCase[];
+  parsed: boolean;
+  /** Non-zero exit with no failing test — a crash before the first verdict. */
+  unexplainedFailure: boolean;
+};
+
 export type VerificationRun = {
   id: string;
   projectHash: string;
@@ -344,6 +374,7 @@ export type VerificationRun = {
   outputTail: string;
   gitHead: string | null;
   at: string;
+  tests: TestReport | null;
 };
 
 /** What a session changed, with its own uncertainty attached. */
@@ -611,13 +642,23 @@ export const queryGraphify = (
 
 /** Resolves to the display name of a project whose shell was killed to make
  * room for this one, or `null` when nothing was replaced. */
-export const terminalSpawn = (projectHash: string) =>
-  invoke<string | null>("terminal_spawn", { projectHash });
-export const terminalInput = (data: string) =>
-  invoke<void>("terminal_input", { data });
-export const terminalResize = (cols: number, rows: number) =>
-  invoke<void>("terminal_resize", { cols, rows });
-export const terminalKill = () => invoke<void>("terminal_kill");
+/** Ensures tab `terminalId`'s shell is running. Resolves `true` when one was
+ *  spawned, `false` when re-attaching to a shell that was already there. */
+export const terminalSpawn = (projectHash: string, terminalId: string) =>
+  invoke<boolean>("terminal_spawn", { projectHash, terminalId });
+export const terminalInput = (terminalId: string, data: string) =>
+  invoke<void>("terminal_input", { terminalId, data });
+export const terminalResize = (terminalId: string, cols: number, rows: number) =>
+  invoke<void>("terminal_resize", { terminalId, cols, rows });
+/** Closes one tab's shell; every other tab keeps running. */
+export const terminalKill = (terminalId: string) =>
+  invoke<void>("terminal_kill", { terminalId });
+/** Closes every shell belonging to one project — what a project switch does. */
+export const terminalKillProject = (projectHash: string) =>
+  invoke<void>("terminal_kill_project", { projectHash });
+/** Which of a project's tabs still have a live shell behind them. */
+export const terminalList = (projectHash: string) =>
+  invoke<string[]>("terminal_list", { projectHash });
 
 // --------------------------------------------------------------------- git
 

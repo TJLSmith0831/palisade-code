@@ -693,6 +693,13 @@ pub struct VerificationRun {
     #[serde(default)]
     pub git_head: Option<String>,
     pub at: String,
+    /// Per-test results parsed out of `output_tail`, when the output came
+    /// from a recognised runner. Strictly a *view* of this run — the exit
+    /// code above stays the evidence, and a green explorer is never a claim
+    /// that a spec is satisfied (D3). Defaulted so runs recorded before the
+    /// test explorer existed still parse.
+    #[serde(default)]
+    pub tests: Option<crate::test_parse::TestReport>,
 }
 
 fn verify_path(home: &Path, hash: &str) -> PathBuf {

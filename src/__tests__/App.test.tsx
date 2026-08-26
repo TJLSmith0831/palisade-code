@@ -356,6 +356,8 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     // The command reaches the shell, and the panel it prints into is open.
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("terminal_input", {
+        // Tagged with a tab now that several shells can be open at once.
+        terminalId: expect.any(String),
         data: "pnpm start\n",
       })
     );
@@ -404,6 +406,7 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     fireEvent.click(await screen.findByTestId("run-opt-test"));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("terminal_input", {
+        terminalId: expect.any(String),
         data: "cargo test\n",
       })
     );
@@ -922,6 +925,90 @@ describe("Bottom panel (shell-redesign Phase 2)", () => {
     fireEvent.click(screen.getByTestId("bp-tab-terminal"));
     expect(screen.queryByTestId("problems-empty")).toBeNull();
     expect(screen.getByTestId("terminal-pane")).toBeDefined();
+  });
+
+  it("has a Tests tab that shows per-test results from the latest verify run", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "verify_commands") return Promise.resolve([["test", "cargo test"]]);
+      if (cmd === "list_verifications")
+        return Promise.resolve([
+          {
+            id: "v1",
+            projectHash: "p1",
+            threadId: null,
+            sessionId: null,
+            name: "test",
+            command: "cargo test",
+            exitCode: 101,
+            outputTail: "running 2 tests",
+            gitHead: "abcdef1234567890",
+            at: "2026-08-26T10:00:00Z",
+            tests: {
+              framework: "cargo",
+              parsed: true,
+              unexplainedFailure: false,
+              cases: [
+                { name: "tests::ok", status: "passed", file: "src/lib.rs", line: null, message: null },
+                {
+                  name: "tests::bad",
+                  status: "failed",
+                  file: "src/lib.rs",
+                  line: 9,
+                  message: "left != right",
+                },
+              ],
+            },
+          },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    fireEvent.click(screen.getByTestId("bp-tab-tests"));
+
+    expect(await screen.findByTestId("test-case-tests::bad")).toHaveAttribute(
+      "data-status",
+      "failed"
+    );
+    // The terminal keeps running behind the tab, as it does behind Problems.
+    expect(screen.getByTestId("terminal-pane")).toBeDefined();
+  });
+
+  it("shows how many tests failed on the Tests tab itself", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "verify_commands") return Promise.resolve([["test", "cargo test"]]);
+      if (cmd === "list_verifications")
+        return Promise.resolve([
+          {
+            id: "v1",
+            projectHash: "p1",
+            threadId: null,
+            sessionId: null,
+            name: "test",
+            command: "cargo test",
+            exitCode: 101,
+            outputTail: "",
+            gitHead: null,
+            at: "2026-08-26T10:00:00Z",
+            tests: {
+              framework: "cargo",
+              parsed: true,
+              unexplainedFailure: false,
+              cases: [
+                { name: "a", status: "failed", file: null, line: null, message: null },
+                { name: "b", status: "errored", file: null, line: null, message: null },
+                { name: "c", status: "passed", file: null, line: null, message: null },
+              ],
+            },
+          },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    expect(await screen.findByTestId("bp-test-count")).toHaveTextContent("2");
   });
 
   it("collapses again from the panel's own chevron", async () => {

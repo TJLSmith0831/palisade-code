@@ -1002,6 +1002,102 @@ input[type="checkbox"] {
   background: transparent !important;
 }
 
+/* --- test explorer ------------------------------------------------------ */
+
+.ds-test-case {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.ds-test-case.is-locatable {
+  cursor: pointer;
+}
+
+.ds-test-case.is-locatable:hover {
+  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+}
+
+.ds-test-mark {
+  width: 10px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.ds-test-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.ds-test-name,
+.ds-test-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- terminal tabs (multiplexing) --------------------------------------- */
+
+.ds-terminal-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-terminal-tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.ds-terminal-tabitem {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 2px;
+  border-radius: 4px;
+}
+
+.ds-terminal-tabitem:has(.ds-terminal-tab.is-active) {
+  background: var(--editor-bg);
+}
+
+.ds-terminal-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+
+.ds-terminal-tab.is-active {
+  color: var(--fg);
+}
+
+/* The body is a stack: every tab's pane stays mounted (a tab is a running
+   process), with all but the active one display:none. */
+.ds-terminal-tabbody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* --- editor tabs (v2) --------------------------------------------------- */
 
 .ds-editor-tabs {

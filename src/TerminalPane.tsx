@@ -7,6 +7,11 @@ import * as api from "./api";
 
 type Props = {
   projectHash: string;
+  /** Which tab's PTY this view is attached to. */
+  terminalId: string;
+  /** False while another tab is showing: the pane stays mounted (so its
+      shell keeps running) but skips the fit/focus work it can't do hidden. */
+  visible?: boolean;
 };
 
 // xterm's canvas renderer doesn't accept the app's oklch() custom-property
@@ -24,8 +29,9 @@ function resolveCssColor(varExpr: string): string {
   return resolved;
 }
 
-export default function TerminalPane({ projectHash }: Props) {
+export default function TerminalPane({ projectHash, terminalId, visible = true }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -45,41 +51,47 @@ export default function TerminalPane({ projectHash }: Props) {
       },
     });
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(host);
     fit.fit();
 
-    api
-      .terminalSpawn(projectHash)
-      .then((replaced) => {
-        // Only one terminal exists at a time, so switching projects kills
-        // the previous project's shell. Say so in the terminal itself
-        // rather than letting a running build vanish without a word.
-        if (replaced) {
-          term.writeln(`\r\n[closed the terminal for "${replaced}" — one shell at a time]`);
-        }
-      })
-      .catch((err) => term.writeln(`\r\n[terminal error: ${err}]`));
+    api.terminalSpawn(projectHash, terminalId).catch((err) => {
+      // A PTY that can't start (fd exhaustion, a missing $SHELL, the
+      // per-project tab limit) has to say so where the user is looking —
+      // an empty black rectangle reads as "still loading" forever.
+      term.writeln(`\r\n[terminal error: ${err}]`);
+    });
 
     const onData = term.onData((data) => {
-      api.terminalInput(data).catch(() => {});
+      api.terminalInput(terminalId, data).catch(() => {});
     });
     // fit() (initial + on host resize below) triggers this with the new
     // dimensions, which is also how the PTY hears about a panel drag-resize.
     const onResize = term.onResize(({ cols, rows }) => {
-      api.terminalResize(cols, rows).catch(() => {});
+      api.terminalResize(terminalId, cols, rows).catch(() => {});
     });
 
-    const unlisten = listen<string>("terminal-output", ({ payload }) => {
-      // Bytes, not text: decoding each chunk as UTF-8 independently would
-      // corrupt a multi-byte character split across a read boundary.
-      // xterm's own write() keeps decoder state across calls, so hand it
-      // raw bytes and let it reassemble anything split (App.tsx D45/D46).
-      const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
-      term.write(bytes);
-    });
+    const unlisten = listen<{ terminalId: string; data: string }>(
+      "terminal-output",
+      ({ payload }) => {
+        // Every tab hears every tab's output; only render our own, or two
+        // open terminals would interleave into each other.
+        if (payload.terminalId !== terminalId) return;
+        // Bytes, not text: decoding each chunk as UTF-8 independently would
+        // corrupt a multi-byte character split across a read boundary.
+        // xterm's own write() keeps decoder state across calls, so hand it
+        // raw bytes and let it reassemble anything split (App.tsx D45/D46).
+        const bytes = Uint8Array.from(atob(payload.data), (c) => c.charCodeAt(0));
+        term.write(bytes);
+      }
+    );
 
-    const resizeObserver = new ResizeObserver(() => fit.fit());
+    const resizeObserver = new ResizeObserver(() => {
+      // A hidden pane has zero height; fitting against it would tell the PTY
+      // the window is 0 rows and reflow the running program's output.
+      if (host.clientHeight > 0) fit.fit();
+    });
     resizeObserver.observe(host);
 
     // Live theme toggle (App.tsx's data-theme attribute) or an "auto" user
@@ -94,7 +106,10 @@ export default function TerminalPane({ projectHash }: Props) {
       };
     };
     const themeObserver = new MutationObserver(applyTheme);
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
     const colorScheme = window.matchMedia("(prefers-color-scheme: light)");
     colorScheme.addEventListener("change", applyTheme);
 
@@ -106,14 +121,29 @@ export default function TerminalPane({ projectHash }: Props) {
       onResize.dispose();
       unlisten.then((un) => un());
       term.dispose();
+      fitRef.current = null;
+      // Deliberately does NOT kill the PTY: unmounting is a view concern
+      // (panel collapsed, project switched), and the shell outlives it so a
+      // running build survives. TerminalTabs owns the shell's lifetime.
     };
-  }, [projectHash]);
+  }, [projectHash, terminalId]);
+
+  // Becoming visible again means the host went from zero height to real
+  // height, which the ResizeObserver above saw while it was still hidden.
+  useEffect(() => {
+    if (visible) fitRef.current?.fit();
+  }, [visible]);
 
   return (
-    <div className="ds-terminal-pane" data-testid="terminal-pane">
-      {/* No header of its own: whichever panel hosts the terminal already
-          names it and carries the placement control. A second bar was pure
-          duplicate chrome. */}
+    <div
+      className="ds-terminal-pane"
+      data-testid="terminal-pane"
+      // Hidden, not unmounted: unmounting disposes the xterm view, and we
+      // want the tab's scrollback and its running process both intact.
+      style={visible ? undefined : { display: "none" }}
+    >
+      {/* No header of its own: the tab strip above already names it and
+          carries the placement control. */}
       <div className="ds-terminal-host" ref={hostRef} data-testid="terminal-host" />
     </div>
   );

@@ -442,7 +442,8 @@ pub struct Harness {
     pub pending_prefix: Mutex<HashMap<String, String>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
     pub watch: Mutex<Option<crate::integrations::Watcher>>,
-    pub terminal: Mutex<Option<(String, crate::terminal::Terminal)>>,
+    /// Every live terminal tab, keyed by tab id (several per project).
+    pub terminals: crate::terminal::TerminalRegistry,
     pub fswatch: Mutex<Option<crate::fswatch::FsWatcher>>,
     /// Buffered JSONL writer for session and thread logs; flushed on turn-done
     /// and app-quit (D9).
@@ -517,7 +518,7 @@ impl Default for Harness {
             pending_prefix: Default::default(),
             pending_propose: Default::default(),
             watch: Default::default(),
-            terminal: Default::default(),
+            terminals: Default::default(),
             fswatch: Default::default(),
             session_log_writer: crate::session_log_writer::shared_session_log_writer(),
             openspec_cache: std::sync::Arc::new(crate::openspec_cache::OpenSpecCache::with_real_adapter()),

@@ -35,7 +35,7 @@ export type PanelId = (typeof PANEL_IDS)[number];
 
 /// Bottom-panel tabs (Amendment 3). Problems is populated by LSP diagnostics
 /// once Phase 4 lands; the tab exists from Phase 2 so it has a home.
-export type BottomTab = "terminal" | "problems";
+export type BottomTab = "terminal" | "problems" | "tests";
 
 export function useAppShell(projectHash: string | undefined) {
   const layoutHash = projectHash ?? "default";

@@ -1,11 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
+import userEvent from "@testing-library/user-event";
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+const render = (ui: React.ReactNode) => rtlRender(ui, { wrapper: MantineProvider });
+
+const { listenMock, listeners } = vi.hoisted(() => {
+  const listeners: Record<string, ((e: { payload: unknown }) => void)[]> = {};
+  return {
+    listeners,
+    listenMock: vi.fn((name: string, cb: (e: { payload: unknown }) => void) => {
+      (listeners[name] ??= []).push(cb);
+      return Promise.resolve(() => {
+        listeners[name] = (listeners[name] ?? []).filter((c) => c !== cb);
+      });
+    }),
+  };
+});
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+
+const { termInstances } = vi.hoisted(() => ({
+  termInstances: [] as { write: ReturnType<typeof vi.fn>; writeln: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }[],
 }));
-
-const { termInstances } = vi.hoisted(() => ({ termInstances: [] as { open: ReturnType<typeof import("vitest")["vi"]["fn"]> }[] }));
 
 vi.mock("@xterm/xterm", () => {
   class FakeTerminal {
@@ -14,10 +30,12 @@ vi.mock("@xterm/xterm", () => {
     write = vi.fn();
     dispose = vi.fn();
     writeln = vi.fn();
+    focus = vi.fn();
+    options: Record<string, unknown> = {};
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onResize = vi.fn(() => ({ dispose: vi.fn() }));
     constructor() {
-      termInstances.push(this as unknown as { open: ReturnType<typeof import("vitest")["vi"]["fn"]> });
+      termInstances.push(this as never);
     }
   }
   return { Terminal: FakeTerminal };
@@ -33,51 +51,184 @@ const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import TerminalPane from "../TerminalPane";
+import TerminalTabs from "../TerminalTabs";
+
+const emit = (name: string, payload: unknown) =>
+  (listeners[name] ?? []).forEach((cb) => cb({ payload }));
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation((cmd: string) => {
+    if (cmd === "terminal_spawn") return Promise.resolve(true);
+    if (cmd === "terminal_list") return Promise.resolve([]);
+    return Promise.resolve();
+  });
+  termInstances.length = 0;
+  for (const key of Object.keys(listeners)) delete listeners[key];
+});
 
 describe("TerminalPane", () => {
-  beforeEach(() => {
-    invokeMock.mockReset();
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "terminal_spawn") return Promise.resolve();
-      if (cmd === "terminal_input") return Promise.resolve();
-      if (cmd === "terminal_resize") return Promise.resolve();
-      return Promise.reject(new Error(`unexpected command ${cmd}`));
-    });
-    termInstances.length = 0;
-  });
-
-  it("spawns a terminal for the project on mount", async () => {
-    render(<TerminalPane projectHash="proj-1" />);
+  it("spawns the PTY for its own tab id", async () => {
+    render(<TerminalPane projectHash="proj-1" terminalId="proj-1:1" />);
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", { projectHash: "proj-1" }),
+      expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", {
+        projectHash: "proj-1",
+        terminalId: "proj-1:1",
+      }),
     );
   });
 
-  it("re-attaches (calls spawn again) rather than creating a second xterm instance in one mount when reopened", async () => {
-    const { unmount } = render(
-      <TerminalPane projectHash="proj-1" />,
+  it("renders only the output addressed to its own tab", async () => {
+    render(
+      <>
+        <TerminalPane projectHash="p" terminalId="tab-a" />
+        <TerminalPane projectHash="p" terminalId="tab-b" />
+      </>,
     );
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", { projectHash: "proj-1" }));
-    expect(termInstances).toHaveLength(1);
-    unmount();
+    await waitFor(() => expect(termInstances).toHaveLength(2));
+    await waitFor(() => expect(listeners["terminal-output"]?.length).toBe(2));
 
-    render(<TerminalPane projectHash="proj-1" />);
-    await waitFor(() => {
-      const calls = invokeMock.mock.calls.filter(
-        ([cmd, args]) => cmd === "terminal_spawn" && (args as { projectHash: string }).projectHash === "proj-1",
-      );
-      expect(calls).toHaveLength(2);
-    });
-    // A closed-and-reopened panel is a fresh xterm view (scrollback isn't
-    // preserved client-side), but it must still be exactly one live
-    // instance at a time, not an accumulating stack.
-    expect(termInstances).toHaveLength(2);
+    emit("terminal-output", { terminalId: "tab-a", data: btoa("hello-a") });
+    expect(termInstances[0].write).toHaveBeenCalledTimes(1);
+    expect(termInstances[1].write).not.toHaveBeenCalled();
+
+    emit("terminal-output", { terminalId: "tab-b", data: btoa("hello-b") });
+    expect(termInstances[0].write).toHaveBeenCalledTimes(1);
+    expect(termInstances[1].write).toHaveBeenCalledTimes(1);
   });
 
-  it("has no header of its own — the panel that hosts it is the header", () => {
-    // Two rows both saying "Terminal", stacked, was duplicate chrome.
-    render(<TerminalPane projectHash="proj-1" />);
+  it("sends input tagged with its tab id", async () => {
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await waitFor(() => expect(termInstances).toHaveLength(1));
+    const onData = (
+      termInstances[0] as never as { onData: { mock: { calls: [(d: string) => void][] } } }
+    ).onData.mock.calls[0][0];
+    onData("ls\n");
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("terminal_input", {
+        terminalId: "tab-x",
+        data: "ls\n",
+      }),
+    );
+  });
+
+  it("reports a spawn failure into the terminal rather than throwing", async () => {
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "terminal_spawn"
+        ? Promise.reject(new Error("start terminal: no pty available"))
+        : Promise.resolve(),
+    );
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await waitFor(() =>
+      expect(termInstances[0].writeln).toHaveBeenCalledWith(
+        expect.stringContaining("no pty available"),
+      ),
+    );
+  });
+
+  it("has no header of its own — the tab strip is the header", () => {
+    render(<TerminalPane projectHash="p" terminalId="t" />);
     expect(screen.queryByTestId("terminal-placement-toggle")).toBeNull();
-    expect(screen.queryByText("Terminal")).toBeNull();
+  });
+});
+
+describe("TerminalTabs", () => {
+  it("opens one tab on mount", async () => {
+    render(<TerminalTabs projectHash="p" />);
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+    expect(termInstances).toHaveLength(1);
+  });
+
+  it("keeps every tab's PTY mounted so background processes keep running", async () => {
+    const user = userEvent.setup();
+    render(<TerminalTabs projectHash="p" />);
+    await waitFor(() => expect(termInstances).toHaveLength(1));
+
+    await user.click(screen.getByTestId("terminal-tab-new"));
+    await waitFor(() => expect(termInstances).toHaveLength(2));
+    expect(screen.getAllByTestId("terminal-pane")).toHaveLength(2);
+    expect(termInstances[0].dispose).not.toHaveBeenCalled();
+
+    await user.click(screen.getAllByTestId(/^terminal-tab-\d/)[0]);
+    expect(screen.getAllByTestId("terminal-pane")).toHaveLength(2);
+    expect(termInstances[1].dispose).not.toHaveBeenCalled();
+  });
+
+  it("closes one tab without touching the others", async () => {
+    const user = userEvent.setup();
+    render(<TerminalTabs projectHash="p" />);
+    await user.click(screen.getByTestId("terminal-tab-new"));
+    await waitFor(() => expect(termInstances).toHaveLength(2));
+
+    await user.click(screen.getAllByTestId(/^terminal-close-/)[0]);
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+    expect(invokeMock).toHaveBeenCalledWith("terminal_kill", { terminalId: expect.any(String) });
+    expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+  });
+
+  it("survives a rapid open/close cycle without leaking tabs", async () => {
+    const user = userEvent.setup();
+    render(<TerminalTabs projectHash="p" />);
+    for (let i = 0; i < 5; i++) await user.click(screen.getByTestId("terminal-tab-new"));
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(6));
+    for (const close of screen.getAllByTestId(/^terminal-close-/).slice(0, 5)) {
+      await user.click(close);
+    }
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+  });
+
+  it("refuses to open more than the backend's tab limit", async () => {
+    const user = userEvent.setup();
+    render(<TerminalTabs projectHash="p" />);
+    for (let i = 0; i < 12; i++) {
+      const add = screen.getByTestId("terminal-tab-new");
+      if ((add as HTMLButtonElement).disabled) break;
+      await user.click(add);
+    }
+    expect(screen.getAllByTestId(/^terminal-tab-\d/).length).toBe(8);
+    expect(screen.getByTestId("terminal-tab-new")).toBeDisabled();
+  });
+
+  it("never closes the last tab — there is always one shell", async () => {
+    render(<TerminalTabs projectHash="p" />);
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+    expect(screen.queryAllByTestId(/^terminal-close-/)).toHaveLength(0);
+  });
+
+  it("starts a fresh strip and closes the old project's shells on project switch", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<TerminalTabs projectHash="p" />);
+    await user.click(screen.getByTestId("terminal-tab-new"));
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(2));
+
+    rerender(<TerminalTabs projectHash="q" />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("terminal_kill_project", { projectHash: "p" }),
+    );
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+  });
+
+  it("reports which tab is focused so Run has somewhere to type", async () => {
+    const user = userEvent.setup();
+    const onActive = vi.fn();
+    render(<TerminalTabs projectHash="p" onActiveTerminalChange={onActive} />);
+    await waitFor(() => expect(onActive).toHaveBeenCalledWith("p:1"));
+
+    await user.click(screen.getByTestId("terminal-tab-new"));
+    await waitFor(() => expect(onActive).toHaveBeenCalledWith("p:2"));
+
+    await user.click(screen.getByTestId("terminal-tab-1"));
+    await waitFor(() => expect(onActive).toHaveBeenLastCalledWith("p:1"));
+  });
+
+  it("hands focus to a surviving tab when the focused one is closed", async () => {
+    const user = userEvent.setup();
+    const onActive = vi.fn();
+    render(<TerminalTabs projectHash="p" onActiveTerminalChange={onActive} />);
+    await user.click(screen.getByTestId("terminal-tab-new"));
+    await waitFor(() => expect(onActive).toHaveBeenLastCalledWith("p:2"));
+
+    await user.click(screen.getByTestId("terminal-close-2"));
+    await waitFor(() => expect(onActive).toHaveBeenLastCalledWith("p:1"));
   });
 });

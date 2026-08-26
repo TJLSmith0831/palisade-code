@@ -1,0 +1,33 @@
+   Compiling rsdemo v0.1.0 (/private/tmp/claude-501/-Users-tjlsmith0831-dev-palisade-code--claude-worktrees-palisade-debugger-terminal-tests-599336/8f9ddff2-3d1c-4e8f-83f6-38c7fa7afe46/scratchpad/rsdemo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/rsdemo-d4e550c9f133c778)
+
+running 4 tests
+test tests::ignored_one ... ignored
+test tests::passes ... ok
+test tests::panics_outright ... FAILED
+test tests::fails ... FAILED
+
+failures:
+
+---- tests::panics_outright stdout ----
+
+thread 'tests::panics_outright' (6691481) panicked at src/lib.rs:14:63:
+index out of bounds: the len is 0 but the index is 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::fails stdout ----
+
+thread 'tests::fails' (6691480) panicked at src/lib.rs:9:18:
+assertion `left == right` failed: two is not three
+  left: 2
+ right: 3
+
+
+failures:
+    tests::fails
+    tests::panics_outright
+
+test result: FAILED. 1 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

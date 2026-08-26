@@ -170,8 +170,9 @@ fn installed(binary: &str) -> bool {
     which(binary).is_some()
 }
 
-/// Wraps one JSON-RPC body in LSP's stdio framing.
-fn frame(body: &str) -> String {
+/// Wraps one JSON-RPC body in LSP's stdio framing. Shared with `dap`, which
+/// speaks the same `Content-Length` framing over stdio.
+pub(crate) fn frame(body: &str) -> String {
     format!("Content-Length: {}\r\n\r\n{body}", body.len())
 }
 
@@ -181,7 +182,7 @@ fn frame(body: &str) -> String {
 /// A server can flush half a header, and it may send headers Palisade doesn't
 /// care about (`Content-Type`) — both are normal, neither may desync the
 /// stream.
-fn drain_messages(buffer: &mut Vec<u8>) -> Vec<String> {
+pub(crate) fn drain_messages(buffer: &mut Vec<u8>) -> Vec<String> {
     let mut out = Vec::new();
     loop {
         let Some(header_end) = find_header_end(buffer) else {

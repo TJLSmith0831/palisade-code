@@ -35,6 +35,7 @@ import {
 } from "@mantine/core";
 import {
   IconAlertTriangle,
+  IconFlask,
   IconArchive,
   IconBolt,
   IconBox,
@@ -147,7 +148,9 @@ import SettingsPanel, {
   loadAppearance,
   PROJECT_SETTINGS_FILE,
 } from "./SettingsPanel";
-import TerminalPane from "./TerminalPane";
+import TerminalTabs from "./TerminalTabs";
+import TestExplorer from "./TestExplorer";
+import { markersForFile, resolveTestPath } from "./testGutter";
 import OnboardingScreen from "./OnboardingScreen";
 import NavRail from "./NavRail";
 import SessionList from "./SessionList";
@@ -2396,6 +2399,9 @@ export default function App() {
   // what anyone wants. Once opened it stays mounted, so collapsing the
   // panel keeps the scrollback instead of disposing the instance.
   const terminalEverOpened = useRef(false);
+  // Which terminal tab a "Run" click should type into. Several shells can be
+  // open at once, so "the terminal" is no longer a single implicit target.
+  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
   if (shell.terminalPlacement === "bottom" && !shell.terminalPanel.collapsed) {
     terminalEverOpened.current = true;
   }
@@ -2537,13 +2543,17 @@ export default function App() {
       // and writing to a pty that doesn't exist yet fails with "no terminal
       // running" — the command would vanish with no output and no error.
       // `terminal_spawn` is a no-op when one is already running.
+      // The focused tab, or — on the very first run, before TerminalTabs has
+      // mounted and reported one — the tab it deterministically opens first.
+      const target = activeTerminalId ?? `${project.hash}:1`;
       api
-        .terminalSpawn(project.hash)
-        .then(() => api.terminalInput(`${command}\n`))
+        .terminalSpawn(project.hash, target)
+        .then(() => api.terminalInput(target, `${command}\n`))
         .catch(fail);
     },
     [
       project?.hash,
+      activeTerminalId,
       shell.setBottomTab,
       shell.terminalPanel.collapsed,
       shell.toggleTerminal,
@@ -2553,6 +2563,9 @@ export default function App() {
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
       setFileEdits((prev) => [...prev, edit]);
+      // Test results recorded before this write describe code that no longer
+      // exists; the explorer reads this to say so.
+      setLastEditAt(Date.now());
       // A save changes the working tree, so the diff behind the toggle is
       // now out of date.
       setDiffRefreshToken((t) => t + 1);
@@ -2893,6 +2906,17 @@ export default function App() {
       if (line !== undefined) setRevealLine({ path, line, at: Date.now() });
     },
     [tabs]
+  );
+
+  // Opens a location a test runner reported. Its paths are relative to
+  // wherever the runner ran, which for a nested crate is not the project
+  // root — resolve against the project's own files before opening.
+  const openAtLine = useCallback(
+    (reported: string, line: number) => {
+      const known = project ? filesCache.current.get(project.hash) ?? [] : [];
+      selectFile(resolveTestPath(reported, known), line);
+    },
+    [project?.hash, selectFile]
   );
 
   const closeTab = useCallback(
@@ -4313,6 +4337,70 @@ export default function App() {
   // The count belongs on the tab: a diagnostic nobody opens the tab to see
   // may as well not have been reported.
   const [problemCount, setProblemCount] = useState(0);
+  // The newest parsed test report, shared by the Tests tab (which shows the
+  // rows) and the editor gutter (which marks the failing lines) so the two
+  // can never disagree about what the last run said.
+  const [testReport, setTestReport] = useState<api.TestReport | null>(null);
+  // When the project was last written to. Results from before it describe
+  // code that no longer exists, and the explorer says so rather than
+  // presenting them as current.
+  const [lastEditAt, setLastEditAt] = useState<number | null>(null);
+  // Loaded (and kept up to date) here rather than only inside the Tests tab:
+  // the tab badge and the editor gutter both need the last run's results
+  // whether or not that tab is open, and it mounts only when it is.
+  //
+  // ponytail: takes the newest run with a parsed report, whichever command
+  // produced it. A project whose non-test verify commands also parse as tests
+  // could see the wrong one; per-command selection if that ever shows up.
+  useEffect(() => {
+    if (!project) {
+      setTestReport(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listVerifications(project.hash)
+      .then((runs) => {
+        if (cancelled) return;
+        const parsed = runs.filter((run) => run.tests?.parsed);
+        setTestReport(parsed.length > 0 ? parsed[parsed.length - 1].tests : null);
+      })
+      .catch(() => !cancelled && setTestReport(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.hash]);
+
+  useEffect(() => {
+    const finished = listen<api.VerificationRun>(
+      "verification-finished",
+      ({ payload }) => {
+        if (payload.projectHash !== project?.hash) return;
+        if (payload.tests?.parsed) setTestReport(payload.tests);
+      }
+    );
+    return () => {
+      finished.then((un) => un());
+    };
+  }, [project?.hash]);
+
+  // The markers for the file currently on screen. Recomputed from the same
+  // report the Tests tab renders, so the gutter and the explorer can never
+  // disagree about which test failed where.
+  const editorTestMarkers = useMemo(
+    () => (selectedFile ? markersForFile(testReport, selectedFile) : []),
+    [testReport, selectedFile]
+  );
+
+  const failingTestCount = useMemo(
+    () =>
+      testReport?.parsed
+        ? testReport.cases.filter(
+            (c) => c.status === "failed" || c.status === "errored"
+          ).length
+        : 0,
+    [testReport]
+  );
   useEffect(() => {
     const refresh = () => setProblemCount(allDiagnostics().length);
     window.addEventListener(DIAGNOSTICS_CHANGED, refresh);
@@ -4478,6 +4566,7 @@ export default function App() {
         onCursorChange={rememberCursor}
         onCursorPosition={setCursorPosition}
         onLspStatus={setLspStatus}
+        testMarkers={editorTestMarkers}
         mdPreview={tabs.activeMdPreview}
         onToggleMdPreview={toggleMdPreview}
       />
@@ -5175,7 +5264,7 @@ export default function App() {
                   value={shell.bottomTab}
                   keepMounted={false}
                   onChange={(v) =>
-                    v && shell.setBottomTab(v as "terminal" | "problems")
+                    v && shell.setBottomTab(v as "terminal" | "problems" | "tests")
                   }
                 >
                   <div className="ds-bp-tabs">
@@ -5187,6 +5276,24 @@ export default function App() {
                         data-testid="bp-tab-terminal"
                       >
                         Terminal
+                      </Tabs.Tab>
+                      <Tabs.Tab
+                        value="tests"
+                        className="ds-bp-tab"
+                        leftSection={<IconFlask size={13} />}
+                        rightSection={
+                          failingTestCount > 0 ? (
+                            <span
+                              className="ds-bp-count"
+                              data-testid="bp-test-count"
+                            >
+                              {failingTestCount}
+                            </span>
+                          ) : undefined
+                        }
+                        data-testid="bp-tab-tests"
+                      >
+                        Tests
                       </Tabs.Tab>
                       <Tabs.Tab
                         value="problems"
@@ -5240,7 +5347,20 @@ export default function App() {
                         such state, so it mounts/unmounts with the tab. */}
                     <Tabs.Panel value="terminal" keepMounted className="ds-bp-pane">
                       {project && terminalEverOpened.current && (
-                        <TerminalPane projectHash={project.hash} />
+                        <TerminalTabs
+                          projectHash={project.hash}
+                          onActiveTerminalChange={setActiveTerminalId}
+                        />
+                      )}
+                    </Tabs.Panel>
+                    <Tabs.Panel value="tests" className="ds-bp-pane">
+                      {project && (
+                        <TestExplorer
+                          projectHash={project.hash}
+                          threadId={thread?.id}
+                          lastEditAt={lastEditAt}
+                          onOpen={(path, line) => openAtLine(path, line)}
+                        />
                       )}
                     </Tabs.Panel>
                     <Tabs.Panel value="problems" className="ds-bp-pane">

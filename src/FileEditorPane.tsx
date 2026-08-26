@@ -55,6 +55,11 @@ import { documentLanguageId, fileUri, languageForPath } from "./lsp";
 import { clientFor } from "./lspClients";
 import { isMarkdownPath } from "./openTabs";
 import {
+  setTestMarkers,
+  testMarkerGutter,
+  type TestMarker,
+} from "./testGutter";
+import {
   EDITOR_FONT_CHANGED_EVENT,
   EDITOR_WRAP_CHANGED_EVENT,
   loadEditorFont,
@@ -88,6 +93,10 @@ type Props = {
   /** Language-server state for the shell's status bar. The pane owns the
    *  editor view the server is attached to, so it is what knows. */
   onLspStatus?: (status: api.LspStatus | null) => void;
+  /** Failing tests to mark in the gutter, from the last verify run. Purely
+   * additive: an empty list (or a run nobody has done) leaves the editor
+   * exactly as it was. */
+  testMarkers?: TestMarker[];
   /** Whether to show the Markdown preview pane alongside the WYSIWYG editor.
    * Only honored for `.md`/`.markdown` files; ignored otherwise. */
   mdPreview?: boolean;
@@ -323,6 +332,7 @@ export default function FileEditorPane({
   onCursorChange,
   onCursorPosition,
   onLspStatus,
+  testMarkers,
   mdPreview = false,
   onToggleMdPreview,
 }: Props) {
@@ -480,6 +490,7 @@ export default function FileEditorPane({
         fimCompletion(loadCompletionSettings(), projectHash, forPath)
       ),
       lspCompartment.current.of([]),
+      testMarkerGutter(),
       definitionClick(),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },
@@ -771,6 +782,15 @@ export default function FileEditorPane({
     });
     view.focus();
   }, [revealLine, path, viewSeq]);
+
+  // Push the failing-test markers into the view. Keyed on viewSeq too, so a
+  // file that is re-opened (or reloaded from disk) gets its markers back
+  // rather than showing a bare gutter until the next test run.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || viewSeq === 0) return;
+    view.dispatch({ effects: setTestMarkers.of(testMarkers ?? []) });
+  }, [testMarkers, viewSeq, path]);
 
   // Seed the WYSIWYG editor from the CodeMirror doc whenever a Markdown file
   // is loaded. CodeMirror stays the source of truth, so this is a one-way

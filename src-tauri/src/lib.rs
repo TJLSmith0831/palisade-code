@@ -23,7 +23,9 @@ mod session_log_writer;
 mod openspec_cache;
 mod settings;
 mod store;
+mod dap;
 mod terminal;
+mod test_parse;
 mod plugins;
 mod commands;
 
@@ -1677,6 +1679,7 @@ pub(crate) fn record_verification(
             output_tail: outcome.output_tail,
             git_head: head,
             at: chrono::Utc::now().to_rfc3339(),
+            tests: None,
         },
         // A command that couldn't start is a failed verification, not a
         // missing one — recording nothing would leave it looking untested.
@@ -1691,8 +1694,14 @@ pub(crate) fn record_verification(
             output_tail: message,
             git_head: head,
             at: chrono::Utc::now().to_rfc3339(),
+            tests: None,
         },
     };
+    // Parsed after the record is built, from exactly the text that was
+    // stored: the explorer and the raw log can never disagree about what
+    // this run said.
+    let mut run = run;
+    run.tests = Some(test_parse::report(&run.output_tail, run.exit_code));
     let exit_code = run.exit_code;
     let _ = store::append_verification(&palisade_home(), &run);
     let _ = app.emit("verification-finished", &run);
@@ -2436,6 +2445,8 @@ pub fn run() {
             commands::terminal_cmds::terminal_input,
             commands::terminal_cmds::terminal_resize,
             commands::terminal_cmds::terminal_kill,
+            commands::terminal_cmds::terminal_kill_project,
+            commands::terminal_cmds::terminal_list,
             commands::git_cmds::git_status,
             commands::git_cmds::git_working_diff,
             commands::git_cmds::git_staged_diff,
