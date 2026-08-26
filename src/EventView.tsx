@@ -8,6 +8,7 @@ import {
   IconCircleX,
   IconGhost3Filled,
   IconLoader2,
+  IconRefresh,
   IconRoute,
   IconTerminal2,
 } from "@tabler/icons-react";
@@ -16,6 +17,7 @@ import type { ExecutorEvent, Message, Preflight } from "./api";
 import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
+import { isAuthError } from "./errors";
 
 /** The "Code Change Diff" tab shows only applied patches; "Console Chat" shows everything. */
 export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
@@ -378,6 +380,7 @@ export const EventList = memo(function EventList({
   items,
   executor,
   sessionId = null,
+  onRetry,
 }: {
   items: Item[];
   executor: Preflight["selected"];
@@ -385,6 +388,13 @@ export const EventList = memo(function EventList({
    *  pending permission prompt. Absent for read-only render paths (e.g. the
    *  diff tab), which never include `toolCall`/`permissionRequest` items. */
   sessionId?: string | null;
+  /** Resends a given prompt as a new message — the crash banner's retry
+   *  action for an auth-shaped failure. A crashed turn ends the session
+   *  (see CLAUDE.md), so "reauth" here isn't a Palisade-side flow to run;
+   *  it's giving the user a one-click way to try the *next* turn once
+   *  they've fixed the agent's login outside Palisade. Omitted on read-only
+   *  render paths (e.g. the diff tab), which have nowhere to route a send. */
+  onRetry?: (text: string) => void;
 }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = useMemo(() => {
@@ -445,16 +455,61 @@ export const EventList = memo(function EventList({
                 </Alert>
               );
             }
-            // A crash is persisted as a system turn; it stays a banner on reload.
+            // A crash is persisted as a system turn; it stays a banner on
+            // reload. An auth-shaped one reads as "the app is broken" if all
+            // it shows is a raw internal error string — the CLI just told us
+            // its own login expired, which isn't a Palisade bug to silently
+            // eat, but it also isn't unrecoverable: a plain-language line
+            // plus a one-click retry replaces "what do I even do with this".
             if (item.role === "system") {
+              const authIssue = isAuthError(item.text);
+              // The prompt that led to this crash — found by walking back to
+              // the nearest preceding user turn — is what Retry resends. A
+              // crashed turn can persist a partial assistant reply right
+              // before the crash marker (the agent's own text before the RPC
+              // itself failed) — stopping the walk at that assistant item
+              // used to skip straight past the user turn that caused it, so
+              // the button silently never appeared for exactly that shape.
+              let retryText: string | null = null;
+              if (authIssue && onRetry) {
+                for (let i = index - 1; i >= 0; i--) {
+                  const prior = items[i];
+                  if (prior.kind === "plain" && prior.role === "user") {
+                    retryText = prior.text;
+                    break;
+                  }
+                }
+              }
               return (
                 <Alert
                   key={index}
                   color="danger"
                   variant="light"
                   data-testid="crash-banner"
+                  className={authIssue ? "ds-crash-banner-auth" : undefined}
                 >
-                  {item.text}
+                  {authIssue && (
+                    <div
+                      className="ds-crash-banner-auth-summary"
+                      data-testid="crash-banner-auth-summary"
+                    >
+                      This agent's login expired or failed to refresh.
+                      Palisade can't complete an interactive login on its
+                      own — sign back in outside Palisade, then retry.
+                    </div>
+                  )}
+                  <div className="ds-crash-banner-detail">{item.text}</div>
+                  {retryText && (
+                    <button
+                      type="button"
+                      className="ds-crash-banner-retry"
+                      onClick={() => onRetry?.(retryText!)}
+                      data-testid="crash-banner-retry"
+                    >
+                      <IconRefresh size={12} />
+                      Retry
+                    </button>
+                  )}
                 </Alert>
               );
             }

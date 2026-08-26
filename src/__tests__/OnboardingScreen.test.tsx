@@ -102,6 +102,133 @@ describe("OnboardingScreen project-first layout", () => {
   });
 });
 
+// The chip only reports whether an agent binary was found on PATH — it used
+// to say "Detected: Claude Agent" even when that agent's own login had
+// expired, which read as an all-clear right up until a session failed to
+// start. It's now a dropdown listing every installed agent's own probed
+// status, with a retry action wherever that status looks like an expired
+// login, so a user can tell "installed" from "actually usable" at a glance.
+describe("OnboardingScreen detection chip dropdown", () => {
+  it("opens a dropdown listing every installed agent, marking the default one", async () => {
+    render(<OnboardingScreen {...base} />);
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+    expect(await screen.findByTestId("onboarding-status-menu")).toBeDefined();
+    expect(
+      screen.getByTestId("onboarding-agent-status-claude"),
+    ).toHaveTextContent("Claude Agentdefault");
+    expect(
+      screen.getByTestId("onboarding-agent-status-devin"),
+    ).toHaveTextContent("Devin");
+  });
+
+  // Checking an agent means spawning its own CLI, and that spawn is not
+  // always read-only — probing an unauthenticated Devin CLI kicked off its
+  // own reauth flow as a side effect of merely opening this dropdown to
+  // look. Nothing gets checked without an explicit click on that row.
+  it("never probes any agent on mount or on opening the dropdown", () => {
+    const onProbeAgent = vi.fn();
+    render(<OnboardingScreen {...base} onProbeAgent={onProbeAgent} />);
+    expect(onProbeAgent).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+    expect(onProbeAgent).not.toHaveBeenCalled();
+  });
+
+  it("shows an unchecked agent with an explicit Check status action, not an auto-run probe", async () => {
+    const onProbeAgent = vi.fn();
+    render(<OnboardingScreen {...base} onProbeAgent={onProbeAgent} />);
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+
+    const claudeRow = await screen.findByTestId(
+      "onboarding-agent-status-claude",
+    );
+    expect(claudeRow.className).toContain("status-unknown");
+    fireEvent.click(screen.getByTestId("onboarding-check-claude"));
+    expect(onProbeAgent).toHaveBeenCalledTimes(1);
+    expect(onProbeAgent).toHaveBeenCalledWith("claude");
+    // Only the row that was actually clicked — not every installed agent.
+    expect(onProbeAgent).not.toHaveBeenCalledWith("devin");
+  });
+
+  it("shows a per-agent auth error as a reauth row, distinct from a generic issue", async () => {
+    render(
+      <OnboardingScreen
+        {...base}
+        agentModels={{
+          claude: { error: "Couldn't complete that — please log in again" },
+          devin: { error: "agent has no path" },
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+
+    const claudeRow = await screen.findByTestId(
+      "onboarding-agent-status-claude",
+    );
+    expect(claudeRow.className).toContain("status-reauth");
+    // The failure text used to live only in a `title` tooltip — invisible on
+    // touch and to a screen reader. It's shown outright now.
+    expect(claudeRow).toHaveTextContent(
+      "Couldn't complete that — please log in again",
+    );
+    expect(screen.getByTestId("onboarding-reauth-claude")).toHaveTextContent(
+      "Reauthenticate",
+    );
+
+    const devinRow = screen.getByTestId("onboarding-agent-status-devin");
+    expect(devinRow.className).toContain("status-error");
+    expect(devinRow).toHaveTextContent("Issue");
+    expect(devinRow).toHaveTextContent("agent has no path");
+    // A non-auth issue gets a plain retry, not the reauth-specific action.
+    expect(
+      screen.queryByTestId("onboarding-reauth-devin"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-retry-devin")).toHaveTextContent(
+      "Retry",
+    );
+  });
+
+  it("clicking Retry on a non-auth issue re-probes that agent", async () => {
+    const onProbeAgent = vi.fn();
+    render(
+      <OnboardingScreen
+        {...base}
+        onProbeAgent={onProbeAgent}
+        agentModels={{ devin: { error: "agent has no path" } }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+    fireEvent.click(await screen.findByTestId("onboarding-retry-devin"));
+    expect(onProbeAgent).toHaveBeenCalledWith("devin");
+  });
+
+  it("warn-tones the chip itself when the default agent needs reauth", () => {
+    render(
+      <OnboardingScreen
+        {...base}
+        agentModels={{ claude: { error: "session expired" } }}
+      />,
+    );
+    expect(screen.getByTestId("onboarding-status").className).toContain(
+      "bad",
+    );
+  });
+
+  it("re-probes the agent when its row's Reauthenticate button is clicked", async () => {
+    const onProbeAgent = vi.fn();
+    render(
+      <OnboardingScreen
+        {...base}
+        onProbeAgent={onProbeAgent}
+        agentModels={{ claude: { error: "not authenticated" } }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+    onProbeAgent.mockClear();
+    fireEvent.click(await screen.findByTestId("onboarding-reauth-claude"));
+    expect(onProbeAgent).toHaveBeenCalledWith("claude");
+  });
+});
+
 describe("OnboardingScreen composer picker", () => {
   it("labels the pill with the agent's own selected model, not 'default'", () => {
     render(<OnboardingScreen {...base} />);

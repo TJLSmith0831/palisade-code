@@ -479,8 +479,9 @@ export const ChatSurface = memo(
     }, [thread?.id]);
     // A chain in the executor slot is named, not identified: the stored value
     // is `chain:design-loop`, but the picker should read "design-loop".
+    const isChainExecutor = executor?.startsWith(CHAIN_EXECUTOR_PREFIX) ?? false;
     const executorLabel = executor
-      ? executor.startsWith(CHAIN_EXECUTOR_PREFIX)
+      ? isChainExecutor
         ? executor.slice(CHAIN_EXECUTOR_PREFIX.length)
         : (flight?.agents.find((a) => a.id === executor)?.name ?? executor)
       : null;
@@ -1229,6 +1230,10 @@ export const ChatSurface = memo(
               items={items}
               executor={executor}
               sessionId={sessionId}
+              onRetry={(text) => {
+                setDraft(text);
+                handleSend();
+              }}
             />
           </>
           {busy && (
@@ -1663,6 +1668,13 @@ export const ChatSurface = memo(
                 )}
               </Menu.Dropdown>
             </Menu>
+            {/* A chain runs several agents in sequence, each with its own
+                model — there is no single model slot to show or set here,
+                so the picker doesn't render rather than offering a control
+                that can't do anything (previously: probing "chain:<name>"
+                as if it were an agent id and surfacing its failure as
+                "models unavailable"). */}
+            {!isChainExecutor && (
             <Menu
               opened={modelMenuOpen}
               onChange={(open) => {
@@ -1738,6 +1750,7 @@ export const ChatSurface = memo(
                 </Box>
               </Menu.Dropdown>
             </Menu>
+            )}
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <SegmentedControl
                 data-testid="mode-selector"
@@ -1986,6 +1999,10 @@ const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
 const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
   getThreadPrefs(hash, threadId) ?? { bypass: false };
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+/** Placeholder `seq` for a user message rendered before the backend has
+ *  assigned it a real one — real seqs are positive, persisted integers, so
+ *  this can never collide with one. */
+const OPTIMISTIC_SEQ = -1;
 type ThreadRowProps = {
   thread: ThreadMeta;
   active: boolean;
@@ -3615,6 +3632,10 @@ export default function App() {
   // re-renders the model menu.
 
   const probeAgentModels = useCallback(async (agentId: string) => {
+    // A chain isn't an ACP agent — it's a saved sequence of them, each with
+    // its own model. There's nothing for `listModels` to return, and probing
+    // it anyway is what produced "unknown or unavailable agent 'chain:...'".
+    if (agentId.startsWith(CHAIN_EXECUTOR_PREFIX)) return;
     const { project } = current.current;
     const existing = modelsRef.current[agentId];
     // Cached success or in-flight probe: don't re-probe. Errors retry —
@@ -3843,14 +3864,29 @@ export default function App() {
     if (chainToRun) {
       return void startChainRun(chainToRun.name, chainToRun.seed, activeThread);
     }
+    // Shown the instant Send is hit, not once the backend round-trip
+    // resolves — `sendMessage` also spawns/waits on the executor session
+    // before it returns (a cold agent spawn can take seconds), so waiting
+    // for its result to render the bubble made the user's own message not
+    // appear until the agent's reply did. Every chat app renders the local
+    // echo first and reconciles with the server's copy once it lands.
+    const optimistic: api.Message = {
+      seq: OPTIMISTIC_SEQ,
+      ts: new Date().toISOString(),
+      role: "user",
+      mode: activeThread.currentMode,
+      content: text,
+    };
+    setMessages((prev) => [...prev, optimistic]);
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, activeThread.id);
-      // sendMessage returns the persisted user message; append it directly
-      // instead of re-reading the whole thread. A second readThread here would
-      // race with the done/thread-updated handlers' refresh() on fast turns —
-      // a stale snapshot could clobber the fresh one. The done handler is the
-      // single writer of the full history; onSend only adds this one row.
+      // sendMessage returns the persisted user message; swap it in for the
+      // optimistic placeholder instead of re-reading the whole thread. A
+      // second readThread here would race with the done/thread-updated
+      // handlers' refresh() on fast turns — a stale snapshot could clobber
+      // the fresh one. The done handler is the single writer of the full
+      // history; onSend only adds this one row.
       const sent = await api.sendMessage(
         project.hash,
         activeThread.id,
@@ -3858,11 +3894,13 @@ export default function App() {
         activeThread.currentMode,
         prefs.bypass
       );
-      setMessages((prev) =>
-        // A fast turn may have already refreshed history (which includes this
-        // message); don't duplicate it.
-        prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
-      );
+      setMessages((prev) => {
+        // A fast turn may have already refreshed history (which includes
+        // this message, placeholder already gone) — don't duplicate it.
+        if (prev.some((m) => m.seq === sent.seq))
+          return prev.filter((m) => m.seq !== OPTIMISTIC_SEQ);
+        return prev.map((m) => (m.seq === OPTIMISTIC_SEQ ? sent : m));
+      });
       // The first turn is also what names the thread, and that name is
       // written server-side — without re-reading, the row the user is
       // looking at keeps saying "New thread" until something else refreshes.
@@ -3874,6 +3912,9 @@ export default function App() {
       // Chat-only mode never answers, so never leave the composer locked.
       if (!flight?.selected) setBusy(false);
     } catch (err) {
+      // The send itself failed — the optimistic echo would otherwise sit
+      // there forever claiming a message was sent that never was.
+      setMessages((prev) => prev.filter((m) => m.seq !== OPTIMISTIC_SEQ));
       setBusy(false);
       fail(err);
     }
@@ -3890,21 +3931,36 @@ export default function App() {
         fail("No working changes to review.");
         return;
       }
+      const reviewText =
+        "Review my working changes. Point out correctness bugs, then anything " +
+        "over-built. Be specific about file and line; skip praise.";
+      setMessages((prev) => [
+        ...prev,
+        {
+          seq: OPTIMISTIC_SEQ,
+          ts: new Date().toISOString(),
+          role: "user",
+          mode: thread.currentMode,
+          content: reviewText,
+        },
+      ]);
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
       const sent = await api.sendMessage(
         project.hash,
         thread.id,
-        "Review my working changes. Point out correctness bugs, then anything " +
-          "over-built. Be specific about file and line; skip praise.",
+        reviewText,
         thread.currentMode,
         prefs.bypass
       );
-      setMessages((prev) =>
-        prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
-      );
+      setMessages((prev) => {
+        if (prev.some((m) => m.seq === sent.seq))
+          return prev.filter((m) => m.seq !== OPTIMISTIC_SEQ);
+        return prev.map((m) => (m.seq === OPTIMISTIC_SEQ ? sent : m));
+      });
       if (!flight?.selected) setBusy(false);
     } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.seq !== OPTIMISTIC_SEQ));
       setBusy(false);
       fail(err);
     }
@@ -4900,8 +4956,10 @@ export default function App() {
               models={
                 modelsByAgent[framingExecutor ?? flight?.selected ?? ""]
               }
+              agentModels={modelsByAgent}
               onPickExecutor={onPickFramingExecutor}
               onPickModel={onPickFramingModel}
+              onProbeAgent={probeAgentModels}
               onOpenProject={onAddProject}
               onCloneRepository={onCloneRepository}
               onComposerSend={onOnboardingComposerSend}

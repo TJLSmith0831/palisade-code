@@ -4119,6 +4119,83 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     expect(await screen.findByTestId("models-none")).toBeDefined();
   });
 
+  it("removes the model picker for a chain executor instead of probing the chain as an agent", async () => {
+    // A saved chain runs several agents in sequence, each with its own
+    // model — `chain:<name>` used to get passed straight to `list_models`
+    // as if it were an agent id, and the backend rejected it with
+    // "unknown or unavailable agent `chain:ship`".
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    const listModels = vi.fn().mockResolvedValue({
+      configId: "model",
+      current: "m1",
+      models: [{ id: "m1", name: "Model One" }],
+    });
+    let currentExecutor = "chain:ship";
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread A",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+            executor: currentExecutor,
+          },
+        ]);
+      if (cmd === "set_thread_executor") {
+        currentExecutor = args?.executor as string;
+        return Promise.resolve({ executor: currentExecutor });
+      }
+      if (cmd === "list_chains")
+        return Promise.resolve([
+          {
+            name: "ship",
+            nodes: {
+              designer: { role: "designer", guideline: "", agent: "claude" },
+            },
+            edges: [],
+            entry: "designer",
+          },
+        ]);
+      if (cmd === "list_models") return listModels(args);
+      return baseImpl?.(cmd, args) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("executor-btn")).toHaveTextContent("ship")
+    );
+
+    expect(screen.queryByTestId("model-btn")).not.toBeInTheDocument();
+
+    // Switch away, then back onto the chain — picking it is exactly the
+    // path that used to call `list_models` with "chain:ship" as the agent
+    // id and get "unknown or unavailable agent `chain:ship`" back.
+    fireEvent.click(screen.getByTestId("executor-btn"));
+    fireEvent.click(await screen.findByTestId("executor-opt-claude"));
+    await waitFor(() =>
+      expect(screen.getByTestId("executor-btn")).toHaveTextContent(/claude/i)
+    );
+
+    fireEvent.click(screen.getByTestId("executor-btn"));
+    fireEvent.click(await screen.findByTestId("executor-opt-chain:ship"));
+    await waitFor(() =>
+      expect(screen.getByTestId("executor-btn")).toHaveTextContent("ship")
+    );
+    expect(screen.queryByTestId("model-btn")).not.toBeInTheDocument();
+    expect(listModels).not.toHaveBeenCalledWith({
+      projectHash: "proj-1",
+      agentId: "chain:ship",
+    });
+  });
+
   it("has a standalone permission-mode icon button, default Accept, that requires confirmation to enable Bypass and persists per-thread", async () => {
     setupWithThread("claude");
     render(<App />);
@@ -4287,6 +4364,79 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         model: null,
         bypass: true,
       })
+    );
+  });
+
+  it("renders the user's own message immediately, before the backend round-trip resolves", async () => {
+    // `send_message` also spawns/waits on the executor session before it
+    // resolves — a cold agent spawn can take seconds. The bubble used to
+    // wait for that round-trip, so the user's own message didn't appear
+    // until the agent's reply did. Held open here to prove the bubble
+    // renders before send_message ever resolves.
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    let resolveSend: (v: unknown) => void = () => {};
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "send_message")
+        return new Promise((resolve) => {
+          resolveSend = resolve;
+        });
+      return baseImpl?.(cmd, args) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "Hello world" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+
+    // Still in flight — send_message hasn't resolved — but the bubble is
+    // already there.
+    expect(screen.getByTestId("messages")).toHaveTextContent("Hello world");
+
+    resolveSend({
+      seq: 1,
+      ts: "2026-08-12T00:00:00Z",
+      role: "user",
+      mode: "spec",
+      content: "Hello world",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("messages")).toHaveTextContent("Hello world")
+    );
+    // Reconciled with the real message, not duplicated.
+    expect(
+      screen.getAllByText("Hello world", { exact: false }).length
+    ).toBeLessThanOrEqual(1);
+  });
+
+  it("drops the optimistic echo if the send itself fails", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "send_message") return Promise.reject(new Error("boom"));
+      return baseImpl?.(cmd, args) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "Hello world" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+
+    expect(screen.getByTestId("messages")).toHaveTextContent("Hello world");
+    await waitFor(() =>
+      expect(screen.getByTestId("messages")).not.toHaveTextContent(
+        "Hello world"
+      )
     );
   });
 
