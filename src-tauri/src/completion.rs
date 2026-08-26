@@ -3,6 +3,7 @@
 //! Spawns a bundled `llama-server` process, sends FIM prompts over HTTP, and
 //! returns the completion text plus model latency for telemetry.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -555,15 +556,32 @@ fn sidecar_binary_name_with_target() -> String {
     format!("llama-server-{target}")
 }
 
+/// Ports already handed out but not yet bound by the child that asked for
+/// them. The probe listener below has to be dropped before `llama-server`
+/// can bind, so a port is unowned for a moment; without this, a second
+/// caller in that window probes the same port successfully and both
+/// children race for it.
+///
+/// ponytail: in-process only — a second Palisade instance (or the test
+/// suite running beside a dev app) can still be handed a port this process
+/// just released. Closing that needs spawn to retry on the next port when
+/// the child fails to come up healthy.
+static CLAIMED_PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+
 fn find_free_port() -> Res<u16> {
     const START: u16 = 18080;
     const END: u16 = 18180;
 
+    let mut claimed = CLAIMED_PORTS.lock().unwrap();
     for port in START..=END {
+        if claimed.contains(&port) {
+            continue;
+        }
         let addr = format!("127.0.0.1:{port}");
         match TcpListener::bind(&addr) {
             Ok(listener) => {
                 if let Ok(local) = listener.local_addr() {
+                    claimed.insert(local.port());
                     return Ok(local.port());
                 }
             }
@@ -812,6 +830,18 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
 
         server.terminate();
         assert!(!server.is_alive());
+    }
+
+    // Found dogfooding: the suite failed intermittently only while the dev
+    // app was running, because its sidecar owns 18080 — the first port this
+    // probes. The probe listener is dropped before the number is returned,
+    // so two callers in a row are handed the same port and the second child
+    // never gets to bind it.
+    #[test]
+    fn two_callers_are_not_handed_the_same_port() {
+        let a = find_free_port().unwrap();
+        let b = find_free_port().unwrap();
+        assert_ne!(a, b, "a port handed out once must not be offered again");
     }
 
     #[test]
