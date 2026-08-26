@@ -19,7 +19,15 @@ pub(crate) fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
     if include_hidden {
         return false;
     }
-    name.starts_with('.') || name == "node_modules" || name == "target"
+    // `__pycache__` joins node_modules/target as generated build output: not
+    // worth listing, and — because a test run writes into it — not a change
+    // the UI should react to either. Left out of this list, a pytest run
+    // reported its own `.pyc` writes as source edits and flagged its own
+    // results as stale the moment it finished.
+    name.starts_with('.')
+        || name == "node_modules"
+        || name == "target"
+        || name == "__pycache__"
 }
 
 #[tauri::command]

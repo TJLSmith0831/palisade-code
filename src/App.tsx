@@ -3541,6 +3541,11 @@ export default function App() {
       // The tree and the ⌘P palette both cache; without this they keep
       // showing files the agent already renamed or deleted.
       filesCache.current.delete(payload.projectHash);
+      // Test results recorded before this write describe code that no longer
+      // exists. An agent turn writing directly to disk is the most common way
+      // code changes here, so staleness cannot hang off the editor's own save
+      // handler alone — that only sees what the user typed.
+      setLastEditAt(Date.now());
       for (const path of payload.paths) {
         invalidateFileTree(path);
       }

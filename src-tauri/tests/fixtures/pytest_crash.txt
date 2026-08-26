@@ -1,0 +1,57 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.13/bin/python3
+cachedir: .pytest_cache
+rootdir: /private/tmp/claude-501/-Users-tjlsmith0831-dev-palisade-code--claude-worktrees-palisade-debugger-terminal-tests-599336/8f9ddff2-3d1c-4e8f-83f6-38c7fa7afe46/scratchpad/dogfood
+plugins: anyio-4.9.0
+collecting ... collected 5 items
+
+tests/test_app.py::test_subtotal_adds_line_items PASSED                  [ 20%]
+tests/test_app.py::test_discount_halves PASSED                           [ 40%]
+tests/test_app.py::test_discount_ignores_unknown_code FAILED             [ 60%]
+tests/test_app.py::test_tax SKIPPED (not implemented yet)                [ 80%]
+tests/test_app.py::test_convert_crashes_on_unknown_currency FAILED       [100%]
+
+=================================== FAILURES ===================================
+______________________ test_discount_ignores_unknown_code ______________________
+
+    def test_discount_ignores_unknown_code():
+>       assert discount(100, "NOPE") == 99
+E       AssertionError: assert 100 == 99
+E        +  where 100 = discount(100, 'NOPE')
+
+tests/test_app.py:15: AssertionError
+___________________ test_convert_crashes_on_unknown_currency ___________________
+
+    def test_convert_crashes_on_unknown_currency():
+>       assert asyncio.run(convert(100, "GBP")) == 100
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_app.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:725: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+app.py:24: in convert
+    rate = await fetch_rate(currency)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+currency = 'GBP'
+
+    async def fetch_rate(currency):
+        await asyncio.sleep(0.01)
+>       return {"USD": 1.0, "EUR": 0.9}[currency]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'GBP'
+
+app.py:20: KeyError
+=========================== short test summary info ============================
+FAILED tests/test_app.py::test_discount_ignores_unknown_code - AssertionError...
+FAILED tests/test_app.py::test_convert_crashes_on_unknown_currency - KeyError...
+==================== 2 failed, 2 passed, 1 skipped in 0.04s ====================

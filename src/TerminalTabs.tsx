@@ -49,30 +49,38 @@ export default function TerminalTabs({
   }, [projectHash]);
 
   const addTab = useCallback(() => {
-    setTabs((previous) => {
-      if (previous.length >= MAX_TERMINAL_TABS) return previous;
-      const index = nextIndex.current++;
-      const tab = { id: `${projectHash}:${index}`, label: String(index) };
-      setActive(tab.id);
-      return [...previous, tab];
-    });
-  }, [projectHash]);
+    // The index is allocated and the tab built out here, not inside the
+    // `setTabs` updater. React double-invokes updaters in development, so a
+    // `nextIndex.current++` in there burned two numbers per click: the strip
+    // read "Terminal 1, 2, 4", and the skipped id was the one the backend
+    // had no PTY under. State updaters must be pure.
+    if (tabs.length >= MAX_TERMINAL_TABS) return;
+    const index = nextIndex.current++;
+    const tab = { id: `${projectHash}:${index}`, label: String(index) };
+    setTabs((previous) =>
+      previous.length >= MAX_TERMINAL_TABS ? previous : [...previous, tab]
+    );
+    setActive(tab.id);
+  }, [projectHash, tabs.length]);
 
-  const closeTab = useCallback((id: string) => {
-    setTabs((previous) => {
+  const closeTab = useCallback(
+    (id: string) => {
       // The strip always keeps one shell; "close the last terminal" is
       // "collapse the panel", which is the panel's own control.
-      if (previous.length <= 1) return previous;
-      const index = previous.findIndex((tab) => tab.id === id);
-      if (index === -1) return previous;
-      const next = previous.filter((tab) => tab.id !== id);
+      if (tabs.length <= 1) return;
+      const index = tabs.findIndex((tab) => tab.id === id);
+      if (index === -1) return;
+      const next = tabs.filter((tab) => tab.id !== id);
+      setTabs(next);
+      // Focus moves to the neighbour, computed out here for the same reason
+      // `addTab` allocates out here: nothing impure inside an updater.
       setActive((current) =>
         current === id ? next[Math.min(index, next.length - 1)].id : current
       );
-      return next;
-    });
-    api.terminalKill(id).catch(() => {});
-  }, []);
+      api.terminalKill(id).catch(() => {});
+    },
+    [tabs]
+  );
 
   // Through a ref so a caller that re-renders (App does, constantly) can't
   // re-fire this effect and re-announce a tab that never changed.

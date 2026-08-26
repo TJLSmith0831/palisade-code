@@ -399,52 +399,125 @@ fn parse_pytest(output: &str) -> Vec<TestCase> {
     cases
 }
 
-/// Hangs each failure's reason (from the `short test summary info` block)
-/// and traceback line onto its own case.
+/// Hangs each failure's reason and traceback line onto its own case.
 ///
-/// The traceback location has to be attributed by section header
-/// (`____ test_two ____`), not by file: two failures in one file both print
-/// `tests/test_a.py:N`, and matching on the file alone gives every failure
-/// the first one's line — a gutter marker on the wrong statement.
+/// Both have to be attributed by section header (`____ test_two ____`), not
+/// by file: two failures in one file both print `tests/test_a.py:N`, and
+/// matching on the file alone gives every failure the first one's line — a
+/// gutter marker on the wrong statement.
 fn attach_pytest_details(lines: &[String], cases: &mut [TestCase]) {
     let mut section: Option<String> = None;
+    let mut reason: Vec<String> = vec![];
+
     for line in lines {
         let trimmed = line.trim();
 
-        // `FAILED tests/test_a.py::test_two - assert 1 == 2`
-        for prefix in ["FAILED ", "ERROR "] {
-            let Some(rest) = trimmed.strip_prefix(prefix) else { continue };
-            let (id, reason) = rest.split_once(" - ").unwrap_or((rest, ""));
-            if let Some(case) = cases.iter_mut().find(|c| c.name == id.trim()) {
-                if !reason.is_empty() {
-                    case.message = Some(reason.trim().to_string());
-                }
-            }
-        }
-
-        // `___________________ test_two ___________________`
-        if trimmed.starts_with('_') && trimmed.ends_with('_') {
-            let name = trimmed.trim_matches('_').trim();
-            section = (!name.is_empty()).then(|| name.to_string());
+        if let Some(name) = section_header(trimmed) {
+            flush_pytest_section(&mut section, &mut reason, cases);
+            section = Some(name);
             continue;
         }
-        // A banner (`==== FAILURES ====`) ends the previous section.
+        // A banner (`==== short test summary info ====`) ends the last one.
         if trimmed.starts_with('=') {
-            section = None;
+            flush_pytest_section(&mut section, &mut reason, cases);
             continue;
         }
 
-        // `tests/test_a.py:7: AssertionError`
-        let Some(current) = section.as_deref() else { continue };
-        let Some((location, _)) = trimmed.split_once(": ") else { continue };
-        let Some((file, line_no)) = file_line(location) else { continue };
+        let Some(current) = section.clone() else {
+            // Outside the FAILURES block, the only useful line is the short
+            // summary — kept as a fallback for runs with no traceback
+            // (`--tb=no`), where it is all there is.
+            summary_reason(trimmed, cases);
+            continue;
+        };
+
+        // `E       AssertionError: assert 100 == 99` — the real message.
+        // pytest elides this in its short summary (`AssertionError...`), so
+        // the traceback is the only place the assertion itself survives.
+        if let Some(detail) = trimmed.strip_prefix("E ") {
+            let detail = detail.trim();
+            if !detail.is_empty() {
+                reason.push(detail.to_string());
+            }
+            continue;
+        }
+
+        // `tests/test_app.py:24:` — a frame location. The *first* one in the
+        // section is the test's own line, which is where the user put the
+        // test and what the gutter should mark; later ones descend into
+        // callees. Deeper frames are skipped by only taking the first.
+        let Some((location, _)) = trimmed.split_once(':') else { continue };
+        if !location.contains('.') || location.contains(' ') {
+            continue;
+        }
+        let Some((file, line_no)) = file_line(trimmed) else { continue };
         let suffix = format!("::{current}");
         for case in cases.iter_mut() {
-            if case.line.is_none()
+            if case.status != TestStatus::Passed
+                && case.line.is_none()
                 && case.name.ends_with(&suffix)
                 && case.file.as_deref() == Some(file.as_str())
             {
                 case.line = Some(line_no);
+            }
+        }
+    }
+    flush_pytest_section(&mut section, &mut reason, cases);
+}
+
+/// `___________ test_two ___________`, but not the `_ _ _ _ _` rules pytest
+/// draws *between frames of one failure* — read as a header those renamed
+/// the current section to nonsense, and every location after one was
+/// attributed to no test at all.
+fn section_header(trimmed: &str) -> Option<String> {
+    if !trimmed.starts_with('_') || !trimmed.ends_with('_') {
+        return None;
+    }
+    let name = trimmed.trim_matches('_').trim();
+    if name.is_empty() {
+        return None;
+    }
+    // `_ _ _ _ _` survives the trim as `_ _ _`: every token is a lone
+    // underscore. A real header leaves the test's name behind.
+    if name.split_whitespace().all(|token| token.chars().all(|c| c == '_')) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn flush_pytest_section(
+    section: &mut Option<String>,
+    reason: &mut Vec<String>,
+    cases: &mut [TestCase],
+) {
+    let Some(name) = section.take() else {
+        reason.clear();
+        return;
+    };
+    let message = std::mem::take(reason).join("\n");
+    if message.is_empty() {
+        return;
+    }
+    let suffix = format!("::{name}");
+    for case in cases.iter_mut() {
+        if case.name.ends_with(&suffix) {
+            case.message = Some(message.clone());
+        }
+    }
+}
+
+/// `FAILED tests/test_a.py::test_two - assert 1 == 2`. Only used where the
+/// traceback gave nothing, since pytest truncates this line.
+fn summary_reason(trimmed: &str, cases: &mut [TestCase]) {
+    for prefix in ["FAILED ", "ERROR "] {
+        let Some(rest) = trimmed.strip_prefix(prefix) else { continue };
+        let (id, reason) = rest.split_once(" - ").unwrap_or((rest, ""));
+        if reason.is_empty() {
+            continue;
+        }
+        if let Some(case) = cases.iter_mut().find(|c| c.name == id.trim()) {
+            if case.message.is_none() {
+                case.message = Some(reason.trim().to_string());
             }
         }
     }
@@ -504,6 +577,9 @@ mod tests {
     const VITEST: &str = include_str!("../tests/fixtures/vitest.txt");
     const PYTEST: &str = include_str!("../tests/fixtures/pytest.txt");
     const GO: &str = include_str!("../tests/fixtures/go.txt");
+    /// A pytest run where one test crashes inside application code rather
+    /// than failing an assertion — captured during the dogfood pass.
+    const PYTEST_CRASH: &str = include_str!("../tests/fixtures/pytest_crash.txt");
 
     fn find<'a>(report: &'a TestReport, needle: &str) -> &'a TestCase {
         report
@@ -676,6 +752,69 @@ mod tests {
     fn go_skip_does_not_borrow_a_neighbours_failure_location() {
         let report = parse(GO);
         assert_eq!(find(&report, "TestSkipped").message, None);
+    }
+
+
+    // ------------------------------------ regressions found while dogfooding
+
+    #[test]
+    fn a_test_that_crashes_in_app_code_still_gets_its_own_test_line() {
+        // Dogfood regression: the explorer showed no location at all for a
+        // test that raised inside the application instead of failing an
+        // assertion, so there was nothing to click and no gutter mark. The
+        // traceback names the test's own line before descending into the
+        // callee; that line is what the user asked for.
+        let report = parse(PYTEST_CRASH);
+        let crashed = find(&report, "test_convert_crashes_on_unknown_currency");
+        assert_eq!(crashed.status, TestStatus::Failed);
+        assert_eq!(crashed.file.as_deref(), Some("tests/test_app.py"));
+        assert_eq!(crashed.line, Some(24), "{:?}", crashed);
+    }
+
+    #[test]
+    fn the_dashed_separators_inside_a_traceback_are_not_section_headers() {
+        // `_ _ _ _ _` divides frames within one failure. Read as a header it
+        // renamed the current section to garbage, and every location after
+        // it was attributed to nothing.
+        let report = parse(PYTEST_CRASH);
+        assert!(
+            !report.cases.iter().any(|c| c.name.contains("_ _")),
+            "a separator was parsed as a test: {:?}",
+            statuses(&report)
+        );
+    }
+
+    #[test]
+    fn a_failure_message_comes_from_the_traceback_not_pytests_truncated_summary() {
+        // Dogfood regression: every row read "AssertionError..." — pytest
+        // elides the reason in its short summary. The `E` lines carry the
+        // real one, which is the only part worth reading.
+        let report = parse(PYTEST_CRASH);
+        let failed = find(&report, "test_discount_ignores_unknown_code");
+        let message = failed.message.as_deref().unwrap_or("");
+        assert!(
+            message.contains("assert 100 == 99"),
+            "the actual assertion is missing: {message:?}"
+        );
+        assert!(!message.ends_with("..."), "still pytest's truncated summary: {message:?}");
+
+        let crashed = find(&report, "test_convert_crashes_on_unknown_currency");
+        assert!(
+            crashed.message.as_deref().unwrap_or("").contains("KeyError: 'GBP'"),
+            "crash reason lost: {:?}",
+            crashed.message
+        );
+    }
+
+    #[test]
+    fn the_dogfood_suite_parses_with_the_verdicts_the_runner_printed() {
+        let report = parse(PYTEST_CRASH);
+        let tally = |want: TestStatus| {
+            report.cases.iter().filter(|c| c.status == want).count()
+        };
+        assert_eq!(tally(TestStatus::Passed), 2);
+        assert_eq!(tally(TestStatus::Failed), 2);
+        assert_eq!(tally(TestStatus::Skipped), 1);
     }
 
     // ------------------------------------------------- order and staleness

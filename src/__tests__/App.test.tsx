@@ -476,6 +476,55 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     expect(await screen.findByTestId("debug-start")).toBeDefined();
   });
 
+  it("marks test results stale when an agent writes to disk, not just on a manual save", async () => {
+    // Dogfood regression: staleness was driven only by the editor's own save
+    // handler. In Palisade an agent turn writes the file directly — the most
+    // common way code changes here — and the explorer went on presenting
+    // results for code that no longer existed.
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "verify_commands") return Promise.resolve([["test", "pytest"]]);
+      if (cmd === "list_verifications")
+        return Promise.resolve([
+          {
+            id: "v1",
+            projectHash: "p1",
+            threadId: null,
+            sessionId: null,
+            name: "test",
+            command: "pytest",
+            exitCode: 1,
+            outputTail: "",
+            gitHead: null,
+            // Long past, so any "now" beats it.
+            at: "2020-01-01T00:00:00Z",
+            tests: {
+              framework: "pytest",
+              parsed: true,
+              unexplainedFailure: false,
+              cases: [
+                { name: "a", status: "failed", file: "app.py", line: 3, message: "boom" },
+              ],
+            },
+          },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    fireEvent.click(screen.getByTestId("bp-tab-tests"));
+    expect(await screen.findByTestId("test-case-a")).toBeDefined();
+    expect(screen.queryByTestId("test-stale")).toBeNull();
+
+    act(() =>
+      emit("fs-changed", { projectHash: "proj-1", paths: ["app.py"] })
+    );
+
+    expect(await screen.findByTestId("test-stale")).toBeDefined();
+    // Still shown: hiding them loses the last thing actually known.
+    expect(screen.getByTestId("test-case-a")).toBeDefined();
+  });
+
   it("opens run configuration from the rail's Run icon", async () => {
     withRun([["dev", "pnpm start"]]);
     render(<App />);

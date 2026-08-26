@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 
 const render = (ui: React.ReactNode) => rtlRender(ui, { wrapper: MantineProvider });
 
@@ -230,5 +231,34 @@ describe("TerminalTabs", () => {
 
     await user.click(screen.getByTestId("terminal-close-2"));
     await waitFor(() => expect(onActive).toHaveBeenLastCalledWith("p:1"));
+  });
+
+  it("numbers new tabs consecutively under StrictMode", async () => {
+    // Regression (dogfood): the tab index was bumped inside a `setTabs`
+    // updater. React double-invokes updaters in development, so every click
+    // consumed two numbers and the strip read "Terminal 1, 2, 4" — and the
+    // skipped id was the one the backend had no PTY under, so writing to
+    // "tab 3" failed with "no terminal running". State updaters must be pure.
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <TerminalTabs projectHash="p" />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+
+    await user.click(screen.getByTestId("terminal-tab-new"));
+    await user.click(screen.getByTestId("terminal-tab-new"));
+
+    await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(3));
+    expect(
+      screen.getAllByTestId(/^terminal-tab-\d/).map((el) => el.textContent),
+    ).toEqual(["Terminal 1", "Terminal 2", "Terminal 3"]);
+
+    // And every tab shown has a PTY spawned under exactly its own id.
+    const spawned = invokeMock.mock.calls
+      .filter(([cmd]) => cmd === "terminal_spawn")
+      .map(([, args]) => (args as { terminalId: string }).terminalId);
+    for (const id of ["p:1", "p:2", "p:3"]) expect(spawned).toContain(id);
   });
 });

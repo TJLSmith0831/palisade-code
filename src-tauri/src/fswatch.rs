@@ -274,6 +274,29 @@ mod tests {
     }
 
     #[test]
+    fn ignores_compiled_python_caches() {
+        // Dogfood regression: running the test suite writes `__pycache__`
+        // into the project. Those events reached the UI as real file
+        // changes, which marked the test run's own results stale the moment
+        // it finished — every run came back flagged, so the flag meant
+        // nothing.
+        let root = Path::new("/p");
+        assert_eq!(
+            relative_if_interesting(root, Path::new("/p/tests/__pycache__/test_app.cpython-313.pyc")),
+            None
+        );
+        assert_eq!(
+            relative_if_interesting(root, Path::new("/p/__pycache__/app.cpython-313.pyc")),
+            None
+        );
+        // The source next to it is still very much interesting.
+        assert_eq!(
+            relative_if_interesting(root, Path::new("/p/tests/test_app.py")).as_deref(),
+            Some("tests/test_app.py")
+        );
+    }
+
+    #[test]
     fn ignores_paths_the_file_tree_hides() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
