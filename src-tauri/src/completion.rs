@@ -34,6 +34,9 @@ const FIM_END: &str = "<|endoftext|>";
 const DEFAULT_CTX_SIZE: u32 = 2048;
 const DEFAULT_N_GPU_LAYERS: u32 = 99;
 const DEFAULT_N_PREDICT: u32 = 128;
+/// n_predict used when the suffix is empty (cursor at true end-of-file).
+/// See the comment in `CompletionServer::complete`.
+const EOF_N_PREDICT: u32 = 32;
 const DEFAULT_TEMPERATURE: f64 = 0.0;
 // D4: repeat_penalty breaks the greedy-decoding repetition trap on the 0.8B
 // model; top_p is a second guard against probability concentration. Both are
@@ -202,7 +205,20 @@ impl CompletionServer {
     /// Sends a FIM prompt and returns the completion text plus model latency.
     pub fn complete(&self, file_path: &str, prefix: &str, suffix: &str) -> Res<CompletionResponse> {
         let prompt = build_fim_prompt(file_path, prefix, suffix);
-        let body = request_body(&prompt);
+        // True end-of-file (nothing after the cursor) gives FIM no suffix to
+        // anchor on. Measured on the bundled 0.8B model: this case
+        // deterministically produces a runaway hallucination — reimporting
+        // already-imported modules, inventing a second `main()` — that is
+        // already wrong at the first token and just keeps going to fill the
+        // budget. A smaller budget caps the damage to a line or two instead
+        // of an 18-line fabricated block, without disabling completions at
+        // EOF entirely (needed for e.g. finishing an open block at file end).
+        let n_predict = if suffix.trim().is_empty() {
+            EOF_N_PREDICT
+        } else {
+            DEFAULT_N_PREDICT
+        };
+        let body = request_body(&prompt, n_predict);
 
         let url = format!("http://127.0.0.1:{}/completion", self.port());
 
@@ -364,7 +380,7 @@ fn trim_suffix(suffix: &str) -> &str {
     }
 }
 
-fn request_body(prompt: &str) -> serde_json::Value {
+fn request_body(prompt: &str, n_predict: u32) -> serde_json::Value {
     // Stop on the model's own control tokens only. `"\n\n"` used to be in
     // here to curb repetition, but a blank line is normal *inside* a
     // completion. Measured against the bundled model on a TypeScript
@@ -381,7 +397,7 @@ fn request_body(prompt: &str) -> serde_json::Value {
 
     serde_json::json!({
         "prompt": prompt,
-        "n_predict": DEFAULT_N_PREDICT,
+        "n_predict": n_predict,
         "temperature": DEFAULT_TEMPERATURE,
         "repeat_penalty": DEFAULT_REPEAT_PENALTY,
         "top_p": DEFAULT_TOP_P,
@@ -618,7 +634,7 @@ mod tests {
     fn a_blank_line_no_longer_stops_the_completion() {
         // "\n\n" as a stop token cut every multi-line suggestion off at the
         // first blank line — the exact point a block completion gets useful.
-        let body = request_body("prompt");
+        let body = request_body("prompt", DEFAULT_N_PREDICT);
         let stops: Vec<String> = body["stop"]
             .as_array()
             .unwrap()
@@ -687,7 +703,7 @@ mod tests {
     #[test]
     fn request_body_stops_on_control_tokens_only() {
         let prompt = build_fim_prompt("f.py", "def f():", "\n    pass");
-        let body = request_body(&prompt);
+        let body = request_body(&prompt, DEFAULT_N_PREDICT);
 
         let stop = body.get("stop").and_then(|v| v.as_array()).unwrap();
         assert!(stop.iter().any(|s| s.as_str() == Some(FIM_SUFFIX)));
@@ -703,7 +719,7 @@ mod tests {
     fn request_body_includes_sampling_params_to_break_repetition_traps() {
         // D4: repeat_penalty (1.1) + top_p (0.95), temperature stays 0.0.
         let prompt = build_fim_prompt("f.py", "def f():", "\n    pass");
-        let body = request_body(&prompt);
+        let body = request_body(&prompt, DEFAULT_N_PREDICT);
 
         assert_eq!(
             body.get("repeat_penalty").and_then(|v| v.as_f64()),
@@ -719,6 +735,22 @@ mod tests {
             body.get("temperature").and_then(|v| v.as_f64()),
             Some(0.0),
             "temperature stays 0.0 for deterministic output"
+        );
+    }
+
+    #[test]
+    fn request_body_honors_a_caller_supplied_n_predict() {
+        // Empty suffix (true end-of-file): measured on the bundled 0.8B
+        // model, this deterministically produces a runaway hallucinated
+        // block that eats the full n_predict budget from the first token.
+        // `complete()` requests a smaller budget in that case; verify
+        // request_body actually carries it through rather than defaulting.
+        let prompt = build_fim_prompt("f.py", "def f():\n    pass\n", "");
+        let body = request_body(&prompt, EOF_N_PREDICT);
+
+        assert_eq!(
+            body.get("n_predict").and_then(|v| v.as_u64()),
+            Some(EOF_N_PREDICT as u64)
         );
     }
 
