@@ -274,6 +274,20 @@ describe("GhostTextPlugin", () => {
       // the model regenerating it IS spurious. Strip it.
       expect(stripStarterOverlap("if x:\n    ", "    y = 1")).toBe("y = 1");
     });
+
+    it("strips a duplicated triple-quote even though the prefix doesn't end in whitespace", () => {
+      // Reported bug: typing `"""` to open a docstring, the model echoes
+      // its own `"""` back with a leading space before continuing — prefix
+      // ends in the quote chars (not whitespace), so the leading-space
+      // strip never used to fire and the whole overlap check bailed out on
+      // an empty firstWord, leaving `""" """docstring...` on screen.
+      expect(
+        stripStarterOverlap(
+          'def foo():\n    """',
+          ' """docstring summary here.\n\n    """'
+        )
+      ).toBe('docstring summary here.\n\n    """');
+    });
   });
 
   it("typing a starter word strips the regenerated prefix from the ghost text", async () => {

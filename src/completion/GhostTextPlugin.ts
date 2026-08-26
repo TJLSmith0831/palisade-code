@@ -230,8 +230,18 @@ export function stripStarterOverlap(
     lastWs === -1 ? trimmedPrefix : trimmedPrefix.slice(lastWs + 1);
   if (!lastWord) return result;
 
-  const firstWs = result.search(/\s/);
-  const firstWord = firstWs === -1 ? result : result.slice(0, firstWs);
+  // Skip the completion's own leading whitespace only to *locate* the word
+  // to compare — a model that regenerates a token you just typed sometimes
+  // prefixes it with a stray space or newline even when the prefix did not
+  // end in whitespace (observed with a `"""` docstring opener: prefix ends
+  // in the quote chars themselves, but the completion comes back as
+  // ` """docstring...`). Without this, firstWord would be computed as ""
+  // and the whole overlap check would bail out, leaving the duplicate
+  // `"""` sitting in the ghost text uncaught.
+  const leadingWs = result.match(/^\s*/)?.[0].length ?? 0;
+  const rest = result.slice(leadingWs);
+  const firstWs = rest.search(/\s/);
+  const firstWord = firstWs === -1 ? rest : rest.slice(0, firstWs);
   if (!firstWord) return result;
 
   const max = Math.min(lastWord.length, firstWord.length);
@@ -241,8 +251,8 @@ export function stripStarterOverlap(
   }
   if (overlap === 0) return result;
 
-  let stripLen = overlap;
-  if (prefixEndsWithWs && /\s/.test(result[overlap] ?? "")) {
+  let stripLen = leadingWs + overlap;
+  if (prefixEndsWithWs && /\s/.test(result[stripLen] ?? "")) {
     stripLen += 1;
   }
   return result.slice(stripLen);
