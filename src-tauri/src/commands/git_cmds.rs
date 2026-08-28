@@ -8,7 +8,7 @@ use crate::{git, git_bin, project_root, thread_meta, Res};
 /// Read paths only. Staging and committing still act on the project root —
 /// pointing a write at a worktree the user is merely *watching* is how edits
 /// land in the wrong tree, so the panes that offer those stay where they are.
-fn read_root(project_hash: &str, thread_id: Option<&str>) -> Res<PathBuf> {
+pub(crate) fn read_root(project_hash: &str, thread_id: Option<&str>) -> Res<PathBuf> {
     let root = project_root(project_hash)?;
     let worktree = thread_id
         .and_then(|id| thread_meta(project_hash, id))

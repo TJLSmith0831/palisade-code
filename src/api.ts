@@ -712,15 +712,18 @@ export type SpecChange = {
 /** A propose turn produced more than one change; the user picks which. */
 export type SpecLinkAmbiguous = { threadId: string; names: string[] };
 
-export const listSpecChanges = (projectHash: string) =>
-  invoke<SpecChange[]>("list_spec_changes", { projectHash });
-export const showSpecChange = (projectHash: string, name: string) =>
-  invoke<unknown | null>("show_spec_change", { projectHash, name });
+// threadId: an agent's proposal lands in the thread's isolated worktree, not
+// the project root (OPE-01) — pass it so the backend reads the tree that
+// actually has the change on disk, not always the main checkout.
+export const listSpecChanges = (projectHash: string, threadId?: string | null) =>
+  invoke<SpecChange[]>("list_spec_changes", { projectHash, threadId: threadId ?? null });
+export const showSpecChange = (projectHash: string, name: string, threadId?: string | null) =>
+  invoke<unknown | null>("show_spec_change", { projectHash, threadId: threadId ?? null, name });
 /** `null` means "openspec isn't installed, so we can't tell" — not "invalid". */
-export const validateSpecChanges = (projectHash: string) =>
-  invoke<boolean | null>("validate_spec_changes", { projectHash });
-export const archiveSpecChange = (projectHash: string, name: string) =>
-  invoke<string>("archive_spec_change", { projectHash, name });
+export const validateSpecChanges = (projectHash: string, threadId?: string | null) =>
+  invoke<boolean | null>("validate_spec_changes", { projectHash, threadId: threadId ?? null });
+export const archiveSpecChange = (projectHash: string, name: string, threadId?: string | null) =>
+  invoke<string>("archive_spec_change", { projectHash, threadId: threadId ?? null, name });
 export const setSpecChange = (
   projectHash: string,
   threadId: string,

@@ -4713,6 +4713,7 @@ export default function App() {
             <div className="ds-panel-body">
               <SpecPane
                 projectHash={project.hash}
+                threadId={thread?.id}
                 linkedChange={thread?.openSpecChangeName}
                 onOpenSpec={(name) => tabs.openSpec(name)}
               />

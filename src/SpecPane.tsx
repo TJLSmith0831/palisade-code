@@ -20,6 +20,11 @@ import { describeError } from "./errors";
 
 type Props = {
   projectHash: string;
+  /** OPE-01: an agent's proposal lands in this thread's isolated worktree,
+   *  not the project root — without it, changes an agent just created are
+   *  invisible here ("No changes in this project") even though they exist
+   *  on disk. */
+  threadId?: string | null;
   /** The change the active thread is linked to, highlighted in the list. */
   linkedChange?: string | null;
   /** Called when the user clicks a change name — opens it as a spec tab. */
@@ -36,6 +41,7 @@ type Props = {
  */
 export default function SpecPane({
   projectHash,
+  threadId,
   linkedChange,
   onOpenSpec,
 }: Props) {
@@ -50,16 +56,17 @@ export default function SpecPane({
   // row's archive button until the CLI returns.
   const [archiving, setArchiving] = useState<Set<string>>(new Set());
 
-  // Results are cached per project — the CLI is a process spawn, not a cheap
-  // read, so it is asked on project switch, on the filesystem event, or when
-  // the user asks. Never on every render.
+  // Results are cached per project+thread — a thread with its own worktree
+  // can see different changes than the project root (OPE-01), so the cache
+  // key has to include it or switching threads would show stale results.
+  const cacheKey = `${projectHash}:${threadId ?? ""}`;
   const cache = useRef(
     new Map<string, { changes: SpecChange[]; valid: boolean | null }>()
   );
 
   const load = useCallback(
     async (force: boolean) => {
-      const cached = cache.current.get(projectHash);
+      const cached = cache.current.get(cacheKey);
       if (cached && !force) {
         setChanges(cached.changes);
         setValid(cached.valid);
@@ -79,12 +86,12 @@ export default function SpecPane({
 
       // List — fast, updates the moment it's back.
       api
-        .listSpecChanges(projectHash)
+        .listSpecChanges(projectHash, threadId)
         .then((listed) => {
           setChanges(listed);
-          cache.current.set(projectHash, {
+          cache.current.set(cacheKey, {
             changes: listed,
-            valid: cache.current.get(projectHash)?.valid ?? null,
+            valid: cache.current.get(cacheKey)?.valid ?? null,
           });
           setLoading(false);
         })
@@ -96,12 +103,12 @@ export default function SpecPane({
       // Validation — slower, runs in the background. The lime dots stay up
       // until this resolves, but the list above is already updated.
       api
-        .validateSpecChanges(projectHash)
+        .validateSpecChanges(projectHash, threadId)
         .then((isValid) => {
           setValid(isValid);
-          const existing = cache.current.get(projectHash);
+          const existing = cache.current.get(cacheKey);
           if (existing) {
-            cache.current.set(projectHash, { ...existing, valid: isValid });
+            cache.current.set(cacheKey, { ...existing, valid: isValid });
           }
         })
         .catch(() => {
@@ -109,7 +116,7 @@ export default function SpecPane({
         })
         .finally(() => setValidating(false));
     },
-    [projectHash]
+    [projectHash, threadId, cacheKey]
   );
 
   useEffect(() => {
@@ -124,7 +131,7 @@ export default function SpecPane({
       ({ payload }) => {
         if (payload.projectHash !== projectHash) return;
         if (payload.paths.some((path) => path.includes("openspec/"))) {
-          cache.current.delete(projectHash);
+          cache.current.delete(cacheKey);
           load(true);
         }
       }
@@ -132,7 +139,7 @@ export default function SpecPane({
     return () => {
       changed.then((un) => un());
     };
-  }, [projectHash, load]);
+  }, [projectHash, cacheKey, load]);
 
   const archiveChange = useCallback(
     async (name: string) => {
@@ -140,7 +147,7 @@ export default function SpecPane({
         setArchiving((prev) => new Set(prev).add(name));
       });
       try {
-        await api.archiveSpecChange(projectHash, name);
+        await api.archiveSpecChange(projectHash, name, threadId);
         load(true);
       } catch (err) {
         setError(describeError(err));
@@ -152,7 +159,7 @@ export default function SpecPane({
         });
       }
     },
-    [projectHash, load]
+    [projectHash, threadId, load]
   );
 
   const sorted = useMemo(

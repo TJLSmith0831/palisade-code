@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 import SpecPane from "../SpecPane";
 
 const renderPane = (props?: {
+  threadId?: string | null;
   linkedChange?: string | null;
   onOpenSpec?: (name: string) => void;
 }) =>
@@ -59,6 +60,38 @@ describe("SpecPane", () => {
     // openspec's own status is attributed, never presented as Palisade's verdict.
     expect(screen.getByText(/openspec: in-progress/)).toBeDefined();
     expect(screen.queryByText(/^complete$/i)).toBeNull();
+  });
+
+  it("forwards the active thread's id so a proposal in its isolated worktree is visible (OPE-01)", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_spec_changes") {
+        expect(args?.threadId).toBe("thread-1");
+        return Promise.resolve([
+          {
+            name: "add-shout-flag",
+            completedTasks: 0,
+            totalTasks: 4,
+            lastModified: "2026-08-27T00:00:00Z",
+            status: "in-progress",
+          },
+        ]);
+      }
+      if (cmd === "validate_spec_changes") {
+        expect(args?.threadId).toBe("thread-1");
+        return Promise.resolve(true);
+      }
+      return Promise.reject(new Error(`unexpected command ${cmd}`));
+    });
+
+    renderPane({ threadId: "thread-1" });
+
+    await waitFor(() =>
+      expect(screen.getByText("add-shout-flag")).toBeDefined()
+    );
+    expect(invokeMock).toHaveBeenCalledWith(
+      "list_spec_changes",
+      expect.objectContaining({ projectHash: "proj-1", threadId: "thread-1" })
+    );
   });
 
   it("distinguishes 'openspec is not installed' from 'validation failed'", async () => {
