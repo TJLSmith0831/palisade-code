@@ -128,6 +128,7 @@ import McpPane from "./McpPane";
 // Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
 // nobody loads until they open the panel.
 const DatabasePanel = lazy(() => import("./DatabasePanel"));
+const SessionsPanel = lazy(() => import("./SessionsPanel"));
 const DataGridTab = lazy(() => import("./DataGridTab"));
 const SqlQueryTab = lazy(() => import("./SqlQueryTab"));
 import RunPanel from "./RunPanel";
@@ -4799,6 +4800,14 @@ export default function App() {
                 onDelete={onDeleteThread}
                 onArchive={onArchiveThread}
               />
+              {/* THR-12/THR-13: sessions are a different thing from threads
+                  (CLAUDE.md's Thread-vs-Session model) — this is the only
+                  place busy/idle state and agent attribution per session
+                  are inspectable. */}
+              <h2 className="ds-section-heading">Sessions</h2>
+              <Suspense fallback={<div style={{ padding: 12 }}>Loading…</div>}>
+                <SessionsPanel projectHash={project.hash} threads={threads} />
+              </Suspense>
             </div>
           </>
         );
