@@ -39,6 +39,10 @@ type Props = {
    *  asked for them — the gutter draws "unknown" until it hears back, which
    *  stops being honest the moment an adapter has answered. */
   onBreakpointsChange?: (breakpoints: Record<string, api.Breakpoint[]>) => void;
+  /** Every breakpoint in the project, keyed by path — the same state the
+   *  editor gutter (DEB-02) toggles. Listed here too: a gutter marker is only
+   *  visible in whichever file happens to be open. */
+  breakpoints?: Record<string, api.Breakpoint[]>;
 };
 
 /**
@@ -57,6 +61,7 @@ export default function DebugPanel({
   onOpen,
   onStoppedAt,
   onBreakpointsChange,
+  breakpoints = {},
 }: Props) {
   const [adapter, setAdapter] = useState<DebugAdapterInfo | null | undefined>(undefined);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -243,6 +248,17 @@ export default function DebugPanel({
     [watchValues]
   );
 
+  // Flattened across every file so the list doesn't care which tab is open —
+  // the gutter marker (DEB-02's toggle) is the source of truth, this just
+  // shows all of it at once.
+  const breakpointEntries = useMemo(
+    () =>
+      Object.entries(breakpoints)
+        .flatMap(([path, list]) => list.map((b) => ({ ...b, path })))
+        .sort((a, b) => (a.path === b.path ? a.line - b.line : a.path.localeCompare(b.path))),
+    [breakpoints]
+  );
+
   const live = sessionId != null;
   const canStart = adapter?.installed === true && launch != null && !live && !starting;
 
@@ -426,6 +442,40 @@ export default function DebugPanel({
           </div>
         </>
       )}
+
+      <div>
+        <h2 className="ds-section-heading">Breakpoints</h2>
+        {breakpointEntries.length === 0 ? (
+          <Text size="xs" c="dimmed" data-testid="debug-breakpoints-empty">
+            No breakpoints set. Click a line number in the gutter to add one.
+          </Text>
+        ) : (
+          <Stack gap={0}>
+            {breakpointEntries.map((bp) => (
+              <div
+                key={`${bp.path}:${bp.line}`}
+                className="ds-debug-frame"
+                data-testid={`debug-breakpoint-${bp.path}:${bp.line}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpen?.(bp.path, bp.line)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") onOpen?.(bp.path, bp.line);
+                }}
+              >
+                <Text span size="xs" className="ds-debug-frame-name">
+                  {bp.path}:{bp.line}
+                </Text>
+                {!bp.enabled && (
+                  <Text span size="10px" c="dimmed">
+                    disabled
+                  </Text>
+                )}
+              </div>
+            ))}
+          </Stack>
+        )}
+      </div>
 
       <div>
         <h2 className="ds-section-heading">Watch</h2>

@@ -4437,10 +4437,17 @@ export default function App() {
     [project?.hash, selectedFile]
   );
 
-  // Which adapter to offer: the language of the file in focus.
+  // Which adapter to offer. Prefers a file that already has a breakpoint —
+  // that is what Start is actually for — over the focused tab, so closing or
+  // switching away from that file (DEB-08) doesn't silently disable Start.
+  // Falls back to the focused file when nothing has a breakpoint yet.
+  const breakpointLanguage = useMemo(() => {
+    const path = Object.keys(breakpoints).find((p) => (breakpoints[p]?.length ?? 0) > 0);
+    return path ? languageForPath(path) : null;
+  }, [breakpoints]);
   const debugLanguage = useMemo(
-    () => (selectedFile ? languageForPath(selectedFile) : null),
-    [selectedFile]
+    () => breakpointLanguage ?? (selectedFile ? languageForPath(selectedFile) : null),
+    [breakpointLanguage, selectedFile]
   );
 
   const editorBreakpoints = useMemo(
@@ -4747,6 +4754,7 @@ export default function App() {
                 onOpen={openAtLine}
                 onStoppedAt={(path, line) => setDebugStop(path && line ? { path, line } : null)}
                 onBreakpointsChange={setBreakpoints}
+                breakpoints={breakpoints}
               />
             </div>
           </>

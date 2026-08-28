@@ -385,6 +385,64 @@ describe("DebugPanel", () => {
     });
   });
 
+  describe("breakpoints list", () => {
+    const bp = (over: Partial<import("../api").Breakpoint> = {}): import("../api").Breakpoint => ({
+      path: "app.py",
+      line: 8,
+      enabled: true,
+      condition: null,
+      verified: null,
+      actualLine: null,
+      message: null,
+      ...over,
+    });
+
+    it("says so when nothing is set", async () => {
+      backend();
+      render(<DebugPanel projectHash="p" language="rust" breakpoints={{}} />);
+      await waitFor(() => expect(screen.getByTestId("debug-breakpoints-empty")).toBeDefined());
+    });
+
+    it("lists every breakpoint across every file, not just the open one", async () => {
+      // DEB-01: breakpoints were only visible as gutter markers in whichever
+      // file happened to be open — no aggregate view across the project.
+      backend();
+      render(
+        <DebugPanel
+          projectHash="p"
+          language="rust"
+          breakpoints={{
+            "app.py": [bp({ path: "app.py", line: 8 }), bp({ path: "app.py", line: 20 })],
+            "lib.rs": [bp({ path: "lib.rs", line: 3 })],
+          }}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("debug-breakpoint-app.py:8")).toBeDefined(),
+      );
+      expect(screen.getByTestId("debug-breakpoint-app.py:20")).toBeDefined();
+      expect(screen.getByTestId("debug-breakpoint-lib.rs:3")).toBeDefined();
+    });
+
+    it("jumps to a breakpoint's location when clicked", async () => {
+      const onOpen = vi.fn();
+      backend();
+      render(
+        <DebugPanel
+          projectHash="p"
+          language="rust"
+          onOpen={onOpen}
+          breakpoints={{ "app.py": [bp({ path: "app.py", line: 8 })] }}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("debug-breakpoint-app.py:8")).toBeDefined(),
+      );
+      fireEvent.click(screen.getByTestId("debug-breakpoint-app.py:8"));
+      expect(onOpen).toHaveBeenCalledWith("app.py", 8);
+    });
+  });
+
   it("reports the adapter's breakpoint verdicts so the gutter stops saying unknown", async () => {
     // Dogfood gap: a session bound the breakpoint and said so, but the
     // editor gutter went on drawing it as "not yet asked". Once an adapter

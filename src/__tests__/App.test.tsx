@@ -593,6 +593,64 @@ describe("Run split button (shell-redesign Amendment 1)", () => {
     await waitFor(() => expect(screen.getByTestId("debug-running")).toBeDefined());
   });
 
+  it("keeps Start enabled after the breakpointed file's tab closes", async () => {
+    // DEB-08 dogfood regression: Start's availability followed the focused
+    // tab's language. Set a breakpoint in app.py, close that tab so no file
+    // is selected, and Start must still be enabled — a valid Run
+    // Configuration and breakpoint still exist, just not in a visible tab.
+    const bp = (verified: boolean | null) => ({
+      path: "app.py",
+      line: 8,
+      enabled: true,
+      condition: null,
+      verified,
+      actualLine: null,
+      message: null,
+    });
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "run_commands") return Promise.resolve([["app", "python3 app.py"]]);
+      if (cmd === "detect_run_commands") return Promise.resolve([]);
+      if (cmd === "debug_breakpoints") return Promise.resolve({ "app.py": [bp(null)] });
+      if (cmd === "list_directory")
+        return Promise.resolve([{ name: "app.py", is_dir: false, path: "app.py" }]);
+      if (cmd === "read_file_content") return Promise.resolve("def subtotal():\n    pass\n");
+      if (cmd === "debug_adapter")
+        return Promise.resolve({
+          language: "python",
+          command: "debugpy-adapter",
+          args: [],
+          installed: true,
+        });
+      if (cmd === "debug_launch_options")
+        return Promise.resolve([
+          { name: "app", command: "python3 app.py", configuration: { program: "app.py" } },
+        ]);
+      if (cmd === "debug_status")
+        return Promise.resolve({
+          sessionId: null,
+          language: null,
+          stopped: null,
+          breakpoints: { "app.py": [bp(null)] },
+        });
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+    fireEvent.click(await screen.findByText("app.py"));
+
+    fireEvent.click(screen.getByTestId("rail-run"));
+    const start = await screen.findByTestId("debug-start");
+    await waitFor(() => expect(start).not.toBeDisabled());
+
+    // Close the only open tab — no file is focused any more.
+    const tab = screen.getByTestId("file-tab");
+    fireEvent.click(within(tab).getByTestId("file-tab-close"));
+    await waitFor(() => expect(screen.queryByTestId("file-tab")).toBeNull());
+
+    expect(screen.getByTestId("debug-start")).not.toBeDisabled();
+  });
+
   it("opens run configuration from the rail's Run icon", async () => {
     withRun([["dev", "pnpm start"]]);
     render(<App />);
