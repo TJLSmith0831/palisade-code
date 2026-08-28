@@ -193,6 +193,21 @@ pub fn detect_run(project_root: &Path) -> Vec<(String, String)> {
     }
     if project_root.join("pyproject.toml").exists() {
         found.push(("python".to_string(), "python -m .".to_string()));
+    } else if let Ok(entries) = std::fs::read_dir(project_root) {
+        // VER-10: no manifest at all is still "obviously runnable" when the
+        // whole project is one script — exactly one top-level .py file, no
+        // sibling to disambiguate from.
+        let py_files: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                (name.ends_with(".py") && e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .then_some(name)
+            })
+            .collect();
+        if let [only] = py_files.as_slice() {
+            found.push((only.clone(), format!("python3 {only}")));
+        }
     }
     found.sort();
     found
@@ -564,5 +579,39 @@ mod tests {
     fn detection_is_empty_for_a_project_with_no_manifest() {
         let root = tempfile::tempdir().unwrap();
         assert!(detect_run(root.path()).is_empty());
+    }
+
+    /// VER-10: a bare single-file script (no pyproject.toml, no package
+    /// manifest at all) had nothing to suggest — the panel said "nothing
+    /// obvious to suggest" for a project that's obviously one runnable file.
+    #[test]
+    fn detection_proposes_running_a_lone_top_level_python_script() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("greet.py"), "print('hi')\n").unwrap();
+        let found = detect_run(root.path());
+        assert!(found.contains(&("greet.py".to_string(), "python3 greet.py".to_string())));
+    }
+
+    /// Ambiguous with more than one candidate entry point — guessing which
+    /// one is "the" script is worse than staying silent and letting the user
+    /// add one by hand.
+    #[test]
+    fn detection_stays_silent_with_more_than_one_top_level_python_script() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.py"), "").unwrap();
+        std::fs::write(root.path().join("b.py"), "").unwrap();
+        assert!(detect_run(root.path()).is_empty());
+    }
+
+    /// A real Python project already gets the `pyproject.toml`-driven
+    /// suggestion — the lone-script heuristic is a fallback, not a second,
+    /// conflicting proposal on top of it.
+    #[test]
+    fn detection_prefers_pyproject_over_the_lone_script_heuristic() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("pyproject.toml"), "[project]\nname = \"x\"\n").unwrap();
+        std::fs::write(root.path().join("main.py"), "").unwrap();
+        let found = detect_run(root.path());
+        assert_eq!(found, vec![("python".to_string(), "python -m .".to_string())]);
     }
 }
