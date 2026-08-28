@@ -21,6 +21,7 @@ vi.mock("../api", () => ({
   gitFetch: vi.fn(),
   gitPull: vi.fn(),
   gitPush: vi.fn(),
+  gitInit: vi.fn(),
   draftCommitMessage: vi.fn(),
 }));
 
@@ -188,6 +189,43 @@ describe("SourceControlPanel staging", () => {
     });
     // A commit with nothing staged commits nothing — the button says so.
     expect(screen.getByTestId("sc-commit")).toBeDisabled();
+  });
+
+  // GIT-20/GIT-21: opening a non-git folder as a project made gitStatus and
+  // gitLog both reject with the same "not a git repository" error on every
+  // reload, and each rejection called onError separately — a burst of
+  // identical toasts with no way to stop them. A non-repo project should
+  // show one graceful init prompt instead, not a toast at all.
+  it("shows a graceful init prompt instead of an error toast for a non-git folder", async () => {
+    mocked.gitStatus.mockRejectedValue(
+      new Error("git status --porcelain=v1 -uall failed: fatal: not a git repository (or any of the parent directories): .git")
+    );
+    mocked.gitLog.mockRejectedValue(new Error("fatal: not a git repository"));
+    mocked.gitAheadBehind.mockRejectedValue(new Error("fatal: not a git repository"));
+
+    render(<SourceControlPanel {...props} />);
+
+    await screen.findByTestId("sc-not-a-repo");
+    expect(props.onError).not.toHaveBeenCalled();
+  });
+
+  it("initializes the repo from the prompt and reloads status", async () => {
+    mocked.gitStatus
+      .mockRejectedValueOnce(new Error("fatal: not a git repository"))
+      .mockResolvedValueOnce([]);
+    mocked.gitLog.mockRejectedValue(new Error("fatal: not a git repository"));
+    mocked.gitAheadBehind.mockRejectedValue(new Error("fatal: not a git repository"));
+    mocked.gitInit = vi.fn().mockResolvedValue(undefined);
+
+    render(<SourceControlPanel {...props} />);
+    await screen.findByTestId("sc-not-a-repo");
+
+    fireEvent.click(screen.getByTestId("sc-git-init"));
+
+    await waitFor(() => expect(mocked.gitInit).toHaveBeenCalledWith("p1"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("sc-not-a-repo")).toBeNull()
+    );
   });
 });
 

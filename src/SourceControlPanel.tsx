@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActionIcon, Button, Loader, Menu, Textarea, Tooltip } from "@mantine/core";
+import { ActionIcon, Button, Loader, Menu, Stack, Text, Textarea, Tooltip } from "@mantine/core";
 import {
   IconCheck,
   IconChevronDown,
@@ -177,6 +177,13 @@ export default function SourceControlPanel({
 }) {
   const [files, setFiles] = useState<FileStatus[]>([]);
   const [log, setLog] = useState<LogEntry[]>([]);
+  // GIT-20/GIT-21: a non-git project made every reload reject identically
+  // ("fatal: not a git repository") from both gitStatus and gitLog, each
+  // separately calling onError — a burst of duplicate toasts with no way to
+  // stop them, and no way to actually init the repo from the UI. Detected
+  // once per reload and shown as a single graceful prompt instead.
+  const [notARepo, setNotARepo] = useState(false);
+  const [initializing, setInitializing] = useState(false);
   /** `[ahead, behind]` against the upstream, or null when there isn't one. */
   const [aheadBehind, setAheadBehind] = useState<[number, number] | null>(null);
   /** Distinguishes "level with upstream" from "there is no upstream" —
@@ -195,8 +202,28 @@ export default function SourceControlPanel({
     setOpenSections((s) => ({ ...s, [key]: !s[key] }));
 
   const reload = useCallback(() => {
-    api.gitStatus(projectHash).then(setFiles).catch(onError);
-    api.gitLog(projectHash, 12).then(setLog).catch(onError);
+    api
+      .gitStatus(projectHash)
+      .then((value) => {
+        setNotARepo(false);
+        setFiles(value);
+      })
+      .catch((err) => {
+        if (/not a git repository/i.test(String(err))) {
+          setNotARepo(true);
+          return;
+        }
+        onError(err);
+      });
+    api
+      .gitLog(projectHash, 12)
+      .then(setLog)
+      .catch((err) => {
+        // "Not a git repository" is reported once already, via gitStatus
+        // above — a second identical toast from the same cause is noise.
+        if (/not a git repository/i.test(String(err))) return;
+        onError(err);
+      });
     // No upstream is a normal state, not an error — no counts, no banner.
     api.gitAheadBehind(projectHash).then(
       (value) => {
@@ -289,6 +316,34 @@ export default function SourceControlPanel({
         </Menu>
       </div>
 
+      {notARepo ? (
+        <div className="ds-panel-body">
+          <Stack gap="xs" p="xs" data-testid="sc-not-a-repo">
+            <Text size="xs" c="dimmed">
+              This folder isn't a git repository yet.
+            </Text>
+            <Button
+              size="xs"
+              variant="default"
+              loading={initializing}
+              data-testid="sc-git-init"
+              onClick={() => {
+                setInitializing(true);
+                api
+                  .gitInit(projectHash)
+                  .then(() => {
+                    setNotARepo(false);
+                    reload();
+                  })
+                  .catch(onError)
+                  .finally(() => setInitializing(false));
+              }}
+            >
+              Initialize repository
+            </Button>
+          </Stack>
+        </div>
+      ) : (
       <div className="ds-panel-body">
         <div className="ds-sc-commit-box">
           <Textarea
@@ -465,6 +520,7 @@ export default function SourceControlPanel({
           </div>
         </Section>
       </div>
+      )}
     </div>
   );
 }
