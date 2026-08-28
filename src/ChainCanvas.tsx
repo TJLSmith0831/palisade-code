@@ -412,6 +412,7 @@ export default function ChainCanvas({
           leftSection={<IconPlus size={14} />}
           onClick={addNode}
           disabled={watching}
+          data-testid="chain-add-node"
         >
           Node
         </Button>
@@ -454,6 +455,7 @@ export default function ChainCanvas({
             color="gray"
             onClick={() => zoomBy(0.2)}
             aria-label="Zoom in"
+            data-testid="chain-zoom-in"
           >
             <IconPlus size={14} />
           </ActionIcon>
