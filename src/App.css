@@ -1322,6 +1322,40 @@ input[type="checkbox"] {
   min-height: 0;
 }
 
+/* The Markdown WYSIWYG/preview pane (@uiw/react-md-editor) ships its own
+ * GitHub-primer palette as CSS custom properties and renders entirely off
+ * it — headings, the blockquote's muted color, table borders, links, and
+ * Prism's syntax-highlight colors all came from GitHub's hardcoded hex
+ * values, not this app's tokens, so the pane didn't track theme changes
+ * (light mode, a custom accent hue) the rest of the shell does. Overriding
+ * the same custom properties here — at higher specificity than the
+ * vendor's own `.wmde-markdown-var[data-color-mode]` rule, so it wins
+ * regardless of stylesheet import order — routes it onto the real tokens
+ * instead of re-implementing its stylesheet.
+ */
+.ds-editor-body.ds-md-rich .wmde-markdown-var,
+.ds-editor-body.ds-md-rich .wmde-markdown {
+  --color-canvas-default: var(--editor-bg);
+  --color-canvas-subtle: var(--surface-warm);
+  --color-fg-default: var(--fg);
+  --color-fg-muted: var(--muted);
+  --color-fg-subtle: var(--muted);
+  --color-border-default: var(--border);
+  --color-border-muted: var(--border);
+  --color-neutral-muted: color-mix(in oklab, var(--fg), transparent 90%);
+  --color-accent-fg: var(--accent);
+  --color-accent-emphasis: var(--accent);
+  --color-danger-fg: var(--danger);
+  --color-success-fg: var(--success);
+  --color-attention-fg: var(--warn);
+  --color-prettylights-syntax-comment: var(--code-comment);
+  --color-prettylights-syntax-keyword: var(--code-keyword);
+  --color-prettylights-syntax-string: var(--code-string);
+  --color-prettylights-syntax-constant: var(--code-number);
+  --color-prettylights-syntax-entity: var(--code-function);
+  --color-prettylights-syntax-variable: var(--code-text);
+}
+
 .ds-editor-body .cm-editor {
   height: 100%;
   background: var(--editor-bg);

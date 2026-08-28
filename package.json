@@ -44,7 +44,8 @@
     "d3-force": "^3.0.0",
     "diff": "^9.0.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "rehype-sanitize": "^6.0.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

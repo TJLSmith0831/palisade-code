@@ -827,6 +827,27 @@ describe("FileEditorPane", () => {
       expect(onToggleMdPreview).toHaveBeenCalledTimes(1);
     });
 
+    it("fires onToggleMdPreview on Ctrl+Shift+V for a .md file (Windows/Linux)", async () => {
+      const onToggleMdPreview = vi.fn();
+      render(
+        <FileEditorPane
+          projectHash="abc"
+          path="README.md"
+          onToggleMdPreview={onToggleMdPreview}
+        />
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("file-editor-cm")).toBeDefined()
+      );
+
+      fireEvent.keyDown(window, {
+        key: "v",
+        ctrlKey: true,
+        shiftKey: true,
+      });
+      expect(onToggleMdPreview).toHaveBeenCalledTimes(1);
+    });
+
     it("does not fire onToggleMdPreview on Cmd+Shift+V for a non-markdown file", async () => {
       const onToggleMdPreview = vi.fn();
       render(
@@ -872,6 +893,104 @@ describe("FileEditorPane", () => {
       await user.click(screen.getByRole("button", { name: /save \*/i }));
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
       expect(onSave.mock.calls[0][0].after).toContain("!");
+    });
+
+    it("promotes a list line to a nested item on Tab at the marker (no selection)", async () => {
+      // jsdom doesn't implement execCommand; simulate what a real browser
+      // does so the fix's insertText/delete calls actually mutate the
+      // textarea and fire a real "input" event React will observe.
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value"
+      )!.set!;
+      document.execCommand = vi.fn((command: string, _ui?: boolean, value?: string) => {
+        const active = document.activeElement as HTMLTextAreaElement;
+        const start = active.selectionStart ?? 0;
+        const end = active.selectionEnd ?? 0;
+        const next =
+          command === "delete"
+            ? active.value.slice(0, start) + active.value.slice(end)
+            : active.value.slice(0, start) + (value ?? "") + active.value.slice(end);
+        nativeSetter.call(active, next);
+        active.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      }) as typeof document.execCommand;
+
+      render(<FileEditorPane projectHash="abc" path="README.md" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("md-editor")).toBeDefined()
+      );
+      const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
+
+      fireEvent.change(editor, { target: { value: "- item\n- " } });
+      editor.focus();
+      editor.setSelectionRange(9, 9); // caret right after "- " on the new line
+
+      fireEvent.keyDown(editor, { key: "Tab" });
+      expect(editor.value).toBe("- item\n    - ");
+
+      fireEvent.keyDown(editor, { key: "Tab", shiftKey: true });
+      expect(editor.value).toBe("- item\n- ");
+    });
+
+    it("leaves Tab on a non-list line to the RTE's own caret behavior", async () => {
+      render(<FileEditorPane projectHash="abc" path="README.md" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("md-editor")).toBeDefined()
+      );
+      const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
+
+      fireEvent.change(editor, { target: { value: "plain text" } });
+      editor.setSelectionRange(5, 5);
+
+      const event = fireEvent.keyDown(editor, { key: "Tab" });
+      // Not a list line: the fix's handler must not intercept the event.
+      expect(event).toBe(true);
+    });
+
+    it("sanitizes raw HTML embedded in Markdown while keeping syntax-highlighting classes", async () => {
+      const rehypeSanitize = (await import("rehype-sanitize")).default;
+      const { markdownPreviewSchema } = await import("../FileEditorPane");
+      const transform = rehypeSanitize(markdownPreviewSchema) as (
+        tree: unknown
+      ) => { children: Array<{ tagName?: string; properties?: unknown }> };
+
+      const tree = transform({
+        type: "root",
+        children: [
+          {
+            type: "element",
+            tagName: "script",
+            properties: {},
+            children: [{ type: "text", value: "alert(document.cookie)" }],
+          },
+          {
+            type: "element",
+            tagName: "img",
+            properties: { src: "x", onerror: "alert(1)" },
+            children: [],
+          },
+          {
+            type: "element",
+            tagName: "code",
+            properties: { className: ["language-js", "token"] },
+            children: [],
+          },
+        ],
+      });
+
+      const tagNames = tree.children.map(
+        (node) => (node as { tagName?: string }).tagName
+      );
+      expect(tagNames).not.toContain("script");
+      const img = tree.children.find(
+        (node) => (node as { tagName?: string }).tagName === "img"
+      ) as { properties?: Record<string, unknown> } | undefined;
+      expect(img?.properties?.onerror).toBeUndefined();
+      const code = tree.children.find(
+        (node) => (node as { tagName?: string }).tagName === "code"
+      ) as { properties?: Record<string, unknown> } | undefined;
+      expect(code?.properties?.className).toEqual(["language-js", "token"]);
     });
   });
 });
