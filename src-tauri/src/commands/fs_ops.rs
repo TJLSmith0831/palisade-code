@@ -78,6 +78,13 @@ pub async fn list_directory(
 pub async fn list_all_files(project_hash: String) -> Res<Vec<String>> {
     tokio::task::spawn_blocking(move || {
         let root = project_root(&project_hash)?;
+        // FIL-02: the hardcoded skip list above misses project-specific
+        // `.gitignore` entries (e.g. `graphify-out/`) — ask git what it
+        // would ignore so a generated-cache tree doesn't leak into the
+        // fuzzy-find palette. Empty outside a git repo; the walk still runs.
+        let ignored = crate::git_bin()
+            .map(|bin| crate::git::ignored_paths(&bin, &root))
+            .unwrap_or_default();
         let mut files = Vec::new();
         let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {
@@ -90,14 +97,19 @@ pub async fn list_all_files(project_hash: String) -> Res<Vec<String>> {
                     continue;
                 }
                 let full = entry.path();
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                let rel = full
+                    .strip_prefix(&root)
+                    .unwrap_or(&full)
+                    .to_string_lossy()
+                    .to_string();
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                let ignore_key = if is_dir { format!("{rel}/") } else { rel.clone() };
+                if ignored.contains(&ignore_key) {
+                    continue;
+                }
+                if is_dir {
                     stack.push(full);
                 } else {
-                    let rel = full
-                        .strip_prefix(&root)
-                        .unwrap_or(&full)
-                        .to_string_lossy()
-                        .to_string();
                     files.push(rel);
                 }
             }

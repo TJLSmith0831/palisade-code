@@ -367,6 +367,21 @@ pub fn init_repo(bin: &Path, root: &Path) -> Res<()> {
     run(bin, root, &["init"]).map(|_| ())
 }
 
+/// Paths `git` itself would ignore, one entry per top-level ignored file or
+/// directory (`--directory` collapses a whole ignored tree like
+/// `graphify-out/` into a single entry instead of walking every file inside
+/// it). Empty rather than erroring outside a git repo — callers like the
+/// file palette work on any project; ignore-awareness is a nicety on top.
+pub fn ignored_paths(bin: &Path, root: &Path) -> std::collections::HashSet<String> {
+    run(
+        bin,
+        root,
+        &["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+    )
+    .map(|out| out.lines().map(str::to_string).filter(|s| !s.is_empty()).collect())
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -745,6 +760,37 @@ mod tests {
 
     /// The guard keys on the graph directory itself, not on anything that
     /// merely lives beneath it — a stray file inside stays discardable.
+    // -------------------------------------------------------- ignored_paths
+
+    /// FIL-02: the file palette walked the whole tree with only a hardcoded
+    /// name-skip (`.git`, `node_modules`, `target`, `__pycache__`) — a
+    /// project-specific `.gitignore` entry like `graphify-out/` was invisible
+    /// to it and leaked hundreds of generated-cache files into the palette.
+    #[test]
+    fn ignored_paths_reports_a_gitignored_directory_as_one_entry() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(".gitignore"), "graphify-out/\n").unwrap();
+        fs::create_dir(root.join("graphify-out")).unwrap();
+        fs::write(root.join("graphify-out/graph.json"), "{}").unwrap();
+        fs::write(root.join("graphify-out/cache.bin"), "x").unwrap();
+
+        let ignored = ignored_paths(git(), root);
+
+        assert!(
+            ignored.contains("graphify-out/"),
+            "expected the whole ignored dir as one entry, got {ignored:?}"
+        );
+    }
+
+    /// Outside a git repo the palette must keep working — ignore-awareness is
+    /// a nicety on top of listing files, not a precondition for it.
+    #[test]
+    fn ignored_paths_is_empty_outside_a_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(ignored_paths(git(), dir.path()).is_empty());
+    }
+
     #[test]
     fn discard_file_still_deletes_a_sibling_of_the_code_graph() {
         let (dir, _tracked) = init_test_repo();
