@@ -2110,6 +2110,79 @@ describe("Keyboard navigation (accessibility)", () => {
       expect(options).toEqual(["feature-login"]);
     });
   });
+
+  it("deletes a non-current local branch from the branch picker after confirming (GIT-14)", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_projects") {
+        return Promise.resolve([
+          {
+            hash: "proj-1",
+            root: "/tmp/palisade-code",
+            displayName: "palisade-code",
+            createdAt: "2026-08-06T00:00:00Z",
+            lastAccessedAt: "2026-08-06T00:00:00Z",
+          },
+        ]);
+      }
+      if (cmd === "switch_project") {
+        return Promise.resolve({
+          hash: "proj-1",
+          root: "/tmp/palisade-code",
+          displayName: "palisade-code",
+          createdAt: "2026-08-06T00:00:00Z",
+          lastAccessedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "list_threads") return Promise.resolve([]);
+      if (cmd === "preflight") {
+        return Promise.resolve({
+          agents: [
+            { id: "claude", label: "Claude Code", path: null, skillsOk: true, pluginOk: true },
+            { id: "codex", label: "Codex", path: null, skillsOk: true, pluginOk: true },
+          ],
+          selected: null,
+          openspec: false,
+          grillApply: false,
+          ponytail: false,
+          graphify: false,
+          ready: false,
+          warnings: [],
+          checkedAt: "2026-08-06T00:00:00Z",
+        });
+      }
+      if (cmd === "load_graphify")
+        return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
+      if (cmd === "list_directory") return Promise.resolve([]);
+      if (cmd === "git_branches") {
+        return Promise.resolve([
+          { name: "main", isCurrent: true, isRemote: false },
+          { name: "stale-feature", isCurrent: false, isRemote: false },
+        ]);
+      }
+      if (cmd === "git_delete_branch") return Promise.resolve();
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+    );
+    fireEvent.click(screen.getByTestId("branch-indicator"));
+
+    const row = (await screen.findByText("stale-feature")).closest("li")!;
+    fireEvent.click(within(row).getByTestId("branch-delete"));
+
+    const confirmButton = await screen.findByRole("button", { name: /delete/i });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "git_delete_branch",
+        expect.objectContaining({ name: "stale-feature" })
+      )
+    );
+  });
 });
 
 describe("Unsaved-edit guard (data-loss prevention)", () => {

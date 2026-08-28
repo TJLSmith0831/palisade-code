@@ -5574,18 +5574,53 @@ export default function App() {
                     (name) => fuzzyMatch(selectQuery, name) !== null
                   )
                 : bar.options
-              ).map((name) => (
-                <li
-                  key={name}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => bar.submit(name)}
-                  onKeyDown={onActivateKey(() => bar.submit(name))}
-                  data-testid="branch-option"
-                >
-                  {name}
-                </li>
-              ))}
+              ).map((name) => {
+                // Only a real local, non-current branch can be deleted —
+                // remote-only entries here are DWIM checkout targets, not
+                // branches that exist locally to delete (GIT-14).
+                const local = branches.find(
+                  (b) => !b.isRemote && b.name === name
+                );
+                return (
+                  <li
+                    key={name}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => bar.submit(name)}
+                    onKeyDown={onActivateKey(() => bar.submit(name))}
+                    data-testid="branch-option"
+                  >
+                    {name}
+                    {local && !local.isCurrent && (
+                      <button
+                        className="ds-branch-delete"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setBar({
+                            kind: "confirm",
+                            label: `Delete branch "${name}"? This can't be undone.`,
+                            onConfirm: async () => {
+                              setBar(null);
+                              if (!project) return;
+                              try {
+                                await api.gitDeleteBranch(project.hash, name);
+                                await refreshBranches(project.hash);
+                              } catch (err) {
+                                fail(err);
+                              }
+                            },
+                          });
+                        }}
+                        title="Delete branch"
+                        aria-label={`Delete branch ${name}`}
+                        data-testid="branch-delete"
+                      >
+                        <DeleteIcon />
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
             <input
               id="barSelect"
