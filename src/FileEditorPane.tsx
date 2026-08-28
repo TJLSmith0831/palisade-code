@@ -3,6 +3,7 @@ import { ActionIcon, Alert, Button, Group } from "@mantine/core";
 import { IconMinus, IconPlus } from "@tabler/icons-react";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { EditorState, Compartment } from "@codemirror/state";
 import {
   EditorView,
@@ -125,6 +126,24 @@ const resolvedColorMode = (): "light" | "dark" => {
   return window.matchMedia("(prefers-color-scheme: dark)").matches
     ? "dark"
     : "light";
+};
+
+// The WYSIWYG preview renders raw HTML embedded in a Markdown file (a
+// `<script>`, an `<img onerror>`, an `<iframe>`) by default — this app opens
+// arbitrary, often untrusted, project files inside a Tauri webview with IPC
+// access, so an unsanitized preview is a live code-execution surface, not a
+// cosmetic gap. `rehype-sanitize`'s default (GitHub) schema already covers
+// GFM task-list checkboxes; the only addition is unconditionally allowing
+// `className` on the elements Prism annotates for syntax highlighting
+// (`code`, `span`, `pre`) — those values are inert strings, never markup.
+export const markdownPreviewSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: ["className"],
+    span: ["className"],
+    pre: ["className"],
+  },
 };
 
 const MIN_ZOOM = 0.1;
@@ -351,6 +370,7 @@ export default function FileEditorPane({
   onToggleMdPreview,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const mdWrapperRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const languageCompartment = useRef(new Compartment());
   const fontCompartment = useRef(new Compartment());
@@ -853,19 +873,74 @@ export default function FileEditorPane({
     };
   }, []);
 
-  // Cmd+Shift+V toggles the Markdown preview pane, but only for Markdown
-  // files. Bound at the window level so it works whether focus is in the
-  // WYSIWYG editor or its preview.
+  // Cmd+Shift+V (Ctrl+Shift+V on Windows/Linux) toggles the Markdown preview
+  // pane, but only for Markdown files. Bound at the window level so it works
+  // whether focus is in the WYSIWYG editor or its preview.
   useEffect(() => {
     if (!isMarkdownPath(path)) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "v") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "v"
+      ) {
         event.preventDefault();
         onToggleMdPreviewRef.current?.();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [path]);
+
+  // Enter on a list line correctly starts a new "- "/"1. " line (the RTE's
+  // own behavior), but its Tab handler only inserts spaces at the caret —
+  // with nothing selected (the common case right after that Enter) the
+  // marker itself never moves, so the line never actually promotes to a
+  // nested item the way every other list editor (Notion, VS Code, GitHub's
+  // own comment box) would treat it. Intercepted in the capture phase so it
+  // runs before the RTE's own listener sees the event; a real text
+  // selection (multi-line reindent) is left to the RTE's own — correct —
+  // handling.
+  useEffect(() => {
+    if (!isMarkdownPath(path)) return;
+    const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])(\s)/;
+    // Matches the RTE's own default tabSize=2 (`Array(tabSize + 1).join('  ')`
+    // resolves to 4 spaces) — see @uiw/react-md-editor's handleKeyDown.
+    const INDENT = "    ";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const target = event.target;
+      if (
+        !(target instanceof HTMLTextAreaElement) ||
+        !mdWrapperRef.current?.contains(target) ||
+        target.selectionStart !== target.selectionEnd
+      ) {
+        return;
+      }
+      const value = target.value;
+      const caret = target.selectionStart;
+      const lineStart = value.lastIndexOf("\n", caret - 1) + 1;
+      const lineEnd = value.indexOf("\n", caret);
+      const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
+      if (!LIST_MARKER.test(line)) return;
+      if (event.shiftKey) {
+        if (!line.startsWith(INDENT)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        target.setSelectionRange(lineStart, lineStart + INDENT.length);
+        document.execCommand("delete");
+        target.setSelectionRange(caret - INDENT.length, caret - INDENT.length);
+      } else {
+        event.preventDefault();
+        event.stopPropagation();
+        target.setSelectionRange(lineStart, lineStart);
+        document.execCommand("insertText", false, INDENT);
+        target.setSelectionRange(caret + INDENT.length, caret + INDENT.length);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [path]);
 
   // Highlighting for file types that aren't bundled (HTML, YAML, SQL, shell
@@ -1052,13 +1127,28 @@ export default function FileEditorPane({
         </Alert>
       )}
       {isMarkdownPath(path) && (
-        <div className="ds-editor-body ds-md-rich" data-testid="file-editor-md">
+        <div
+          className="ds-editor-body ds-md-rich"
+          data-testid="file-editor-md"
+          ref={mdWrapperRef}
+        >
           <MDEditor
             value={mdValue}
             onChange={handleMdChange}
             data-color-mode={colorMode}
             preview={mdPreview ? "live" : "edit"}
             height="100%"
+            // The library's own edit/live/preview/fullscreen buttons are a
+            // second, unsynced control for the one thing the toolbar's
+            // dedicated preview toggle already does — clicking one doesn't
+            // update the other, and could leave the pane stuck in a
+            // preview-only mode (no visible editor, no obvious way back)
+            // that the app's own toggle can't represent or undo. One
+            // control, one job: only the formatting commands stay.
+            extraCommands={[]}
+            previewOptions={{
+              rehypePlugins: [[rehypeSanitize, markdownPreviewSchema]],
+            }}
           />
         </div>
       )}
