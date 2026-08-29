@@ -96,6 +96,18 @@ find "$APP" -name '.DS_Store' -delete 2>/dev/null || true
 #     -s -k "<your login password>" ~/Library/Keychains/login.keychain-db
 #
 # Either way it is a one-time step per machine; later builds sign silently.
+# Release path: with APPLE_SIGNING_IDENTITY set, Tauri already signed the
+# bundle (and the llama-server sidecar inside it) with the hardened runtime and
+# our entitlements, and produced a .dmg. Re-signing here with --deep would
+# clobber the sidecar's own signature and fail notarization, so don't.
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  echo "==> signed by Tauri as '$APPLE_SIGNING_IDENTITY' (skipping re-sign)"
+  echo "==> designated requirement:"
+  codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => /    /p'
+  ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | sed 's/^/    dmg: /'
+  [[ "${1:-}" == "--no-install" ]] && exit 0
+else
+
 CODESIGN_ID="${CODESIGN_ID:--}"
 if [[ "$CODESIGN_ID" == "-" ]]; then
   echo "==> WARNING: ad-hoc signing."
@@ -117,6 +129,7 @@ codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => /    /p'
 if [[ "${1:-}" == "--no-install" ]]; then
   echo "==> built $APP (not installed)"
   exit 0
+fi
 fi
 
 echo "==> installing to /Applications"
