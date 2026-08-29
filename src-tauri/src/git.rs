@@ -137,7 +137,54 @@ pub fn current_branch_name(_bin: &Path, root: &Path) -> Res<String> {
 
 /// A dirty working tree that would be overwritten surfaces git's own error
 /// verbatim (D55) — no auto-stash.
+/// Every worktree of this repo that currently has a branch checked out, as
+/// `(branch, path)`. A detached worktree contributes no entry.
+///
+/// `git worktree list --porcelain` emits one blank-line-separated record per
+/// worktree, with `worktree <path>` first and an optional `branch
+/// refs/heads/<name>` line.
+pub fn worktree_branches(bin: &Path, root: &Path) -> Res<Vec<(String, std::path::PathBuf)>> {
+    let raw = run(bin, root, &["worktree", "list", "--porcelain"])?;
+    let mut out = vec![];
+    let mut path: Option<std::path::PathBuf> = None;
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            path = Some(std::path::PathBuf::from(rest));
+        } else if let Some(rest) = line.strip_prefix("branch refs/heads/") {
+            if let Some(p) = path.clone() {
+                out.push((rest.to_string(), p));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Which worktree holds `name` checked out, if any other than `root` itself.
+pub fn worktree_holding(bin: &Path, root: &Path, name: &str) -> Option<std::path::PathBuf> {
+    let here = root.canonicalize().ok();
+    worktree_branches(bin, root)
+        .ok()?
+        .into_iter()
+        .find(|(branch, path)| branch == name && path.canonicalize().ok() != here)
+        .map(|(_, path)| path)
+}
+
+/// Git refuses to check out a branch another worktree already holds, and says
+/// so with a `fatal:` line naming a path the user never chose.
+///
+/// The UI does not normally reach this: picking a held branch opens that
+/// worktree as a workspace instead — the branch picker asks
+/// [`worktree_holding`] first. This stays as the backstop, for the race where
+/// a worktree appears between that check and this call and for any caller
+/// that skips the check, so the failure explains itself rather than leaking
+/// git's message about a directory the user has no context for.
 pub fn checkout_branch(bin: &Path, root: &Path, name: &str) -> Res<()> {
+    if let Some(path) = worktree_holding(bin, root, name) {
+        return Err(format!(
+            "`{name}` is already checked out in another worktree ({}). A branch can only live in one worktree at a time \u{2014} open that worktree to work on it, or pick a different branch here.",
+            path.display()
+        ));
+    }
     run(bin, root, &["checkout", name]).map(|_| ())
 }
 
@@ -473,6 +520,32 @@ mod tests {
 
         assert!(working_tree_diff(git(), root).unwrap().contains("CHANGED"));
         assert_eq!(staged_diff(git(), root).unwrap(), "");
+    }
+
+    /// The regression behind "View diff renders nothing": a turn that only
+    /// creates files left `git diff` empty while the stat promised +N.
+    #[test]
+    fn working_tree_diff_includes_untracked_files_as_new_file_patches() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join("brand_new.md"), "hello
+world
+").unwrap();
+
+        let diff = working_tree_diff(git(), root).unwrap();
+        assert!(diff.contains("brand_new.md"), "untracked file is named");
+        assert!(diff.contains("new file mode"), "emitted as a new-file patch");
+        assert!(diff.contains("+hello"), "its content is reviewable");
+
+        // Tracked edits and untracked files coexist in one diff.
+        fs::write(root.join(&tracked), "line one\nCHANGED\nline three\n").unwrap();
+        let both = working_tree_diff(git(), root).unwrap();
+        assert!(both.contains("CHANGED") && both.contains("+hello"));
+
+        // Staging moves it out of the working diff, same as any edit.
+        stage_file(git(), root, "brand_new.md").unwrap();
+        assert!(!working_tree_diff(git(), root).unwrap().contains("+hello"));
+        assert!(staged_diff(git(), root).unwrap().contains("+hello"));
     }
 
     #[test]
@@ -1028,6 +1101,82 @@ mod tests {
 
         assert_eq!(diff_stat(git(), &path_a).unwrap(), (1, 3));
         assert_eq!(diff_stat(git(), &path_b).unwrap(), (0, 0));
+    }
+
+    /// The multi-worktree promise: a thread can stage and commit its own work
+    /// without the project root seeing any of it.
+    #[test]
+    fn a_worktree_stages_and_commits_independently_of_the_project_root() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let (wt, _branch) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+
+        fs::write(wt.join("only_here.md"), "worktree work\n").unwrap();
+        stage_file(git(), &wt, "only_here.md").unwrap();
+        commit(git(), &wt, "worktree commit").unwrap();
+
+        // The worktree advanced; the project root did not.
+        assert_eq!(log(git(), &wt, 1).unwrap()[0].subject, "worktree commit");
+        assert_ne!(log(git(), root, 1).unwrap()[0].subject, "worktree commit");
+        assert!(!root.join("only_here.md").exists());
+        assert_eq!(diff_stat(git(), &wt).unwrap(), (0, 0), "committed, nothing left");
+
+        // And an edit in the root stays in the root.
+        fs::write(root.join(&tracked), "root only\n").unwrap();
+        assert!(working_tree_diff(git(), root).unwrap().contains("root only"));
+        assert_eq!(working_tree_diff(git(), &wt).unwrap(), "");
+    }
+
+    /// The red banner in the bug report: git's own message names a path the
+    /// user never picked. Palisade explains the situation instead.
+    /// One `git` process per untracked file is fine for a handful and a hang
+    /// for a repo with no `.gitignore` yet, so both axes are bounded.
+    #[test]
+    fn untracked_diffing_is_bounded_by_file_count_and_size() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+
+        // Past the size bound: still a status row, no contents.
+        let big = "x".repeat(1024 * 1024 + 1);
+        fs::write(root.join("generated.bin"), &big).unwrap();
+        let diff = working_tree_diff(git(), root).unwrap();
+        assert!(!diff.contains("generated.bin"), "oversized file is not diffed");
+        assert!(
+            status(git(), root).unwrap().iter().any(|f| f.path == "generated.bin"),
+            "but it is still reported as untracked"
+        );
+
+        // Past the count bound: the first 200 carry contents, the rest do not.
+        for i in 0..250 {
+            fs::write(root.join(format!("f{i:03}.txt")), format!("line {i}\n")).unwrap();
+        }
+        let diff = working_tree_diff(git(), root).unwrap();
+        let diffed = diff.matches("new file mode").count();
+        assert_eq!(diffed, 200, "capped at the file limit, not unbounded");
+    }
+
+    #[test]
+    fn checking_out_a_branch_another_worktree_holds_explains_rather_than_fataling() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+        let (wt_path, branch) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+
+        assert_eq!(
+            worktree_holding(git(), root, &branch).map(|p| p.canonicalize().unwrap()),
+            Some(wt_path.canonicalize().unwrap())
+        );
+
+        let err = checkout_branch(git(), root, &branch).unwrap_err();
+        assert!(err.contains("already checked out in another worktree"), "{err}");
+        assert!(!err.contains("fatal:"), "git's raw message must not leak: {err}");
+
+        // A branch no worktree holds still checks out normally.
+        create_branch(git(), root, "free").unwrap();
+        checkout_branch(git(), root, "main").unwrap();
+        checkout_branch(git(), root, "free").unwrap();
+        assert_eq!(current_branch_name(git(), root).unwrap(), "free");
+        // And the root's own branch is never reported as "held elsewhere".
+        assert!(worktree_holding(git(), root, "free").is_none());
     }
 
     #[test]

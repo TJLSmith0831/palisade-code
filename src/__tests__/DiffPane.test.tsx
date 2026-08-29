@@ -244,8 +244,13 @@ describe("DiffPane worktree review", () => {
 
   // Staging acts on the project root. Offering it over a worktree's diff
   // would stage a file the user is not looking at.
-  it("hides staging and discarding while reviewing a worktree", async () => {
-    mockGit((cmd) => {
+  /** Staging used to be hidden here, because every write went to the project
+   *  root regardless of which tree was on screen. Writes are routed by thread
+   *  now, so the buttons are back — and they must carry the thread through. */
+  it("stages into the worktree it is showing, not the project root", async () => {
+    const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+    mockGit((cmd, args) => {
+      calls.push({ cmd, args: args as Record<string, unknown> });
       if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
       return undefined;
     });
@@ -253,9 +258,12 @@ describe("DiffPane worktree review", () => {
     render(<DiffPane projectHash="p1" threadId="t1" />);
     await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
 
-    expect(screen.queryByTestId("stage-all-btn")).toBeNull();
-    expect(screen.queryByTestId("discard-btn")).toBeNull();
-    expect(screen.queryByTestId("hunk-action-btn")).toBeNull();
+    fireEvent.click(screen.getByTestId("stage-all-btn"));
+    await waitFor(() =>
+      expect(calls.some((c) => c.cmd === "git_stage_file")).toBe(true)
+    );
+    const staged = calls.find((c) => c.cmd === "git_stage_file")!;
+    expect(staged.args.threadId).toBe("t1");
   });
 
   it("keeps staging available on the project's own working tree", async () => {
@@ -269,6 +277,40 @@ describe("DiffPane worktree review", () => {
 
     expect(screen.getByTestId("stage-all-btn")).toBeTruthy();
     expect(screen.getByTestId("hunk-action-btn")).toBeTruthy();
+  });
+
+  /** An added file has no "before", so side-by-side rendered a full-height
+   *  column of blank cells beside it — indistinguishable from a broken
+   *  render. GitHub and VS Code both fall back to unified here. */
+  it("renders an added file unified even in side-by-side", async () => {
+    const NEW_FILE_DIFF = [
+      "diff --git a/new.md b/new.md",
+      "new file mode 100644",
+      "index 0000000..8c7e5a6",
+      "--- /dev/null",
+      "+++ b/new.md",
+      "@@ -0,0 +1,2 @@",
+      "+hello",
+      "+world",
+      "",
+    ].join("\n");
+    localStorage.setItem("palisade.diffView", "split");
+    mockGit((cmd) => {
+      if (cmd === "git_working_diff") return Promise.resolve(NEW_FILE_DIFF);
+      if (cmd === "git_status")
+        return Promise.resolve([{ path: "new.md", code: "??" }]);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
+
+    expect(screen.queryByTestId("diff-rows-split")).toBeNull();
+    expect(screen.getByTestId("diff-rows-inline")).toBeTruthy();
+    // The toggle still reads "split" — this is a per-file fallback, not a
+    // silent change to the reviewer's own preference.
+    expect(localStorage.getItem("palisade.diffView")).toBe("split");
+    localStorage.removeItem("palisade.diffView");
   });
 
   it("switches between inline and side-by-side", async () => {

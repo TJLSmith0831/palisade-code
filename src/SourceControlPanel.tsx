@@ -161,11 +161,16 @@ export default function SourceControlPanel({
   refreshToken,
   onOpenFile,
   onReviewWorkingChanges,
+  onChanged,
   onError,
 }: {
   projectHash: string;
-  /** The active thread, so Generate drafts with the provider/model the user
-   *  picked in the chat pane rather than whatever was auto-detected. */
+  /** The active thread. Two jobs: it names the working tree this panel reads
+   *  and writes — the thread's own worktree when it has one, the project root
+   *  otherwise — and it names the provider/model Generate drafts with, so the
+   *  draft runs on the agent the user picked rather than whatever was
+   *  auto-detected. Every git call below passes it, so what gets staged and
+   *  committed is always the tree whose rows are on screen. */
   threadId?: string | null;
   branch: string;
   /** Bumped by the app whenever the working tree may have changed. */
@@ -173,6 +178,11 @@ export default function SourceControlPanel({
   onOpenFile: (path: string) => void;
   /** Sends the working diff to the active agent as a chat turn. */
   onReviewWorkingChanges: () => void;
+  /** This panel wrote to the working tree. The diff pane renders the same
+   *  tree from its own state, so without this it kept showing a file as
+   *  unstaged that this panel had just staged — two views of one tree
+   *  disagreeing, which is worse than either being slow. */
+  onChanged?: () => void;
   onError: (message: unknown) => void;
 }) {
   const [files, setFiles] = useState<FileStatus[]>([]);
@@ -201,9 +211,13 @@ export default function SourceControlPanel({
   const toggle = (key: keyof typeof openSections) =>
     setOpenSections((s) => ({ ...s, [key]: !s[key] }));
 
+  /** The tree every call in this panel acts on. `null` and `undefined` both
+   *  mean "the project root"; the IPC layer wants the latter. */
+  const tree = threadId ?? undefined;
+
   const reload = useCallback(() => {
     api
-      .gitStatus(projectHash)
+      .gitStatus(projectHash, tree)
       .then((value) => {
         setNotARepo(false);
         setFiles(value);
@@ -216,7 +230,7 @@ export default function SourceControlPanel({
         onError(err);
       });
     api
-      .gitLog(projectHash, 12)
+      .gitLog(projectHash, 12, tree)
       .then(setLog)
       .catch((err) => {
         // "Not a git repository" is reported once already, via gitStatus
@@ -225,7 +239,7 @@ export default function SourceControlPanel({
         onError(err);
       });
     // No upstream is a normal state, not an error — no counts, no banner.
-    api.gitAheadBehind(projectHash).then(
+    api.gitAheadBehind(projectHash, tree).then(
       (value) => {
         setAheadBehind(value);
         setHasUpstream(value !== null);
@@ -235,7 +249,7 @@ export default function SourceControlPanel({
         setHasUpstream(false);
       }
     );
-  }, [projectHash, onError]);
+  }, [projectHash, tree, onError]);
 
   useEffect(reload, [reload, refreshToken]);
 
@@ -243,7 +257,13 @@ export default function SourceControlPanel({
   const staged = files.filter((f) => isStaged(f.code));
   const unstaged = files.filter((f) => !isStaged(f.code));
 
-  const act = (run: Promise<unknown>) => run.then(reload).catch(onError);
+  const act = (run: Promise<unknown>) =>
+    run
+      .then(() => {
+        reload();
+        onChanged?.();
+      })
+      .catch(onError);
 
   /** Git takes an exclusive lock on the index, so staging N files is N
    *  sequential calls. `Promise.all` raced them and half failed with
@@ -268,10 +288,11 @@ export default function SourceControlPanel({
     if (!message.trim() || staged.length === 0) return;
     setCommitting(true);
     api
-      .gitCommit(projectHash, message.trim())
+      .gitCommit(projectHash, message.trim(), tree)
       .then(() => {
         setMessage("");
         reload();
+        onChanged?.();
       })
       .catch(onError)
       .finally(() => setCommitting(false));
@@ -291,7 +312,7 @@ export default function SourceControlPanel({
             {/* fetch/pull/push live here rather than as primary buttons —
                 Amendment 7 supersedes the old git-btn cluster. */}
             <Menu.Item
-              onClick={() => act(api.gitFetch(projectHash))}
+              onClick={() => act(api.gitFetch(projectHash, tree))}
             >
               Fetch
             </Menu.Item>
@@ -301,13 +322,13 @@ export default function SourceControlPanel({
               </Menu.Item>
             )}
             <Menu.Item
-              onClick={() => act(api.gitPull(projectHash))}
+              onClick={() => act(api.gitPull(projectHash, tree))}
               data-testid="sc-pull"
             >
               Pull{behind > 0 ? ` ${behind}` : ""}
             </Menu.Item>
             <Menu.Item
-              onClick={() => act(api.gitPush(projectHash))}
+              onClick={() => act(api.gitPush(projectHash, tree))}
               data-testid="sc-push"
             >
               Push{ahead > 0 ? ` ${ahead}` : ""}
@@ -411,7 +432,7 @@ export default function SourceControlPanel({
                   onClick={() =>
                     act(
                       forEachSequentially(staged, (path) =>
-                        api.gitUnstageFile(projectHash, path)
+                        api.gitUnstageFile(projectHash, path, tree)
                       )
                     )
                   }
@@ -430,7 +451,7 @@ export default function SourceControlPanel({
               file={file}
               action="unstage"
               onOpen={() => onOpenFile(file.path)}
-              onAction={() => act(api.gitUnstageFile(projectHash, file.path))}
+              onAction={() => act(api.gitUnstageFile(projectHash, file.path, tree))}
             />
           ))}
         </Section>
@@ -452,7 +473,7 @@ export default function SourceControlPanel({
                     onClick={() =>
                       act(
                         forEachSequentially(unstaged, (path) =>
-                          api.gitStageFile(projectHash, path)
+                          api.gitStageFile(projectHash, path, tree)
                         )
                       )
                     }
@@ -483,7 +504,7 @@ export default function SourceControlPanel({
               file={file}
               action="stage"
               onOpen={() => onOpenFile(file.path)}
-              onAction={() => act(api.gitStageFile(projectHash, file.path))}
+              onAction={() => act(api.gitStageFile(projectHash, file.path, tree))}
             />
           ))}
         </Section>
@@ -504,15 +525,23 @@ export default function SourceControlPanel({
                 <div className="ds-sc-commit-dot" />
                 <div className="ds-sc-commit-text">
                   <span className="ds-sc-commit-msg">{entry.subject}</span>
+                  {/* Two facts, not one string: in a 193px panel a single
+                      truncating line ate the date and left only the author,
+                      which is the same name on every row. The author yields
+                      its characters; "51m ago" always survives. */}
                   <span className="ds-sc-commit-meta">
-                    {entry.author}
-                    {entry.date ? ` · ${relativeTime(entry.date)}` : ""}
+                    <span className="ds-sc-commit-author">{entry.author}</span>
+                    {entry.date && (
+                      <span className="ds-sc-commit-age">
+                        {relativeTime(entry.date)}
+                      </span>
+                    )}
                   </span>
                 </div>
                 {index === 0 && (
-                  <span className="ds-sc-branch-badge">
+                  <span className="ds-sc-branch-badge" title={branch}>
                     <IconGitBranch size={11} />
-                    {branch}
+                    <span className="ds-sc-branch-badge-name">{branch}</span>
                   </span>
                 )}
               </div>

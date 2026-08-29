@@ -47,6 +47,7 @@ import {
   IconLayoutSidebarRight,
   IconMessageDots,
   IconPlayerPlay,
+  IconFolders,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
@@ -2298,6 +2299,12 @@ export default function App() {
   // thread exists, then persisted on the thread when it's created.
   // The project being opened, if any — drives the onboarding row's spinner.
   const [openingProject, setOpeningProject] = useState<string | null>(null);
+  /** Branch → the worktree path that holds it, for every worktree but the
+   *  project root. Drives both the picker's worktree marker and what picking
+   *  such a branch does. */
+  const [worktreeBranches, setWorktreeBranches] = useState<Map<string, string>>(
+    new Map()
+  );
   const [framingExecutor, setFramingExecutor] = useState<string | null>(null);
   const [framingModel, setFramingModel] = useState<string | null>(null);
   // D1: spec-type framing menu — shown after picking "Spec" from the Vibe/Spec
@@ -2668,6 +2675,15 @@ export default function App() {
     } catch {
       setBranches([]);
     }
+    // Loaded alongside the branch list because it answers a question about
+    // the same rows: which of these branches already live in a worktree, and
+    // where. A branch can only be checked out once, so those rows open their
+    // worktree instead of switching — the picker has to say so up front.
+    try {
+      setWorktreeBranches(new Map(await api.gitWorktrees(projectHash)));
+    } catch {
+      setWorktreeBranches(new Map());
+    }
   }, []);
 
   // The branch label sits on a write action ("commit on X"), so it cannot be
@@ -3029,6 +3045,23 @@ export default function App() {
       submit: async (choice) => {
         setBar(null);
         try {
+          // A branch lives in exactly one worktree, and with a worktree per
+          // thread most branches in this list are already checked out
+          // somewhere — git cannot check one out twice, and trying produced a
+          // `fatal:` naming a path the user never chose.
+          //
+          // Picking such a branch plainly means "take me to that work", so
+          // that is what happens: the worktree opens as a workspace, with its
+          // own file tree, editor, terminal and source control. One rule for
+          // every worktree, Palisade's own thread worktrees included — being
+          // able to edit that tree by hand is the whole point.
+          const held = worktreeBranches.get(choice);
+          if (held) {
+            const opened = await api.addProject(held);
+            setProjects(await api.listProjects());
+            await selectProject(opened);
+            return;
+          }
           if (options.includes(choice)) {
             await api.gitCheckoutBranch(project.hash, choice);
           } else {
@@ -4699,10 +4732,19 @@ export default function App() {
           <SourceControlPanel
             projectHash={project.hash}
             threadId={thread?.id ?? null}
-            branch={branches.find((b) => b.isCurrent)?.name ?? "HEAD"}
+            /* The panel reads and writes the thread's worktree, so it has to
+               name that worktree's branch — the project root's current
+               branch is a different tree and would put the wrong name on the
+               commit button. */
+            branch={
+              (thread ? worktrees.get(thread.id)?.branch : undefined) ??
+              branches.find((b) => b.isCurrent)?.name ??
+              "HEAD"
+            }
             refreshToken={diffRefreshToken}
             onOpenFile={openDiffFor}
             onReviewWorkingChanges={onReviewWorkingChanges}
+            onChanged={() => setDiffRefreshToken((t) => t + 1)}
             onError={fail}
           />
         );
@@ -5582,6 +5624,13 @@ export default function App() {
                 const local = branches.find(
                   (b) => !b.isRemote && b.name === name
                 );
+                // Git allows a branch in exactly one worktree, so this row
+                // cannot switch — it opens the tree the branch already lives
+                // in. Said on the row rather than after the click: an action
+                // that silently does something else is worse than one that
+                // fails. Deleting is off the table for the same reason git
+                // refuses it — the branch is in use.
+                const worktree = worktreeBranches.get(name);
                 return (
                   <li
                     key={name}
@@ -5590,9 +5639,34 @@ export default function App() {
                     onClick={() => bar.submit(name)}
                     onKeyDown={onActivateKey(() => bar.submit(name))}
                     data-testid="branch-option"
+                    aria-label={
+                      worktree
+                        ? `${name} — open its worktree at ${worktree}`
+                        : name
+                    }
                   >
-                    {name}
-                    {local && !local.isCurrent && (
+                    <span className="ds-branch-name" title={name}>
+                      {name}
+                    </span>
+                    {worktree && (
+                      <Tooltip
+                        label={`Checked out in ${worktree} — opens that worktree`}
+                        openDelay={300}
+                        withinPortal
+                      >
+                        <Badge
+                          size="xs"
+                          variant="default"
+                          tt="none"
+                          ff="var(--mono)"
+                          leftSection={<IconFolders size={10} />}
+                          data-testid="branch-worktree-badge"
+                        >
+                          worktree
+                        </Badge>
+                      </Tooltip>
+                    )}
+                    {local && !local.isCurrent && !worktree && (
                       <button
                         className="ds-branch-delete"
                         onClick={(event) => {
@@ -5643,7 +5717,11 @@ export default function App() {
               }}
             />
             <span className="hint">
-              Click a branch to switch · Enter a name to create · Esc to cancel
+              Click a branch to switch · Enter a name to create · Esc to
+              cancel
+              {worktreeBranches.size > 0 && (
+                <> · a branch marked <b>worktree</b> opens that worktree</>
+              )}
             </span>
           </MantineModal>
         )}

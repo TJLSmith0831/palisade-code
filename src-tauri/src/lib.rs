@@ -2471,6 +2471,7 @@ pub fn run() {
             commands::git_cmds::git_log,
             commands::git_cmds::git_branches,
             commands::git_cmds::git_checkout_branch,
+            commands::git_cmds::git_worktrees,
             commands::git_cmds::git_create_branch,
             commands::git_cmds::git_delete_branch,
             commands::git_cmds::git_fetch,

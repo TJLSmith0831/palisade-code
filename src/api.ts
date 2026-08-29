@@ -789,24 +789,27 @@ export const terminalList = (projectHash: string) =>
 
 export type FileStatus = { path: string; code: string };
 
-/** `threadId` reads that thread's own worktree instead of the project root.
- *  Reads only — staging and committing always act on the project root. */
+/** Every call below takes an optional `threadId` naming the working tree it
+ *  acts on: that thread's isolated worktree when it has one, the project root
+ *  otherwise. Reads and writes alike — a thread's worktree is committable, it
+ *  is not a museum. The contract for callers is to pass the same `threadId`
+ *  they *rendered* from, so the tree written to is the tree on screen. */
 export const gitStatus = (projectHash: string, threadId?: string) =>
   invoke<FileStatus[]>("git_status", { projectHash, threadId });
 export const gitWorkingDiff = (projectHash: string, threadId?: string) =>
   invoke<string>("git_working_diff", { projectHash, threadId });
 export const gitStagedDiff = (projectHash: string, threadId?: string) =>
   invoke<string>("git_staged_diff", { projectHash, threadId });
-export const gitStageHunk = (projectHash: string, patch: string) =>
-  invoke<void>("git_stage_hunk", { projectHash, patch });
-export const gitUnstageHunk = (projectHash: string, patch: string) =>
-  invoke<void>("git_unstage_hunk", { projectHash, patch });
-export const gitUnstageFile = (projectHash: string, path: string) =>
-  invoke<void>("git_unstage_file", { projectHash, path });
-export const gitStageFile = (projectHash: string, path: string) =>
-  invoke<void>("git_stage_file", { projectHash, path });
-export const gitCommit = (projectHash: string, message: string) =>
-  invoke<void>("git_commit", { projectHash, message });
+export const gitStageHunk = (projectHash: string, patch: string, threadId?: string) =>
+  invoke<void>("git_stage_hunk", { projectHash, patch, threadId });
+export const gitUnstageHunk = (projectHash: string, patch: string, threadId?: string) =>
+  invoke<void>("git_unstage_hunk", { projectHash, patch, threadId });
+export const gitUnstageFile = (projectHash: string, path: string, threadId?: string) =>
+  invoke<void>("git_unstage_file", { projectHash, path, threadId });
+export const gitStageFile = (projectHash: string, path: string, threadId?: string) =>
+  invoke<void>("git_stage_file", { projectHash, path, threadId });
+export const gitCommit = (projectHash: string, message: string, threadId?: string) =>
+  invoke<void>("git_commit", { projectHash, message, threadId });
 
 /** One row of the Source Control panel's read-only commit graph. */
 export type LogEntry = {
@@ -817,8 +820,8 @@ export type LogEntry = {
   date: string;
 };
 
-export const gitLog = (projectHash: string, limit = 20) =>
-  invoke<LogEntry[]>("git_log", { projectHash, limit });
+export const gitLog = (projectHash: string, limit = 20, threadId?: string) =>
+  invoke<LogEntry[]>("git_log", { projectHash, limit, threadId });
 
 /** Source Control panel's **Generate**: drafts a message from the staged diff.
  *  `threadId` names the thread whose provider/model to draft with — the one
@@ -838,23 +841,30 @@ export const gitBranches = (projectHash: string) =>
   invoke<BranchInfo[]>("git_branches", { projectHash });
 export const gitCheckoutBranch = (projectHash: string, name: string) =>
   invoke<void>("git_checkout_branch", { projectHash, name });
+/** Every branch checked out in a worktree other than the project root, as
+ *  `[branch, worktree path]`. A branch lives in exactly one worktree, so this
+ *  is what turns "switch to that branch" into "open the tree it is already
+ *  in" — and what lets the picker say so before the user clicks. */
+export const gitWorktrees = (projectHash: string) =>
+  invoke<[string, string][]>("git_worktrees", { projectHash });
 export const gitCreateBranch = (projectHash: string, name: string) =>
   invoke<void>("git_create_branch", { projectHash, name });
 export const gitDeleteBranch = (projectHash: string, name: string) =>
   invoke<void>("git_delete_branch", { projectHash, name });
-export const gitFetch = (projectHash: string) =>
-  invoke<void>("git_fetch", { projectHash });
-export const gitPull = (projectHash: string) =>
-  invoke<string>("git_pull", { projectHash });
-export const gitPush = (projectHash: string) =>
-  invoke<string>("git_push", { projectHash });
-export const gitAheadBehind = (projectHash: string) =>
-  invoke<[number, number] | null>("git_ahead_behind", { projectHash });
+export const gitFetch = (projectHash: string, threadId?: string) =>
+  invoke<void>("git_fetch", { projectHash, threadId });
+export const gitPull = (projectHash: string, threadId?: string) =>
+  invoke<string>("git_pull", { projectHash, threadId });
+export const gitPush = (projectHash: string, threadId?: string) =>
+  invoke<string>("git_push", { projectHash, threadId });
+export const gitAheadBehind = (projectHash: string, threadId?: string) =>
+  invoke<[number, number] | null>("git_ahead_behind", { projectHash, threadId });
 export const gitDiscardFile = (
   projectHash: string,
   path: string,
-  untracked: boolean
-) => invoke<void>("git_discard_file", { projectHash, path, untracked });
+  untracked: boolean,
+  threadId?: string
+) => invoke<void>("git_discard_file", { projectHash, path, untracked, threadId });
 export const gitIsRepo = (projectHash: string) =>
   invoke<boolean>("git_is_repo", { projectHash });
 export const gitInit = (projectHash: string) =>
