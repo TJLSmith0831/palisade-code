@@ -11,7 +11,7 @@ Rust + Tauri · TypeScript (frontend) · pnpm · Browserbase (web search) · Gra
 - `pnpm build` — typecheck (`tsc`) and build the frontend bundle
 - `pnpm tauri build` — create the release binary
 
-## Packaging (per machine)
+## Packaging (per machine, local dev)
 `CODESIGN_ID="Palisade Code Dev" ./package.sh` — builds the release bundle,
 re-signs it with a stable self-signed identity, and installs it to
 `/Applications`. `--no-install` builds without installing.
@@ -27,6 +27,48 @@ match, since only per-machine rebuild consistency matters.
 First signing on a machine raises a keychain dialog even with
 `-T /usr/bin/codesign`; click "Always Allow" once, or set the key partition
 list as documented in the script.
+
+## Releasing (signed, notarized .dmg)
+Distribution is a different path from the self-signed one above: it needs a
+paid Apple Developer Program membership, a *Developer ID Application*
+certificate (Xcode > Settings > Accounts > Manage Certificates, requires
+Admin/Account Holder), and an App Store Connect API key (`.p8`) for
+notarization. Keep the `.p8` at `~/private_keys/` with mode 600 — it is a
+private key and must never enter the repo.
+
+    APPLE_SIGNING_IDENTITY="Developer ID Application: NAME (TEAMID)" \
+    APPLE_API_KEY="<key-id>" \
+    APPLE_API_ISSUER="<issuer-uuid>" \
+    APPLE_API_KEY_PATH="$HOME/private_keys/AuthKey_<key-id>.p8" \
+    ./package.sh --no-install
+
+With `APPLE_SIGNING_IDENTITY` set, `package.sh` skips its manual re-sign step:
+Tauri has already signed the bundle *and* the nested `llama-server` sidecar
+with the hardened runtime and `src-tauri/entitlements.plist`. Re-signing with
+`--deep` would clobber the sidecar's signature and fail notarization.
+
+**Tauri notarizes and staples the `.app`, not the `.dmg`.** The dmg is built
+afterwards and is a separate artifact with its own hash, so it needs its own
+submission or downloaders hit Gatekeeper on the disk image itself:
+
+    xcrun notarytool submit <path-to-dmg> --key ... --key-id ... --issuer ... --wait
+    xcrun stapler staple <path-to-dmg>
+
+Verify the way a downloader sees it — mount the dmg and check the app inside,
+not the build-tree copy. `spctl -a -vvv -t install <mounted>/Palisade.app`
+must report `accepted` / `source=Notarized Developer ID`.
+
+### Gotchas
+- **Notarization takes ~1 hour**, and that is normal here. The bundle is 528MB
+  and 517MB of it is `resources/models/*.gguf` — notary time scales with bytes
+  uploaded and hashed. The model is data, not code, so it draws no findings;
+  it just makes every round trip slow. Notarize once per *release*, not per
+  build; the inner loop is `pnpm start` and the self-signed `CODESIGN_ID` path,
+  neither of which contacts Apple.
+- **The entitlements exist for the sidecar.** `allow-jit` (llama.cpp compiles
+  Metal shaders at runtime) and `disable-library-validation` (it loads its own
+  dylibs). Without them the hardened runtime kills `llama-server` at launch.
+- **Builds are `aarch64` only.** Intel Macs cannot run the current dmg.
 
 ## Verifying UI flows
 Playwright cannot drive this app: it targets Chromium/Firefox/WebKit browsers,
