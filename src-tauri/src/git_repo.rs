@@ -55,6 +55,34 @@ fn run_git_res(root: &Path, args: &[&str]) -> Res<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// How many untracked files are worth synthesizing a patch for in one read,
+/// and how large one of them may be. Both are review limits, not correctness
+/// limits: past them the file still appears as a status row, it just doesn't
+/// carry its contents. A human is not reading the 201st new file in a single
+/// pass, and a multi-megabyte one is generated output, not a change.
+const UNTRACKED_DIFF_FILE_LIMIT: usize = 200;
+const UNTRACKED_DIFF_BYTE_LIMIT: u64 = 1024 * 1024;
+
+/// The "new file" patch for one untracked path.
+///
+/// `git diff --no-index` exits 1 whenever the two sides differ — which is
+/// always, here — so the exit code carries no information and only stdout is
+/// read. A path git cannot diff (binary, unreadable, a dangling symlink)
+/// yields no hunks; the caller drops it and the status row still lists it.
+fn untracked_patch(root: &Path, path: &str) -> String {
+    let Some(bin) = crate::executor::find_on_path("git") else {
+        return String::new();
+    };
+    Command::new(bin)
+        .args(["diff", "--no-index", "--", "/dev/null", path])
+        .current_dir(root)
+        .env("PATH", crate::executor::child_path_env())
+        .output()
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 /// Read-only git operations used by the harness.
 pub trait GitRepo: Send + Sync + 'static {
     /// Whether `root` is inside a git worktree.
@@ -72,7 +100,8 @@ pub trait GitRepo: Send + Sync + 'static {
     /// Porcelain status entries, including untracked files.
     fn status(&self, root: &Path) -> Res<Vec<FileStatus>>;
 
-    /// Unified diff of unstaged changes.
+    /// Unified diff of unstaged changes, untracked files included as
+    /// synthesized "new file" patches.
     fn working_tree_diff(&self, root: &Path) -> Res<String>;
 
     /// Unified diff of staged changes.
@@ -168,7 +197,41 @@ impl GitRepo for ShellGitRepo {
     }
 
     fn working_tree_diff(&self, root: &Path) -> Res<String> {
-        run_git_res(root, &["diff"])
+        let mut out = run_git_res(root, &["diff"])?;
+        // `git diff` is blind to untracked files, but a file the agent just
+        // created is the single most common thing there is to review — a
+        // thread whose whole turn was "write README.md" otherwise renders an
+        // empty pane while the diff stat promises +107. Synthesize the same
+        // "new file" patch git would emit had the file been staged, so every
+        // reader downstream (pane, stat, commit draft) sees one diff.
+        //
+        // Bounded on both axes, because this runs one `git` process per file
+        // against whatever happens to be untracked: a repo with no
+        // `.gitignore` yet has a `node_modules` in that list, and an
+        // unbounded loop there would hang the pane and exhaust memory before
+        // rendering anything. Files past either bound keep their status row,
+        // which is how untracked files displayed before this existed.
+        let mut budget = UNTRACKED_DIFF_FILE_LIMIT;
+        for entry in self.status(root)?.iter().filter(|f| f.code == "??") {
+            if budget == 0 {
+                break;
+            }
+            let too_big = std::fs::metadata(root.join(&entry.path))
+                .map(|meta| meta.len() > UNTRACKED_DIFF_BYTE_LIMIT)
+                .unwrap_or(true);
+            if too_big {
+                continue;
+            }
+            budget -= 1;
+            let patch = untracked_patch(root, &entry.path);
+            if !patch.is_empty() {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&patch);
+            }
+        }
+        Ok(out)
     }
 
     fn staged_diff(&self, root: &Path) -> Res<String> {

@@ -21,7 +21,7 @@ import type { FileStatus } from "./api";
 import DiffRows from "./DiffRows";
 import type { DiffView } from "./DiffRows";
 import { describeError } from "./errors";
-import { rowsFromHunk } from "./diffLines";
+import { isOneSided, rowsFromHunk } from "./diffLines";
 import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
 
 /** Survives remounts and app restarts: a reviewer who wants side-by-side
@@ -30,12 +30,14 @@ const VIEW_KEY = "palisade.diffView";
 
 type Props = {
   projectHash: string;
-  /** Read this thread's isolated worktree instead of the project root.
+  /** Which working tree to show: this thread's isolated worktree when it has
+   *  one, the project root otherwise.
    *
-   *  Staging, discarding and committing are hidden while it is set: those
-   *  act on the project root, and offering them over a worktree's diff would
-   *  stage a file the user is not looking at. Reviewing a thread's work is
-   *  reading; the Source Control panel is where changes get committed. */
+   *  Every write below is routed through the same id, so staging and
+   *  discarding act on the tree that is actually on screen. An earlier
+   *  revision made the pane read-only whenever this was set — writes went to
+   *  the project root regardless, so the only safe thing to do was offer
+   *  nothing. Routing them fixes the cause; the buttons come back. */
   threadId?: string;
   /** Show only this file's diff — set when a row in the Source Control
    *  panel is clicked, so "click a change" lands on that change rather
@@ -65,6 +67,13 @@ function FileDiff({
   busy: boolean;
   view: DiffView;
 }) {
+  // An added or deleted file has no opposite side, so side-by-side would put
+  // a full-height column of blank cells next to it — indistinguishable from a
+  // broken render. Decided per file rather than per hunk so the columns don't
+  // flip partway down, and left as the reviewer's own toggle everywhere else.
+  const rowsByHunk = file.hunks.map((hunk) => rowsFromHunk(hunk));
+  const effectiveView: DiffView =
+    view === "split" && rowsByHunk.every(isOneSided) ? "inline" : view;
   return (
     <div className="diff-file" data-testid="diff-file">
       <div className="diff-file-head">
@@ -118,7 +127,7 @@ function FileDiff({
               </Button>
             </div>
           )}
-          <DiffRows rows={rowsFromHunk(hunk)} view={view} />
+          <DiffRows rows={rowsByHunk[i]} view={effectiveView} />
         </div>
       ))}
     </div>
@@ -132,9 +141,9 @@ export default function DiffPane({
   focusPath,
   onClearFocus,
 }: Props) {
-  // Reviewing another tree is read-only: every write below targets the
-  // project root, so the buttons would act on a file that is not on screen.
-  const readOnly = threadId !== undefined;
+  /** A thread's worktree is the ordinary case now, not a special read-only
+   *  one — used only to word the empty state for whose tree it is. */
+  const isWorktree = threadId !== undefined;
   const [isRepo, setIsRepo] = useState(true);
   const [status, setStatus] = useState<FileStatus[]>([]);
   const [workingFiles, setWorkingFiles] = useState<StructuredPatch[]>([]);
@@ -198,7 +207,7 @@ export default function DiffPane({
     if (!confirmDiscard) return;
     const { path, untracked } = confirmDiscard;
     setConfirmDiscard(null);
-    run(() => api.gitDiscardFile(projectHash, path, untracked));
+    run(() => api.gitDiscardFile(projectHash, path, untracked, threadId));
   };
 
   if (!isRepo) {
@@ -234,7 +243,19 @@ export default function DiffPane({
     focusPath ? files.filter((f) => pathFromPatch(f) === focusPath) : files;
   const shownWorking = focused(workingFiles);
   const shownStaged = focused(stagedFiles);
-  const untracked = status.filter((f) => f.code === "??");
+  /** A new file is discarded by deleting it, not by restoring it from HEAD —
+   *  now that untracked files arrive as real patches, the row that renders
+   *  one still has to know which kind of discard it needs. */
+  const untrackedPaths = new Set(
+    status.filter((f) => f.code === "??").map((f) => f.path)
+  );
+  // Untracked files reach the working diff as synthesized "new file" patches,
+  // so only the ones git could not diff at all (binary, unreadable) still
+  // need the bare name-only row — listing the rest twice is the bug.
+  const workingPaths = new Set(workingFiles.map(pathFromPatch));
+  const untracked = status.filter(
+    (f) => f.code === "??" && !workingPaths.has(f.path)
+  );
   const shownUntracked = focusPath
     ? untracked.filter((f) => f.path === focusPath)
     : untracked;
@@ -257,7 +278,7 @@ export default function DiffPane({
 
       {isClean && !error && (
         <p className="empty">
-          {readOnly
+          {isWorktree
             ? "No changes in this thread yet."
             : "Nothing to commit — working tree clean."}
         </p>
@@ -299,10 +320,10 @@ export default function DiffPane({
               key={pathFromPatch(file)}
               file={file}
               actionLabel="Unstage hunk"
-              onHunkAction={
-                readOnly
-                  ? undefined
-                  : (hunk) => run(() => api.gitUnstageHunk(projectHash, patchForHunk(file, hunk)))
+              onHunkAction={(hunk) =>
+                run(() =>
+                  api.gitUnstageHunk(projectHash, patchForHunk(file, hunk), threadId)
+                )
               }
               busy={busy}
               view={view}
@@ -319,20 +340,21 @@ export default function DiffPane({
               key={pathFromPatch(file)}
               file={file}
               actionLabel="Stage hunk"
-              onHunkAction={
-                readOnly
-                  ? undefined
-                  : (hunk) => run(() => api.gitStageHunk(projectHash, patchForHunk(file, hunk)))
+              onHunkAction={(hunk) =>
+                run(() =>
+                  api.gitStageHunk(projectHash, patchForHunk(file, hunk), threadId)
+                )
               }
-              onStageAll={
-                readOnly
-                  ? undefined
-                  : () => run(() => api.gitStageFile(projectHash, pathFromPatch(file)))
+              onStageAll={() =>
+                run(() =>
+                  api.gitStageFile(projectHash, pathFromPatch(file), threadId)
+                )
               }
-              onDiscard={
-                readOnly
-                  ? undefined
-                  : () => setConfirmDiscard({ path: pathFromPatch(file), untracked: false })
+              onDiscard={() =>
+                setConfirmDiscard({
+                  path: pathFromPatch(file),
+                  untracked: untrackedPaths.has(pathFromPatch(file)),
+                })
               }
               busy={busy}
               view={view}
@@ -346,35 +368,31 @@ export default function DiffPane({
                   new
                 </Badge>
                 <span className="diff-spacer" />
-                {!readOnly && (
-                  <>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      color="danger"
-                      leftSection={<IconTrash size={12} />}
-                      onClick={() =>
-                        setConfirmDiscard({ path: entry.path, untracked: true })
-                      }
-                      disabled={busy}
-                      data-testid="discard-untracked-btn"
-                    >
-                      Discard
-                    </Button>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      leftSection={<IconPlus size={12} />}
-                      onClick={() =>
-                        run(() => api.gitStageFile(projectHash, entry.path))
-                      }
-                      disabled={busy}
-                      data-testid="stage-untracked-btn"
-                    >
-                      Stage
-                    </Button>
-                  </>
-                )}
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="danger"
+                  leftSection={<IconTrash size={12} />}
+                  onClick={() =>
+                    setConfirmDiscard({ path: entry.path, untracked: true })
+                  }
+                  disabled={busy}
+                  data-testid="discard-untracked-btn"
+                >
+                  Discard
+                </Button>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  leftSection={<IconPlus size={12} />}
+                  onClick={() =>
+                    run(() => api.gitStageFile(projectHash, entry.path, threadId))
+                  }
+                  disabled={busy}
+                  data-testid="stage-untracked-btn"
+                >
+                  Stage
+                </Button>
               </div>
             </div>
           ))}

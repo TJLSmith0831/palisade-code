@@ -88,7 +88,7 @@ describe("SourceControlPanel staging", () => {
     render(<SourceControlPanel {...props} onOpenFile={onOpenFile} />);
     fireEvent.click(await screen.findByTestId("sc-stage-src/b.ts"));
     await waitFor(() =>
-      expect(mocked.gitStageFile).toHaveBeenCalledWith("p1", "src/b.ts")
+      expect(mocked.gitStageFile).toHaveBeenCalledWith("p1", "src/b.ts", undefined)
     );
     expect(onOpenFile).not.toHaveBeenCalled();
   });
@@ -97,7 +97,7 @@ describe("SourceControlPanel staging", () => {
     render(<SourceControlPanel {...props} />);
     fireEvent.click(await screen.findByTestId("sc-stage-src/b.ts"));
     await waitFor(() =>
-      expect(mocked.gitStageFile).toHaveBeenCalledWith("p1", "src/b.ts")
+      expect(mocked.gitStageFile).toHaveBeenCalledWith("p1", "src/b.ts", undefined)
     );
   });
 
@@ -105,8 +105,36 @@ describe("SourceControlPanel staging", () => {
     render(<SourceControlPanel {...props} />);
     fireEvent.click(await screen.findByTestId("sc-unstage-src/a.ts"));
     await waitFor(() =>
-      expect(mocked.gitUnstageFile).toHaveBeenCalledWith("p1", "src/a.ts")
+      expect(mocked.gitUnstageFile).toHaveBeenCalledWith("p1", "src/a.ts", undefined)
     );
+  });
+
+  /** The panel used to read and write the project root no matter which
+   *  thread was active, so an agent's worktree changes never appeared here
+   *  and could not be committed from the UI at all. */
+  it("reads and writes the active thread's worktree, not the project root", async () => {
+    render(<SourceControlPanel {...props} threadId="t1" />);
+
+    await waitFor(() =>
+      expect(mocked.gitStatus).toHaveBeenCalledWith("p1", "t1")
+    );
+    expect(mocked.gitLog).toHaveBeenCalledWith("p1", 12, "t1");
+    expect(mocked.gitAheadBehind).toHaveBeenCalledWith("p1", "t1");
+
+    fireEvent.click(await screen.findByTestId("sc-stage-src/b.ts"));
+    await waitFor(() =>
+      expect(mocked.gitStageFile).toHaveBeenCalledWith("p1", "src/b.ts", "t1")
+    );
+  });
+
+  /** The panel and the diff pane render the same working tree from separate
+   *  state. Staging here left the pane still showing the file as unstaged. */
+  it("tells the app the working tree changed after a write", async () => {
+    const onChanged = vi.fn();
+    render(<SourceControlPanel {...props} onChanged={onChanged} />);
+
+    fireEvent.click(await screen.findByTestId("sc-stage-src/b.ts"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   it("stages many files one at a time — git's index takes an exclusive lock", async () => {

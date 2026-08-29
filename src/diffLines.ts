@@ -41,6 +41,23 @@ export function pairRows(rows: DiffRow[]): DiffPair[] {
   return pairs;
 }
 
+/** Whether these rows only ever touch one side of the file — every line
+ *  added (a new file) or every line removed (a deleted one).
+ *
+ *  Side-by-side has nothing to show opposite such a file: the whole "before"
+ *  column renders as blank cells, a full-height dead gutter that reads as a
+ *  rendering failure. GitHub and VS Code both drop to unified for added and
+ *  deleted files; callers use this to do the same. Context lines exist on
+ *  both sides, so their presence alone means the split view has real work.
+ */
+export function isOneSided(rows: DiffRow[]): boolean {
+  if (rows.length === 0) return false;
+  return (
+    rows.every((row) => row.type === "add") ||
+    rows.every((row) => row.type === "remove")
+  );
+}
+
 /** Line-level diff between two full file contents (no git involved). */
 export function rowsFromChange(before: string, after: string): DiffRow[] {
   const rows: DiffRow[] = [];

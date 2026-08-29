@@ -626,11 +626,28 @@ input[type="checkbox"] {
 }
 
 .ds-branch-list li {
+  /* A row carries a branch name, an optional worktree marker and an optional
+     delete button. Laid out as a flex row so the trailing controls stay on
+     the baseline beside the name: in normal flow they wrapped onto their own
+     line and every long branch turned one row into three. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 10px;
   font-size: 12px;
   font-family: var(--mono);
   cursor: pointer;
   border-bottom: 1px solid var(--border);
+}
+
+/* Branch names are as long as the tool that generated them; the row
+   truncates rather than growing the dialog, with the full name on hover. */
+.ds-branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-branch-list li:last-child {
@@ -639,6 +656,70 @@ input[type="checkbox"] {
 
 .ds-branch-list li:hover {
   background: var(--active-row);
+}
+
+/* Focus is the keyboard's hover — the rows are `role="button" tabIndex={0}`,
+   so without this they were operable but invisible to anyone not using a
+   mouse. */
+.ds-branch-list li:focus-visible {
+  background: var(--active-row);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Destructive, secondary, and one per row: an icon button, not the global
+   bordered `button` box it was inheriting — that box is what pushed the row
+   to wrap in the first place. */
+.ds-branch-delete {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Revealed on the row the pointer or the keyboard is on — always-on delete
+   buttons turn a branch list into a minefield. Never hidden from assistive
+   tech: it keeps its `aria-label` and stays focusable. */
+.ds-branch-list li:hover .ds-branch-delete,
+.ds-branch-list li:focus-within .ds-branch-delete,
+.ds-branch-delete:focus-visible {
+  opacity: 1;
+}
+
+.ds-branch-delete:hover,
+.ds-branch-delete:focus-visible {
+  background: color-mix(in oklab, var(--danger), transparent 85%);
+  color: var(--danger);
+}
+
+/* The branch dialog's create-a-branch input and its footnote. Both were
+   inline-flow siblings, so the hint ran up beside the input and wrapped
+   around it — the dialog read as broken before a single branch was picked.
+   Stacked, full-width, and the hint set in the sans stack because it is a
+   sentence, not a label. */
+#barSelect {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+}
+
+.ds-branch-list + #barSelect + .hint,
+#barSelect + .hint {
+  display: block;
+  margin-top: 8px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
 }
 
 .ds-new-thread {
@@ -3586,16 +3667,47 @@ details.graph-report-wrap > summary {
 }
 
 .ds-sc-commit-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
   font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
 }
 
+/* The author is the same name on every row of a personal repo; the age is
+   the row's only varying fact. So the author is what truncates. */
+.ds-sc-commit-author {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The separator belongs to the author, so it truncates away with it — as its
+   own element it survived the author being clipped to nothing and left the
+   row starting with a bare "·". The flex gap does the separating. */
+.ds-sc-commit-author::after {
+  content: " ·";
+}
+
+.ds-sc-commit-age {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Marks the commit HEAD is on. Branch names are generated — a worktree's can
+   run to fifty characters — and unbounded it starved the commit subject
+   beside it down to two letters. It is the annotation, not the content: it
+   yields first and truncates, with the full name on hover. */
 .ds-sc-branch-badge {
   display: flex;
   align-items: center;
   gap: 3px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 40%;
   font-size: 9px;
   font-family: var(--mono);
   text-transform: uppercase;
@@ -3603,6 +3715,16 @@ details.graph-report-wrap > summary {
   border: 1px solid color-mix(in oklab, var(--accent), transparent 65%);
   border-radius: 9999px;
   padding: 1px 6px;
+}
+
+.ds-sc-branch-badge svg {
+  flex-shrink: 0;
+}
+
+.ds-sc-branch-badge-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- Search panel -------------------------------------------------------- */
