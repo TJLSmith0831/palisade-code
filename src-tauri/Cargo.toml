@@ -57,3 +57,12 @@ objc = "0.2.7"
 tempfile = "3"
 tokio-util = { version = "0.7", features = ["compat"] }
 futures = "0.3"
+
+# Release binary is ~3% of the .dmg (the bundled .gguf is 98%), so this is about
+# a tidier binary, not download size. strip drops debug symbols; lto + a single
+# codegen unit let the optimizer work across the whole crate graph. Costs a
+# noticeably slower release build — dev builds are unaffected.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
