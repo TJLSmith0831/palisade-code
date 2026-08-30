@@ -1,7 +1,7 @@
 {
   "name": "palisade-code",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "postinstall": "scripts/link-sidecar.sh || true",
