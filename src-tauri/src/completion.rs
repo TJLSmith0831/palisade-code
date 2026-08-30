@@ -56,6 +56,11 @@ const MAX_SUFFIX_CHARS: usize = 128 * CHARS_PER_TOKEN_ESTIMATE;
 
 const MODEL_FILE_NAME: &str = "Qwen3.5-0.8B.Q4_K_M.gguf";
 
+/// Which entry of the role-keyed model manifest this build wants. Palisade
+/// ships one model today; the manifest is keyed so adding a second is a new
+/// key rather than a format change that strands every installed beta.
+const MODEL_ROLE: &str = "fim";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionResponse {
@@ -557,10 +562,10 @@ pub struct ModelManifest {
     pub min_app_version: String,
 }
 
-/// Where the update Worker serves `models.json`. `None` until the Worker is
-/// deployed — the download path then reports a clear error rather than
-/// guessing at a URL.
-const MODEL_MANIFEST_URL: Option<&str> = None;
+/// Where the update Worker serves `models.json`. The Worker holds the
+/// Hugging Face credentials; the app never does.
+const MODEL_MANIFEST_URL: Option<&str> =
+    Some("https://palisade-updates.tjlsmith0831.workers.dev/models.json");
 
 /// True when `have` is at or past `want`, comparing dotted numeric versions.
 /// An empty `want` means no floor was set.
@@ -646,6 +651,24 @@ fn write_verified(
     Ok(())
 }
 
+/// Picks this build's model out of a role-keyed manifest.
+///
+/// The manifest maps a role (`"fim"`) to its entry, so a second or third
+/// model is an added key rather than a shape change that older installs
+/// cannot parse.
+#[allow(dead_code)]
+fn select_model(manifest_json: &str, role: &str) -> Res<ModelManifest> {
+    let manifests: std::collections::BTreeMap<String, ModelManifest> =
+        serde_json::from_str(manifest_json)
+            .map_err(|err| format!("model manifest is not valid JSON: {err}"))?;
+    let count = manifests.len();
+    manifests
+        .into_iter()
+        .find(|(key, _)| key == role)
+        .map(|(_, entry)| entry)
+        .ok_or_else(|| format!("model manifest has no \"{role}\" entry ({count} roles listed)"))
+}
+
 /// The installed model's home: `<app-data>/models/`.
 ///
 /// Deliberately outside the `.app`: the updater replaces the whole bundle, so
@@ -720,11 +743,12 @@ fn download_model(app: &AppHandle, target: &Path) -> Res<()> {
     let manifest_url = MODEL_MANIFEST_URL
         .ok_or("no model manifest configured, so the model cannot be downloaded")?;
 
-    let manifest: ModelManifest = ureq::get(manifest_url)
+    let body = ureq::get(manifest_url)
         .call()
         .map_err(|err| format!("failed to fetch model manifest: {err}"))?
-        .into_json()
-        .map_err(|err| format!("model manifest is not valid JSON: {err}"))?;
+        .into_string()
+        .map_err(|err| format!("failed to read model manifest: {err}"))?;
+    let manifest = select_model(&body, MODEL_ROLE)?;
 
     let app_version = env!("CARGO_PKG_VERSION");
     if !version_at_least(app_version, &manifest.min_app_version) {
@@ -1341,5 +1365,32 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         let mut bytes = &b"abc"[..];
         let _ = write_verified(&dest, &mut bytes, "deadbeef", |done| seen.push(done));
         assert_eq!(seen, vec![3]);
+    }
+
+    #[test]
+    fn select_model_picks_this_builds_role() {
+        let json = r#"{
+            "fim": {"filename": "fim.gguf", "sha256": "aa", "url": "https://x/fim", "size": 7, "minAppVersion": "0.2.0"},
+            "chat": {"filename": "chat.gguf", "sha256": "bb", "url": "https://x/chat", "size": 9}
+        }"#;
+
+        let picked = select_model(json, "fim").unwrap();
+        assert_eq!(picked.filename, "fim.gguf");
+        assert_eq!(picked.size, 7);
+        assert_eq!(picked.min_app_version, "0.2.0");
+
+        // A role this build does not ship must not silently fall back to
+        // whatever happens to be first in the map.
+        let other = select_model(json, "chat").unwrap();
+        assert_eq!(other.filename, "chat.gguf");
+        assert_eq!(other.min_app_version, "", "missing floor means no floor");
+    }
+
+    #[test]
+    fn select_model_reports_a_missing_role_rather_than_guessing() {
+        let json = r#"{"chat": {"filename": "c.gguf", "sha256": "bb", "url": "https://x/c"}}"#;
+        let err = select_model(json, "fim").unwrap_err();
+        assert!(err.contains("fim"), "got: {err}");
+        assert!(err.contains("1 roles listed"), "got: {err}");
     }
 }
