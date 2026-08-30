@@ -2359,11 +2359,28 @@ pub fn run() {
             }
             let harness: tauri::State<'_, Harness> = app.state();
             if *harness.completion_enabled.lock().unwrap() {
-                let handle = app.handle();
-                if let Err(err) = start_completion_server(&handle) {
-                    eprintln!("completion: {err}");
-                    let _ = app.emit("harness-warning", err);
-                }
+                // Installing the model is a background job: copying it out of
+                // the installer bundle takes seconds and downloading it takes
+                // minutes, and neither should hold the window closed.
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    if let Err(err) = completion::ensure_model_installed(&handle) {
+                        eprintln!("completion: {err}");
+                        let _ = handle.emit("harness-warning", err);
+                        return;
+                    }
+                    // A completion requested while the model was still landing
+                    // latches the permanent-disable sentinel (see
+                    // `ensure_completion_server`). Clear it now that the model
+                    // is actually there, or AI completion stays off until the
+                    // next launch.
+                    let harness = handle.state::<Harness>();
+                    *harness.completion_crashes.lock().unwrap() = 0;
+                    if let Err(err) = start_completion_server(&handle) {
+                        eprintln!("completion: {err}");
+                        let _ = handle.emit("harness-warning", err);
+                    }
+                });
             }
             Ok(())
         })

@@ -36,7 +36,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/models/"],
     "externalBin": ["llama-server"],
     "macOS": {
       "hardenedRuntime": true,
