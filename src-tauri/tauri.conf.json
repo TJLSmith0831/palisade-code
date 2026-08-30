@@ -28,7 +28,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -36,11 +39,22 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["llama-server"],
+    "externalBin": [
+      "llama-server"
+    ],
     "macOS": {
       "hardenedRuntime": true,
       "minimumSystemVersion": "11.0",
       "entitlements": "entitlements.plist"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0MjQ4MTE0Q0FCMDBDNjQKUldSa0RMREtGSUVrTkEvanYzaFNEanhsbFVQUk5NdUYwOENnRWtzd2hsMFU0MVJSNEUyVUpQOFQK",
+      "endpoints": [
+        "https://palisade-updates.tjlsmith0831.workers.dev/latest.json"
+      ]
     }
   }
 }

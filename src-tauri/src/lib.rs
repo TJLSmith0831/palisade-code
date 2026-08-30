@@ -2319,6 +2319,70 @@ async fn flush_completion_telemetry(
         .map_err(|e| e.to_string())?
 }
 
+/// What a bug report needs attached that a tester cannot be asked to find.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostics {
+    pub app_version: String,
+    pub os_version: String,
+    pub arch: String,
+    pub executor: String,
+    pub model_installed: bool,
+}
+
+#[tauri::command]
+async fn collect_diagnostics(app: tauri::AppHandle) -> Res<Diagnostics> {
+    tokio::task::spawn_blocking(move || {
+        // The preflight's agent list, not `selected_executor`: that resolves
+        // per project and thread, and a bug report has neither.
+        let harness = app.state::<Harness>();
+        let agents = harness
+            .preflight
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|flight| {
+                flight
+                    .agents
+                    .iter()
+                    .map(|agent| agent.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let executor = if agents.is_empty() {
+            "none detected".to_string()
+        } else {
+            agents.join(", ")
+        };
+        let model_installed = completion::resolve_sidecar_paths(&app)
+            .map(|(_, model)| model.is_file())
+            .unwrap_or(false);
+
+        Ok(Diagnostics {
+            app_version: app.package_info().version.to_string(),
+            os_version: os_release(),
+            arch: std::env::consts::ARCH.to_string(),
+            executor,
+            model_installed,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// `sw_vers -productVersion`, or a placeholder. A diagnostic that fails must
+/// never block the report it was attached to.
+fn os_release() -> String {
+    std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|v| format!("macOS {}", v.trim()))
+        .unwrap_or_else(|| "unknown".into())
+}
+
 #[tauri::command]
 async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::CompletionSettings> {
     tokio::task::spawn_blocking(move || {
@@ -2341,7 +2405,9 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(debug_assertions)]
     {
         // Default binds 0.0.0.0, which would expose the bridge to the LAN.
@@ -2391,6 +2457,7 @@ pub fn run() {
             set_completion_enabled,
             set_completion_keybinding,
             get_completion_settings,
+            collect_diagnostics,
             flush_completion_telemetry,
             list_mcp_servers,
             save_mcp_server,

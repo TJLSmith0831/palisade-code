@@ -95,6 +95,7 @@ import {
   parseChainInvocation,
   type MenuCommand,
 } from "./slashCommands";
+import BetaBadge from "./BetaBadge";
 import ChainsPanel, { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
 import { CHAIN_EXECUTOR_PREFIX } from "./api";
 import ChainCanvas, { type RunView } from "./ChainCanvas";
@@ -5105,6 +5106,7 @@ export default function App() {
                 <IconSettings size={14} />
               </ActionIcon>
             </Tooltip>
+            <BetaBadge />
           </div>
         </header>
         {flight && flight.warnings.length > 0 && (

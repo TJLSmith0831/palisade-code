@@ -1206,3 +1206,14 @@ export const dbApplyEdits = (
   table: string,
   edits: DbRowEdit[]
 ) => invoke<number>("db_apply_edits", { projectHash, connectionId, schema, table, edits });
+
+export type Diagnostics = {
+  appVersion: string;
+  osVersion: string;
+  arch: string;
+  executor: string;
+  modelInstalled: boolean;
+};
+
+export const collectDiagnostics = () =>
+  invoke<Diagnostics>("collect_diagnostics");
