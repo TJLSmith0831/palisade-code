@@ -21,8 +21,12 @@ fn run(bin: &Path, root: &Path, args: &[&str]) -> Res<String> {
         .output()
         .map_err(|err| format!("could not run git: {err}"))?;
     if !output.status.success() {
+        // git reports some failures entirely on stdout ("nothing to commit"),
+        // so stderr alone can leave the error blank and undiagnosable.
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git {} failed:\n{}", args.join(" "), stderr.trim()));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = [stderr.trim(), stdout.trim()].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n");
+        return Err(format!("git {} failed:\n{}", args.join(" "), detail));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -660,7 +664,7 @@ world
 
     fn init_bare_remote() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        run(git(), dir.path(), &["init", "--bare", "-q"]).unwrap();
+        run(git(), dir.path(), &["init", "--bare", "-q", "-b", "main"]).unwrap();
         dir
     }
 

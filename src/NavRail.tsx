@@ -3,6 +3,7 @@ import {
   IconFolder,
   IconSearch,
   IconGitBranch,
+  IconDeviceWorkstation,
   IconClipboardList,
   IconTopologyStar3,
   IconPlayerPlay,
@@ -10,7 +11,6 @@ import {
   IconDatabase,
   IconRoute,
   IconHistory,
-  IconFolders,
   IconSettings,
 } from "@tabler/icons-react";
 import type { PanelId } from "./hooks/useAppShell";
@@ -35,6 +35,10 @@ const TOP_NAV: RailItem[] = [
   { id: "explorer", label: "Explorer", Icon: IconFolder },
   { id: "search", label: "Search", Icon: IconSearch },
   { id: "git", label: "Source Control", Icon: IconGitBranch },
+  // Workspace lives here, not in BOTTOM: it's the project/branch picker for
+  // this machine, grouped with the other "where am I" controls rather than
+  // buried below the agent-orchestration group where it was easy to miss.
+  { id: "workspace", label: "Workspace", Icon: IconDeviceWorkstation },
 ];
 
 const TOP_AGENT: RailItem[] = [
@@ -48,11 +52,6 @@ const TOP_AGENT: RailItem[] = [
 
 const BOTTOM: RailItem[] = [
   { id: "history", label: "History", Icon: IconHistory },
-  // Not "Account": Palisade has no account (PRODUCT.md — no sign-in, no
-  // billing), and the panel this opens is the project/branch picker. A
-  // first-run reviewer clicked it expecting a profile and landed somewhere
-  // unrelated-looking.
-  { id: "workspace", label: "Workspace", Icon: IconFolders },
   { id: "settings", label: "Settings", Icon: IconSettings },
 ];
 
