@@ -148,12 +148,12 @@ export default function BetaBadge() {
             </Badge>
           </Tooltip>
         )}
-        <Tooltip label="Report a bug">
+        <Tooltip label="Bug Report / Feature Request">
           <ActionIcon
             variant="subtle"
             className="ds-icon-btn"
             onClick={() => setOpen(true)}
-            aria-label="Report a bug"
+            aria-label="Bug Report / Feature Request"
             data-testid="open-feedback"
           >
             <IconBug size={14} />
@@ -173,7 +173,7 @@ export default function BetaBadge() {
       <Modal
         opened={open}
         onClose={close}
-        title="Report a bug"
+        title="Bug Report / Feature Request"
         data-testid="feedback-modal"
       >
         {sent ? (

@@ -4957,6 +4957,7 @@ export default function App() {
             </Tooltip>
           )}
           <div className="ds-chrome-utils">
+            <BetaBadge />
             {/* Amendment 1's split button: project-scoped, not file-scoped.
                 Primary action is the last command run (first configured
                 until you run one); the chevron lists them all. Nothing
@@ -5106,7 +5107,6 @@ export default function App() {
                 <IconSettings size={14} />
               </ActionIcon>
             </Tooltip>
-            <BetaBadge />
           </div>
         </header>
         {flight && flight.warnings.length > 0 && (
