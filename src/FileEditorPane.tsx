@@ -228,6 +228,10 @@ const popupTheme = EditorView.theme({
     borderRadius: "6px",
     boxShadow: "0 4px 20px rgba(0, 0, 0, 0.35)",
     fontSize: "12px",
+    // A hover-doc signature has no natural width limit (generics, long
+    // arrow types), so without a cap the card stretches to fit the content
+    // instead of wrapping it.
+    maxWidth: "420px",
   },
   ".cm-tooltip .cm-tooltip-arrow:before": {
     borderTopColor: "var(--border)",
@@ -236,6 +240,62 @@ const popupTheme = EditorView.theme({
   ".cm-tooltip .cm-tooltip-arrow:after": {
     borderTopColor: "var(--surface)",
     borderBottomColor: "var(--surface)",
+  },
+  // The LSP hover card (`.cm-lsp-documentation`) renders a signature block
+  // above a markdown-derived prose description. The library's own base
+  // theme gives it 7px of horizontal padding and nothing else — no header
+  // treatment, no wrap guarantee, no font split. This mirrors the
+  // signature-header-then-body layout of a mature IDE's quick-doc popup
+  // (e.g. PyCharm/IntelliJ): the signature gets its own full-bleed header
+  // strip with a divider, everything else is padded body copy. Two-Voice
+  // Rule still applies: signature stays mono, prose gets the sans default.
+  ".cm-tooltip .cm-lsp-documentation": {
+    padding: 0,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+  },
+  ".cm-tooltip .cm-lsp-documentation > pre:first-child": {
+    margin: "0 0 8px",
+    padding: "8px 10px",
+    background: "var(--surface-warm)",
+    borderBottom: "1px solid var(--border)",
+    // Matches the card's own 6px radius (DESIGN.md's documented top-only
+    // rounding pattern) so the header's top corners sit flush inside it.
+    borderRadius: "6px 6px 0 0",
+    fontFamily: "var(--mono)",
+    // A bare `pre` carries its own UA-stylesheet `white-space: pre`, which
+    // wins over the inherited `pre-wrap` on the parent — this is the one
+    // element in the popup that actually needs the wrap, so it has to be
+    // set here directly rather than relying on inheritance.
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+  },
+  ".cm-tooltip .cm-lsp-documentation > :not(pre:first-child)": {
+    padding: "0 10px",
+  },
+  ".cm-tooltip .cm-lsp-documentation > :last-child": {
+    marginBottom: "8px",
+  },
+  ".cm-tooltip .cm-lsp-documentation p": {
+    fontSize: "13px",
+    lineHeight: "1.5",
+    margin: "6px 0",
+  },
+  ".cm-tooltip .cm-lsp-documentation ul": {
+    margin: "6px 0",
+    paddingLeft: "16px",
+  },
+  ".cm-tooltip .cm-lsp-documentation li": {
+    fontSize: "12px",
+    lineHeight: "1.5",
+    marginBottom: "2px",
+  },
+  ".cm-tooltip .cm-lsp-documentation li code, .cm-tooltip .cm-lsp-documentation p code": {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: "0 4px",
+    borderRadius: "4px",
+    fontSize: "11px",
   },
   ".cm-tooltip-autocomplete > ul > li": {
     color: "var(--fg)",
