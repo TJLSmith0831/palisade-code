@@ -126,6 +126,12 @@ export function useAppShell(projectHash: string | undefined) {
     min: 160,
     max: 420,
     axis: "horizontal",
+    // The rail and its panel are DOM-first/left-edge, but `data-preset`
+    // flips their CSS `order` to the right edge in Vibe (see the shell's
+    // "ONE shell, two arrangements" comment). The resize handle sits on
+    // the panel's *inner* edge either way, so which drag direction grows
+    // it flips right along with that visual side.
+    reverse: centerShell === "vibe",
   });
   const rightPanel = useResizable({
     storageKey: `palisade:layout:${layoutHash}:right`,

@@ -1300,6 +1300,7 @@ input[type="checkbox"] {
 
 .ds-code-editor {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   background: var(--editor-bg);
   display: flex;
@@ -1311,6 +1312,7 @@ input[type="checkbox"] {
 
 .ds-media-preview {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   background: var(--editor-bg);
   display: flex;
@@ -1478,7 +1480,9 @@ input[type="checkbox"] {
   border: 1px solid var(--border) !important;
   border-radius: 6px;
   color: var(--fg);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  /* Matches .cm-tooltip's elevation in FileEditorPane.tsx — one popup
+     family, one shadow value. */
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .cm-tooltip-autocomplete ul li {
@@ -1520,6 +1524,10 @@ input[type="checkbox"] {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+  /* The base rule sets flex-shrink: 0 for its other (non-shrinking) use as
+   * a standalone header row; here it has to actually shrink or its content
+   * pushes the Save button past the editor pane's right edge. */
+  flex-shrink: 1;
 }
 
 .ds-crumb-active {
