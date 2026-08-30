@@ -96,6 +96,7 @@ import {
   parseChainInvocation,
   type MenuCommand,
 } from "./slashCommands";
+import BetaBadge from "./BetaBadge";
 import ChainsPanel, { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
 import { CHAIN_EXECUTOR_PREFIX } from "./api";
 import ChainCanvas, { type RunView } from "./ChainCanvas";
@@ -4986,6 +4987,7 @@ export default function App() {
             </Tooltip>
           )}
           <div className="ds-chrome-utils">
+            <BetaBadge />
             {/* Amendment 1's split button: project-scoped, not file-scoped.
                 Primary action is the last command run (first configured
                 until you run one); the chevron lists them all. Nothing

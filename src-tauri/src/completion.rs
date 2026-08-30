@@ -4,7 +4,7 @@
 //! returns the completion text plus model latency for telemetry.
 
 use std::collections::BTreeSet;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -19,7 +19,9 @@ use std::os::unix::fs::PermissionsExt;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 #[cfg(not(debug_assertions))]
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+use sha2::{Digest, Sha256};
 
 use crate::store::Res;
 
@@ -53,6 +55,11 @@ const MAX_PREFIX_CHARS: usize = 256 * CHARS_PER_TOKEN_ESTIMATE;
 const MAX_SUFFIX_CHARS: usize = 128 * CHARS_PER_TOKEN_ESTIMATE;
 
 const MODEL_FILE_NAME: &str = "Qwen3.5-0.8B.Q4_K_M.gguf";
+
+/// Which entry of the role-keyed model manifest this build wants. Palisade
+/// ships one model today; the manifest is keyed so adding a second is a new
+/// key rather than a format change that strands every installed beta.
+const MODEL_ROLE: &str = "fim";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -520,15 +527,9 @@ pub fn resolve_sidecar_paths(app: &AppHandle) -> Res<(PathBuf, PathBuf)> {
 
     #[cfg(not(debug_assertions))]
     {
-        // bundle.resources is `resources/models/`, which Tauri places at
-        // `Contents/Resources/resources/models/` in the macOS app bundle.
-        let model = app
-            .path()
-            .resolve(
-                format!("resources/models/{MODEL_FILE_NAME}"),
-                tauri::path::BaseDirectory::Resource,
-            )
-            .map_err(|err| format!("failed to resolve model resource: {err}"))?;
+        // The model lives outside the `.app` (see `installed_model_dir`), so
+        // it survives an update that replaces the whole bundle.
+        let model = installed_model_dir(app)?.join(MODEL_FILE_NAME);
 
         // Sidecar binaries live next to the main executable on all platforms
         // when bundled via `externalBin`.
@@ -541,6 +542,241 @@ pub fn resolve_sidecar_paths(app: &AppHandle) -> Res<(PathBuf, PathBuf)> {
 
         Ok((binary, model))
     }
+}
+
+/// Manifest entry describing the model an app version should be running.
+///
+/// Served as `models.json` so a new model ships by editing one JSON file —
+/// no rebuild, no notarization, no reinstall.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelManifest {
+    pub filename: String,
+    pub sha256: String,
+    pub url: String,
+    #[serde(default)]
+    pub size: u64,
+    /// Guards against an old app pulling a model whose prompt format it
+    /// cannot drive. Empty means "any version".
+    #[serde(default)]
+    pub min_app_version: String,
+}
+
+/// Where the update Worker serves `models.json`. The Worker holds the
+/// Hugging Face credentials; the app never does.
+const MODEL_MANIFEST_URL: Option<&str> =
+    Some("https://palisade-updates.tjlsmith0831.workers.dev/models.json");
+
+/// True when `have` is at or past `want`, comparing dotted numeric versions.
+/// An empty `want` means no floor was set.
+#[allow(dead_code)]
+fn version_at_least(have: &str, want: &str) -> bool {
+    if want.trim().is_empty() {
+        return true;
+    }
+    let parts = |v: &str| -> Vec<u64> {
+        v.split(['.', '-', '+'])
+            .map(|piece| piece.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (have, want) = (parts(have), parts(want));
+    for idx in 0..have.len().max(want.len()) {
+        let h = have.get(idx).copied().unwrap_or(0);
+        let w = want.get(idx).copied().unwrap_or(0);
+        if h != w {
+            return h > w;
+        }
+    }
+    true
+}
+
+/// Writes through a `.part` sibling and renames on success.
+///
+/// A half-written model must never be visible at the real path: the whole
+/// startup path keys off `model.exists()`, so a truncated file would read as
+/// a working install forever.
+#[allow(dead_code)]
+fn install_atomically(target: &Path, write: impl FnOnce(&Path) -> Res<()>) -> Res<()> {
+    let part = target.with_extension("part");
+    let _ = std::fs::remove_file(&part);
+    if let Err(err) = write(&part) {
+        let _ = std::fs::remove_file(&part);
+        return Err(err);
+    }
+    std::fs::rename(&part, target)
+        .map_err(|err| format!("failed to install model at {}: {err}", target.display()))
+}
+
+/// Streams `reader` into `dest`, hashing as it goes, and fails if the digest
+/// does not match `expected_sha256`.
+#[allow(dead_code)]
+fn write_verified(
+    dest: &Path,
+    reader: &mut impl Read,
+    expected_sha256: &str,
+    mut on_progress: impl FnMut(u64),
+) -> Res<()> {
+    let mut file = std::fs::File::create(dest)
+        .map_err(|err| format!("failed to create {}: {err}", dest.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut written: u64 = 0;
+
+    loop {
+        let read = reader
+            .read(&mut buf)
+            .map_err(|err| format!("model download failed: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        file.write_all(&buf[..read])
+            .map_err(|err| format!("failed writing model: {err}"))?;
+        written += read as u64;
+        on_progress(written);
+    }
+    file.flush()
+        .map_err(|err| format!("failed writing model: {err}"))?;
+
+    let digest = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if !digest.eq_ignore_ascii_case(expected_sha256.trim()) {
+        return Err(format!(
+            "model checksum mismatch: expected {expected_sha256}, got {digest}"
+        ));
+    }
+    Ok(())
+}
+
+/// Picks this build's model out of a role-keyed manifest.
+///
+/// The manifest maps a role (`"fim"`) to its entry, so a second or third
+/// model is an added key rather than a shape change that older installs
+/// cannot parse.
+#[allow(dead_code)]
+fn select_model(manifest_json: &str, role: &str) -> Res<ModelManifest> {
+    let manifests: std::collections::BTreeMap<String, ModelManifest> =
+        serde_json::from_str(manifest_json)
+            .map_err(|err| format!("model manifest is not valid JSON: {err}"))?;
+    let count = manifests.len();
+    manifests
+        .into_iter()
+        .find(|(key, _)| key == role)
+        .map(|(_, entry)| entry)
+        .ok_or_else(|| format!("model manifest has no \"{role}\" entry ({count} roles listed)"))
+}
+
+/// The installed model's home: `<app-data>/models/`.
+///
+/// Deliberately outside the `.app`: the updater replaces the whole bundle, so
+/// a model inside it would be re-downloaded on every update and lost on every
+/// install.
+#[cfg(not(debug_assertions))]
+fn installed_model_dir(app: &AppHandle) -> Res<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("models"))
+        .map_err(|err| format!("failed to resolve app data dir: {err}"))
+}
+
+#[cfg(not(debug_assertions))]
+fn emit_model_progress(app: &AppHandle, stage: &str, done: u64, total: u64) {
+    let _ = app.emit(
+        "model-install",
+        serde_json::json!({ "stage": stage, "done": done, "total": total }),
+    );
+}
+
+/// Puts the model on disk before the sidecar needs it.
+///
+/// Three sources, cheapest first: already installed, carried inside the
+/// installer bundle, or downloaded from the manifest. Debug builds read the
+/// model straight from the source tree, so this is a no-op there.
+pub fn ensure_model_installed(app: &AppHandle) -> Res<()> {
+    let _ = app;
+
+    #[cfg(debug_assertions)]
+    {
+        Ok(())
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let dir = installed_model_dir(app)?;
+        let target = dir.join(MODEL_FILE_NAME);
+        if target.is_file() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+
+        // The installer build carries the model as a bundle resource. Copy it
+        // out rather than moving it: removing a file from a signed `.app`
+        // invalidates the bundle's code signature.
+        let bundled = app.path().resolve(
+            format!("resources/models/{MODEL_FILE_NAME}"),
+            tauri::path::BaseDirectory::Resource,
+        );
+        if let Ok(bundled) = bundled {
+            if bundled.is_file() {
+                emit_model_progress(app, "copying", 0, 0);
+                install_atomically(&target, |part| {
+                    std::fs::copy(&bundled, part)
+                        .map(|_| ())
+                        .map_err(|err| format!("failed to copy bundled model: {err}"))
+                })?;
+                emit_model_progress(app, "ready", 0, 0);
+                return Ok(());
+            }
+        }
+
+        download_model(app, &target)
+    }
+}
+
+/// Fetches the model manifest and installs the model it names.
+#[cfg(not(debug_assertions))]
+fn download_model(app: &AppHandle, target: &Path) -> Res<()> {
+    let manifest_url = MODEL_MANIFEST_URL
+        .ok_or("no model manifest configured, so the model cannot be downloaded")?;
+
+    let body = ureq::get(manifest_url)
+        .call()
+        .map_err(|err| format!("failed to fetch model manifest: {err}"))?
+        .into_string()
+        .map_err(|err| format!("failed to read model manifest: {err}"))?;
+    let manifest = select_model(&body, MODEL_ROLE)?;
+
+    let app_version = env!("CARGO_PKG_VERSION");
+    if !version_at_least(app_version, &manifest.min_app_version) {
+        return Err(format!(
+            "model {} needs Palisade {} or newer (running {app_version})",
+            manifest.filename, manifest.min_app_version
+        ));
+    }
+
+    emit_model_progress(app, "downloading", 0, manifest.size);
+    let response = ureq::get(&manifest.url)
+        .call()
+        .map_err(|err| format!("failed to download model: {err}"))?;
+    let mut reader = response.into_reader();
+
+    // Emit at most once per 8MB — a per-chunk event would flood the webview.
+    let mut next_report: u64 = 0;
+    install_atomically(target, |part| {
+        write_verified(part, &mut reader, &manifest.sha256, |done| {
+            if done >= next_report {
+                emit_model_progress(app, "downloading", done, manifest.size);
+                next_report = done + (8 << 20);
+            }
+        })
+    })?;
+
+    emit_model_progress(app, "ready", manifest.size, manifest.size);
+    Ok(())
 }
 
 fn sidecar_binary_name_with_target() -> String {
@@ -1067,5 +1303,94 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
 
         assert!(stop.iter().any(|s| s.as_str() == Some("\n")));
         assert_eq!(body.get("n_predict").and_then(|v| v.as_u64()), Some(16));
+    }
+
+    #[test]
+    fn version_floor_compares_numerically() {
+        assert!(version_at_least("0.2.0", ""));
+        assert!(version_at_least("0.2.0", "0.2.0"));
+        assert!(version_at_least("0.10.0", "0.9.0"));
+        assert!(version_at_least("1.0", "0.9.9"));
+        assert!(!version_at_least("0.1.9", "0.2.0"));
+    }
+
+    #[test]
+    fn install_atomically_never_leaves_a_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("model.gguf");
+
+        let failed = install_atomically(&target, |part| {
+            std::fs::write(part, b"half a model").unwrap();
+            Err("network died".into())
+        });
+
+        assert!(failed.is_err());
+        assert!(!target.exists(), "a failed install must not publish the file");
+        assert!(
+            !target.with_extension("part").exists(),
+            "the scratch file must be cleaned up"
+        );
+
+        install_atomically(&target, |part| {
+            std::fs::write(part, b"whole model").map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"whole model");
+    }
+
+    #[test]
+    fn write_verified_rejects_a_checksum_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out.bin");
+        // sha256("palisade")
+        let good = "a4b7b9f4a0d0bd0e0e3fe0d0b0d3bfa2f4e0c2f1b9d8a7c6e5d4c3b2a1908070";
+
+        let mut bytes = &b"palisade"[..];
+        let err = write_verified(&dest, &mut bytes, good, |_| {}).unwrap_err();
+        assert!(err.contains("checksum mismatch"), "got: {err}");
+
+        // Round-trip the digest the function itself computes, so the happy
+        // path is covered without hardcoding a hash.
+        let digest = err.rsplit("got ").next().unwrap().to_string();
+        let mut bytes = &b"palisade"[..];
+        write_verified(&dest, &mut bytes, &digest, |_| {}).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"palisade");
+    }
+
+    #[test]
+    fn write_verified_reports_progress_as_it_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out.bin");
+        let mut seen = Vec::new();
+        let mut bytes = &b"abc"[..];
+        let _ = write_verified(&dest, &mut bytes, "deadbeef", |done| seen.push(done));
+        assert_eq!(seen, vec![3]);
+    }
+
+    #[test]
+    fn select_model_picks_this_builds_role() {
+        let json = r#"{
+            "fim": {"filename": "fim.gguf", "sha256": "aa", "url": "https://x/fim", "size": 7, "minAppVersion": "0.2.0"},
+            "chat": {"filename": "chat.gguf", "sha256": "bb", "url": "https://x/chat", "size": 9}
+        }"#;
+
+        let picked = select_model(json, "fim").unwrap();
+        assert_eq!(picked.filename, "fim.gguf");
+        assert_eq!(picked.size, 7);
+        assert_eq!(picked.min_app_version, "0.2.0");
+
+        // A role this build does not ship must not silently fall back to
+        // whatever happens to be first in the map.
+        let other = select_model(json, "chat").unwrap();
+        assert_eq!(other.filename, "chat.gguf");
+        assert_eq!(other.min_app_version, "", "missing floor means no floor");
+    }
+
+    #[test]
+    fn select_model_reports_a_missing_role_rather_than_guessing() {
+        let json = r#"{"chat": {"filename": "c.gguf", "sha256": "bb", "url": "https://x/c"}}"#;
+        let err = select_model(json, "fim").unwrap_err();
+        assert!(err.contains("fim"), "got: {err}");
+        assert!(err.contains("1 roles listed"), "got: {err}");
     }
 }

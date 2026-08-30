@@ -3,6 +3,13 @@
 #
 #   CODESIGN_ID="Palisade Code Dev" ./package.sh
 #   CODESIGN_ID="Palisade Code Dev" ./package.sh --no-install   # build only
+#   ./package.sh --installer                                    # bundle the model
+#
+# Two builds ship from here. The default is the slim build: no model inside
+# the .app, ~11MB, and what the updater hands to existing testers. The
+# --installer build carries the model as a bundle resource for someone
+# installing Palisade for the first time; the app copies it into app-data on
+# first launch, where it survives every later update.
 #
 # Follows day-22-stackwatch/package.sh (commit 83ad83f); the difference is that
 # Tauri produces the bundle for us, so this script re-signs Tauri's output
@@ -14,8 +21,25 @@ APP_NAME="Palisade"
 BUNDLE_ID="com.tjlsmith0831.palisade-code"
 APP="src-tauri/target/release/bundle/macos/$APP_NAME.app"
 
-echo "==> building release bundle"
-pnpm tauri build
+# Flags may arrive in either order, so they are scanned rather than read
+# positionally.
+INSTALL=1
+INSTALLER=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-install) INSTALL=0 ;;
+    --installer) INSTALLER=1 ;;
+    *) echo "error: unknown flag $arg" >&2; exit 2 ;;
+  esac
+done
+
+if [[ "$INSTALLER" == "1" ]]; then
+  echo "==> building release bundle (installer: model included)"
+  pnpm tauri build --config src-tauri/tauri.installer.conf.json
+else
+  echo "==> building release bundle (slim: model fetched at runtime)"
+  pnpm tauri build
+fi
 
 # Guard against Tauri moving its bundler output — without this the script would
 # sail past a missing bundle and "successfully" install nothing.
@@ -105,7 +129,7 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   echo "==> designated requirement:"
   codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => /    /p'
   ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | sed 's/^/    dmg: /'
-  [[ "${1:-}" == "--no-install" ]] && exit 0
+  [[ "$INSTALL" == "0" ]] && exit 0
 else
 
 CODESIGN_ID="${CODESIGN_ID:--}"
@@ -126,7 +150,7 @@ codesign --force --deep --identifier "$BUNDLE_ID" --sign "$CODESIGN_ID" "$APP"
 echo "==> designated requirement:"
 codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => /    /p'
 
-if [[ "${1:-}" == "--no-install" ]]; then
+if [[ "$INSTALL" == "0" ]]; then
   echo "==> built $APP (not installed)"
   exit 0
 fi
