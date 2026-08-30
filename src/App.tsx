@@ -47,6 +47,7 @@ import {
   IconLayoutSidebarRight,
   IconMessageDots,
   IconPlayerPlay,
+  IconFolder,
   IconFolders,
   IconGitBranch,
   IconLayoutBottombar,
@@ -2176,10 +2177,11 @@ const WorkspacePicker = memo(function WorkspacePicker({
   onOpenBranchPicker,
 }: WorkspacePickerProps) {
   void variant;
+  const otherProjects = projects.filter((p) => p.hash !== project?.hash);
   return (
     <div className="ds-workspace-panel">
       <div className="ds-rail-section">
-        <div className="ds-rail-label">Workspace</div>
+        <p className="ds-workspace-desc">Project &amp; branch for this thread</p>
         <select
           data-testid="project-picker"
           value={project?.hash ?? ""}
@@ -2197,10 +2199,14 @@ const WorkspacePicker = memo(function WorkspacePicker({
         </select>
         <div className="ds-rail-actions">
           <button onClick={onAddProject} data-testid="add-project">
-            Add
+            Add project
           </button>
           {project && (
-            <button onClick={onRenameProject} data-testid="rename-project">
+            <button
+              className="ds-rail-action-subtle"
+              onClick={onRenameProject}
+              data-testid="rename-project"
+            >
               Rename
             </button>
           )}
@@ -2216,6 +2222,30 @@ const WorkspacePicker = memo(function WorkspacePicker({
           </button>
         )}
       </div>
+      {otherProjects.length > 0 && (
+        <div className="ds-rail-section">
+          <h2 className="ds-section-heading">Recent Projects</h2>
+          <ul className="ds-recent-projects">
+            {otherProjects.map((p) => {
+              const select = () => onSelectProject(p);
+              return (
+                <li
+                  key={p.hash}
+                  className="ds-tree-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={select}
+                  onKeyDown={onActivateKey(select)}
+                  data-testid="recent-project"
+                >
+                  <IconFolder size={14} className="ds-chevron" />
+                  <span className="ds-tree-label">{p.displayName}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 });
@@ -4855,9 +4885,9 @@ export default function App() {
           </>
         );
       case "workspace":
-        // WorkspacePicker carries its own "Workspace" heading.
         return (
           <>
+            <div className="ds-panel-head">Workspace</div>
             <div className="ds-panel-body">
               <WorkspacePicker
                 variant="editor"
