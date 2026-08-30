@@ -1,0 +1,34 @@
+name = "palisade-updates"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Off by default the config must say so: wrangler re-enables preview URLs on
+# every deploy otherwise, and each one is another public endpoint holding the
+# same credentials.
+preview_urls = false
+
+# Everything here is public config. Tokens are secrets, set with:
+#   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put HF_TOKEN
+[vars]
+GITHUB_REPO = "TJLSmith0831/palisade-code"
+UPDATE_TARGET = "darwin-aarch64"
+
+HF_REPO = "TJLSmith0831/palisade-models"
+
+# One line per model role. The app asks for the role it was built for, so a
+# second or third model is a new entry here — never a manifest shape change
+# that older installs cannot parse.
+#   role | file in the HF repo | sha256 | bytes | minimum app version
+MODELS = """
+fim | Qwen3.5-0.8B.Q4_K_M.gguf | c9bf7d67e2eb8b7bd2e54558df46fad152fcf98c0601a857d4d0b5d41bae02af | 541903328 | 0.2.0
+"""
+
+# One issue per 10s per IP. A stuck retry loop files 6/min, not 400.
+[[ratelimits]]
+name = "FEEDBACK_LIMIT"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 1
+  period = 10
