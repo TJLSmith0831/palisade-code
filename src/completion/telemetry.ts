@@ -5,6 +5,12 @@ export type CompletionTelemetry = {
   accepted: number;
   dismissed: number;
   typedPast: number;
+  /** Requests where the model declined to suggest anything (D60). Counted
+   *  unthrottled — the status-bar notice is throttled, the measurement is not. */
+  abstained: number;
+  /** Accepted completions still present 30s later. Accepted-then-deleted is
+   *  not an accepted completion, and this is the difference. */
+  retained: number;
   ttftP50: number;
   ttftP99: number;
 };
@@ -19,6 +25,8 @@ function emptyTelemetry(): StoredTelemetry {
     accepted: 0,
     dismissed: 0,
     typedPast: 0,
+    abstained: 0,
+    retained: 0,
     ttftP50: 0,
     ttftP99: 0,
     _latencies: [],
@@ -77,6 +85,18 @@ export function recordDismissed() {
 export function recordTypedPast() {
   const t = loadTelemetry();
   t.typedPast += 1;
+  save(t);
+}
+
+export function recordAbstained() {
+  const t = loadTelemetry();
+  t.abstained += 1;
+  save(t);
+}
+
+export function recordRetained() {
+  const t = loadTelemetry();
+  t.retained += 1;
   save(t);
 }
 

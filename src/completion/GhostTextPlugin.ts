@@ -12,6 +12,8 @@ import {
   recordAccepted,
   recordDismissed,
   recordLatency,
+  recordAbstained,
+  recordRetained,
   recordShown,
   recordTypedPast,
 } from "./telemetry";
@@ -298,7 +300,24 @@ export function acceptGhostText(view: EditorView): boolean {
     effects: setGhostText.of(null),
     userEvent: "ghost.accept",
   });
+  scheduleRetentionCheck(view, ghost.text);
   return true;
+}
+
+// A completion accepted and then deleted was not a good completion. GitHub's
+// own rebuild of Copilot found accepted-and-retained characters the metric
+// that tracks developer happiness, where raw acceptance rate does not.
+const RETENTION_WINDOW_MS = 30_000;
+
+function scheduleRetentionCheck(view: EditorView, text: string) {
+  setTimeout(() => {
+    // ponytail: substring search rather than a mapped position — a distinct
+    // completion is unlikely to also appear elsewhere, and this is a usage
+    // counter, not an accounting ledger. Track a StateField-mapped range if
+    // the number ever has to be exact.
+    if (!view.dom.isConnected) return;
+    if (view.state.doc.toString().includes(text)) recordRetained();
+  }, RETENTION_WINDOW_MS);
 }
 
 /** Clear the ghost text without inserting it. */
@@ -409,6 +428,9 @@ class FimViewPlugin {
         ? stripStarterOverlap(prefix, res.completion)
         : "";
       if (!text) {
+        // Counted every time; only the notice is throttled. Sizing the
+        // behaviour and surfacing it are different jobs.
+        recordAbstained();
         announceAbstention(this.filePath, pos);
         return;
       }

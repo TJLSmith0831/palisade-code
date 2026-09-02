@@ -20,6 +20,7 @@ import {
   COMPLETION_ABSTAINED_EVENT,
   resetAbstentionThrottle,
 } from "../completion/GhostTextPlugin";
+import { getPublicTelemetry } from "../completion/telemetry";
 
 describe("GhostTextPlugin", () => {
   beforeEach(() => {
@@ -566,6 +567,27 @@ describe("accepting with Tab (Cursor parity)", () => {
       view.destroy();
     });
 
+    it("counts every abstention, even the ones it stays quiet about", async () => {
+      // The throttle governs the notice, not the measurement. Undercounting
+      // here would hide the thing step 2 of the sequence exists to size.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      localStorage.removeItem("palisade:completionTelemetry");
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      await typeAt(view, 19, "e");
+      await typeAt(view, 20, "t");
+
+      expect(seen.count).toBe(1);
+      expect(getPublicTelemetry().abstained).toBe(3);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
     it("announces again once the throttle window has passed", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
@@ -582,6 +604,65 @@ describe("accepting with Tab (Cursor parity)", () => {
 
       seen.stop();
       vi.useRealTimers();
+      view.destroy();
+    });
+  });
+
+  // GH#9 step 2: acceptance alone overstates quality — a completion accepted
+  // and immediately deleted is a rejected one. This is the correction.
+  describe("retention", () => {
+    function accepted(doc: string, at: number, text: string) {
+      const view = new EditorView({
+        state: EditorState.create({
+          doc,
+          selection: { anchor: at },
+          extensions: fimCompletion(
+            { enabled: true, acceptKeybinding: "Tab" },
+            "abc",
+            "src/foo.ts"
+          ),
+        }),
+      });
+      // The view must be in the document: the 30s check skips a destroyed
+      // editor, and an unattached one is indistinguishable from that.
+      document.body.appendChild(view.dom);
+      view.dispatch({
+        effects: setGhostText.of({ text, from: at, keybinding: "Tab" }),
+      });
+      acceptGhostText(view);
+      return view;
+    }
+
+    beforeEach(() => {
+      localStorage.removeItem("palisade:completionTelemetry");
+    });
+
+    it("counts a completion still in the file after 30s", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const view = accepted("function add() {\n  \n}", 19, "return x + y;");
+
+      expect(getPublicTelemetry().retained).toBe(0);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(getPublicTelemetry().retained).toBe(1);
+
+      vi.useRealTimers();
+      view.dom.remove();
+      view.destroy();
+    });
+
+    it("does not count one the user deleted again", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const view = accepted("function add() {\n  \n}", 19, "return x + y;");
+      view.dispatch({
+        changes: { from: 19, to: 19 + "return x + y;".length, insert: "" },
+      });
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(getPublicTelemetry().retained).toBe(0);
+      expect(getPublicTelemetry().accepted).toBe(1);
+
+      vi.useRealTimers();
+      view.dom.remove();
       view.destroy();
     });
   });

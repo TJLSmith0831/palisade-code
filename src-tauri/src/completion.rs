@@ -87,6 +87,12 @@ pub struct CompletionTelemetry {
     pub accepted: u64,
     pub dismissed: u64,
     pub typed_past: u64,
+    /// Requests where the model declined to suggest anything (D60).
+    #[serde(default)]
+    pub abstained: u64,
+    /// Accepted completions still in the file 30s later.
+    #[serde(default)]
+    pub retained: u64,
     pub ttft_p50: f64,
     pub ttft_p99: f64,
 }
