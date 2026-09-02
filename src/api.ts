@@ -1000,17 +1000,23 @@ export type CompletionTelemetry = {
   ttftP99: number;
 };
 
+/** A neighbouring file sent along with a completion request so the model can
+ *  complete against symbols defined outside the file being edited. */
+export type ContextFile = { path: string; text: string };
+
 export const completeCode = (
   projectHash: string,
   filePath: string,
   prefix: string,
-  suffix: string
+  suffix: string,
+  context: ContextFile[] = []
 ) =>
   invoke<CompletionResponse>("complete_code", {
     projectHash,
     filePath,
     prefix,
     suffix,
+    context,
   });
 
 export const setCompletionEnabled = (enabled: boolean) =>

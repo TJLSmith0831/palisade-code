@@ -54,6 +54,13 @@ const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 const MAX_PREFIX_CHARS: usize = 256 * CHARS_PER_TOKEN_ESTIMATE;
 const MAX_SUFFIX_CHARS: usize = 128 * CHARS_PER_TOKEN_ESTIMATE;
 
+/// Cross-file context gets its own budget, deliberately separate from the
+/// prefix/suffix ones: the code around the cursor is the highest-signal part
+/// of the prompt and must never be evicted to make room for a neighbouring
+/// file. ~512 tokens, which leaves the 2048-token context window room for
+/// prefix (256) + suffix (128) + generation (128) with headroom to spare.
+const MAX_CONTEXT_CHARS: usize = 512 * CHARS_PER_TOKEN_ESTIMATE;
+
 const MODEL_FILE_NAME: &str = "Qwen3.5-0.8B.Q4_K_M.gguf";
 
 /// Which entry of the role-keyed model manifest this build wants. Palisade
@@ -118,17 +125,7 @@ impl CompletionServer {
         *self.port.lock().unwrap() = port;
 
         let mut cmd = Command::new(binary);
-        cmd.arg("--model")
-            .arg(model)
-            .arg("--ctx-size")
-            .arg(DEFAULT_CTX_SIZE.to_string())
-            .arg("--n-gpu-layers")
-            .arg(DEFAULT_N_GPU_LAYERS.to_string())
-            .arg("--host")
-            .arg("127.0.0.1")
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--no-ui")
+        cmd.args(server_args(model, port))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -211,8 +208,14 @@ impl CompletionServer {
     }
 
     /// Sends a FIM prompt and returns the completion text plus model latency.
-    pub fn complete(&self, file_path: &str, prefix: &str, suffix: &str) -> Res<CompletionResponse> {
-        let prompt = build_fim_prompt(file_path, prefix, suffix);
+    pub fn complete(
+        &self,
+        file_path: &str,
+        prefix: &str,
+        suffix: &str,
+        context: &[ContextFile],
+    ) -> Res<CompletionResponse> {
+        let prompt = build_fim_prompt(file_path, prefix, suffix, context);
         // True end-of-file (nothing after the cursor) gives FIM no suffix to
         // anchor on. Measured on the bundled 0.8B model: this case
         // deterministically produces a runaway hallucination — reimporting
@@ -356,20 +359,70 @@ impl Drop for CompletionServer {
     }
 }
 
-/// `file_path` is accepted and deliberately unused in the prompt.
+/// A neighbouring file worth showing the model alongside the cursor.
 ///
-/// Prefixing the FIM prompt with Qwen's `<|file_sep|>{path}` header is the
-/// obvious way to tell the model what language it is completing, and it was
-/// tried: measured against the bundled Qwen3.5-0.8B on a Python function
-/// body, the header made output *worse* — three repeated docstrings instead
-/// of the coherent 15-line implementation the bare FIM prompt produced.
-/// This checkpoint evidently wasn't trained with a lone separator ahead of
-/// the prefix. Left here so the next person reads this instead of
-/// re-deriving it; add it back only with a measurement that says otherwise.
-pub fn build_fim_prompt(_file_path: &str, prefix: &str, suffix: &str) -> String {
+/// Selection (which files, and how they rank) is the frontend's job — it is
+/// the side that knows about open tabs, edit recency and the project graph.
+/// This module only decides how they are serialized and what fits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextFile {
+    pub path: String,
+    pub text: String,
+}
+
+/// `file_path` is deliberately kept out of the FIM prompt itself.
+///
+/// Prefixing the FIM prompt with a lone `<|file_sep|>{path}` header — a path
+/// and no content — is the obvious way to tell the model what language it is
+/// completing, and it was tried: measured against the bundled Qwen3.5-0.8B on
+/// a Python function body, it made output *worse* (three repeated docstrings
+/// instead of a coherent 15-line implementation). That finding (D9) is about
+/// a bare header; it says nothing about separators that actually carry file
+/// *content*, which is what `context` supplies below.
+pub fn build_fim_prompt(
+    file_path: &str,
+    prefix: &str,
+    suffix: &str,
+    context: &[ContextFile],
+) -> String {
     let trimmed_prefix = trim_prefix(prefix);
     let trimmed_suffix = trim_suffix(suffix);
-    format!("{FIM_PREFIX}{trimmed_prefix}{FIM_SUFFIX}{trimmed_suffix}{FIM_MIDDLE}")
+    let block = build_context_block(file_path, context);
+    format!("{block}{FIM_PREFIX}{trimmed_prefix}{FIM_SUFFIX}{trimmed_suffix}{FIM_MIDDLE}")
+}
+
+/// Serializes the cross-file context that rides ahead of the FIM prompt.
+///
+/// Two properties matter as much as the content:
+///
+/// * **It comes first.** llama.cpp's `cache_prompt` reuses the longest common
+///   token prefix between consecutive requests. Everything ahead of the
+///   cursor prefix survives a keystroke; anything after it is re-evaluated.
+/// * **It is ordered by path, not by relevance.** Relevance decides which
+///   files are here at all, but re-sorting by recency on every keystroke
+///   would change the token prefix and throw the KV cache away — the exact
+///   cost this ordering exists to avoid.
+fn build_context_block(current_path: &str, context: &[ContextFile]) -> String {
+    let mut usable: Vec<&ContextFile> = context
+        .iter()
+        .filter(|f| !f.text.trim().is_empty() && f.path != current_path)
+        .collect();
+    usable.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut block = String::new();
+    for file in usable {
+        let text = file.text.trim_end();
+        let entry = format!("{FIM_FILE_SEP}{}\n{}\n", file.path, text);
+        // Dropped whole rather than cut in half: half a file is worse input
+        // than no file, and a truncation point that shifts with the budget
+        // would destabilize the cached prefix on every edit.
+        if block.len() + entry.len() > MAX_CONTEXT_CHARS {
+            continue;
+        }
+        block.push_str(&entry);
+    }
+    block
 }
 
 fn trim_prefix(prefix: &str) -> &str {
@@ -386,6 +439,36 @@ fn trim_suffix(suffix: &str) -> &str {
     } else {
         &suffix[..MAX_SUFFIX_CHARS]
     }
+}
+
+/// The sidecar's command line. Split out from `spawn` so the flags that
+/// carry performance decisions are assertable without starting a process.
+fn server_args(model: &Path, port: u16) -> Vec<String> {
+    vec![
+        "--model".into(),
+        model.to_string_lossy().into_owned(),
+        "--ctx-size".into(),
+        DEFAULT_CTX_SIZE.to_string(),
+        "--n-gpu-layers".into(),
+        DEFAULT_N_GPU_LAYERS.to_string(),
+        "--host".into(),
+        "127.0.0.1".into(),
+        "--port".into(),
+        port.to_string(),
+        // No `--cache-reuse` here, deliberately. It was measured (GH#9
+        // Phase 2) and llama.cpp refuses it on this checkpoint:
+        //   "cache_reuse is not supported by this context, it will be disabled"
+        //   "forcing full prompt re-processing due to lack of cache data
+        //    (likely due to SWA or hybrid/recurrent memory)"
+        // Qwen3.5's hybrid Gated DeltaNet attention defeats both KV shifting
+        // and ordinary prefix caching, so every prompt is re-prefilled whole
+        // regardless of what we ask for. A sweep of 32/64/128/256 moved
+        // neither prefill time nor tokens-evaluated (367 every time) and the
+        // larger values were slightly slower from bookkeeping alone.
+        // Re-add this with a fresh measurement once the model is a standard
+        // dense transformer (Phase 3's Qwen2.5-Coder-0.5B), which supports it.
+        "--no-ui".into(),
+    ]
 }
 
 fn request_body(prompt: &str, n_predict: u32) -> serde_json::Value {
@@ -409,6 +492,10 @@ fn request_body(prompt: &str, n_predict: u32) -> serde_json::Value {
         "temperature": DEFAULT_TEMPERATURE,
         "repeat_penalty": DEFAULT_REPEAT_PENALTY,
         "top_p": DEFAULT_TOP_P,
+        // Stated rather than inherited: Phase 1 puts the cross-file block at
+        // the front of the prompt *because* the common prefix is cached, so
+        // this is load-bearing, not an upstream default we happen to like.
+        "cache_prompt": true,
         "stop": stop_tokens,
     })
 }
@@ -869,7 +956,7 @@ mod tests {
 
     #[test]
     fn fim_prompt_contains_control_tokens() {
-        let prompt = build_fim_prompt("", "def f():", "\n    pass");
+        let prompt = build_fim_prompt("", "def f():", "\n    pass", &[]);
         assert!(prompt.starts_with(FIM_PREFIX), "{prompt}");
         assert!(prompt.contains(FIM_SUFFIX), "{prompt}");
         assert!(prompt.ends_with(FIM_MIDDLE), "{prompt}");
@@ -879,9 +966,151 @@ mod tests {
     fn the_file_path_stays_out_of_the_prompt() {
         // Measured: a `<|file_sep|>` header degraded this checkpoint's
         // output. The path is accepted for the day a model wants it.
-        let prompt = build_fim_prompt("src/main.rs", "fn add(", ") {}");
+        let prompt = build_fim_prompt("src/main.rs", "fn add(", ") {}", &[]);
         assert!(!prompt.contains("src/main.rs"), "{prompt}");
         assert!(prompt.starts_with(FIM_PREFIX), "{prompt}");
+    }
+
+    // -------------------------------------------- prompt caching (Phase 2)
+
+    /// Measured, not assumed (GH#9 Phase 2): llama.cpp logs
+    /// "cache_reuse is not supported by this context, it will be disabled"
+    /// on this checkpoint, because Qwen3.5's hybrid/recurrent attention has
+    /// no shiftable KV cache. A 32/64/128/256 sweep moved neither prefill
+    /// time nor tokens-evaluated. Passing the flag anyway would be config
+    /// that does nothing but earn a warning in the sidecar log.
+    ///
+    /// This guards the *finding*, so re-adding the flag is a deliberate act
+    /// with a fresh measurement behind it rather than a hopeful edit.
+    #[test]
+    fn kv_cache_reuse_is_not_requested_because_this_model_cannot_do_it() {
+        let args = server_args(Path::new("/tmp/m.gguf"), 18080);
+        assert!(
+            !args.iter().any(|a| a == "--cache-reuse"),
+            "this checkpoint disables cache reuse; re-add only with a measurement:\n{args:?}"
+        );
+    }
+
+    /// Kept even though the same hybrid architecture currently forces a full
+    /// re-prefill anyway: it is free, it is what Phase 1's prompt layout is
+    /// designed around (context block first so it survives a keystroke), and
+    /// it starts paying the moment the model becomes a standard transformer.
+    #[test]
+    fn every_completion_request_opts_into_prompt_caching() {
+        let body = request_body("prompt", DEFAULT_N_PREDICT);
+        assert_eq!(body.get("cache_prompt").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn the_sidecar_still_gets_its_model_and_port() {
+        let args = server_args(Path::new("/tmp/m.gguf"), 19999);
+        assert!(args.contains(&"/tmp/m.gguf".to_string()), "{args:?}");
+        assert!(args.contains(&"19999".to_string()), "{args:?}");
+    }
+
+    // ------------------------------------------- cross-file context (Phase 1)
+
+    fn ctx(path: &str, text: &str) -> ContextFile {
+        ContextFile { path: path.to_string(), text: text.to_string() }
+    }
+
+    /// No context must produce byte-identical output to the pre-Phase-1
+    /// prompt — the feature has to be free when there is nothing to add.
+    #[test]
+    fn an_empty_context_leaves_the_prompt_untouched() {
+        let bare = format!("{FIM_PREFIX}def f():{FIM_SUFFIX}\n    pass{FIM_MIDDLE}");
+        assert_eq!(build_fim_prompt("a.py", "def f():", "\n    pass", &[]), bare);
+    }
+
+    /// The context block goes *ahead* of the FIM prompt so it is a stable
+    /// token prefix. llama.cpp's `cache_prompt` reuses the common prefix
+    /// between consecutive requests; anything placed after the volatile
+    /// cursor prefix would be re-evaluated on every keystroke.
+    #[test]
+    fn the_context_block_precedes_the_fim_prompt() {
+        let prompt = build_fim_prompt(
+            "main.py",
+            "total = ",
+            "\n",
+            &[ctx("models.py", "class Item: pass")],
+        );
+        let ctx_at = prompt.find("models.py").expect("context missing");
+        let fim_at = prompt.find(FIM_PREFIX).expect("fim prefix missing");
+        assert!(ctx_at < fim_at, "context must precede the FIM prompt:\n{prompt}");
+        assert!(prompt.ends_with(FIM_MIDDLE), "{prompt}");
+    }
+
+    #[test]
+    fn each_context_file_is_introduced_by_a_file_sep_and_its_path() {
+        let prompt = build_fim_prompt(
+            "main.py",
+            "x = ",
+            "",
+            &[ctx("models.py", "class Item: pass"), ctx("util.py", "def helper(): pass")],
+        );
+        assert!(prompt.contains(&format!("{FIM_FILE_SEP}models.py\nclass Item: pass")), "{prompt}");
+        assert!(prompt.contains(&format!("{FIM_FILE_SEP}util.py\ndef helper(): pass")), "{prompt}");
+    }
+
+    /// Relevance decides *which* files ride along, but the block itself is
+    /// emitted in a stable order. Re-sorting by recency on every keystroke
+    /// would change the token prefix and throw away the KV cache — the exact
+    /// cost Phase 2 exists to avoid.
+    #[test]
+    fn the_context_block_is_ordered_stably_so_the_kv_cache_keeps_hitting() {
+        let a = build_fim_prompt("m.py", "x", "", &[ctx("b.py", "B"), ctx("a.py", "A")]);
+        let b = build_fim_prompt("m.py", "x", "", &[ctx("a.py", "A"), ctx("b.py", "B")]);
+        assert_eq!(a, b, "the same file set must serialize identically");
+    }
+
+    /// The context budget is its own, independent of the 1024/512 prefix and
+    /// suffix budgets — growing context must never silently evict the code
+    /// immediately around the cursor, which is the highest-signal part.
+    #[test]
+    fn context_has_its_own_budget_and_does_not_eat_the_prefix() {
+        let huge = "z".repeat(MAX_CONTEXT_CHARS * 2);
+        let prefix = "p".repeat(MAX_PREFIX_CHARS);
+        let prompt = build_fim_prompt("m.py", &prefix, "", &[ctx("big.py", &huge)]);
+
+        let fim_at = prompt.find(FIM_PREFIX).unwrap();
+        assert!(fim_at <= MAX_CONTEXT_CHARS, "context block overran its budget");
+        let kept_prefix = &prompt[fim_at + FIM_PREFIX.len()..prompt.find(FIM_SUFFIX).unwrap()];
+        assert_eq!(kept_prefix.len(), MAX_PREFIX_CHARS, "prefix must survive intact");
+    }
+
+    /// A file that does not fit is dropped whole rather than cut in half.
+    /// Half a file is worse input than no file, and a truncation point that
+    /// moves with the budget would also destabilize the cached prefix.
+    #[test]
+    fn a_file_that_does_not_fit_is_dropped_whole_not_truncated() {
+        let small = ctx("a.py", "def a(): pass");
+        let oversized = ctx("big.py", &"z".repeat(MAX_CONTEXT_CHARS));
+        let prompt = build_fim_prompt("m.py", "x", "", &[small, oversized]);
+
+        assert!(prompt.contains("def a(): pass"), "the file that fits must be kept");
+        assert!(!prompt.contains("big.py"), "the file that does not fit must be dropped whole");
+        assert!(!prompt.contains("zzz"), "no partial file content:\n{prompt}");
+    }
+
+    #[test]
+    fn context_files_with_empty_text_are_skipped() {
+        let prompt = build_fim_prompt("m.py", "x", "", &[ctx("empty.py", "   \n")]);
+        assert!(!prompt.contains("empty.py"), "{prompt}");
+        assert!(prompt.starts_with(FIM_PREFIX), "{prompt}");
+    }
+
+    /// The file being edited is already the prefix/suffix. Repeating it as
+    /// context wastes budget and teaches the model to echo.
+    #[test]
+    fn the_current_file_is_never_included_in_its_own_context() {
+        let prompt = build_fim_prompt(
+            "src/main.py",
+            "x = ",
+            "",
+            &[ctx("src/main.py", "SHOULD NOT APPEAR"), ctx("other.py", "keep me")],
+        );
+        assert!(!prompt.contains("SHOULD NOT APPEAR"), "{prompt}");
+        assert!(prompt.contains("keep me"), "{prompt}");
     }
 
     #[test]
@@ -935,7 +1164,7 @@ mod tests {
     fn prefix_and_suffix_are_trimmed_to_budget() {
         let big_prefix = "x".repeat(MAX_PREFIX_CHARS + 50);
         let big_suffix = "y".repeat(MAX_SUFFIX_CHARS + 50);
-        let prompt = build_fim_prompt("", &big_prefix, &big_suffix);
+        let prompt = build_fim_prompt("", &big_prefix, &big_suffix, &[]);
 
         let prefix_end = prompt.find(FIM_SUFFIX).unwrap();
         let suffix_start = FIM_PREFIX.len();
@@ -956,7 +1185,7 @@ mod tests {
 
     #[test]
     fn request_body_stops_on_control_tokens_only() {
-        let prompt = build_fim_prompt("f.py", "def f():", "\n    pass");
+        let prompt = build_fim_prompt("f.py", "def f():", "\n    pass", &[]);
         let body = request_body(&prompt, DEFAULT_N_PREDICT);
 
         let stop = body.get("stop").and_then(|v| v.as_array()).unwrap();
@@ -972,7 +1201,7 @@ mod tests {
     #[test]
     fn request_body_includes_sampling_params_to_break_repetition_traps() {
         // D4: repeat_penalty (1.1) + top_p (0.95), temperature stays 0.0.
-        let prompt = build_fim_prompt("f.py", "def f():", "\n    pass");
+        let prompt = build_fim_prompt("f.py", "def f():", "\n    pass", &[]);
         let body = request_body(&prompt, DEFAULT_N_PREDICT);
 
         assert_eq!(
@@ -999,7 +1228,7 @@ mod tests {
         // block that eats the full n_predict budget from the first token.
         // `complete()` requests a smaller budget in that case; verify
         // request_body actually carries it through rather than defaulting.
-        let prompt = build_fim_prompt("f.py", "def f():\n    pass\n", "");
+        let prompt = build_fim_prompt("f.py", "def f():\n    pass\n", "", &[]);
         let body = request_body(&prompt, EOF_N_PREDICT);
 
         assert_eq!(
@@ -1059,7 +1288,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
 
         let server = CompletionServer::default();
         server.spawn(&binary, &model).unwrap();
-        let resp = server.complete("test.py", "def ", ":\n    pass").unwrap();
+        let resp = server.complete("test.py", "def ", ":\n    pass", &[]).unwrap();
 
         assert_eq!(resp.completion, "hello");
         assert!((resp.model_latency_ms - 12.34).abs() < 0.001);
@@ -1109,7 +1338,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         // We expect spawn to succeed with the fake sidecar (it ignores the model),
         // but complete should work.
         server.spawn(&binary, &model).unwrap();
-        let resp = server.complete("test.py", "def ", ":\n    pass").unwrap();
+        let resp = server.complete("test.py", "def ", ":\n    pass", &[]).unwrap();
         assert_eq!(resp.completion, "hello");
         server.terminate();
     }
@@ -1117,7 +1346,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
     #[test]
     fn completion_server_complete_fails_when_not_spawned() {
         let server = CompletionServer::default();
-        let result = server.complete("test.py", "def ", ":\n    pass");
+        let result = server.complete("test.py", "def ", ":\n    pass", &[]);
         assert!(result.is_err(), "complete should fail when server is not running");
     }
 

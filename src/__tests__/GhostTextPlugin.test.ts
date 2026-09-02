@@ -40,6 +40,51 @@ describe("GhostTextPlugin", () => {
     return view;
   }
 
+  it("sends the gathered cross-file context with the completion request", async () => {
+    invokeMock.mockResolvedValue({ completion: "x", modelLatencyMs: 1 });
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "const a = ",
+        selection: { anchor: 10 },
+        extensions: fimCompletion(
+          { enabled: true, acceptKeybinding: "Tab" },
+          "abc",
+          "src/foo.ts",
+          () => [{ path: "src/models.ts", text: "export class Item {}" }]
+        ),
+      }),
+    });
+
+    view.dispatch({
+      changes: { from: 10, insert: "n" },
+      annotations: Transaction.userEvent.of("input.type"),
+    });
+    await vi.waitFor(
+      () => expect(invokeMock).toHaveBeenCalled(),
+      { timeout: 3000 }
+    );
+
+    expect(invokeMock.mock.calls[0][1]).toMatchObject({
+      context: [{ path: "src/models.ts", text: "export class Item {}" }],
+    });
+    view.destroy();
+  });
+
+  it("sends an empty context when no provider is supplied", async () => {
+    invokeMock.mockResolvedValue({ completion: "x", modelLatencyMs: 1 });
+    const view = viewWith("const a = ", 10);
+    view.dispatch({
+      changes: { from: 10, insert: "n" },
+      annotations: Transaction.userEvent.of("input.type"),
+    });
+    await vi.waitFor(
+      () => expect(invokeMock).toHaveBeenCalled(),
+      { timeout: 3000 }
+    );
+    expect(invokeMock.mock.calls[0][1]).toMatchObject({ context: [] });
+    view.destroy();
+  });
+
   it("fimCompletion returns an array of extensions", () => {
     const ext = fimCompletion(
       { enabled: true, acceptKeybinding: "Alt-Tab" },

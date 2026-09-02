@@ -8,6 +8,8 @@ import {
   keymap,
 } from "@codemirror/view";
 import * as api from "../api";
+import type { ContextFile } from "../api";
+import { recordEdit } from "./context";
 import {
   recordAccepted,
   recordDismissed,
@@ -288,16 +290,19 @@ class FimViewPlugin {
   private settings: FimSettings;
   private projectHash: string;
   private filePath: string;
+  private getContext: ContextProvider;
 
   constructor(
     _view: EditorView,
     settings: FimSettings,
     projectHash: string,
-    filePath: string
+    filePath: string,
+    getContext: ContextProvider
   ) {
     this.settings = settings;
     this.projectHash = projectHash;
     this.filePath = filePath;
+    this.getContext = getContext;
   }
 
   update(update: ViewUpdate) {
@@ -310,6 +315,10 @@ class FimViewPlugin {
           (tr) => tr.annotation(Transaction.userEvent) !== undefined
         )
       ) {
+        // Remember this file as recently edited. It is filtered out of its
+        // own context, so this only matters once the user switches away —
+        // which is exactly when the file becomes worth showing the model.
+        recordEdit(this.filePath);
         this.cancel();
         this.schedule(update.view);
       }
@@ -351,6 +360,15 @@ class FimViewPlugin {
     this.cancel();
 
     const { prefix, suffix, pos } = extractContext(view);
+    // Gathered per request, not cached: which files are open and which were
+    // just edited both change under us, and the call is a few map lookups.
+    let context: ContextFile[] = [];
+    try {
+      context = this.getContext();
+    } catch {
+      // Context is an enhancement — a failure to gather it must not cost
+      // the user the completion itself.
+    }
     // Capture the controller locally so we can check if THIS request was
     // aborted after the await resolves. this.controller is replaced by the
     // next request's controller, so checking it would test the wrong one.
@@ -362,7 +380,8 @@ class FimViewPlugin {
         this.projectHash,
         this.filePath,
         prefix,
-        suffix
+        suffix,
+        context
       );
       recordLatency(res.modelLatencyMs);
       // D7: drop stale results if a new keystroke aborted this request.
@@ -389,13 +408,20 @@ class FimViewPlugin {
   }
 }
 
+/** Supplies the neighbouring files to send with each request. Injected
+ *  rather than imported so this module stays independent of the editor
+ *  shell's session cache, and so tests can hand it a fixed list. */
+export type ContextProvider = () => ContextFile[];
+
 export function fimCompletion(
   settings: FimSettings,
   projectHash: string,
-  filePath: string
+  filePath: string,
+  getContext: ContextProvider = () => []
 ) {
   const plugin = ViewPlugin.define(
-    (view) => new FimViewPlugin(view, settings, projectHash, filePath)
+    (view) =>
+      new FimViewPlugin(view, settings, projectHash, filePath, getContext)
   );
 
   const acceptKey =

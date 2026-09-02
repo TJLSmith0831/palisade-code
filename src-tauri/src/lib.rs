@@ -2204,6 +2204,10 @@ async fn complete_code(
     file_path: String,
     prefix: String,
     suffix: String,
+    // Neighbouring files the editor picked as relevant; empty when there is
+    // nothing to offer. Selection lives in the frontend, which is the side
+    // that knows about open tabs, edit recency and the project graph.
+    context: Vec<completion::ContextFile>,
 ) -> Res<completion::CompletionResponse> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
@@ -2217,7 +2221,7 @@ async fn complete_code(
         let server = guard
             .as_ref()
             .ok_or("completion server is not running")?;
-        server.complete(&file_path, &prefix, &suffix)
+        server.complete(&file_path, &prefix, &suffix, &context)
     })
     .await
     .map_err(|e| e.to_string())?

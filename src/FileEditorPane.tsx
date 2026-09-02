@@ -28,6 +28,7 @@ import {
   fimCompletion,
   loadCompletionSettings,
 } from "./completion/GhostTextPlugin";
+import { gatherContext } from "./completion/context";
 import {
   syntaxHighlighting,
   HighlightStyle,
@@ -182,6 +183,41 @@ export function evictProjectSessions(projectHash: string) {
   for (const key of [...sessions.keys()]) {
     if (key.startsWith(`${projectHash}:`)) sessions.delete(key);
   }
+}
+
+/** Paths with a live editing session in this project.
+ *
+ * This is the FIM cross-file context's file list (GH#9 Phase 1). The session
+ * map is a better source than the tab list: it already holds each buffer's
+ * *unsaved* text, so the model sees the code as the user has it, not as it
+ * was last written to disk. */
+export function sessionPaths(projectHash: string): string[] {
+  const prefix = `${projectHash}:`;
+  return [...sessions.keys()]
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length));
+}
+
+/** A file's current buffer text, or undefined when it has no live session. */
+export function sessionText(
+  projectHash: string,
+  path: string
+): string | undefined {
+  const session = sessions.get(sessionKey(projectHash, path));
+  return session ? docOf(session) : undefined;
+}
+
+/** The cross-file context for a completion in `filePath` (GH#9 Phase 1).
+ * Reads straight out of the session cache, so neighbouring files are seen
+ * with their unsaved edits rather than as they sit on disk. */
+function contextProviderFor(projectHash: string, filePath: string) {
+  return () =>
+    gatherContext({
+      currentPath: filePath,
+      currentText: sessionText(projectHash, filePath) ?? "",
+      openPaths: sessionPaths(projectHash),
+      contentFor: (p) => sessionText(projectHash, p),
+    });
 }
 
 /** Whether a file has unsaved edits according to its cached session. Lets
@@ -583,7 +619,12 @@ export default function FileEditorPane({
       codeColorTheme,
       popupTheme,
       fimCompartment.current.of(
-        fimCompletion(loadCompletionSettings(), projectHash, forPath)
+        fimCompletion(
+          loadCompletionSettings(),
+          projectHash,
+          forPath,
+          contextProviderFor(projectHash, forPath)
+        )
       ),
       lspCompartment.current.of([]),
       testMarkerGutter(),
@@ -844,7 +885,12 @@ export default function FileEditorPane({
     const onCompletionSettingsChanged = () => {
       viewRef.current?.dispatch({
         effects: fimCompartment.current.reconfigure(
-          fimCompletion(loadCompletionSettings(), projectHash, path ?? "")
+          fimCompletion(
+            loadCompletionSettings(),
+            projectHash,
+            path ?? "",
+            contextProviderFor(projectHash, path ?? "")
+          )
         ),
       });
     };
