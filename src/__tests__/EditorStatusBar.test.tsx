@@ -9,6 +9,10 @@ import {
 import { MantineProvider } from "@mantine/core";
 import EditorStatusBar from "../EditorStatusBar";
 import type { LspStatus } from "../api";
+import {
+  COMPLETION_ABSTAINED_EVENT,
+  COMPLETION_ENABLED_KEY,
+} from "../completion/GhostTextPlugin";
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
@@ -172,5 +176,62 @@ describe("EditorStatusBar", () => {
     expect(dot?.className).toContain("warn");
     expect(dot).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByTestId("lsp-note").textContent).toContain("restarting");
+  });
+
+  // D61: the model's silence used to be indistinguishable from idle, in
+  // flight, or errored — all four rendered nothing at all. This is the one
+  // that gets a voice, and it lives here rather than at the cursor so it is
+  // glanceable instead of interrupting the line being written.
+  describe("abstention", () => {
+    const abstain = () =>
+      act(() => {
+        window.dispatchEvent(new Event(COMPLETION_ABSTAINED_EVENT));
+      });
+
+    it("says nothing until the model abstains", () => {
+      render(<EditorStatusBar language="Rust" lsp={status({})} />);
+      expect(screen.queryByTestId("fim-abstained")).toBeNull();
+    });
+
+    it("reports the abstention in words, not just a colour", () => {
+      render(<EditorStatusBar language="Rust" lsp={status({})} />);
+      abstain();
+      expect(screen.getByTestId("fim-abstained").textContent).toBe(
+        "nothing confident here"
+      );
+    });
+
+    it("does not blame the model or the user", () => {
+      // The draft copy was a paragraph with "cannot" and "please" in it.
+      // Read in peripheral vision mid-keystroke, that is an error message.
+      render(<EditorStatusBar language="Rust" lsp={status({})} />);
+      abstain();
+      const text = screen.getByTestId("fim-abstained").textContent ?? "";
+      for (const word of ["cannot", "failed", "unable", "please", "error"]) {
+        expect(text.toLowerCase()).not.toContain(word);
+      }
+    });
+
+    it("clears itself rather than sitting there", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<EditorStatusBar language="Rust" lsp={status({})} />);
+      abstain();
+      expect(screen.queryByTestId("fim-abstained")).not.toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(screen.queryByTestId("fim-abstained")).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it("stays quiet when inline completion is switched off", () => {
+      // Nothing is running, so there is nothing to abstain from — a stale
+      // event must not resurrect the notice.
+      localStorage.setItem(COMPLETION_ENABLED_KEY, "false");
+      render(<EditorStatusBar language="Rust" lsp={status({})} />);
+      abstain();
+      expect(screen.queryByTestId("fim-abstained")).toBeNull();
+    });
   });
 });

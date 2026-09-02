@@ -4,7 +4,7 @@
 
 set -e
 
-MODEL_PATH="$HOME/Downloads/socrata-v1-flash/gguf_q4_k_m_gguf/Qwen3.5-0.8B.Q4_K_M.gguf"
+MODEL_PATH="$(dirname "$0")/src-tauri/resources/models/Qwen2.5-Coder-0.5B-Q5_K_M.gguf"
 STATIC_SERVER="/tmp/llama-server-macos-arm64"
 PORT=8081
 SERVER_PID=""

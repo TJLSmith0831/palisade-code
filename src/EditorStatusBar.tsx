@@ -6,10 +6,16 @@ import type { LspStatus } from "./api";
 import { describeError } from "./errors";
 import { stateLabel, stateTone } from "./lsp";
 import {
+  COMPLETION_ABSTAINED_EVENT,
   COMPLETION_SETTINGS_CHANGED_EVENT,
   loadCompletionSettings,
   persistCompletionEnabled,
 } from "./completion/GhostTextPlugin";
+
+// D61: long enough to catch out of the corner of an eye, short enough that
+// the bar is not still talking about a keystroke from a minute ago. The
+// plugin's own throttle is what keeps this rare; this only bounds one showing.
+const ABSTENTION_VISIBLE_MS = 6000;
 
 // Amendment 2's status surface. D14 requires that a server which is
 // missing, starting, crashing or disabled says so somewhere the user can
@@ -40,6 +46,24 @@ export default function EditorStatusBar({
     return () =>
       window.removeEventListener(COMPLETION_SETTINGS_CHANGED_EVENT, sync);
   }, []);
+
+  // D60/D61: the model returns nothing 9-21% of the time, and that is it
+  // declining rather than failing — worth surfacing, but not at the cursor.
+  // Inline text competes with the code being written at the exact moment of
+  // concentration; a phrase in the bar carries the same fact and is
+  // glanceable instead of interrupting.
+  const [abstained, setAbstained] = useState(false);
+  useEffect(() => {
+    const onAbstain = () => setAbstained(true);
+    window.addEventListener(COMPLETION_ABSTAINED_EVENT, onAbstain);
+    return () =>
+      window.removeEventListener(COMPLETION_ABSTAINED_EVENT, onAbstain);
+  }, []);
+  useEffect(() => {
+    if (!abstained) return;
+    const timer = setTimeout(() => setAbstained(false), ABSTENTION_VISIBLE_MS);
+    return () => clearTimeout(timer);
+  }, [abstained]);
 
   // A missing server used to be a sentence telling the user to go install
   // something. Palisade still bundles nothing (D6) — but it knows the one command
@@ -168,6 +192,16 @@ export default function EditorStatusBar({
           />
         </button>
       </Tooltip>
+      {fim && abstained && (
+        <Tooltip
+          label="The model had no confident suggestion for this spot, so it stayed quiet instead of guessing. Nothing is wrong."
+          withinPortal
+        >
+          <span className="ds-status-note" data-testid="fim-abstained">
+            nothing confident here
+          </span>
+        </Tooltip>
+      )}
       <Tooltip label={label} withinPortal>
         <span className="ds-status-note" data-testid="lsp-note">
           {label}

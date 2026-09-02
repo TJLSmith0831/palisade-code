@@ -54,7 +54,12 @@ const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 const MAX_PREFIX_CHARS: usize = 256 * CHARS_PER_TOKEN_ESTIMATE;
 const MAX_SUFFIX_CHARS: usize = 128 * CHARS_PER_TOKEN_ESTIMATE;
 
-const MODEL_FILE_NAME: &str = "Qwen3.5-0.8B.Q4_K_M.gguf";
+/// D59: stock Qwen2.5-Coder-0.5B at Q5_K_M, replacing Qwen3.5-0.8B Q4_K_M.
+/// Roughly double the pass@1, 27% smaller, and on an architecture where
+/// llama.cpp prompt caching actually engages (10 tokens reprocessed per
+/// keystroke against 241). Changing this constant is the whole swap: both
+/// the bundled-resource path and the installed-model path derive from it.
+const MODEL_FILE_NAME: &str = "Qwen2.5-Coder-0.5B-Q5_K_M.gguf";
 
 /// Which entry of the role-keyed model manifest this build wants. Palisade
 /// ships one model today; the manifest is keyed so adding a second is a new
@@ -607,6 +612,41 @@ fn install_atomically(target: &Path, write: impl FnOnce(&Path) -> Res<()>) -> Re
         .map_err(|err| format!("failed to install model at {}: {err}", target.display()))
 }
 
+/// Removes model files this build no longer uses from `dir`.
+///
+/// The ordering is the whole point. A model swap orphans the previous
+/// `.gguf`, but deleting it before the replacement resolves would strand the
+/// user with no model at all — so this is a no-op unless `keep` is already on
+/// disk. `.part` files are abandoned downloads and go with it.
+///
+/// A fresh install never reaches this; only an upgrade does.
+#[allow(dead_code)]
+fn prune_stale_models(dir: &Path, keep: &str) -> Res<()> {
+    if !dir.join(keep).is_file() {
+        return Ok(());
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == keep {
+            continue;
+        }
+        if !(name.ends_with(".gguf") || name.ends_with(".part")) {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_file() {
+            // Best-effort: a stale model left behind wastes disk, it does not
+            // break the install, so a permissions failure must not fail startup.
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    Ok(())
+}
+
 /// Streams `reader` into `dest`, hashing as it goes, and fails if the digest
 /// does not match `expected_sha256`.
 #[allow(dead_code)]
@@ -708,6 +748,7 @@ pub fn ensure_model_installed(app: &AppHandle) -> Res<()> {
         let dir = installed_model_dir(app)?;
         let target = dir.join(MODEL_FILE_NAME);
         if target.is_file() {
+            prune_stale_models(&dir, MODEL_FILE_NAME)?;
             return Ok(());
         }
         std::fs::create_dir_all(&dir)
@@ -728,12 +769,14 @@ pub fn ensure_model_installed(app: &AppHandle) -> Res<()> {
                         .map(|_| ())
                         .map_err(|err| format!("failed to copy bundled model: {err}"))
                 })?;
+                prune_stale_models(&dir, MODEL_FILE_NAME)?;
                 emit_model_progress(app, "ready", 0, 0);
                 return Ok(());
             }
         }
 
-        download_model(app, &target)
+        download_model(app, &target)?;
+        prune_stale_models(&dir, MODEL_FILE_NAME)
     }
 }
 
@@ -1392,5 +1435,71 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         let err = select_model(json, "fim").unwrap_err();
         assert!(err.contains("fim"), "got: {err}");
         assert!(err.contains("1 roles listed"), "got: {err}");
+    }
+
+    // --- Upgrade path: the 0.8B file is orphaned by the model swap (D61). ---
+    //
+    // A fresh install never exercises this, so it is tested directly. The
+    // invariant that matters is the ordering: nothing is deleted until the
+    // model we are keeping is actually on disk.
+
+    #[test]
+    fn prune_removes_the_orphaned_previous_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("Qwen2.5-Coder-0.5B-Q5_K_M.gguf");
+        let old = dir.path().join("Qwen3.5-0.8B.Q4_K_M.gguf");
+        std::fs::write(&keep, b"new").unwrap();
+        std::fs::write(&old, b"old").unwrap();
+
+        prune_stale_models(dir.path(), "Qwen2.5-Coder-0.5B-Q5_K_M.gguf").unwrap();
+
+        assert!(keep.is_file(), "the current model must survive");
+        assert!(!old.exists(), "the orphaned model should be gone");
+    }
+
+    #[test]
+    fn prune_refuses_to_delete_anything_when_the_kept_model_is_absent() {
+        // The failure this guards: a download that errors out must not leave
+        // the user with no model at all.
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Qwen3.5-0.8B.Q4_K_M.gguf");
+        std::fs::write(&old, b"old").unwrap();
+
+        prune_stale_models(dir.path(), "Qwen2.5-Coder-0.5B-Q5_K_M.gguf").unwrap();
+
+        assert!(old.is_file(), "the old model is the only one left; keep it");
+    }
+
+    #[test]
+    fn prune_sweeps_abandoned_part_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("keep.gguf");
+        std::fs::write(&keep, b"new").unwrap();
+        let part = dir.path().join("Qwen3.5-0.8B.Q4_K_M.part");
+        std::fs::write(&part, b"half").unwrap();
+
+        prune_stale_models(dir.path(), "keep.gguf").unwrap();
+
+        assert!(!part.exists(), "an interrupted download leaves .part behind");
+        assert!(keep.is_file());
+    }
+
+    #[test]
+    fn prune_leaves_files_it_does_not_own_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("keep.gguf"), b"new").unwrap();
+        let notes = dir.path().join("README.txt");
+        std::fs::write(&notes, b"hi").unwrap();
+
+        prune_stale_models(dir.path(), "keep.gguf").unwrap();
+
+        assert!(notes.is_file(), "only .gguf and .part are ours to delete");
+    }
+
+    #[test]
+    fn prune_is_a_no_op_on_a_directory_that_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("never-created");
+        assert!(prune_stale_models(&missing, "keep.gguf").is_ok());
     }
 }

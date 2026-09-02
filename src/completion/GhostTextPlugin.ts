@@ -31,6 +31,34 @@ export const COMPLETION_KEYBINDING_KEY = "palisade:completionKeybinding";
 export const COMPLETION_SETTINGS_CHANGED_EVENT =
   "palisade:completion-settings-changed";
 
+/** Fired when the model declined to suggest anything (D60/D61). The status
+ *  bar listens; nothing in the editor itself reacts. Same window-event
+ *  idiom as the settings-changed event above. */
+export const COMPLETION_ABSTAINED_EVENT = "palisade:completion-abstained";
+
+// D61: at a 9-21% abstention rate and a 1250ms debounce (D1), an unthrottled
+// notice fires many times a minute — which is how a well-meant affordance
+// becomes something users learn to resent. At most once per file per window,
+// and never twice for the same cursor position however long you wait there.
+const ABSTENTION_THROTTLE_MS = 3 * 60_000;
+const lastAbstention = new Map<string, { at: number; pos: number }>();
+
+/** Test seam: the throttle is module state so it survives the plugin being
+ *  reconfigured mid-session, which also means it survives between tests. */
+export function resetAbstentionThrottle(): void {
+  lastAbstention.clear();
+}
+
+function announceAbstention(filePath: string, pos: number): void {
+  const last = lastAbstention.get(filePath);
+  const now = Date.now();
+  if (last && (last.pos === pos || now - last.at < ABSTENTION_THROTTLE_MS)) {
+    return;
+  }
+  lastAbstention.set(filePath, { at: now, pos });
+  window.dispatchEvent(new Event(COMPLETION_ABSTAINED_EVENT));
+}
+
 export function loadCompletionSettings(): FimSettings {
   const enabled = localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false";
   // Tab by default: it is what Cursor, Copilot and every other ghost-text
@@ -372,19 +400,29 @@ class FimViewPlugin {
       if (controller.signal.aborted) return;
       // Ignore stale responses for a cursor that has moved.
       if (view.state.selection.main.head !== pos) return;
-      if (res.completion) {
-        const text = stripStarterOverlap(prefix, res.completion);
-        if (!text) return;
-        view.dispatch({
-          effects: setGhostText.of({
-            text,
-            from: pos,
-            keybinding: this.settings.acceptKeybinding,
-          }),
-        });
+      // Both paths leave the user looking at nothing: an empty response, and
+      // a response that was only a repeat of what they just typed. Same
+      // state, so the same signal (D61). Every staleness guard above still
+      // applies first — an abstention from a moved cursor is as stale as a
+      // completion from one.
+      const text = res.completion
+        ? stripStarterOverlap(prefix, res.completion)
+        : "";
+      if (!text) {
+        announceAbstention(this.filePath, pos);
+        return;
       }
+      view.dispatch({
+        effects: setGhostText.of({
+          text,
+          from: pos,
+          keybinding: this.settings.acceptKeybinding,
+        }),
+      });
     } catch {
-      // Graceful degradation: no ghost text on error.
+      // Graceful degradation: no ghost text on error. Deliberately NOT an
+      // abstention — a failed round-trip is not the model declining, and
+      // saying so would blame the model for the network.
     }
   }
 }

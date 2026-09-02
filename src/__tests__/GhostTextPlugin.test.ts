@@ -17,6 +17,8 @@ import {
   ghostTextState,
   setGhostText,
   stripStarterOverlap,
+  COMPLETION_ABSTAINED_EVENT,
+  resetAbstentionThrottle,
 } from "../completion/GhostTextPlugin";
 
 describe("GhostTextPlugin", () => {
@@ -445,5 +447,142 @@ describe("accepting with Tab (Cursor parity)", () => {
       }),
     });
     expect(acceptGhostText(view)).toBe(false);
+  });
+
+  // D61: the model returning nothing is abstention, not failure — it declines
+  // when it has nothing confident to say (D60). These tests pin the signal
+  // and, more importantly, the throttle: at a 9-21% abstention rate and a
+  // 1250ms debounce, an unthrottled notice fires many times a minute.
+  describe("abstention", () => {
+    function abstentionView(doc: string, sel: number) {
+      return new EditorView({
+        state: EditorState.create({
+          doc,
+          selection: { anchor: sel },
+          extensions: fimCompletion(
+            { enabled: true, acceptKeybinding: "Alt-Tab" },
+            "abc",
+            "src/foo.ts"
+          ),
+        }),
+      });
+    }
+
+    function countAbstentions() {
+      const seen = { n: 0 };
+      const on = () => (seen.n += 1);
+      window.addEventListener(COMPLETION_ABSTAINED_EVENT, on);
+      return {
+        get count() {
+          return seen.n;
+        },
+        stop: () => window.removeEventListener(COMPLETION_ABSTAINED_EVENT, on),
+      };
+    }
+
+    async function typeAt(view: EditorView, pos: number, ch: string) {
+      view.dispatch({
+        changes: { from: pos, to: pos, insert: ch },
+        selection: { anchor: pos + 1 },
+        userEvent: "input.type",
+      });
+      await vi.advanceTimersByTimeAsync(3100);
+    }
+
+    beforeEach(() => {
+      resetAbstentionThrottle();
+    });
+
+    it("announces an abstention when the model returns nothing", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+
+      expect(seen.count).toBe(1);
+      expect(view.state.field(ghostTextState)).toBeNull();
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("announces an abstention when the overlap strip consumes the whole completion", async () => {
+      // stripStarterOverlap eats a completion that only repeats what was
+      // typed. The user sees nothing either way, so it is the same state.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "r", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+
+      expect(seen.count).toBe(1);
+      expect(view.state.field(ghostTextState)).toBeNull();
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("stays silent when the model does have something to say", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({
+        completion: "return x + y;",
+        modelLatencyMs: 8,
+      });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      await vi.waitFor(() => view.state.field(ghostTextState) !== null, {
+        timeout: 2000,
+      });
+
+      expect(seen.count).toBe(0);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("does not announce the same abstention twice in a row", async () => {
+      // The throttle is the whole feature. Without it this is unbearable.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      await typeAt(view, 19, "e");
+      await typeAt(view, 20, "t");
+
+      expect(seen.count).toBe(1);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("announces again once the throttle window has passed", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      expect(seen.count).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await typeAt(view, 19, "e");
+
+      expect(seen.count).toBe(2);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
   });
 });

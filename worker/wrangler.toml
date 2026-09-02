@@ -21,7 +21,7 @@ HF_REPO = "TJLSmith0831/palisade-models"
 # that older installs cannot parse.
 #   role | file in the HF repo | sha256 | bytes | minimum app version
 MODELS = """
-fim | Qwen3.5-0.8B.Q4_K_M.gguf | c9bf7d67e2eb8b7bd2e54558df46fad152fcf98c0601a857d4d0b5d41bae02af | 541903328 | 0.2.0
+fim | Qwen2.5-Coder-0.5B-Q5_K_M.gguf | 59fa334682d4125690371970e07994e47b1c1dd151b8f280fcae019df9eeddfc | 420086272 | 0.3.0
 """
 
 # One issue per 10s per IP. A stuck retry loop files 6/min, not 400.
