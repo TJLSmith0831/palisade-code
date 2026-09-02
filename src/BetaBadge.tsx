@@ -13,7 +13,6 @@ import {
   Button,
   Group,
   Modal,
-  Progress,
   Stack,
   Text,
   Textarea,
@@ -137,11 +136,7 @@ export default function BetaBadge() {
           <Tooltip
             label={
               modelProgress
-                ? `Setting up the AI model${
-                    modelProgress.total > 0
-                      ? ` — ${Math.round((modelProgress.done / modelProgress.total) * 100)}%`
-                      : ""
-                  } — the app is usable meanwhile`
+                ? "Setting up the AI model — the app is usable meanwhile"
                 : `Prerelease build${version ? ` · ${version}` : ""}`
             }
           >
@@ -151,7 +146,13 @@ export default function BetaBadge() {
               color="warn"
               data-testid="beta-badge"
             >
-              {modelProgress ? "Beta · setting up" : "Beta"}
+              {modelProgress
+                ? `Beta · setting up${
+                    modelProgress.total > 0
+                      ? ` · ${Math.round((modelProgress.done / modelProgress.total) * 100)}%`
+                      : ""
+                  }`
+                : "Beta"}
             </Badge>
           </Tooltip>
         )}
@@ -167,21 +168,6 @@ export default function BetaBadge() {
           </ActionIcon>
         </Tooltip>
       </Group>
-
-      {modelProgress && modelProgress.total > 0 && (
-        <Group gap={4} wrap="nowrap" data-testid="model-progress-row">
-          <Progress
-            size="xs"
-            radius={0}
-            value={(modelProgress.done / modelProgress.total) * 100}
-            style={{ flex: 1 }}
-            data-testid="model-progress"
-          />
-          <Text size="xs" c="dimmed" data-testid="model-progress-percent">
-            {Math.round((modelProgress.done / modelProgress.total) * 100)}%
-          </Text>
-        </Group>
-      )}
 
       <Modal
         opened={open}

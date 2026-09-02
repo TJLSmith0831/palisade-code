@@ -88,13 +88,13 @@ describe("BetaBadge", () => {
       emit("model-install", { stage: "downloading", done: 50, total: 100 });
     });
     expect(screen.getByTestId("beta-badge")).toHaveTextContent("setting up");
-    expect(screen.getByTestId("model-progress")).toBeInTheDocument();
+    expect(screen.getByTestId("beta-badge")).toHaveTextContent("50%");
 
     await act(async () => {
       emit("model-install", { stage: "ready", done: 100, total: 100 });
     });
     expect(screen.getByTestId("beta-badge")).toHaveTextContent("Beta");
-    expect(screen.queryByTestId("model-progress")).toBeNull();
+    expect(screen.getByTestId("beta-badge")).not.toHaveTextContent("setting up");
   });
 
   it("sends a report with diagnostics attached", async () => {
