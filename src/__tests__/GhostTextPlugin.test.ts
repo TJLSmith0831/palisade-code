@@ -269,13 +269,55 @@ describe("GhostTextPlugin", () => {
       expect(stripStarterOverlap("if x:\n", "    y = 1")).toBe("    y = 1");
     });
 
+    // D64 amends D11/D51. Reported while dogfooding the D59 model swap: an
+    // accepted completion landed at 2 spaces inside a 4-space block. The
+    // model was right and the strip was wrong — Qwen2.5-Coder emits the
+    // *remainder* of the indent, never a regeneration of what was typed.
+    // Measured on the shipped checkpoint, cursor sitting in a 12-space block:
+    //   12 spaces typed -> "out.append(...)"          (nothing added)
+    //    4 spaces typed -> "        out.append(...)"  (the missing 8)
+    //    0 spaces typed -> "            out.append(...)"
+    // So whitespace after a newline is always indent to keep. Only whitespace
+    // following actual content on the line can be a regeneration.
+    it("keeps the indent the model supplies when the line is short of it", () => {
+      // The reported bug: 2 typed + 2 supplied = the 4 the block needs.
+      // Stripping produced a line indented 2, which Python rejects outright.
+      expect(stripStarterOverlap("if x:\n  ", "  y = 1")).toBe("  y = 1");
+    });
+
+    it("adds nothing when the typed indent is already correct", () => {
+      expect(stripStarterOverlap("if x:\n    ", "y = 1")).toBe("y = 1");
+    });
+
     it("preserves leading whitespace when prefix ends with newline + indent", () => {
-      // D11: prefix "if x:\n    " — user already typed the indent on the
-      // new line. The completion's leading whitespace is spurious here too,
-      // but we only strip when the prefix's trailing whitespace is not
-      // preceded by a newline. Actually — the user typed the indent, so
-      // the model regenerating it IS spurious. Strip it.
-      expect(stripStarterOverlap("if x:\n    ", "    y = 1")).toBe("y = 1");
+      // Was: stripped, on the assumption the model regenerates the indent.
+      // The shipped model does not, so stripping here is what breaks the
+      // block. Whitespace-only-since-the-newline means the cursor is in the
+      // indent, and the indent is the model's to finish.
+      expect(stripStarterOverlap("if x:\n    ", "    y = 1")).toBe(
+        "    y = 1"
+      );
+    });
+
+    it("does not treat a word on the previous line as a regenerated prefix", () => {
+      // Same root cause as D64, found while fixing it. The overlap check
+      // exists to catch a model repeating the token you just typed — which
+      // only means anything while the cursor is still touching that token.
+      // Across a newline it matches by coincidence: the previous line
+      // happening to end in "helper" turned "    helper_two(value)" into
+      // "_two(value)" — the indent gone and the identifier chewed.
+      expect(
+        stripStarterOverlap(
+          "def run():\n    value = helper\n    ",
+          "    helper_two(value)"
+        )
+      ).toBe("    helper_two(value)");
+    });
+
+    it("still strips whitespace regenerated after content on the line", () => {
+      // D11's original case survives untouched: the cursor is past real
+      // content, so a leading space is the model repeating what was typed.
+      expect(stripStarterOverlap("x = 1\n    total = ", "  0")).toBe("0");
     });
 
     it("strips a duplicated triple-quote even though the prefix doesn't end in whitespace", () => {

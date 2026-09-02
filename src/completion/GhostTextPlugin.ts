@@ -244,16 +244,27 @@ export function stripStarterOverlap(
   const trimmedPrefix = prefix.replace(/\s+$/, "");
   if (!trimmedPrefix) return completion;
 
-  // D11: if the prefix ends with non-newline whitespace and the completion
-  // starts with whitespace, the model regenerated whitespace the user
-  // already typed. Strip it before word-overlap detection so the ghost
-  // text continues right at the cursor. When the prefix ends with a
-  // newline, the completion's leading whitespace is the new line's indent
-  // — preserve it.
+  // D11/D51, amended by D64: strip whitespace the model regenerated after
+  // content on the line — but never the leading indent of a line that has
+  // none yet. Everything after the last newline being whitespace means the
+  // cursor is sitting in the indent, and the shipped model (D59) supplies
+  // the *remainder* of that indent rather than repeating what was typed.
+  // Stripping there produced a line indented two spaces inside a four-space
+  // block, which Python rejects outright.
+  const sinceNewline = prefix.slice(prefix.lastIndexOf("\n") + 1);
+  const cursorSitsInIndent = sinceNewline.trim() === "";
+
   let result = completion;
-  if (prefixEndsWithWs && !/\n$/.test(prefix) && /^\s/.test(result)) {
+  if (prefixEndsWithWs && !cursorSitsInIndent && /^\s/.test(result)) {
     result = result.replace(/^\s+/, "");
   }
+
+  // D64: the overlap check below catches a model repeating the token the
+  // user just typed, which is only meaningful while the cursor still touches
+  // that token. With the cursor in a fresh line's indent the "last word" is
+  // on the previous line, and any match is coincidence — one that strips the
+  // indent and eats the start of the identifier with it.
+  if (cursorSitsInIndent) return result;
 
   const lastWs = trimmedPrefix.search(/\s[^\s]*$/);
   const lastWord =
