@@ -164,6 +164,9 @@ export default function FilePalette({
                 defaultValue={path}
                 disabled={busy}
                 data-testid="file-palette-rename-input"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 onClick={(event) => event.stopPropagation()}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {

@@ -5604,6 +5604,11 @@ export default function App() {
               name="barInput"
               autoFocus
               autoComplete="off"
+              // File names aren't prose — don't let the system capitalize
+              // "new file" into "New file" as the tester starts typing.
+              autoCapitalize={bar.label === "New file" ? "off" : undefined}
+              autoCorrect={bar.label === "New file" ? "off" : undefined}
+              spellCheck={bar.label === "New file" ? false : undefined}
               defaultValue={bar.value}
               placeholder={bar.value ? undefined : bar.placeholder}
               aria-label={bar.label}

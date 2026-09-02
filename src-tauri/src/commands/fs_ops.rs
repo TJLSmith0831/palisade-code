@@ -461,6 +461,17 @@ pub(crate) fn check_not_stale(resolved: &Path, expected_previous: Option<&str>, 
     ))
 }
 
+/// True when `a` and `b` are the same file on disk (same device + inode),
+/// as opposed to two distinct files that merely share a path on a
+/// case-insensitive filesystem.
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(a_meta), Ok(b_meta)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    a_meta.dev() == b_meta.dev() && a_meta.ino() == b_meta.ino()
+}
+
 /// Renames or moves a file or directory within the project (the file
 /// palette's rename action — a full relative-path edit doubles as a move,
 /// so this is also how "reorganize" works). Refuses to clobber an existing
@@ -477,7 +488,11 @@ pub async fn rename_path(
         let root = project_root(&project_hash)?;
         let source = resolve_existing_path(&root, &from)?;
         let target = resolve_creatable_path(&root, &to)?;
-        if target.exists() {
+        // macOS's default filesystem is case-insensitive but case-preserving,
+        // so `Hello.py` -> `hello.py` makes `target.exists()` true even
+        // though it is the same file. Only reject when the existing path at
+        // `target` is a genuinely different file (different inode).
+        if target.exists() && !is_same_file(&source, &target) {
             return Err(format!("{to} already exists"));
         }
         note_self_write(&harness, &source);
@@ -788,6 +803,23 @@ mod tests {
         let to_delete = resolve_existing_path(&canonical_root, "moved/new.txt").unwrap();
         std::fs::remove_file(&to_delete).unwrap();
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn is_same_file_recognizes_a_pure_case_rename_but_not_two_distinct_files() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(project_dir.path()).unwrap();
+        std::fs::write(canonical_root.join("Hello.txt"), "hi").unwrap();
+        std::fs::write(canonical_root.join("other.txt"), "bye").unwrap();
+
+        // macOS's default filesystem is case-insensitive: "hello.txt" resolves
+        // to the same inode as "Hello.txt" even before any rename happens.
+        let source = resolve_existing_path(&canonical_root, "Hello.txt").unwrap();
+        let same_case_folded = canonical_root.join("hello.txt");
+        assert!(is_same_file(&source, &same_case_folded));
+
+        let distinct = resolve_existing_path(&canonical_root, "other.txt").unwrap();
+        assert!(!is_same_file(&source, &distinct));
     }
 
     #[test]

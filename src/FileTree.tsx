@@ -314,6 +314,9 @@ export default function FileTree({
       defaultValue=""
       data-testid="tree-create-input"
       placeholder={creating?.kind === "folder" ? "Folder name" : "File name"}
+      autoCapitalize="off"
+      autoCorrect="off"
+      spellCheck={false}
       onKeyDown={(event) => {
         if (event.key === "Enter" && creating) {
           runCreate(creating.parentPath, creating.kind, event.currentTarget.value);
@@ -363,6 +366,9 @@ export default function FileTree({
             ref={editInputRef}
             defaultValue={entry.name}
             data-testid="tree-rename-input"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             onKeyDown={(event) => {
               if (event.key === "Enter") runRename(entry.path, event.currentTarget.value);
               else if (event.key === "Escape") setRenaming(null);
