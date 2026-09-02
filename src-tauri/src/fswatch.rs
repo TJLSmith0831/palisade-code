@@ -264,12 +264,30 @@ mod tests {
 
         watcher.note_self_write(&file);
         std::fs::write(&file, "ours").unwrap();
+        // Usually returns nothing: suppression eats the save, and no empty
+        // batch is sent, so this burns its budget. It returns early only on a
+        // machine slow enough that FSEvents outran SELF_WRITE_WINDOW and the
+        // save was reported rather than swallowed.
         let _ = recv_changes(&rx);
+
+        // Do not write again in the same breath. After an early return above
+        // the entry is still armed, and a write landing in the same debounce
+        // batch is exactly what it would eat — measured: two writes with no
+        // gap produce one batch and one suppressed path, and nothing arrives.
+        std::thread::sleep(DEBOUNCE * 2);
+        while rx.try_recv().is_ok() {}
 
         // The suppression entry is one-shot, so the agent editing the same
         // file right after our save is not swallowed.
         std::fs::write(&file, "theirs").unwrap();
-        let changed = recv_changes(&rx).expect("a second, external write should report");
+        // Deliberately generous, unlike `recv_changes`. This asserts an event
+        // *will* arrive, where the drain above asserts nothing; delivery here
+        // is ~450ms on a developer machine, and the CI failure this replaces
+        // was a loaded shared runner missing a 5s budget. A high ceiling
+        // costs nothing on the passing path.
+        let changed = rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("a second, external write should report");
         assert!(changed.contains(&"notes.txt".to_string()), "got {changed:?}");
     }
 

@@ -17,7 +17,10 @@ import {
   ghostTextState,
   setGhostText,
   stripStarterOverlap,
+  COMPLETION_ABSTAINED_EVENT,
+  resetAbstentionThrottle,
 } from "../completion/GhostTextPlugin";
+import { getPublicTelemetry } from "../completion/telemetry";
 
 describe("GhostTextPlugin", () => {
   beforeEach(() => {
@@ -266,13 +269,55 @@ describe("GhostTextPlugin", () => {
       expect(stripStarterOverlap("if x:\n", "    y = 1")).toBe("    y = 1");
     });
 
+    // D64 amends D11/D51. Reported while dogfooding the D59 model swap: an
+    // accepted completion landed at 2 spaces inside a 4-space block. The
+    // model was right and the strip was wrong — Qwen2.5-Coder emits the
+    // *remainder* of the indent, never a regeneration of what was typed.
+    // Measured on the shipped checkpoint, cursor sitting in a 12-space block:
+    //   12 spaces typed -> "out.append(...)"          (nothing added)
+    //    4 spaces typed -> "        out.append(...)"  (the missing 8)
+    //    0 spaces typed -> "            out.append(...)"
+    // So whitespace after a newline is always indent to keep. Only whitespace
+    // following actual content on the line can be a regeneration.
+    it("keeps the indent the model supplies when the line is short of it", () => {
+      // The reported bug: 2 typed + 2 supplied = the 4 the block needs.
+      // Stripping produced a line indented 2, which Python rejects outright.
+      expect(stripStarterOverlap("if x:\n  ", "  y = 1")).toBe("  y = 1");
+    });
+
+    it("adds nothing when the typed indent is already correct", () => {
+      expect(stripStarterOverlap("if x:\n    ", "y = 1")).toBe("y = 1");
+    });
+
     it("preserves leading whitespace when prefix ends with newline + indent", () => {
-      // D11: prefix "if x:\n    " — user already typed the indent on the
-      // new line. The completion's leading whitespace is spurious here too,
-      // but we only strip when the prefix's trailing whitespace is not
-      // preceded by a newline. Actually — the user typed the indent, so
-      // the model regenerating it IS spurious. Strip it.
-      expect(stripStarterOverlap("if x:\n    ", "    y = 1")).toBe("y = 1");
+      // Was: stripped, on the assumption the model regenerates the indent.
+      // The shipped model does not, so stripping here is what breaks the
+      // block. Whitespace-only-since-the-newline means the cursor is in the
+      // indent, and the indent is the model's to finish.
+      expect(stripStarterOverlap("if x:\n    ", "    y = 1")).toBe(
+        "    y = 1"
+      );
+    });
+
+    it("does not treat a word on the previous line as a regenerated prefix", () => {
+      // Same root cause as D64, found while fixing it. The overlap check
+      // exists to catch a model repeating the token you just typed — which
+      // only means anything while the cursor is still touching that token.
+      // Across a newline it matches by coincidence: the previous line
+      // happening to end in "helper" turned "    helper_two(value)" into
+      // "_two(value)" — the indent gone and the identifier chewed.
+      expect(
+        stripStarterOverlap(
+          "def run():\n    value = helper\n    ",
+          "    helper_two(value)"
+        )
+      ).toBe("    helper_two(value)");
+    });
+
+    it("still strips whitespace regenerated after content on the line", () => {
+      // D11's original case survives untouched: the cursor is past real
+      // content, so a leading space is the model repeating what was typed.
+      expect(stripStarterOverlap("x = 1\n    total = ", "  0")).toBe("0");
     });
 
     it("strips a duplicated triple-quote even though the prefix doesn't end in whitespace", () => {
@@ -445,5 +490,222 @@ describe("accepting with Tab (Cursor parity)", () => {
       }),
     });
     expect(acceptGhostText(view)).toBe(false);
+  });
+
+  // D61: the model returning nothing is abstention, not failure — it declines
+  // when it has nothing confident to say (D60). These tests pin the signal
+  // and, more importantly, the throttle: at a 9-21% abstention rate and a
+  // 1250ms debounce, an unthrottled notice fires many times a minute.
+  describe("abstention", () => {
+    function abstentionView(doc: string, sel: number) {
+      return new EditorView({
+        state: EditorState.create({
+          doc,
+          selection: { anchor: sel },
+          extensions: fimCompletion(
+            { enabled: true, acceptKeybinding: "Alt-Tab" },
+            "abc",
+            "src/foo.ts"
+          ),
+        }),
+      });
+    }
+
+    function countAbstentions() {
+      const seen = { n: 0 };
+      const on = () => (seen.n += 1);
+      window.addEventListener(COMPLETION_ABSTAINED_EVENT, on);
+      return {
+        get count() {
+          return seen.n;
+        },
+        stop: () => window.removeEventListener(COMPLETION_ABSTAINED_EVENT, on),
+      };
+    }
+
+    async function typeAt(view: EditorView, pos: number, ch: string) {
+      view.dispatch({
+        changes: { from: pos, to: pos, insert: ch },
+        selection: { anchor: pos + 1 },
+        userEvent: "input.type",
+      });
+      await vi.advanceTimersByTimeAsync(3100);
+    }
+
+    beforeEach(() => {
+      resetAbstentionThrottle();
+    });
+
+    it("announces an abstention when the model returns nothing", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+
+      expect(seen.count).toBe(1);
+      expect(view.state.field(ghostTextState)).toBeNull();
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("announces an abstention when the overlap strip consumes the whole completion", async () => {
+      // stripStarterOverlap eats a completion that only repeats what was
+      // typed. The user sees nothing either way, so it is the same state.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "r", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+
+      expect(seen.count).toBe(1);
+      expect(view.state.field(ghostTextState)).toBeNull();
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("stays silent when the model does have something to say", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({
+        completion: "return x + y;",
+        modelLatencyMs: 8,
+      });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      await vi.waitFor(() => view.state.field(ghostTextState) !== null, {
+        timeout: 2000,
+      });
+
+      expect(seen.count).toBe(0);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("does not announce the same abstention twice in a row", async () => {
+      // The throttle is the whole feature. Without it this is unbearable.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      await typeAt(view, 19, "e");
+      await typeAt(view, 20, "t");
+
+      expect(seen.count).toBe(1);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("counts every abstention, even the ones it stays quiet about", async () => {
+      // The throttle governs the notice, not the measurement. Undercounting
+      // here would hide the thing step 2 of the sequence exists to size.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      localStorage.removeItem("palisade:completionTelemetry");
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      await typeAt(view, 19, "e");
+      await typeAt(view, 20, "t");
+
+      expect(seen.count).toBe(1);
+      expect(getPublicTelemetry().abstained).toBe(3);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+
+    it("announces again once the throttle window has passed", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      invokeMock.mockResolvedValue({ completion: "", modelLatencyMs: 8 });
+      const seen = countAbstentions();
+
+      const view = abstentionView("function add() {\n  \n}", 18);
+      await typeAt(view, 18, "r");
+      expect(seen.count).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await typeAt(view, 19, "e");
+
+      expect(seen.count).toBe(2);
+
+      seen.stop();
+      vi.useRealTimers();
+      view.destroy();
+    });
+  });
+
+  // GH#9 step 2: acceptance alone overstates quality — a completion accepted
+  // and immediately deleted is a rejected one. This is the correction.
+  describe("retention", () => {
+    function accepted(doc: string, at: number, text: string) {
+      const view = new EditorView({
+        state: EditorState.create({
+          doc,
+          selection: { anchor: at },
+          extensions: fimCompletion(
+            { enabled: true, acceptKeybinding: "Tab" },
+            "abc",
+            "src/foo.ts"
+          ),
+        }),
+      });
+      // The view must be in the document: the 30s check skips a destroyed
+      // editor, and an unattached one is indistinguishable from that.
+      document.body.appendChild(view.dom);
+      view.dispatch({
+        effects: setGhostText.of({ text, from: at, keybinding: "Tab" }),
+      });
+      acceptGhostText(view);
+      return view;
+    }
+
+    beforeEach(() => {
+      localStorage.removeItem("palisade:completionTelemetry");
+    });
+
+    it("counts a completion still in the file after 30s", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const view = accepted("function add() {\n  \n}", 19, "return x + y;");
+
+      expect(getPublicTelemetry().retained).toBe(0);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(getPublicTelemetry().retained).toBe(1);
+
+      vi.useRealTimers();
+      view.dom.remove();
+      view.destroy();
+    });
+
+    it("does not count one the user deleted again", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const view = accepted("function add() {\n  \n}", 19, "return x + y;");
+      view.dispatch({
+        changes: { from: 19, to: 19 + "return x + y;".length, insert: "" },
+      });
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(getPublicTelemetry().retained).toBe(0);
+      expect(getPublicTelemetry().accepted).toBe(1);
+
+      vi.useRealTimers();
+      view.dom.remove();
+      view.destroy();
+    });
   });
 });

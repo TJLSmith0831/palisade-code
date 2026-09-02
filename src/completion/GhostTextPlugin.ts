@@ -12,6 +12,8 @@ import {
   recordAccepted,
   recordDismissed,
   recordLatency,
+  recordAbstained,
+  recordRetained,
   recordShown,
   recordTypedPast,
 } from "./telemetry";
@@ -30,6 +32,34 @@ export const COMPLETION_ENABLED_KEY = "palisade:completionEnabled";
 export const COMPLETION_KEYBINDING_KEY = "palisade:completionKeybinding";
 export const COMPLETION_SETTINGS_CHANGED_EVENT =
   "palisade:completion-settings-changed";
+
+/** Fired when the model declined to suggest anything (D60/D61). The status
+ *  bar listens; nothing in the editor itself reacts. Same window-event
+ *  idiom as the settings-changed event above. */
+export const COMPLETION_ABSTAINED_EVENT = "palisade:completion-abstained";
+
+// D61: at a 9-21% abstention rate and a 1250ms debounce (D1), an unthrottled
+// notice fires many times a minute — which is how a well-meant affordance
+// becomes something users learn to resent. At most once per file per window,
+// and never twice for the same cursor position however long you wait there.
+const ABSTENTION_THROTTLE_MS = 3 * 60_000;
+const lastAbstention = new Map<string, { at: number; pos: number }>();
+
+/** Test seam: the throttle is module state so it survives the plugin being
+ *  reconfigured mid-session, which also means it survives between tests. */
+export function resetAbstentionThrottle(): void {
+  lastAbstention.clear();
+}
+
+function announceAbstention(filePath: string, pos: number): void {
+  const last = lastAbstention.get(filePath);
+  const now = Date.now();
+  if (last && (last.pos === pos || now - last.at < ABSTENTION_THROTTLE_MS)) {
+    return;
+  }
+  lastAbstention.set(filePath, { at: now, pos });
+  window.dispatchEvent(new Event(COMPLETION_ABSTAINED_EVENT));
+}
 
 export function loadCompletionSettings(): FimSettings {
   const enabled = localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false";
@@ -214,16 +244,27 @@ export function stripStarterOverlap(
   const trimmedPrefix = prefix.replace(/\s+$/, "");
   if (!trimmedPrefix) return completion;
 
-  // D11: if the prefix ends with non-newline whitespace and the completion
-  // starts with whitespace, the model regenerated whitespace the user
-  // already typed. Strip it before word-overlap detection so the ghost
-  // text continues right at the cursor. When the prefix ends with a
-  // newline, the completion's leading whitespace is the new line's indent
-  // — preserve it.
+  // D11/D51, amended by D64: strip whitespace the model regenerated after
+  // content on the line — but never the leading indent of a line that has
+  // none yet. Everything after the last newline being whitespace means the
+  // cursor is sitting in the indent, and the shipped model (D59) supplies
+  // the *remainder* of that indent rather than repeating what was typed.
+  // Stripping there produced a line indented two spaces inside a four-space
+  // block, which Python rejects outright.
+  const sinceNewline = prefix.slice(prefix.lastIndexOf("\n") + 1);
+  const cursorSitsInIndent = sinceNewline.trim() === "";
+
   let result = completion;
-  if (prefixEndsWithWs && !/\n$/.test(prefix) && /^\s/.test(result)) {
+  if (prefixEndsWithWs && !cursorSitsInIndent && /^\s/.test(result)) {
     result = result.replace(/^\s+/, "");
   }
+
+  // D64: the overlap check below catches a model repeating the token the
+  // user just typed, which is only meaningful while the cursor still touches
+  // that token. With the cursor in a fresh line's indent the "last word" is
+  // on the previous line, and any match is coincidence — one that strips the
+  // indent and eats the start of the identifier with it.
+  if (cursorSitsInIndent) return result;
 
   const lastWs = trimmedPrefix.search(/\s[^\s]*$/);
   const lastWord =
@@ -270,7 +311,24 @@ export function acceptGhostText(view: EditorView): boolean {
     effects: setGhostText.of(null),
     userEvent: "ghost.accept",
   });
+  scheduleRetentionCheck(view, ghost.text);
   return true;
+}
+
+// A completion accepted and then deleted was not a good completion. GitHub's
+// own rebuild of Copilot found accepted-and-retained characters the metric
+// that tracks developer happiness, where raw acceptance rate does not.
+const RETENTION_WINDOW_MS = 30_000;
+
+function scheduleRetentionCheck(view: EditorView, text: string) {
+  setTimeout(() => {
+    // ponytail: substring search rather than a mapped position — a distinct
+    // completion is unlikely to also appear elsewhere, and this is a usage
+    // counter, not an accounting ledger. Track a StateField-mapped range if
+    // the number ever has to be exact.
+    if (!view.dom.isConnected) return;
+    if (view.state.doc.toString().includes(text)) recordRetained();
+  }, RETENTION_WINDOW_MS);
 }
 
 /** Clear the ghost text without inserting it. */
@@ -372,19 +430,32 @@ class FimViewPlugin {
       if (controller.signal.aborted) return;
       // Ignore stale responses for a cursor that has moved.
       if (view.state.selection.main.head !== pos) return;
-      if (res.completion) {
-        const text = stripStarterOverlap(prefix, res.completion);
-        if (!text) return;
-        view.dispatch({
-          effects: setGhostText.of({
-            text,
-            from: pos,
-            keybinding: this.settings.acceptKeybinding,
-          }),
-        });
+      // Both paths leave the user looking at nothing: an empty response, and
+      // a response that was only a repeat of what they just typed. Same
+      // state, so the same signal (D61). Every staleness guard above still
+      // applies first — an abstention from a moved cursor is as stale as a
+      // completion from one.
+      const text = res.completion
+        ? stripStarterOverlap(prefix, res.completion)
+        : "";
+      if (!text) {
+        // Counted every time; only the notice is throttled. Sizing the
+        // behaviour and surfacing it are different jobs.
+        recordAbstained();
+        announceAbstention(this.filePath, pos);
+        return;
       }
+      view.dispatch({
+        effects: setGhostText.of({
+          text,
+          from: pos,
+          keybinding: this.settings.acceptKeybinding,
+        }),
+      });
     } catch {
-      // Graceful degradation: no ghost text on error.
+      // Graceful degradation: no ghost text on error. Deliberately NOT an
+      // abstention — a failed round-trip is not the model declining, and
+      // saying so would blame the model for the network.
     }
   }
 }
