@@ -996,6 +996,10 @@ export type CompletionTelemetry = {
   accepted: number;
   dismissed: number;
   typedPast: number;
+  /** Requests where the model declined to suggest anything (D60). */
+  abstained: number;
+  /** Accepted completions still present 30s later (D63). */
+  retained: number;
   ttftP50: number;
   ttftP99: number;
 };
