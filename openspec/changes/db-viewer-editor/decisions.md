@@ -140,3 +140,9 @@ Seeded from the confirmed `/impeccable shape` brief (this session) plus codebase
   4. The line-number gutter rendered in CodeMirror's default white/light styling, clashing with the dark editor around it. Cause: only `.cm-editor`'s own background was themed; `.cm-gutters`, active-line, selection and cursor were left at CM's defaults. Fix: mirrored `FileEditorPane`'s full token set (`--editor-bg`/`--muted`/`--border`/`--fg`/`--accent`) onto `.ds-db-sql` — since these are the same CSS custom properties DESIGN.md's light/dark mirror already flips, no separate light-mode rule was needed.
 - **Why**: none of these were visible from source review, the critique's screenshots-less agents, or unit tests — they only showed up driving the real running app. Logged here because the gauntlet's own task list (6.5, "manual pass in the running app") exists specifically to catch this category of bug.
 - **Source**: user (live manual review)
+
+---
+
+## Superseded
+
+**D8 (keychain deferred; plaintext-with-0600 accepted as the v1 credential model)** is superseded by the `db-hardening` change (2026-09-02). Connection strings now live in the OS credential store, with this file-based model retained only as a warned fallback where no store is available. See `openspec/changes/db-hardening/decisions.md` D8, D9, D12, D15.

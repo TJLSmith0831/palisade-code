@@ -6,6 +6,9 @@ import {
   Group,
   Loader,
   NavLink,
+  NumberInput,
+  PasswordInput,
+  SegmentedControl,
   Stack,
   Text,
   TextInput,
@@ -50,7 +53,16 @@ export default function DatabasePanel({
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
+  // Discrete fields, not a connection string: the password is stored on its own
+  // so listing connections needs no credential-store access (D21/D23).
+  const [backend, setBackend] = useState<api.DbBackend>("postgres");
+  const [host, setHost] = useState("localhost");
+  const [port, setPort] = useState<number>(5432);
+  const [user, setUser] = useState("");
+  const [database, setDatabase] = useState("");
+  const [password, setPassword] = useState("");
+  const [path, setPath] = useState("");
+  const [paste, setPaste] = useState("");
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, Loaded>>({});
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -66,14 +78,48 @@ export default function DatabasePanel({
 
   useEffect(reload, [reload]);
 
+  const details = (): api.DbDetails =>
+    backend === "sqlite"
+      ? { backend: "sqlite", path }
+      : { backend: "postgres", host, port, user, database };
+
+  // Pasting a connection string fills the fields rather than being stored as
+  // one — the user still sees and can correct what will be saved (D24).
+  const applyPaste = (value: string) => {
+    setPaste(value);
+    if (!value.trim()) return;
+    api
+      .dbParseUrl(value)
+      .then(({ details, password }) => {
+        setBackend(details.backend);
+        if (details.backend === "sqlite") {
+          setPath(details.path);
+        } else {
+          setHost(details.host);
+          setPort(details.port);
+          setUser(details.user);
+          setDatabase(details.database);
+        }
+        if (password) setPassword(password);
+        setPaste("");
+        setError(null);
+      })
+      .catch((e) => setError(String(e)));
+  };
+
+  const complete = name && (backend === "sqlite" ? path : host && database);
+
   const save = () => {
     setSaving(true);
     setError(null);
     api
-      .dbAddConnection(projectHash, name, url)
+      .dbAddConnection(projectHash, name, details(), password || undefined)
       .then(() => {
         setName("");
-        setUrl("");
+        setPassword("");
+        setUser("");
+        setDatabase("");
+        setPath("");
         setAdding(false);
         reload();
       })
@@ -147,13 +193,73 @@ export default function DatabasePanel({
           onChange={(e) => setName(e.currentTarget.value)}
           data-autofocus
         />
+        <SegmentedControl
+          size="xs"
+          fullWidth
+          value={backend}
+          onChange={(value) => setBackend(value as api.DbBackend)}
+          data={[
+            { label: "Postgres", value: "postgres" },
+            { label: "SQLite", value: "sqlite" },
+          ]}
+        />
+        {backend === "sqlite" ? (
+          <TextInput
+            size="xs"
+            label="Database file"
+            placeholder="/path/to/app.db"
+            description="No credentials — SQLite connections never use the keychain."
+            value={path}
+            onChange={(e) => setPath(e.currentTarget.value)}
+          />
+        ) : (
+          <>
+            <Group gap="xs" grow align="flex-start">
+              <TextInput
+                size="xs"
+                label="Host"
+                placeholder="localhost"
+                value={host}
+                onChange={(e) => setHost(e.currentTarget.value)}
+              />
+              <NumberInput
+                size="xs"
+                label="Port"
+                value={port}
+                min={1}
+                max={65535}
+                onChange={(value) => setPort(Number(value) || 5432)}
+              />
+            </Group>
+            <TextInput
+              size="xs"
+              label="User"
+              value={user}
+              onChange={(e) => setUser(e.currentTarget.value)}
+            />
+            <PasswordInput
+              size="xs"
+              label="Password"
+              description="Stored in the OS keychain, separate from the details above."
+              value={password}
+              onChange={(e) => setPassword(e.currentTarget.value)}
+            />
+            <TextInput
+              size="xs"
+              label="Database"
+              placeholder="app"
+              value={database}
+              onChange={(e) => setDatabase(e.currentTarget.value)}
+            />
+          </>
+        )}
         <TextInput
           size="xs"
-          label="Connection string"
+          label="Or paste a connection string"
           placeholder="postgres://user:password@localhost:5432/app"
-          description="Postgres or SQLite. Stored outside this project, never committed."
-          value={url}
-          onChange={(e) => setUrl(e.currentTarget.value)}
+          description="Fills the fields above; the string itself is never stored."
+          value={paste}
+          onChange={(e) => applyPaste(e.currentTarget.value)}
         />
         <Group gap="xs" justify="flex-end">
           <Button
@@ -166,7 +272,7 @@ export default function DatabasePanel({
           >
             Cancel
           </Button>
-          <Button size="xs" type="submit" loading={saving} disabled={!name || !url}>
+          <Button size="xs" type="submit" loading={saving} disabled={!complete}>
             Connect
           </Button>
         </Group>

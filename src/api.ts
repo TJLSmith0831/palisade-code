@@ -1092,18 +1092,30 @@ export const searchMcpRegistry = (
 
 // ---------------------------------------------------------------- database
 //
-// Saved connections live in `~/.palisade-code`, never in the project — a
-// connection string can carry a password (D5/D8). The frontend therefore only
-// ever holds a connection *id*; the backend resolves the URL itself.
+// Saved connections live in `~/.palisade-code`, never in the project (D5/D8).
+// Connection details are discrete fields, not a URL string: the password is
+// stored on its own in the OS credential store, so listing connections reads no
+// secrets and opening the panel raises no OS prompt (D21/D23).
 
 export type DbBackend = "postgres" | "sqlite";
 
+/** Non-secret connection details. `backend` is the discriminator. */
+export type DbDetails =
+  | {
+      backend: "postgres";
+      host: string;
+      port: number;
+      user: string;
+      database: string;
+    }
+  | { backend: "sqlite"; path: string };
+
+/** No password and no assembled URL — neither crosses IPC (D16, D21). Every
+ *  command addresses a connection by `id`. */
 export type DbConnection = {
   id: string;
   name: string;
-  url: string;
-  backend: DbBackend;
-};
+} & DbDetails;
 
 /** A table or view in the schema tree. `schema` is null on SQLite. */
 export type DbTable = {
@@ -1152,8 +1164,17 @@ export type DbRowEdit = {
 export const dbListConnections = (projectHash: string) =>
   invoke<DbConnection[]>("db_list_connections", { projectHash });
 
-export const dbAddConnection = (projectHash: string, name: string, url: string) =>
-  invoke<DbConnection>("db_add_connection", { projectHash, name, url });
+export const dbAddConnection = (
+  projectHash: string,
+  name: string,
+  details: DbDetails,
+  password?: string
+) => invoke<DbConnection>("db_add_connection", { projectHash, name, details, password });
+
+/** Splits a pasted connection string into fields for review (D24). Parsing
+ *  lives in the backend so the two sides can't disagree about a URL's shape. */
+export const dbParseUrl = (url: string) =>
+  invoke<{ details: DbDetails; password: string | null }>("db_parse_url", { url });
 
 export const dbRemoveConnection = (projectHash: string, connectionId: string) =>
   invoke<void>("db_remove_connection", { projectHash, connectionId });

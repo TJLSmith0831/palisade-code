@@ -2515,6 +2515,7 @@ pub fn run() {
             commands::db_cmds::db_fetch_page,
             commands::db_cmds::db_run_query,
             commands::db_cmds::db_is_destructive,
+            commands::db_cmds::db_parse_url,
             commands::db_cmds::db_preview_edits,
             commands::db_cmds::db_apply_edits,
             commands::openspec_cmds::list_spec_changes,
