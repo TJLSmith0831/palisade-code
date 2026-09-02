@@ -51,6 +51,17 @@ export function resetAbstentionThrottle(): void {
   lastAbstention.clear();
 }
 
+// A new model landing (first launch, or a fresh one after an app update)
+// means the sidecar has no model file to serve yet. BetaBadge already
+// listens for the "model-install" Tauri event to drive its progress bar;
+// it calls this setter from the same handler so every open editor stops
+// firing requests that can only fail, rather than each editor subscribing
+// to Tauri itself.
+let modelInstalling = false;
+export function setModelInstalling(installing: boolean): void {
+  modelInstalling = installing;
+}
+
 function announceAbstention(filePath: string, pos: number): void {
   const last = lastAbstention.get(filePath);
   const now = Date.now();
@@ -405,7 +416,7 @@ class FimViewPlugin {
   }
 
   private async request(view: EditorView) {
-    if (!this.settings.enabled) return;
+    if (!this.settings.enabled || modelInstalling) return;
     this.cancel();
 
     const { prefix, suffix, pos } = extractContext(view);

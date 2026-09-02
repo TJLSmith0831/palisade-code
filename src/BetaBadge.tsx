@@ -27,6 +27,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import * as api from "./api";
 import { sendFeedback } from "./feedback";
+import { setModelInstalling } from "./completion/GhostTextPlugin";
 
 /** Re-check this often while the app stays open. */
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
@@ -71,9 +72,11 @@ export default function BetaBadge() {
   // The model install runs on first launch and after a model upgrade. It is
   // the one thing here that blocks a feature, so it gets a progress bar.
   useEffect(() => {
-    const un = listen<ModelProgress>("model-install", ({ payload }) =>
-      setModelProgress(payload.stage === "ready" ? null : payload)
-    );
+    const un = listen<ModelProgress>("model-install", ({ payload }) => {
+      const ready = payload.stage === "ready";
+      setModelProgress(ready ? null : payload);
+      setModelInstalling(!ready);
+    });
     return () => {
       un.then((off) => off());
     };
@@ -134,7 +137,11 @@ export default function BetaBadge() {
           <Tooltip
             label={
               modelProgress
-                ? "Setting up the AI model — the app is usable meanwhile"
+                ? `Setting up the AI model${
+                    modelProgress.total > 0
+                      ? ` — ${Math.round((modelProgress.done / modelProgress.total) * 100)}%`
+                      : ""
+                  } — the app is usable meanwhile`
                 : `Prerelease build${version ? ` · ${version}` : ""}`
             }
           >
@@ -162,12 +169,18 @@ export default function BetaBadge() {
       </Group>
 
       {modelProgress && modelProgress.total > 0 && (
-        <Progress
-          size="xs"
-          radius={0}
-          value={(modelProgress.done / modelProgress.total) * 100}
-          data-testid="model-progress"
-        />
+        <Group gap={4} wrap="nowrap" data-testid="model-progress-row">
+          <Progress
+            size="xs"
+            radius={0}
+            value={(modelProgress.done / modelProgress.total) * 100}
+            style={{ flex: 1 }}
+            data-testid="model-progress"
+          />
+          <Text size="xs" c="dimmed" data-testid="model-progress-percent">
+            {Math.round((modelProgress.done / modelProgress.total) * 100)}%
+          </Text>
+        </Group>
       )}
 
       <Modal
