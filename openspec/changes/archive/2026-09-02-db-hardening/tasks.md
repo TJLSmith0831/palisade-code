@@ -55,4 +55,4 @@ Supersedes the whole-URL-in-keychain model from task 1. The vault module, fallba
 
 - [x] 4.1 `cd src-tauri && cargo test db::` green (D3)
 - [x] 4.2 Full gate: `cd src-tauri && cargo test` and `pnpm test` — the frontend is untouched, so this is a regression check, not new coverage
-- [ ] 4.3 Record the verification run and commit; note in `db-viewer-editor/decisions.md` that its D8 is superseded here (D8)
+- [x] 4.3 Record the verification run and commit; note in `db-viewer-editor/decisions.md` that its D8 is superseded here (D8)
