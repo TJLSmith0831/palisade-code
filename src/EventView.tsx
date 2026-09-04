@@ -13,7 +13,7 @@ import {
   IconTerminal2,
 } from "@tabler/icons-react";
 
-import type { ExecutorEvent, Message, Preflight } from "./api";
+import type { AgentLogin, ExecutorEvent, Message, Preflight } from "./api";
 import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
@@ -381,6 +381,8 @@ export const EventList = memo(function EventList({
   executor,
   sessionId = null,
   onRetry,
+  agentLogins = [],
+  onAgentLogin,
 }: {
   items: Item[];
   executor: Preflight["selected"];
@@ -395,6 +397,13 @@ export const EventList = memo(function EventList({
    *  they've fixed the agent's login outside Palisade. Omitted on read-only
    *  render paths (e.g. the diff tab), which have nowhere to route a send. */
   onRetry?: (text: string) => void;
+  /** Interactive logins the thread's agent advertised over ACP. An agent that
+   *  offers one expects the *client* to run it (its own `authenticate` can't),
+   *  which is how an expired login gets fixed without leaving the app (#19).
+   *  Empty when the agent advertises none, or hasn't been reached yet. */
+  agentLogins?: AgentLogin[];
+  /** Runs one of those logins — the app opens a terminal and executes it. */
+  onAgentLogin?: (login: AgentLogin) => void;
 }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = useMemo(() => {
@@ -493,12 +502,25 @@ export const EventList = memo(function EventList({
                       className="ds-crash-banner-auth-summary"
                       data-testid="crash-banner-auth-summary"
                     >
-                      This agent's login expired or failed to refresh.
-                      Palisade can't complete an interactive login on its
-                      own — sign back in outside Palisade, then retry.
+                      {agentLogins.length > 0
+                        ? "This agent's login expired or failed to refresh. Sign in below — Palisade runs the agent's own login in a terminal here — then retry."
+                        : "This agent's login expired or failed to refresh. Palisade can't complete an interactive login on its own — sign back in outside Palisade, then retry."}
                     </div>
                   )}
                   <div className="ds-crash-banner-detail">{item.text}</div>
+                  {authIssue &&
+                    onAgentLogin &&
+                    agentLogins.map((login) => (
+                      <button
+                        key={login.methodId}
+                        type="button"
+                        className="ds-crash-banner-retry"
+                        onClick={() => onAgentLogin(login)}
+                        data-testid="crash-banner-signin"
+                      >
+                        Sign in with {login.label}
+                      </button>
+                    ))}
                   {retryText && (
                     <button
                       type="button"

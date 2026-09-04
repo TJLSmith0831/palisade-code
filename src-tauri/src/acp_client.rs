@@ -84,6 +84,140 @@ pub fn extract_models(options: &[v1::SessionConfigOption]) -> ModelState {
 
 // ------------------------------------------------------------ ACP auth
 
+/// A login an agent says the *client* should run for it.
+///
+/// ACP's `terminal` auth methods work this way: the agent can't log itself in
+/// over the protocol (its `authenticate` rejects them), it tells the client
+/// what to run so the user can complete an interactive login. Palisade has a
+/// terminal, so it runs this in one — no agent-specific knowledge, just the
+/// method the agent advertised (#19).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLogin {
+    pub method_id: String,
+    pub label: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+impl AgentLogin {
+    /// The command as one shell line, for writing into a PTY.
+    pub fn shell_line(&self) -> String {
+        std::iter::once(&self.command)
+            .chain(self.args.iter())
+            .map(|word| shell_quote(word))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// Single-quote a word unless it is plainly safe bare. The words come from an
+/// agent's own manifest, so they are not hostile input, but a path with a
+/// space still has to survive reaching a shell intact.
+fn shell_quote(word: &str) -> String {
+    let safe = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@+=,".contains(c));
+    if safe {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+/// What Palisade tells agents it can do.
+///
+/// `auth.terminal` is the reason any of this works: agents only advertise
+/// their interactive logins when the client says it can run one. Sending no
+/// capabilities at all — what Palisade did — means `initialize` comes back
+/// with an empty `auth_methods` and there is no way to sign in from inside
+/// the app, whatever the agent supports (#19). The `_meta` variant is the same
+/// statement for agents that key off the extension rather than the (still
+/// unstable) spec field, and buys a fully resolved command in return.
+pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
+    let mut meta = serde_json::Map::new();
+    meta.insert("terminal-auth".into(), serde_json::Value::Bool(true));
+    v1::ClientCapabilities::new().auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
+}
+
+/// Every agent's advertised logins, keyed by agent id, as last seen at
+/// `initialize`.
+///
+/// Process-global on purpose: the sign-in the user needs has to outlive the
+/// session whose failure asked for it, and a session that hit an auth error is
+/// torn down before the user can act on it.
+static AGENT_LOGINS: std::sync::OnceLock<Mutex<HashMap<String, Vec<AgentLogin>>>> =
+    std::sync::OnceLock::new();
+
+fn agent_logins() -> &'static Mutex<HashMap<String, Vec<AgentLogin>>> {
+    AGENT_LOGINS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn record_logins(agent_id: &str, logins: Vec<AgentLogin>) {
+    agent_logins().lock().unwrap().insert(agent_id.to_string(), logins);
+}
+
+/// What the user can be offered to sign this agent in, or empty when the agent
+/// advertised no client-runnable login (or has not been reached yet).
+pub fn logins_for(agent_id: &str) -> Vec<AgentLogin> {
+    agent_logins().lock().unwrap().get(agent_id).cloned().unwrap_or_default()
+}
+
+/// The interactive logins an agent advertised, as commands Palisade can run.
+///
+/// `cmd`/`args` are how Palisade launched this agent; per ACP a terminal auth
+/// method is the same binary with extra arguments, so the login command is the
+/// launch plus the method's own args. An agent that resolved the command for
+/// itself (the `terminal-auth` `_meta` extension) is taken at its word.
+pub(crate) fn logins_from(
+    methods: &[v1::AuthMethod],
+    cmd: &str,
+    args: &[String],
+) -> Vec<AgentLogin> {
+    methods
+        .iter()
+        .filter_map(|method| {
+            let v1::AuthMethod::Terminal(terminal) = method else {
+                return None;
+            };
+            let resolved = terminal
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("terminal-auth"))
+                .and_then(|m| m.as_object());
+            let (command, login_args, label) = match resolved {
+                Some(meta) => {
+                    let command = meta.get("command").and_then(|c| c.as_str())?.to_string();
+                    let login_args = meta
+                        .get("args")
+                        .and_then(|a| a.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    let label = meta
+                        .get("label")
+                        .and_then(|l| l.as_str())
+                        .unwrap_or(&terminal.name)
+                        .to_string();
+                    (command, login_args, label)
+                }
+                None => (
+                    cmd.to_string(),
+                    args.iter().cloned().chain(terminal.args.iter().cloned()).collect(),
+                    terminal.name.clone(),
+                ),
+            };
+            Some(AgentLogin {
+                method_id: terminal.id.to_string(),
+                label,
+                command,
+                args: login_args,
+            })
+        })
+        .collect()
+}
+
+
 /// Whether an agent's error is ACP's "the client must authenticate" signal.
 ///
 /// The protocol defines this as JSON-RPC code -32000 (`ErrorCode::AuthRequired`),
@@ -894,10 +1028,20 @@ async fn run_bridge(
         )
         .connect_with(transport, async move |cx| {
             let init_response = cx
-                .send_request(v1::InitializeRequest::new(ProtocolVersion::V1))
+                .send_request(
+                    v1::InitializeRequest::new(ProtocolVersion::V1)
+                        .client_capabilities(client_capabilities()),
+                )
                 .block_task()
                 .await
                 .map_err(|e| acp::Error::internal_error().data(format!("initialize failed: {e}")))?;
+
+            // Remember any interactive login this agent offers, so a later auth
+            // failure can hand the user a sign-in they can actually click (#19).
+            record_logins(
+                &spawn.agent_id,
+                logins_from(&init_response.auth_methods, &spawn.cmd, &spawn.args),
+            );
 
             // Authenticate if the agent requires it (D15).  Agents that
             // advertise auth methods (e.g. Devin's API-key flow) will
@@ -1195,15 +1339,20 @@ pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Result<AcpSess
 /// the connection (which kills the process). Used to populate the model
 /// menu for a provider without opening a thread session.
 pub fn probe_models(
+    agent_id: String,
+    cmd: String,
     bin: PathBuf,
     args: Vec<String>,
     project_root: PathBuf,
 ) -> Result<ModelState, String> {
     let spawn = AcpSpawn {
-        agent_id: String::new(),
+        // Named, not blank: the probe completes a real `initialize`, which is
+        // where an agent's advertised logins are learned — recording them
+        // under an empty id would throw that away (#19).
+        agent_id,
         agent_name: String::new(),
         bin,
-        cmd: String::new(),
+        cmd,
         args,
         project_root,
         project_hash: String::new(),
@@ -2496,5 +2645,127 @@ mod tests {
         assert!(help.contains("Devin"));
         assert!(help.contains("devin acp"));
         assert!(!help.contains("npm"));
+    }
+
+    // ------------------------------------------- #19: in-app agent sign-in
+
+    fn terminal_method(id: &str, name: &str, args: &[&str]) -> v1::AuthMethod {
+        v1::AuthMethod::Terminal(
+            v1::AuthMethodTerminal::new(v1::AuthMethodId::new(id), name)
+                .args(args.iter().map(|a| a.to_string()).collect()),
+        )
+    }
+
+    /// ACP terminal auth: the client runs the agent's own binary with the
+    /// advertised extra args. Palisade already knows how it launched the
+    /// agent, so the login command is that launch plus those args — which is
+    /// what makes this work for any agent, not one adapter.
+    #[test]
+    fn a_terminal_auth_method_becomes_the_agents_launch_command_plus_its_args() {
+        let methods = vec![terminal_method(
+            "claude-ai-login",
+            "Claude Subscription",
+            &["--cli", "auth", "login", "--claudeai"],
+        )];
+        let logins = logins_from(
+            &methods,
+            "npx",
+            &["-y".into(), "@agentclientprotocol/claude-agent-acp@0.74.0".into()],
+        );
+
+        assert_eq!(logins.len(), 1);
+        assert_eq!(logins[0].method_id, "claude-ai-login");
+        assert_eq!(logins[0].label, "Claude Subscription");
+        assert_eq!(logins[0].command, "npx");
+        assert_eq!(
+            logins[0].args,
+            vec![
+                "-y",
+                "@agentclientprotocol/claude-agent-acp@0.74.0",
+                "--cli",
+                "auth",
+                "login",
+                "--claudeai"
+            ]
+        );
+        assert_eq!(
+            logins[0].shell_line(),
+            "npx -y @agentclientprotocol/claude-agent-acp@0.74.0 --cli auth login --claudeai"
+        );
+    }
+
+    /// An agent that resolves the command itself (the `terminal-auth` _meta
+    /// extension) is taken at its word rather than reconstructed.
+    #[test]
+    fn a_resolved_terminal_auth_meta_wins_over_the_launch_command() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "terminal-auth".into(),
+            serde_json::json!({
+                "command": "/usr/local/bin/node",
+                "args": ["/path/to/cli.js", "--cli", "auth", "login"],
+                "label": "Claude Login",
+            }),
+        );
+        let methods = vec![v1::AuthMethod::Terminal(
+            v1::AuthMethodTerminal::new(v1::AuthMethodId::new("claude-ai-login"), "Claude Subscription")
+                .args(vec!["--cli".into()])
+                .meta(meta),
+        )];
+        let logins = logins_from(&methods, "npx", &["-y".into(), "pkg".into()]);
+
+        assert_eq!(logins[0].command, "/usr/local/bin/node");
+        assert_eq!(logins[0].args, vec!["/path/to/cli.js", "--cli", "auth", "login"]);
+        assert_eq!(logins[0].label, "Claude Login");
+    }
+
+    /// Methods the client can't run itself are not offered as a sign-in the
+    /// user can click — those go through the protocol's `authenticate`.
+    #[test]
+    fn non_terminal_methods_are_not_offered_as_a_terminal_login() {
+        let methods = vec![v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
+            v1::AuthMethodId::new("windsurf-api-key"),
+            "API key",
+        ))];
+        assert!(logins_from(&methods, "devin", &["acp".into()]).is_empty());
+    }
+
+    #[test]
+    fn every_advertised_terminal_method_is_offered() {
+        let methods = vec![
+            terminal_method("claude-ai-login", "Claude Subscription", &["--claudeai"]),
+            terminal_method("console-login", "Anthropic Console", &["--console"]),
+        ];
+        let logins = logins_from(&methods, "npx", &["pkg".into()]);
+        assert_eq!(
+            logins.iter().map(|l| l.label.as_str()).collect::<Vec<_>>(),
+            vec!["Claude Subscription", "Anthropic Console"]
+        );
+    }
+
+    /// Arguments with spaces have to survive being written to a shell.
+    #[test]
+    fn the_shell_line_quotes_arguments_that_need_it() {
+        let methods = vec![terminal_method("m", "M", &["--flag", "two words"])];
+        let logins = logins_from(&methods, "my agent", &[]);
+        assert_eq!(logins[0].shell_line(), "'my agent' --flag 'two words'");
+    }
+
+    /// The client capability is the whole reason any of this is advertised:
+    /// agents only include terminal login methods when the client says it can
+    /// run them (#19).
+    #[test]
+    fn palisade_advertises_that_it_can_run_a_terminal_login() {
+        let caps = client_capabilities();
+        assert!(caps.auth.terminal, "the spec capability agents key off");
+        assert_eq!(
+            caps.auth
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("terminal-auth"))
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "and the _meta variant, for agents that resolve the command for us"
+        );
     }
 }

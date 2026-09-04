@@ -1237,7 +1237,65 @@ async fn list_models(
             Some(hash) => project_root(hash)?,
             None => dirs_home(),
         };
-        acp_client::probe_models(PathBuf::from(path), agent.args.clone(), root)
+        acp_client::probe_models(
+            agent.id.clone(),
+            agent.cmd.clone(),
+            PathBuf::from(path),
+            agent.args.clone(),
+            root,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One interactive login an agent advertised, as the frontend can offer it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLoginOption {
+    method_id: String,
+    label: String,
+    shell_line: String,
+}
+
+/// The logins this thread's agent says the *client* should run.
+///
+/// ACP agents that own an interactive login advertise it at `initialize` and
+/// expect the client to run it — their own `authenticate` refuses those
+/// methods. Palisade has a terminal, so it can run one, which is what makes an
+/// expired agent login fixable without leaving the app (#19). Empty for an
+/// agent that advertises none.
+#[tauri::command]
+async fn agent_logins(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: Option<String>,
+) -> Res<Vec<AgentLoginOption>> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let (agent, _) = selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?;
+        // Nothing cached means no session has reached this agent yet this run.
+        // A probe completes the same handshake, which is where the methods are
+        // advertised — cheap, and only on the path that needs an answer.
+        if acp_client::logins_for(&agent.id).is_empty() {
+            if let Some(path) = agent.path.clone() {
+                let _ = acp_client::probe_models(
+                    agent.id.clone(),
+                    agent.cmd.clone(),
+                    PathBuf::from(path),
+                    agent.args.clone(),
+                    project_root(&project_hash)?,
+                );
+            }
+        }
+        Ok(acp_client::logins_for(&agent.id)
+            .into_iter()
+            .map(|login| AgentLoginOption {
+                method_id: login.method_id.clone(),
+                label: login.label.clone(),
+                shell_line: login.shell_line(),
+            })
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2507,6 +2565,7 @@ pub fn run() {
             set_thread_mode,
             set_thread_executor,
             list_models,
+            agent_logins,
             delete_thread,
             set_thread_archived,
             append_message,

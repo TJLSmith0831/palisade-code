@@ -213,6 +213,8 @@ type ChatSurfaceProps = {
   onGo: () => void;
   /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
   onApply: () => void;
+  agentLogins?: api.AgentLogin[];
+  onAgentLogin?: (login: api.AgentLogin) => void;
   /** Spec-mode stage derivation (amended D19). */
   stage: SpecStage;
   dragActive: boolean;
@@ -430,6 +432,8 @@ export const ChatSurface = memo(
     onSpec,
     onGo,
     onApply,
+    agentLogins,
+    onAgentLogin,
     stage,
     dragActive,
     newThreadPicker,
@@ -1243,6 +1247,8 @@ export const ChatSurface = memo(
                 setDraft(text);
                 handleSend();
               }}
+              agentLogins={agentLogins}
+              onAgentLogin={onAgentLogin}
             />
           </>
           {busy && (
@@ -2599,6 +2605,36 @@ export default function App() {
       shell.terminalPanel.collapsed,
       shell.toggleTerminal,
     ]
+  );
+
+  // #19: the interactive logins this thread's agent advertises over ACP.
+  // Agents that own a login expect the *client* to run it — their own
+  // `authenticate` refuses those methods — so an expired agent login is only
+  // fixable in-app if Palisade asks for the command and runs it.
+  const [agentLogins, setAgentLogins] = useState<api.AgentLogin[]>([]);
+  useEffect(() => {
+    if (!project) {
+      setAgentLogins([]);
+      return;
+    }
+    let live = true;
+    api
+      .agentLogins(project.hash, thread?.id ?? null)
+      .then((logins) => live && setAgentLogins(logins))
+      .catch(() => live && setAgentLogins([]));
+    return () => {
+      live = false;
+    };
+  }, [project?.hash, thread?.id]);
+
+  const onAgentLogin = useCallback(
+    (login: api.AgentLogin) => {
+      // The agent's own login, run in Palisade's terminal so the user can
+      // complete it (browser handoff, device code, whatever the agent does)
+      // without leaving the app.
+      runCommand(`Sign in — ${login.label}`, login.shellLine);
+    },
+    [runCommand]
   );
 
   const handleFileSave = useCallback(
@@ -4594,6 +4630,8 @@ export default function App() {
     onSpec,
     onGo,
     onApply,
+    agentLogins,
+    onAgentLogin,
     stage,
     dragActive,
     newThreadPicker,

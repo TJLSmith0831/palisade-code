@@ -254,6 +254,20 @@ export const goMode = (
 /** `start` is the deliberate "begin exploring" act — picking a spec type in
  *  the framing menu. The Spec/Go toggle passes false: it records the thread's
  *  mode and must not spawn a session or send a turn (#17). */
+/** One interactive login an agent advertised at `initialize`. */
+export type AgentLogin = {
+  methodId: string;
+  label: string;
+  /** The agent's own login command, ready to run in a terminal. */
+  shellLine: string;
+};
+
+/** Interactive logins the thread's agent advertises over ACP. Agents that own
+ *  a login expect the *client* to run it — Palisade runs it in a terminal, so
+ *  an expired agent login is fixable without leaving the app (#19). */
+export const agentLogins = (projectHash: string, threadId: string | null) =>
+  invoke<AgentLogin[]>("agent_logins", { projectHash, threadId });
+
 export const specMode = (
   projectHash: string,
   threadId: string,
