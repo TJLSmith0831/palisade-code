@@ -2653,6 +2653,7 @@ mod tests {
             test_spawn(Some("model-b".into())),
             Arc::new(ChannelSink(tx)),
             false,
+            None,
         )
         .unwrap();
 
