@@ -3,7 +3,7 @@
 //! Rust owns kernel *processes* only — never notebook content. The frontend
 //! parses/edits/saves the `.ipynb` JSON itself (`src/notebook.ts`) via the
 //! existing `read_file_content`/`write_file_content` commands; this module
-//! spawns the bundled Python driver (`resources/notebook_driver.py`), which
+//! spawns the bundled Python driver (`src-tauri/driver/notebook_driver.py`), which
 //! wraps `jupyter_client` and owns the real kernel connection, and forwards
 //! its JSON-line stdout events to the frontend verbatim as `notebook-event`.
 
@@ -293,14 +293,14 @@ pub fn resolve_driver_path(app: &AppHandle) -> Res<PathBuf> {
     #[cfg(debug_assertions)]
     {
         let _ = app;
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("notebook_driver.py"))
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("driver").join("notebook_driver.py"))
     }
     #[cfg(not(debug_assertions))]
     {
         use tauri::path::BaseDirectory;
         use tauri::Manager;
         app.path()
-            .resolve("resources/notebook_driver.py", BaseDirectory::Resource)
+            .resolve("driver/notebook_driver.py", BaseDirectory::Resource)
             .map_err(|err| format!("failed to resolve bundled notebook driver: {err}"))
     }
 }

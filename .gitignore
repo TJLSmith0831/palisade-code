@@ -35,8 +35,13 @@ graphify-out/
 .palisade/
 
 # Bundled sidecar and model (build inputs, not source; distribution needs an installer/fetcher in future).
-src-tauri/resources/models/
 src-tauri/llama-server-aarch64-apple-darwin
 
-# Local-only: a symlink to the shared model resources in the main checkout.
+# Local-only, and a symlink to the main checkout in every worktree — so it
+# holds build inputs only, never source. A tracked file here cannot be checked
+# out in a worktree at all (git will not write through the symlink); the
+# notebook driver lives in src-tauri/driver/ for exactly that reason.
 src-tauri/resources
+
+# Python bytecode from running the notebook driver self-check.
+__pycache__/

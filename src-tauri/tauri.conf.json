@@ -43,7 +43,7 @@
       "llama-server"
     ],
     "resources": [
-      "resources/notebook_driver.py"
+      "driver/notebook_driver.py"
     ],
     "macOS": {
       "hardenedRuntime": true,
