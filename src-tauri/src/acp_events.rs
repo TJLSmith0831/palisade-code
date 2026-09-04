@@ -176,9 +176,9 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
             vec![ExecutorEvent::ToolResult { id, output, is_error }]
         }
         AcpUpdate::Done => vec![ExecutorEvent::Done],
-        AcpUpdate::Crashed { message } => {
-            vec![ExecutorEvent::Crashed { exit_code: None, message }]
-        }
+        // A stop reason, not a dead process: the connection is still up and
+        // the next prompt can be retried against it (#18).
+        AcpUpdate::Crashed { message } => vec![ExecutorEvent::turn_failed(message)],
         // usage_update, plan_update and available_commands_update produce no
         // ExecutorEvent — nothing here belongs in the persisted transcript.
         AcpUpdate::UsageUpdate { .. } | AcpUpdate::PlanUpdate | AcpUpdate::Commands { .. } => {
@@ -326,10 +326,8 @@ mod tests {
     fn crashed_maps_to_crashed() {
         let events = map_acp_update(AcpUpdate::Crashed { message: "timeout".into() });
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0], ExecutorEvent::Crashed {
-            exit_code: None,
-            message: "timeout".into(),
-        });
+        assert_eq!(events[0], ExecutorEvent::turn_failed("timeout".into()));
+        assert!(!crate::executor::crash_resets_mode(&events[0]), "a stop reason is retryable");
     }
 
     // --------------------------------------------------------- 4.5: usage_update → separate channel

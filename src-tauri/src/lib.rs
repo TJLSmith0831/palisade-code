@@ -488,7 +488,13 @@ impl Sink for AppSink {
         match &envelope_ref.event {
             ExecutorEvent::Crashed { .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
-                let _ = executor::on_crash(&palisade_home(), &self.project_hash, &thread_id);
+                // #18: only a dead agent drops the thread back to spec. A
+                // retryable turn failure (expired auth, a cancelled turn)
+                // leaves the user's Go intent where they put it — the UI is
+                // offering them a Retry for that very error.
+                if executor::crash_resets_mode(&envelope_ref.event) {
+                    let _ = executor::on_crash(&palisade_home(), &self.project_hash, &thread_id);
+                }
                 let _ = self.app.emit("thread-updated", &thread_id);
             }
             ExecutorEvent::Done => {
@@ -1471,10 +1477,9 @@ async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res
             let envelope = executor::Envelope {
                 session_id: id.clone(),
                 thread_id: thread_id.clone(),
-                event: executor::ExecutorEvent::Crashed {
-                    exit_code: None,
-                    message: "Cancelled by user".into(),
-                },
+                // The user stopped the turn; nothing died and nothing about
+                // their mode choice should change (#18).
+                event: executor::ExecutorEvent::turn_failed("Cancelled by user".into()),
             };
             let _ = app.emit("executor-event", &envelope);
             // This event is emitted straight at the frontend rather than

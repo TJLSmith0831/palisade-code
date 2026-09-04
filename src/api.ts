@@ -150,7 +150,16 @@ export type ExecutorEvent =
       warning: string | null;
     }
   | { kind: "done" }
-  | { kind: "crashed"; exitCode: number | null; message: string };
+  | {
+      kind: "crashed";
+      exitCode: number | null;
+      message: string;
+      /** Whether the agent is still alive and the turn can simply be retried
+       *  (an expired login, a cancelled turn) rather than the process being
+       *  gone. Only a non-retryable crash drops the thread back to Spec mode.
+       *  Absent on events persisted before the flag existed. */
+      retryable?: boolean;
+    };
 
 /**
  * What the `executor-event` listener actually receives. Every event names the

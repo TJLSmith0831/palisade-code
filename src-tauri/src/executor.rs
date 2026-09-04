@@ -150,7 +150,40 @@ pub enum ExecutorEvent {
         warning: Option<String>,
     },
     Done,
-    Crashed { exit_code: Option<i32>, message: String },
+    /// A turn ended badly. `retryable` separates the two cases that used to
+    /// share this variant: a turn the *live* agent refused or failed (auth
+    /// expired, a cancelled turn) versus the agent process/connection being
+    /// gone. Only the latter drops the thread's intent back to spec (#18).
+    /// Absent on records written before the flag existed, which were all
+    /// treated as real deaths — hence `default` (false).
+    Crashed {
+        exit_code: Option<i32>,
+        message: String,
+        #[serde(default)]
+        retryable: bool,
+    },
+}
+
+impl ExecutorEvent {
+    /// The turn failed but the agent is still there — a prompt error, an
+    /// expired login, a policy cancellation. The user can retry.
+    pub fn turn_failed(message: String) -> Self {
+        Self::Crashed { exit_code: None, message, retryable: true }
+    }
+
+    /// The agent process or its connection is gone. Nothing to retry against.
+    pub fn agent_died(exit_code: Option<i32>, message: String) -> Self {
+        Self::Crashed { exit_code, message, retryable: false }
+    }
+}
+
+/// Whether this event should drop the thread's intent back to spec.
+///
+/// Only a dead agent does. Folding every failed prompt into `Crashed` meant a
+/// retryable auth error silently flipped a Go thread back to Spec while the
+/// UI was still offering a Retry button (#18).
+pub fn crash_resets_mode(event: &ExecutorEvent) -> bool {
+    matches!(event, ExecutorEvent::Crashed { retryable: false, .. })
 }
 
 // Old per-agent parsers removed — events are now mapped from ACP
@@ -651,9 +684,11 @@ mod tests {
         assert_eq!(json, serde_json::json!({ "kind": "toolResult", "id": "t1", "output": "out", "isError": true }));
 
         let crashed =
-            serde_json::to_value(ExecutorEvent::Crashed { exit_code: Some(9), message: "x".into() })
-                .unwrap();
-        assert_eq!(crashed, serde_json::json!({ "kind": "crashed", "exitCode": 9, "message": "x" }));
+            serde_json::to_value(ExecutorEvent::agent_died(Some(9), "x".into())).unwrap();
+        assert_eq!(
+            crashed,
+            serde_json::json!({ "kind": "crashed", "exitCode": 9, "message": "x", "retryable": false })
+        );
 
         let edit = serde_json::to_value(ExecutorEvent::FileEdit {
             id: "t2".into(),
@@ -969,5 +1004,89 @@ mod tests {
             adapter.validate = Err(unavailable);
             assert_eq!(openspec_validate(&spec_cache(adapter), repo.path()), None);
         }
+    }
+
+    // ------------------------------------------- #18: retryable vs fatal
+
+    /// #18 RED: an auth failure mid-turn is a failed *turn*, not a dead
+    /// agent — the thread's Go intent must survive it, because the UI is
+    /// offering the user a Retry for exactly that error.
+    #[test]
+    fn a_retryable_turn_failure_does_not_reset_the_thread_mode() {
+        let (home, _repo, hash, thread_id) = fixture();
+        store::set_thread_mode(home.path(), &hash, &thread_id, "go").unwrap();
+
+        let event = ExecutorEvent::turn_failed(
+            "prompt failed: Failed to authenticate: OAuth session expired".into(),
+        );
+        assert!(!crash_resets_mode(&event), "a live agent's failed turn is not a crash");
+
+        // The gate is what lib.rs applies; with it, mode is left alone.
+        if crash_resets_mode(&event) {
+            on_crash(home.path(), &hash, &thread_id).unwrap();
+        }
+        let meta = store::list_threads(home.path(), &hash).unwrap().remove(0);
+        assert_eq!(meta.current_mode, "go");
+    }
+
+    #[test]
+    fn a_dead_agent_still_resets_the_thread_mode() {
+        let (home, _repo, hash, thread_id) = fixture();
+        store::set_thread_mode(home.path(), &hash, &thread_id, "go").unwrap();
+
+        let event = ExecutorEvent::agent_died(Some(1), "connection closed".into());
+        assert!(crash_resets_mode(&event));
+
+        if crash_resets_mode(&event) {
+            on_crash(home.path(), &hash, &thread_id).unwrap();
+        }
+        let meta = store::list_threads(home.path(), &hash).unwrap().remove(0);
+        assert_eq!(meta.current_mode, "spec", "a dead agent must not leave the thread write-enabled");
+    }
+
+    #[test]
+    fn only_a_crash_can_reset_the_mode_at_all() {
+        for event in [ExecutorEvent::Done, ExecutorEvent::Text { text: "hi".into() }] {
+            assert!(!crash_resets_mode(&event));
+        }
+    }
+
+    /// Crash records written before the flag existed have to keep reading as
+    /// what they were: real process deaths.
+    #[test]
+    fn a_crash_record_without_the_flag_deserializes_as_fatal() {
+        let old: ExecutorEvent =
+            serde_json::from_value(serde_json::json!({ "kind": "crashed", "message": "boom" }))
+                .unwrap();
+        assert_eq!(old, ExecutorEvent::agent_died(None, "boom".into()));
+        assert!(crash_resets_mode(&old));
+    }
+
+    #[test]
+    fn the_retryable_flag_reaches_the_frontend_as_camel_case_json() {
+        let json = serde_json::to_value(ExecutorEvent::turn_failed("nope".into())).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "kind": "crashed", "exitCode": null, "message": "nope", "retryable": true })
+        );
+    }
+
+    /// Both kinds still land in the transcript as the user-visible system
+    /// line they always were — the flag changes recovery, not the record.
+    #[test]
+    fn both_kinds_of_crash_are_still_persisted_as_system_messages() {
+        let (home, _repo, hash, thread_id) = fixture();
+        for event in [
+            ExecutorEvent::turn_failed("prompt failed: Authentication required".into()),
+            ExecutorEvent::agent_died(Some(1), "process exited".into()),
+        ] {
+            persist(home.path(), &hash, &thread_id, "s1", "go", &event);
+        }
+        store::flush_session_log_writer().unwrap();
+
+        let messages = store::read_thread(home.path(), &hash, &thread_id).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m| m.role == "system"));
+        assert!(messages[0].content.contains("Authentication required"));
     }
 }

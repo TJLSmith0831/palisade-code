@@ -772,10 +772,9 @@ async fn run_bridge(
                                 &notif_sink,
                                 &notif_session,
                                 &notif_thread,
-                                ExecutorEvent::Crashed {
-                                    exit_code: None,
-                                    message: reason,
-                                },
+                                // A policy cancellation, not a death: the
+                                // agent is still connected (#18).
+                                ExecutorEvent::turn_failed(reason),
                             );
                             return Ok(());
                         }
@@ -950,18 +949,20 @@ async fn run_bridge(
                                     }
                                     match result {
                                         Ok(_) => emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Done),
-                                        Err(e) => emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Crashed {
-                                            exit_code: None,
-                                            message: format!("prompt failed: {e}"),
-                                        }),
+                                        // The turn failed, the agent did not
+                                        // die: an expired login or a rejected
+                                        // prompt is retryable, and must not
+                                        // reset the thread's mode (#18).
+                                        Err(e) => emit(&done_sink, &done_session, &done_thread,
+                                            ExecutorEvent::turn_failed(format!("prompt failed: {e}"))),
                                     }
                                     Ok(())
                                 }) {
                                     busy.store(false, Ordering::SeqCst);
-                                    emit(&sink, &palisade_session_id, &spawn.thread_id, ExecutorEvent::Crashed {
-                                        exit_code: None,
-                                        message: format!("prompt send failed: {e}"),
-                                    });
+                                    // Couldn't even dispatch the request —
+                                    // the connection is gone.
+                                    emit(&sink, &palisade_session_id, &spawn.thread_id,
+                                        ExecutorEvent::agent_died(None, format!("prompt send failed: {e}")));
                                 }
                             }
                             Some(BridgeCommand::Shutdown) | None => return Ok(()),
@@ -985,10 +986,7 @@ async fn run_bridge(
                     &tail_sink,
                     &tail_session,
                     &tail_thread,
-                    ExecutorEvent::Crashed {
-                        exit_code: None,
-                        message: message.clone(),
-                    },
+                    ExecutorEvent::agent_died(None, message.clone()),
                 );
             }
             Err(message)
@@ -1350,10 +1348,7 @@ mod tests {
     #[test]
     fn collector_records_a_crash_as_an_error_and_finishes() {
         let mut collected = Collected::default();
-        collected.accept(&ExecutorEvent::Crashed {
-            exit_code: Some(1),
-            message: "agent exited".into(),
-        });
+        collected.accept(&ExecutorEvent::agent_died(Some(1), "agent exited".into()));
 
         assert!(collected.finished);
         assert_eq!(collected.error.as_deref(), Some("agent exited"));
