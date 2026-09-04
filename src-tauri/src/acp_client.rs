@@ -82,6 +82,74 @@ pub fn extract_models(options: &[v1::SessionConfigOption]) -> ModelState {
     ModelState::default()
 }
 
+// ------------------------------------------------------------ ACP auth
+
+/// Whether an agent's error is ACP's "the client must authenticate" signal.
+///
+/// The protocol defines this as JSON-RPC code -32000 (`ErrorCode::AuthRequired`),
+/// and the spec's examples also carry `data.reason == "auth_required"`. Both are
+/// checked so this works for any compliant agent rather than one adapter's
+/// wording; the prose check is a fallback for agents that only say it in text
+/// (#19), not the contract.
+pub(crate) fn is_auth_required(err: &acp::Error) -> bool {
+    if matches!(err.code, acp::ErrorCode::AuthRequired) {
+        return true;
+    }
+    let reason = err.data.as_ref().and_then(|d| d.get("reason")).and_then(|r| r.as_str());
+    if reason == Some("auth_required") {
+        return true;
+    }
+    reads_as_auth_failure(&err.to_string())
+}
+
+/// Mirror of the frontend's `isAuthError` (src/errors.ts): agents report an
+/// expired or missing login in prose, with no shared error code between them.
+fn reads_as_auth_failure(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "authenticate",
+        "authentication",
+        "unauthoriz",
+        "not logged in",
+        "log in",
+        "login required",
+        "sign in",
+        "session expired",
+        "token expired",
+        "credentials",
+        "401",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+/// How Palisade actually launched this agent, e.g. `npx @scope/pkg` — the
+/// thing the user has to sign in, which is not always the CLI of the same name.
+pub(crate) fn launch_label(cmd: &str, args: &[String]) -> String {
+    std::iter::once(cmd.to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What to tell the user when an agent says it needs authentication.
+///
+/// Naming the launch command is the point (#19): an ACP adapter distributed as
+/// an npm package holds its own login, so re-authenticating a CLI that happens
+/// to share its name changes nothing the adapter reads.
+pub(crate) fn auth_help(agent_name: &str, launch: &str, detail: &str) -> String {
+    let mut help = format!(
+        "{agent_name} needs to be signed in — {detail}. Palisade runs it as `{launch}`;          sign in for that agent, then retry"
+    );
+    if launch.starts_with("npx ") {
+        help.push_str(
+            ". This agent is an npm-distributed ACP adapter: it keeps its own login,              which is not necessarily the one a CLI of the same name wrote",
+        );
+    }
+    help.push('.');
+    help
+}
+
 // ------------------------------------------------------------- credentials
 
 /// Look up stored credentials for an agent's auth method.
@@ -836,21 +904,32 @@ async fn run_bridge(
             // reject session/new until the client calls authenticate first.
             // AuthMethod::Agent means the agent handles auth itself — Palisade
             // looks up stored credentials and passes them via _meta.
-            if !init_response.auth_methods.is_empty() {
-                let method_id = init_response.auth_methods[0].id().clone();
-                let method_id_str = method_id.to_string();
-                let creds = lookup_agent_credentials(&spawn.agent_id, &method_id_str);
+            //
+            // ACP: `authenticate` may only be called when `initialize`
+            // advertised at least one method, so the guard is part of the
+            // contract, not an optimisation. A failure here is no longer
+            // fatal: the agent may already hold a valid login of its own, and
+            // aborting the handshake on a failed pre-emptive login is what
+            // turned "this agent is signed in already" into a dead session
+            // (#19). If it really is unauthenticated, `session/new` says so
+            // below with the protocol's own signal.
+            let authenticate = async || -> Result<(), acp::Error> {
+                let Some(method) = init_response.auth_methods.first() else {
+                    return Err(acp::Error::auth_required()
+                        .data("this agent advertises no authentication method"));
+                };
+                let method_id = method.id().clone();
+                let creds = lookup_agent_credentials(&spawn.agent_id, &method_id.to_string());
                 let mut req = v1::AuthenticateRequest::new(method_id);
                 if let Some(meta) = creds {
                     req = req.meta(meta);
                 }
-                cx.send_request(req)
-                    .block_task()
-                    .await
-                    .map_err(|e| {
-                        acp::Error::internal_error()
-                            .data(format!("authenticate failed: {e}"))
-                    })?;
+                cx.send_request(req).block_task().await.map(|_| ())
+            };
+            if !init_response.auth_methods.is_empty() {
+                if let Err(e) = authenticate().await {
+                    eprintln!("acp: pre-emptive authenticate failed, continuing: {e}");
+                }
             }
 
             // The project's MCP servers, handed over the protocol rather than
@@ -863,14 +942,32 @@ async fn run_bridge(
             let mcp_servers =
                 crate::mcp::for_session(&spawn.project_root, mcp.http, mcp.sse);
 
-            let new_session = cx
-                .send_request(
-                    v1::NewSessionRequest::new(spawn.project_root.clone())
-                        .mcp_servers(mcp_servers),
-                )
-                .block_task()
-                .await
-                .map_err(|e| acp::Error::internal_error().data(format!("session/new failed: {e}")))?;
+            let launch = launch_label(&spawn.cmd, &spawn.args);
+            let new_request = || {
+                v1::NewSessionRequest::new(spawn.project_root.clone())
+                    .mcp_servers(mcp_servers.clone())
+            };
+            let mut started = cx.send_request(new_request()).block_task().await;
+            // ACP's authentication handshake: the agent answers `auth_required`
+            // (-32000) when the client has to log in, and the client
+            // authenticates and retries. Doing it here rather than reading any
+            // one agent's credential store is what makes this work for every
+            // compliant agent (#19).
+            if let Err(e) = &started {
+                if is_auth_required(e) && !init_response.auth_methods.is_empty() {
+                    if authenticate().await.is_ok() {
+                        started = cx.send_request(new_request()).block_task().await;
+                    }
+                }
+            }
+            let new_session = started.map_err(|e| {
+                let detail = if is_auth_required(&e) {
+                    auth_help(&spawn.agent_name, &launch, &e.to_string())
+                } else {
+                    format!("session/new failed: {e}")
+                };
+                acp::Error::internal_error().data(detail)
+            })?;
 
             let session_id = new_session.session_id;
             let mut models = extract_models(new_session.config_options.as_deref().unwrap_or(&[]));
@@ -918,6 +1015,8 @@ async fn run_bridge(
                                 let done_think = think_buf.clone();
                                 let done_think_started = think_started.clone();
                                 let done_cancelled = cancelled.clone();
+                                let done_agent = spawn.agent_name.clone();
+                                let done_launch = launch.clone();
                                 // Reset the per-turn cancellation flag.
                                 cancelled.store(false, Ordering::SeqCst);
                                 let send = cx.send_request(v1::PromptRequest::new(
@@ -952,9 +1051,21 @@ async fn run_bridge(
                                         // The turn failed, the agent did not
                                         // die: an expired login or a rejected
                                         // prompt is retryable, and must not
-                                        // reset the thread's mode (#18).
-                                        Err(e) => emit(&done_sink, &done_session, &done_thread,
-                                            ExecutorEvent::turn_failed(format!("prompt failed: {e}"))),
+                                        // reset the thread's mode (#18). An
+                                        // auth failure gets the message that
+                                        // names what to sign in (#19) — the
+                                        // retry then re-runs the handshake,
+                                        // which is where `authenticate` is
+                                        // called.
+                                        Err(e) => {
+                                            let message = if is_auth_required(&e) {
+                                                auth_help(&done_agent, &done_launch, &e.to_string())
+                                            } else {
+                                                format!("prompt failed: {e}")
+                                            };
+                                            emit(&done_sink, &done_session, &done_thread,
+                                                ExecutorEvent::turn_failed(message))
+                                        }
                                     }
                                     Ok(())
                                 }) {
@@ -2311,5 +2422,79 @@ mod tests {
         assert_eq!(result.models.len(), 0);
         assert!(result.config_id.is_none());
         assert!(result.current.is_none());
+    }
+
+    // ------------------------------------------------- #19: ACP auth signal
+
+    /// The protocol's own signal: JSON-RPC -32000. Recognising this (rather
+    /// than any one agent's prose) is what makes the auth handling work for
+    /// every compliant agent.
+    #[test]
+    fn the_protocol_auth_required_code_is_recognised() {
+        assert!(is_auth_required(&acp::Error::auth_required()));
+        assert!(is_auth_required(
+            &acp::Error::auth_required().data(serde_json::json!({ "reason": "auth_required" }))
+        ));
+    }
+
+    /// The spec's examples also carry `data.reason`, on an error whose code an
+    /// agent may not have set to -32000.
+    #[test]
+    fn the_spec_data_reason_is_recognised_without_the_code() {
+        let err = acp::Error::internal_error()
+            .data(serde_json::json!({ "reason": "auth_required" }));
+        assert!(is_auth_required(&err));
+    }
+
+    /// Both messages from #19, verbatim. Agents that only say it in prose are
+    /// still understood — the text check is the fallback, not the contract.
+    #[test]
+    fn an_agents_prose_auth_failure_is_recognised() {
+        for detail in [
+            "Failed to authenticate: OAuth session expired and could not be refreshed (errorKind: authentication_failed)",
+            "Authentication required",
+            "Unauthorized",
+            "Please log in to continue",
+        ] {
+            let err = acp::Error::internal_error().data(serde_json::json!(detail));
+            assert!(is_auth_required(&err), "should read as auth: {detail}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_failure_is_not_mistaken_for_an_auth_failure() {
+        for detail in [
+            "session/new failed: no such directory",
+            "context window exceeded",
+            "tool call failed: exit status 1",
+        ] {
+            let err = acp::Error::internal_error().data(serde_json::json!(detail));
+            assert!(!is_auth_required(&err), "should not read as auth: {detail}");
+        }
+    }
+
+    /// #19's actual finding: the thing Palisade launched is not necessarily
+    /// the CLI the user re-authenticated, so the message has to name what was
+    /// launched instead of telling them to "sign in outside Palisade".
+    #[test]
+    fn the_auth_message_names_the_agent_and_how_it_was_launched() {
+        let launch = launch_label("npx", &["@agentclientprotocol/claude-agent-acp".to_string()]);
+        assert_eq!(launch, "npx @agentclientprotocol/claude-agent-acp");
+
+        let help = auth_help("Claude Agent", &launch, "OAuth session expired");
+        assert!(help.contains("Claude Agent"));
+        assert!(help.contains("@agentclientprotocol/claude-agent-acp"));
+        assert!(help.contains("OAuth session expired"), "the agent's own words survive");
+        assert!(help.contains("npm"), "says the adapter keeps its own login: {help}");
+    }
+
+    #[test]
+    fn a_binary_agent_gets_a_message_without_npm_advice() {
+        let launch = launch_label("devin", &["acp".to_string()]);
+        assert_eq!(launch, "devin acp");
+        let help = auth_help("Devin", &launch, "Authentication required");
+        assert!(help.contains("Devin"));
+        assert!(help.contains("devin acp"));
+        assert!(!help.contains("npm"));
     }
 }
