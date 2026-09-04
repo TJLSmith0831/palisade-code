@@ -470,6 +470,9 @@ pub struct Harness {
     pub turn_watchers: Mutex<HashMap<String, std::sync::Arc<TurnWatch>>>,
     /// Approval gates waiting on a human, keyed by run id (D9).
     pub chain_gates: Mutex<HashMap<String, std::sync::mpsc::Sender<crate::chain_runner::Approval>>>,
+    /// Every open notebook's kernel process (design.md D2, decisions.md
+    /// D16/D18), keyed by `notebook::notebook_id`.
+    pub notebook_kernels: crate::notebook::NotebookRegistry,
 }
 
 /// How a chain run watches one node's turn. The sink owns the writing end;
@@ -533,6 +536,7 @@ impl Default for Harness {
             chain_sessions: Default::default(),
             turn_watchers: Default::default(),
             chain_gates: Default::default(),
+            notebook_kernels: Default::default(),
         }
     }
 }

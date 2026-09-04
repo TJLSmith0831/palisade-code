@@ -1462,26 +1462,39 @@ input[type="checkbox"] {
   color: var(--fg);
 }
 
-.ds-editor-body .cm-editor.cm-focused {
+/* Notebook cells share the file editor's CodeMirror colors (gutter, cursor,
+   selection, active line) but size to their own content, not the pane. */
+.ds-notebook-tab .cm-editor {
+  background: var(--editor-bg);
+  color: var(--fg);
+}
+
+.ds-editor-body .cm-editor.cm-focused,
+.ds-notebook-tab .cm-editor.cm-focused {
   outline: none;
 }
 
-.ds-editor-body .cm-gutters {
+.ds-editor-body .cm-gutters,
+.ds-notebook-tab .cm-gutters {
   background: var(--editor-bg);
   color: var(--muted);
   border-right: 1px solid var(--border);
 }
 
 .ds-editor-body .cm-activeLine,
-.ds-editor-body .cm-activeLineGutter {
+.ds-editor-body .cm-activeLineGutter,
+.ds-notebook-tab .cm-activeLine,
+.ds-notebook-tab .cm-activeLineGutter {
   background: color-mix(in oklab, var(--fg), transparent 94%);
 }
 
-.ds-editor-body .cm-selectionBackground {
+.ds-editor-body .cm-selectionBackground,
+.ds-notebook-tab .cm-selectionBackground {
   background: color-mix(in oklab, var(--accent), transparent 75%) !important;
 }
 
-.ds-editor-body .cm-cursor {
+.ds-editor-body .cm-cursor,
+.ds-notebook-tab .cm-cursor {
   border-left-color: var(--accent);
 }
 
