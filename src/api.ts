@@ -251,13 +251,23 @@ export const goMode = (
   bypass: boolean
 ) =>
   invoke<ThreadMeta>("go_mode", { projectHash, threadId, model: null, bypass });
+/** `start` is the deliberate "begin exploring" act — picking a spec type in
+ *  the framing menu. The Spec/Go toggle passes false: it records the thread's
+ *  mode and must not spawn a session or send a turn (#17). */
 export const specMode = (
   projectHash: string,
   threadId: string,
   specType: string,
-  bypass: boolean
+  bypass: boolean,
+  start: boolean
 ) =>
-  invoke<ThreadMeta>("spec_mode", { projectHash, threadId, specType, bypass });
+  invoke<ThreadMeta>("spec_mode", {
+    projectHash,
+    threadId,
+    specType,
+    bypass,
+    start,
+  });
 export const propose = (
   projectHash: string,
   threadId: string,

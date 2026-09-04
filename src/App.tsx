@@ -3200,7 +3200,7 @@ export default function App() {
       // Fire specMode without awaiting — don't block the UI. The busy state
       // stays true until the agent's turn ends (ExecutorEvent::Done clears it).
       api
-        .specMode(project.hash, updated.id, specType, false)
+        .specMode(project.hash, updated.id, specType, false, true)
         .then((meta) => {
           setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
           setThread(meta);
@@ -3726,8 +3726,9 @@ export default function App() {
         );
         return;
       }
-      // A linked change means /grill-apply was just sent; otherwise we're idle.
-      if (!meta.openSpecChangeName) setBusy(false);
+      // #17: go-mode no longer brings a session up — `send_message` does
+      // that on the user's first actual turn — so the toggle is never busy.
+      setBusy(false);
     } catch (err) {
       setBusy(false);
       fail(err);
@@ -3851,24 +3852,17 @@ export default function App() {
       setComposerSpecTypePicker(true);
       return;
     }
-    setBusy(true);
     const prefs = resolvePrefs(project.hash, thread.id);
     // Reuse the stored spec_type if available; otherwise the change is
     // already open so spec_type is silently dropped (D10).
     const specType = thread.specType ?? "grill-explore";
-    // Fire specMode without awaiting — busy stays true until the agent's
-    // turn ends (ExecutorEvent::Done clears it). If there's an open change,
-    // spec_mode just sets the mode (no session started) so clear busy.
+    // #17: the toggle records the mode and nothing else — no session, no
+    // turn, so nothing to be busy for. The framing menu below is the one
+    // path that starts anything.
     api
-      .specMode(project.hash, thread.id, specType, prefs.bypass)
-      .then((meta) => {
-        if (meta.openSpecChangeName) setBusy(false);
-        refresh();
-      })
-      .catch((err) => {
-        setBusy(false);
-        fail(err);
-      });
+      .specMode(project.hash, thread.id, specType, prefs.bypass, false)
+      .then(() => refresh())
+      .catch(fail);
   };
 
   // D9: spec-type selection from the composer-toggle framing menu — the
@@ -3882,7 +3876,7 @@ export default function App() {
     // Fire specMode without awaiting — busy stays true until the agent's
     // turn ends (ExecutorEvent::Done clears it).
     api
-      .specMode(project.hash, thread.id, specType, prefs.bypass)
+      .specMode(project.hash, thread.id, specType, prefs.bypass, true)
       .then(() => refresh())
       .catch((err) => {
         setBusy(false);

@@ -3346,6 +3346,9 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         threadId: "thread-new",
         specType: "Feature",
         bypass: false,
+        // The framing menu is the deliberate "start" act — this is the one
+        // path that may fire grill-explore (#17).
+        start: true,
       },
     ]);
     // The thread title appears — the transition completed.
@@ -5473,5 +5476,129 @@ describe("Agent command menu", () => {
     const menu = await screen.findByTestId("command-menu");
     expect(menu).toHaveTextContent("/new-skill");
     expect(menu).not.toHaveTextContent("/old-skill");
+  });
+});
+
+
+/** #17: flipping Spec/Go with an empty composer used to spawn a session and,
+ *  in spec mode, send a grill-explore turn and persist a visible user message
+ *  — a full agent request nobody asked for. */
+describe("Mode toggle (#17)", () => {
+  const thread = (over: Record<string, unknown> = {}) => ({
+    id: "t1",
+    projectHash: "proj-1",
+    title: "Test Thread",
+    createdAt: "2026-08-06T00:00:00Z",
+    updatedAt: "2026-08-06T00:00:00Z",
+    currentMode: "go",
+    openSpecChangeName: null,
+    specType: "Feature",
+    // The framing menu only enables its cards once an agent is chosen.
+    executor: "claude",
+    executorSessionId: null,
+    ...over,
+  });
+
+  /** Records every IPC call so the test can assert on what the toggle did
+   *  *not* do, which is the whole point of the bug. */
+  const trackedInvoke = (calls: [string, Record<string, unknown>][], over: Record<string, unknown> = {}) =>
+    (cmd: string, args?: Record<string, unknown>) => {
+      calls.push([cmd, args ?? {}]);
+      if (cmd === "list_threads") return Promise.resolve([thread(over)]);
+      if (cmd === "spec_mode") return Promise.resolve(thread({ currentMode: "spec", ...over }));
+      if (cmd === "go_mode") return Promise.resolve(thread({ currentMode: "go", ...over }));
+      return defaultInvoke(cmd, args);
+    };
+
+  const toggle = async (label: RegExp) => {
+    const selector = await screen.findByTestId("mode-selector");
+    fireEvent.click(within(selector).getByRole("radio", { name: label }));
+  };
+
+  it("switching to Spec records the mode without starting a turn", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    invokeMock.mockImplementation(trackedInvoke(calls));
+    const { unmount } = render(<App />);
+    await openProject();
+
+    await toggle(/Spec/);
+
+    await waitFor(() => expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(true));
+    const specMode = calls.find(([cmd]) => cmd === "spec_mode")![1];
+    expect(specMode.start).toBe(false);
+    expect(calls.some(([cmd]) => cmd === "send_message")).toBe(false);
+    unmount();
+  });
+
+  it("switching back to Go records the mode without starting a turn", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    invokeMock.mockImplementation(trackedInvoke(calls, { currentMode: "spec" }));
+    const { unmount } = render(<App />);
+    await openProject();
+
+    await toggle(/Go/);
+
+    await waitFor(() => expect(calls.some(([cmd]) => cmd === "go_mode")).toBe(true));
+    expect(calls.some(([cmd]) => cmd === "send_message")).toBe(false);
+    unmount();
+  });
+
+  /** The reported reproduction: a thread already framed as "Feature" that the
+   *  user toggles back into Spec. It used to re-fire grill-explore every time. */
+  it("toggling back into Spec on an already-framed thread never asks to start", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    invokeMock.mockImplementation(trackedInvoke(calls));
+    const { unmount } = render(<App />);
+    await openProject();
+
+    await toggle(/Spec/);
+    await waitFor(() => expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(true));
+    await toggle(/Go/);
+    await toggle(/Spec/);
+
+    const starts = calls.filter(([cmd]) => cmd === "spec_mode").map(([, args]) => args.start);
+    expect(starts.every((start) => start === false)).toBe(true);
+    expect(calls.some(([cmd]) => cmd === "send_message")).toBe(false);
+    unmount();
+  });
+
+  /** A thread with an open change toggles the same way: mode only. */
+  it("toggling into Spec with an open change starts nothing", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    invokeMock.mockImplementation(
+      trackedInvoke(calls, { openSpecChangeName: "add-thing", specType: null })
+    );
+    const { unmount } = render(<App />);
+    await openProject();
+
+    await toggle(/Spec/);
+
+    await waitFor(() => expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(true));
+    expect(calls.find(([cmd]) => cmd === "spec_mode")![1].start).toBe(false);
+    expect(calls.some(([cmd]) => cmd === "send_message")).toBe(false);
+    unmount();
+  });
+
+  /** The framing menu is the deliberate act, and it still starts the turn. */
+  it("picking a spec type from the composer framing menu does start one", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    invokeMock.mockImplementation(trackedInvoke(calls, { specType: null }));
+    const { unmount } = render(<App />);
+    await openProject();
+
+    await toggle(/Spec/);
+
+    // No stored framing yet, so the toggle asks which kind of change this is
+    // rather than calling the backend at all.
+    await waitFor(() => expect(screen.getByTestId("spec-type-picker")).toBeDefined());
+    expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(false);
+
+    fireEvent.click(screen.getByTestId("spec-type-feature"));
+
+    await waitFor(() => expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(true));
+    const specMode = calls.find(([cmd]) => cmd === "spec_mode")![1];
+    expect(specMode.start).toBe(true);
+    expect(specMode.specType).toBe("Feature");
+    unmount();
   });
 });

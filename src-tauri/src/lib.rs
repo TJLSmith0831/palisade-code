@@ -1062,7 +1062,15 @@ async fn go_mode(
             check_agents_available(&harness, &loaded)?;
             return Ok(meta);
         }
-        let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
+        // No session is started here (#17). Flipping to go-mode is a statement
+        // of intent, not a request: `send_message` calls `ensure_session`
+        // itself, so the agent comes up when the user actually sends
+        // something. The preflight and chain checks above stay — they are what
+        // makes the toggle refuse a mode this thread can't run.
+        //
+        // `model` and `bypass` stay on the command: they describe the session
+        // the *next* send will bring up, and `send_message` passes its own.
+        let _ = (model, bypass);
         // Per amended D19: go-mode has no skill injection. The user toggles
         // go-mode to let the agent write code; grill-apply is a separate
         // UI-triggered one-shot in spec-mode.
@@ -1106,7 +1114,18 @@ fn spec_type_reinjection(mode: &str, meta: &store::ThreadMeta) -> Option<String>
 /// Per D5: `spec_type` is the user turn body (replacing the bare "grill-explore"
 /// literal). Per D10: when an existing change is open, spec_type is silently
 /// dropped — no auto-injection, the user is past explore.
-fn spec_mode_initial_prompt(meta: &store::ThreadMeta, spec_type: &str) -> Option<String> {
+///
+/// `start` is what separates the two callers (#17): picking a spec type in the
+/// framing menu is a deliberate "begin exploring" act, while flipping the mode
+/// toggle is not a request at all — it records intent and sends nothing.
+fn spec_mode_initial_prompt(
+    meta: &store::ThreadMeta,
+    spec_type: &str,
+    start: bool,
+) -> Option<String> {
+    if !start {
+        return None;
+    }
     if meta.open_spec_change_name.is_none() {
         Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type)))
     } else {
@@ -1114,10 +1133,17 @@ fn spec_mode_initial_prompt(meta: &store::ThreadMeta, spec_type: &str) -> Option
     }
 }
 
-/// Sets the thread's default mode back to spec. Under amended D19, entering
-/// spec-mode with no open change auto-fires grill-explore — the first stage
-/// of the explore → propose → apply progression. With an existing change,
-/// it just sets the mode (the user is past explore).
+/// Sets the thread's default mode back to spec. Under amended D19, *starting*
+/// spec-mode with no open change auto-fires grill-explore — the first stage of
+/// the explore → propose → apply progression. With an existing change, it just
+/// sets the mode (the user is past explore).
+///
+/// `start` is false for the mode toggle, which must be inert: it records the
+/// thread's intent and nothing else. It used to spawn a session, append a
+/// visible user message and send a grill-explore turn on every flip back into
+/// Spec, so switching modes with an empty composer fired a real agent request
+/// (#17). Only the framing menu — where the user picks what they are exploring
+/// — passes true.
 #[tauri::command]
 async fn spec_mode(
     app: tauri::AppHandle,
@@ -1125,6 +1151,7 @@ async fn spec_mode(
     thread_id: String,
     spec_type: String,
     bypass: bool,
+    start: bool,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
@@ -1137,7 +1164,7 @@ async fn spec_mode(
         } else {
             store::set_spec_type(&palisade_home(), &project_hash, &thread_id, &spec_type)?
         };
-        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type) {
+        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, start) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
                 let id =
                     ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
@@ -2824,7 +2851,7 @@ mod tests {
     #[test]
     fn spec_mode_initial_prompt_with_no_change_uses_spec_type_as_body() {
         let meta = thread_meta(None);
-        let prompt = spec_mode_initial_prompt(&meta, "Feature").unwrap();
+        let prompt = spec_mode_initial_prompt(&meta, "Feature", true).unwrap();
         // The grill-explore skill content is still prepended (it contains the
         // label "grill-explore" and a "---" separator before the body).
         assert!(prompt.contains("grill-explore"));
@@ -2842,7 +2869,33 @@ mod tests {
     #[test]
     fn spec_mode_initial_prompt_with_change_is_none() {
         let meta = thread_meta(Some("my-change"));
-        assert!(spec_mode_initial_prompt(&meta, "Feature").is_none());
+        assert!(spec_mode_initial_prompt(&meta, "Feature", true).is_none());
+    }
+
+    /// #17 RED: flipping the mode toggle is not a request. Nothing is typed,
+    /// nothing is sent — the toggle only records the thread's intent, so
+    /// there is no initial prompt to fire whatever the thread looks like.
+    #[test]
+    fn a_mode_toggle_never_produces_an_initial_prompt() {
+        for change in [None, Some("my-change")] {
+            let meta = thread_meta(change);
+            assert!(
+                spec_mode_initial_prompt(&meta, "Feature", false).is_none(),
+                "the toggle must stay inert"
+            );
+            assert!(
+                spec_mode_initial_prompt(&meta, "", false).is_none(),
+                "even with no spec type to frame"
+            );
+        }
+    }
+
+    /// The deliberate act — picking a spec type in the framing menu — is what
+    /// still starts the explore turn.
+    #[test]
+    fn an_explicit_start_with_no_open_change_still_fires_grill_explore() {
+        let meta = thread_meta(None);
+        assert!(spec_mode_initial_prompt(&meta, "Bugfix", true).is_some());
     }
 
     // ----------------------------------------------- D12: handoff re-injection
