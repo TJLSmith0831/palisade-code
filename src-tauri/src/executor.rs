@@ -280,7 +280,7 @@ pub fn openspec_list(
     cache: &crate::openspec_cache::OpenSpecCache,
     project_root: &Path,
 ) -> Vec<SpecChange> {
-    if let Some(body) = cache.list(project_root) {
+    if let Ok(body) = cache.list(project_root) {
         if let Some(changes) = parse_openspec_list(&body) {
             return changes;
         }
@@ -316,7 +316,7 @@ pub fn openspec_show(
     project_root: &Path,
     name: &str,
 ) -> Option<Value> {
-    let body = cache.show(project_root, name)?;
+    let body = cache.show(project_root, name).ok()?;
     serde_json::from_str(&body).ok()
 }
 
@@ -334,7 +334,7 @@ pub fn openspec_change_status(
     project_root: &Path,
     name: &str,
 ) -> Option<bool> {
-    let body = cache.status(project_root, name)?;
+    let body = cache.status(project_root, name).ok()?;
     parse_change_status(&body)
 }
 
@@ -343,26 +343,29 @@ pub fn openspec_validate(
     cache: &crate::openspec_cache::OpenSpecCache,
     project_root: &Path,
 ) -> Option<bool> {
-    // `validate` exits non-zero when something is invalid, which the adapter
-    // reports as `None` — so a successful run means valid and a failed one
-    // means either invalid or unavailable. Distinguishing those needs the
-    // binary itself to exist.
-    find_on_path("openspec")?;
-    Some(cache.validate(project_root).is_some())
+    // `validate` exits non-zero when something is invalid — that is a real
+    // verdict. Every other failure (no binary, wouldn't start, hung) is "we
+    // can't tell", which must not be rendered as "invalid" (#16).
+    match cache.validate(project_root) {
+        Ok(_) => Some(true),
+        Err(crate::openspec_cache::OpenSpecError::Exit { .. }) => Some(false),
+        Err(_) => None,
+    }
 }
 
 /// Archive one change via the openspec CLI. `--yes` skips the interactive
 /// confirmation prompt (the subprocess has no stdin to answer it); `--json`
-/// gives a stable machine-readable stdout. Returns that stdout on success;
-/// `openspec` missing or a non-zero exit becomes an error string.
+/// gives a stable machine-readable stdout. Returns that stdout on success; on
+/// failure the CLI's own diagnostic is what reaches the user, not a guess at
+/// what might have gone wrong (#16).
 pub fn openspec_archive(
     cache: &crate::openspec_cache::OpenSpecCache,
     project_root: &Path,
     name: &str,
 ) -> crate::store::Res<String> {
-    cache.archive(project_root, name).ok_or_else(|| {
-        format!("`openspec archive {name}` failed — check that `openspec` is on PATH and the change exists")
-    })
+    cache
+        .archive(project_root, name)
+        .map_err(|e| format!("`openspec archive {name}` failed — {e}"))
 }
 
 /// Names of the OpenSpec change directories in a project — the fallback when
@@ -854,5 +857,117 @@ mod tests {
         assert!(capped_text.starts_with('é'));
         assert!(capped_text.contains("[truncated"));
         assert_eq!(elapsed_secs, 5);
+    }
+
+    // ------------------------------------------------- openspec error paths
+
+    use crate::openspec_cache::{InMemoryOpenSpecAdapter, OpenSpecCache, OpenSpecError};
+
+    fn spec_cache(adapter: InMemoryOpenSpecAdapter) -> OpenSpecCache {
+        OpenSpecCache::new(std::sync::Arc::new(adapter))
+    }
+
+    /// #16 RED: the reported bug — every archive failure read as "check that
+    /// openspec is on PATH", whatever actually went wrong.
+    #[test]
+    fn archive_failure_surfaces_the_real_openspec_error() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut adapter = InMemoryOpenSpecAdapter::default();
+        adapter.archive.insert(
+            "add-thing".into(),
+            Err(OpenSpecError::Exit {
+                code: Some(1),
+                output: "Error: change 'add-thing' has incomplete tasks".into(),
+            }),
+        );
+        let err = openspec_archive(&spec_cache(adapter), repo.path(), "add-thing").unwrap_err();
+
+        assert!(err.contains("change 'add-thing' has incomplete tasks"), "got: {err}");
+        assert!(err.contains("add-thing"));
+        assert!(
+            !err.contains("check that `openspec` is on PATH"),
+            "the generic guess must not replace the real error: {err}"
+        );
+    }
+
+    /// The one case the old message actually described still says so.
+    #[test]
+    fn archive_without_the_binary_still_says_it_is_not_installed() {
+        let repo = tempfile::tempdir().unwrap();
+        let err = openspec_archive(&spec_cache(InMemoryOpenSpecAdapter::default()), repo.path(), "c")
+            .unwrap_err();
+        assert!(err.contains("not on PATH"), "got: {err}");
+    }
+
+    #[test]
+    fn archive_timeout_is_reported_as_a_timeout() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut adapter = InMemoryOpenSpecAdapter::default();
+        adapter.archive.insert("c".into(), Err(OpenSpecError::TimedOut { seconds: 10 }));
+        let err = openspec_archive(&spec_cache(adapter), repo.path(), "c").unwrap_err();
+        assert!(err.contains("timed out"), "got: {err}");
+    }
+
+    #[test]
+    fn archive_success_returns_the_cli_stdout_verbatim() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut adapter = InMemoryOpenSpecAdapter::default();
+        adapter.archive.insert("c".into(), Ok(r#"{"archived":"c"}"#.into()));
+        assert_eq!(
+            openspec_archive(&spec_cache(adapter), repo.path(), "c").unwrap(),
+            r#"{"archived":"c"}"#
+        );
+    }
+
+    /// The read paths keep degrading the way they always did — an error is
+    /// still "we can't tell", it just no longer starts life as a `None`.
+    #[test]
+    fn list_falls_back_to_the_directory_listing_when_the_cli_errors() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("openspec/changes/on-disk")).unwrap();
+        let mut adapter = InMemoryOpenSpecAdapter::default();
+        adapter.list = Err(OpenSpecError::Exit { code: Some(1), output: "broken".into() });
+
+        let listed = openspec_list(&spec_cache(adapter), repo.path());
+        assert_eq!(listed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["on-disk"]);
+    }
+
+    #[test]
+    fn show_and_status_are_none_when_the_cli_errors() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut adapter = InMemoryOpenSpecAdapter::default();
+        adapter.show.insert("c".into(), Err(OpenSpecError::TimedOut { seconds: 10 }));
+        adapter.status.insert("c".into(), Err(OpenSpecError::Spawn("nope".into())));
+        let cache = spec_cache(adapter);
+
+        assert_eq!(openspec_show(&cache, repo.path(), "c"), None);
+        assert_eq!(openspec_change_status(&cache, repo.path(), "c"), None);
+    }
+
+    /// "Invalid" and "we couldn't ask" were the same answer before: the CLI
+    /// exits non-zero for invalid changes, and that collapsed into the same
+    /// `None` a missing binary produced.
+    #[test]
+    fn validate_distinguishes_invalid_from_unavailable() {
+        let repo = tempfile::tempdir().unwrap();
+
+        let mut valid = InMemoryOpenSpecAdapter::default();
+        valid.validate = Ok("all good".into());
+        assert_eq!(openspec_validate(&spec_cache(valid), repo.path()), Some(true));
+
+        let mut invalid = InMemoryOpenSpecAdapter::default();
+        invalid.validate = Err(OpenSpecError::Exit { code: Some(1), output: "3 issues".into() });
+        assert_eq!(openspec_validate(&spec_cache(invalid), repo.path()), Some(false));
+
+        // Not installed, couldn't start, or hung: no verdict to report.
+        for unavailable in [
+            OpenSpecError::NotInstalled,
+            OpenSpecError::Spawn("permission denied".into()),
+            OpenSpecError::TimedOut { seconds: 10 },
+        ] {
+            let mut adapter = InMemoryOpenSpecAdapter::default();
+            adapter.validate = Err(unavailable);
+            assert_eq!(openspec_validate(&spec_cache(adapter), repo.path()), None);
+        }
     }
 }
