@@ -1270,10 +1270,20 @@ async fn agent_logins(
     app: tauri::AppHandle,
     project_hash: String,
     thread_id: Option<String>,
+    agent_id: Option<String>,
 ) -> Res<Vec<AgentLoginOption>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let (agent, _) = selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?;
+        // Named agent, or whatever this thread resolves to. The picker asks
+        // by name — it offers a sign-in before any thread has been pointed at
+        // that agent.
+        let agent = match agent_id {
+            Some(id) => preflight_for_harness(&*harness, false)
+                .agent(&id)
+                .cloned()
+                .ok_or_else(|| format!("unknown or unavailable agent `{id}`"))?,
+            None => selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?.0,
+        };
         // Nothing cached means no session has reached this agent yet this run.
         // A probe completes the same handshake, which is where the methods are
         // advertised — cheap, and only on the path that needs an answer.

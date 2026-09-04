@@ -98,14 +98,21 @@ pub struct AgentLogin {
     pub label: String,
     pub command: String,
     pub args: Vec<String>,
+    /// Environment the agent asked for on this login. ACP: the client launches
+    /// the agent program with the arguments *and environment variables* the
+    /// method supplies — an agent whose login is gated behind one of these
+    /// gets a broken login if they are dropped.
+    pub env: Vec<(String, String)>,
 }
 
 impl AgentLogin {
-    /// The command as one shell line, for writing into a PTY.
+    /// The command as one shell line, for writing into a PTY — environment
+    /// assignments first, the way a shell applies them to one command.
     pub fn shell_line(&self) -> String {
-        std::iter::once(&self.command)
-            .chain(self.args.iter())
-            .map(|word| shell_quote(word))
+        self.env
+            .iter()
+            .map(|(name, value)| format!("{name}={}", shell_quote(value)))
+            .chain(std::iter::once(&self.command).chain(self.args.iter()).map(|w| shell_quote(w)))
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -139,6 +146,20 @@ pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
     let mut meta = serde_json::Map::new();
     meta.insert("terminal-auth".into(), serde_json::Value::Bool(true));
     v1::ClientCapabilities::new().auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
+}
+
+/// The advertised method `authenticate` may actually be called with.
+///
+/// ACP is explicit that a `terminal` method is out-of-band: the client runs it
+/// and it "is not passed to the standard v1 or v2 authentication endpoints".
+/// Calling `authenticate` with one is a protocol error the agent answers with
+/// "method not implemented" — so the client must pick a protocol-driven method
+/// or make no call at all (#19).
+pub(crate) fn protocol_login_method(methods: &[v1::AuthMethod]) -> Option<v1::AuthMethodId> {
+    methods
+        .iter()
+        .find(|method| !matches!(method, v1::AuthMethod::Terminal(_)))
+        .map(|method| method.id().clone())
 }
 
 /// Every agent's advertised logins, keyed by agent id, as last seen at
@@ -207,11 +228,17 @@ pub(crate) fn logins_from(
                     terminal.name.clone(),
                 ),
             };
+            // Sorted so the command line a user sees is stable between runs;
+            // the agent hands these over as an unordered map.
+            let mut env: Vec<(String, String)> =
+                terminal.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            env.sort();
             Some(AgentLogin {
                 method_id: terminal.id.to_string(),
                 label,
                 command,
                 args: login_args,
+                env,
             })
         })
         .collect()
@@ -1057,12 +1084,17 @@ async fn run_bridge(
             // turned "this agent is signed in already" into a dead session
             // (#19). If it really is unauthenticated, `session/new` says so
             // below with the protocol's own signal.
+            // Only a protocol-driven method may be handed to `authenticate`.
+            // A `terminal` method is run by the client instead (see
+            // `protocol_login_method`), so an agent that offers only those is
+            // never called here — doing so is what produced "method not
+            // implemented" against an agent that was working fine (#19).
+            let protocol_method = protocol_login_method(&init_response.auth_methods);
             let authenticate = async || -> Result<(), acp::Error> {
-                let Some(method) = init_response.auth_methods.first() else {
+                let Some(method_id) = protocol_method.clone() else {
                     return Err(acp::Error::auth_required()
-                        .data("this agent advertises no authentication method"));
+                        .data("this agent has no protocol-driven login; it must be signed in by running its own login command"));
                 };
-                let method_id = method.id().clone();
                 let creds = lookup_agent_credentials(&spawn.agent_id, &method_id.to_string());
                 let mut req = v1::AuthenticateRequest::new(method_id);
                 if let Some(meta) = creds {
@@ -1070,7 +1102,7 @@ async fn run_bridge(
                 }
                 cx.send_request(req).block_task().await.map(|_| ())
             };
-            if !init_response.auth_methods.is_empty() {
+            if protocol_method.is_some() {
                 if let Err(e) = authenticate().await {
                     eprintln!("acp: pre-emptive authenticate failed, continuing: {e}");
                 }
@@ -1098,7 +1130,7 @@ async fn run_bridge(
             // one agent's credential store is what makes this work for every
             // compliant agent (#19).
             if let Err(e) = &started {
-                if is_auth_required(e) && !init_response.auth_methods.is_empty() {
+                if is_auth_required(e) && protocol_method.is_some() {
                     if authenticate().await.is_ok() {
                         started = cx.send_request(new_request()).block_task().await;
                     }
@@ -2767,5 +2799,117 @@ mod tests {
             Some(true),
             "and the _meta variant, for agents that resolve the command for us"
         );
+    }
+
+    // --------------------- #19: the protocol contract, not one agent's shape
+
+    /// ACP: a `terminal` method is run by the client and is deliberately NOT
+    /// passed to the auth endpoints. Calling `authenticate` with one is what
+    /// made the Claude adapter answer "Method not implemented" — and would do
+    /// the same to any agent whose login is client-run.
+    #[test]
+    fn authenticate_is_never_offered_a_terminal_method() {
+        let methods = vec![
+            terminal_method("claude-ai-login", "Claude Subscription", &["--claudeai"]),
+            terminal_method("console-login", "Anthropic Console", &["--console"]),
+        ];
+        assert_eq!(protocol_login_method(&methods), None);
+    }
+
+    /// An agent that does own a protocol-driven login still gets one.
+    #[test]
+    fn authenticate_uses_the_first_protocol_driven_method() {
+        let methods = vec![
+            terminal_method("terminal-first", "Terminal", &[]),
+            v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
+                v1::AuthMethodId::new("windsurf-api-key"),
+                "API key",
+            )),
+        ];
+        assert_eq!(
+            protocol_login_method(&methods).map(|id| id.to_string()),
+            Some("windsurf-api-key".to_string()),
+            "the terminal method is skipped, not picked because it came first"
+        );
+    }
+
+    #[test]
+    fn no_methods_means_no_authenticate_call() {
+        assert_eq!(protocol_login_method(&[]), None);
+    }
+
+    /// Terminal methods carry environment the agent needs for its login
+    /// ("Clients launch the Agent program using the arguments *and
+    /// environment variables* provided by the Agent"). Dropping them means
+    /// running a login the agent did not ask for.
+    #[test]
+    fn a_terminal_login_carries_the_environment_the_agent_asked_for() {
+        let method = v1::AuthMethod::Terminal(
+            v1::AuthMethodTerminal::new(v1::AuthMethodId::new("agent-login"), "Log in")
+                .args(vec!["--login".into()])
+                .env(HashMap::from([("ACP_INTERACTIVE_LOGIN".to_string(), "1".to_string())])),
+        );
+        let logins = logins_from(&[method], "some-agent", &["acp".into()]);
+
+        assert_eq!(logins[0].env, vec![("ACP_INTERACTIVE_LOGIN".to_string(), "1".to_string())]);
+        assert_eq!(
+            logins[0].shell_line(),
+            "ACP_INTERACTIVE_LOGIN=1 some-agent acp --login",
+            "the env goes on the command line the terminal runs"
+        );
+    }
+
+    #[test]
+    fn a_login_env_value_that_needs_quoting_gets_it() {
+        let method = v1::AuthMethod::Terminal(
+            v1::AuthMethodTerminal::new(v1::AuthMethodId::new("m"), "M")
+                .env(HashMap::from([("TOKEN_HINT".to_string(), "two words".to_string())])),
+        );
+        let logins = logins_from(&[method], "agent", &[]);
+        assert_eq!(logins[0].shell_line(), "TOKEN_HINT='two words' agent");
+    }
+
+    /// Agent-typed methods are the protocol's default and are never a
+    /// client-run login, so they are not offered as one.
+    #[test]
+    fn an_agent_typed_method_is_not_a_terminal_login() {
+        let methods = vec![v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
+            v1::AuthMethodId::new("oauth"),
+            "OAuth",
+        ))];
+        assert!(logins_from(&methods, "agent", &[]).is_empty());
+        assert!(protocol_login_method(&methods).is_some());
+    }
+
+    /// Version robustness: an agent from a newer protocol revision may
+    /// advertise method types this build has never heard of. The handshake has
+    /// to survive that and still use the methods it *does* understand.
+    #[test]
+    fn a_future_method_type_does_not_break_the_handshake() {
+        let wire = serde_json::json!({
+            "protocolVersion": 1,
+            "authMethods": [
+                { "type": "quantum_handshake", "id": "future", "name": "Future method" },
+                { "type": "terminal", "id": "agent-login", "name": "Log in", "args": ["--login"] }
+            ]
+        });
+        let response: v1::InitializeResponse =
+            serde_json::from_value(wire).expect("an unknown method type must not fail initialize");
+
+        // The login this build understands is still offered.
+        let logins = logins_from(&response.auth_methods, "agent", &["acp".into()]);
+        assert_eq!(logins.len(), 1);
+        assert_eq!(logins[0].method_id, "agent-login");
+        assert_eq!(logins[0].shell_line(), "agent acp --login");
+    }
+
+    /// The same applies to a response that carries no auth surface at all —
+    /// most agents today. Nothing is offered, and nothing is called.
+    #[test]
+    fn an_agent_that_advertises_nothing_is_handled_without_a_login_or_a_call() {
+        let response: v1::InitializeResponse =
+            serde_json::from_value(serde_json::json!({ "protocolVersion": 1 })).unwrap();
+        assert!(logins_from(&response.auth_methods, "agent", &[]).is_empty());
+        assert_eq!(protocol_login_method(&response.auth_methods), None);
     }
 }

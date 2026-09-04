@@ -265,8 +265,11 @@ export type AgentLogin = {
 /** Interactive logins the thread's agent advertises over ACP. Agents that own
  *  a login expect the *client* to run it — Palisade runs it in a terminal, so
  *  an expired agent login is fixable without leaving the app (#19). */
-export const agentLogins = (projectHash: string, threadId: string | null) =>
-  invoke<AgentLogin[]>("agent_logins", { projectHash, threadId });
+export const agentLogins = (
+  projectHash: string,
+  threadId: string | null,
+  agentId: string | null = null
+) => invoke<AgentLogin[]>("agent_logins", { projectHash, threadId, agentId });
 
 export const specMode = (
   projectHash: string,
