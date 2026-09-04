@@ -258,9 +258,23 @@ export const goMode = (
 export type AgentLogin = {
   methodId: string;
   label: string;
-  /** The agent's own login command, ready to run in a terminal. */
+  /** How the login runs: "terminal" means execute `shellLine`; "protocol"
+   *  means call `agentAuthenticate` and let the agent run its own flow. */
+  kind: "terminal" | "protocol";
+  /** The agent's own login command, ready to run in a terminal. Empty for a
+   *  protocol login. */
   shellLine: string;
 };
+
+/** Runs an agent's protocol-driven login (`authenticate`). The agent keeps the
+ *  credential itself; the next turn's handshake picks it up. */
+export const agentAuthenticate = (
+  projectHash: string,
+  threadId: string | null,
+  agentId: string | null,
+  methodId: string
+) =>
+  invoke<void>("agent_authenticate", { projectHash, threadId, agentId, methodId });
 
 /** Interactive logins the thread's agent advertises over ACP. Agents that own
  *  a login expect the *client* to run it — Palisade runs it in a terminal, so

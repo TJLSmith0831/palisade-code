@@ -1255,6 +1255,9 @@ async fn list_models(
 pub struct AgentLoginOption {
     method_id: String,
     label: String,
+    /// "terminal" (run `shell_line`) or "protocol" (call `agent_authenticate`).
+    kind: acp_client::AgentLoginKind,
+    /// Empty for a protocol login — there is no command to run.
     shell_line: String,
 }
 
@@ -1303,9 +1306,50 @@ async fn agent_logins(
             .map(|login| AgentLoginOption {
                 method_id: login.method_id.clone(),
                 label: login.label.clone(),
-                shell_line: login.shell_line(),
+                kind: login.kind,
+                shell_line: match login.kind {
+                    acp_client::AgentLoginKind::Terminal => login.shell_line(),
+                    acp_client::AgentLoginKind::Protocol => String::new(),
+                },
             })
             .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Run one of an agent's advertised logins that the protocol drives.
+///
+/// The counterpart to running a `terminal` login in Palisade's terminal: here
+/// the client calls `authenticate` with the chosen method and the agent runs
+/// its own flow. Between the two kinds, every agent that advertises anything
+/// can be signed in from inside the app (#19).
+#[tauri::command]
+async fn agent_authenticate(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: Option<String>,
+    agent_id: Option<String>,
+    method_id: String,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let agent = match agent_id {
+            Some(id) => preflight_for_harness(&*harness, false)
+                .agent(&id)
+                .cloned()
+                .ok_or_else(|| format!("unknown or unavailable agent `{id}`"))?,
+            None => selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?.0,
+        };
+        let path = agent.path.clone().ok_or("agent has no path")?;
+        acp_client::authenticate_agent(
+            agent.id.clone(),
+            agent.cmd.clone(),
+            PathBuf::from(path),
+            agent.args.clone(),
+            project_root(&project_hash)?,
+            method_id,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2576,6 +2620,7 @@ pub fn run() {
             set_thread_executor,
             list_models,
             agent_logins,
+            agent_authenticate,
             delete_thread,
             set_thread_archived,
             append_message,

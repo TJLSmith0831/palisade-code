@@ -29,6 +29,10 @@ use crate::permissions::{self, PermissionDecision, PermissionMode};
 /// binaries still need headroom.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long an interactive sign-in may take. Longer than startup on purpose:
+/// the agent's own flow can send the user to a browser and wait for them.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(300);
+
 // ------------------------------------------------------------- models
 
 /// One selectable model an agent reported via its `model` config option.
@@ -84,6 +88,20 @@ pub fn extract_models(options: &[v1::SessionConfigOption]) -> ModelState {
 
 // ------------------------------------------------------------ ACP auth
 
+/// How a login is driven. ACP has two shapes, and an agent may advertise
+/// either — offering only one is what made three of four installed agents look
+/// like they had no login at all (#19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentLoginKind {
+    /// `type: "terminal"` — the client runs the agent's own login command.
+    /// Deliberately not passed to the auth endpoints.
+    Terminal,
+    /// `type: "agent"` (the protocol's default) — the client calls
+    /// `authenticate` with the method id and the agent runs its own flow.
+    Protocol,
+}
+
 /// A login an agent says the *client* should run for it.
 ///
 /// ACP's `terminal` auth methods work this way: the agent can't log itself in
@@ -96,6 +114,9 @@ pub fn extract_models(options: &[v1::SessionConfigOption]) -> ModelState {
 pub struct AgentLogin {
     pub method_id: String,
     pub label: String,
+    pub kind: AgentLoginKind,
+    /// Empty for a `Protocol` login: there is nothing to run, the client
+    /// calls `authenticate` with `method_id` instead.
     pub command: String,
     pub args: Vec<String>,
     /// Environment the agent asked for on this login. ACP: the client launches
@@ -185,6 +206,16 @@ pub fn logins_for(agent_id: &str) -> Vec<AgentLogin> {
     agent_logins().lock().unwrap().get(agent_id).cloned().unwrap_or_default()
 }
 
+/// An advertised method's display name, falling back to its id.
+fn login_label(method: &v1::AuthMethod) -> String {
+    match method {
+        v1::AuthMethod::Agent(agent) => agent.name.clone(),
+        v1::AuthMethod::EnvVar(env) => env.name.clone(),
+        v1::AuthMethod::Terminal(terminal) => terminal.name.clone(),
+        _ => method.id().to_string(),
+    }
+}
+
 /// The interactive logins an agent advertised, as commands Palisade can run.
 ///
 /// `cmd`/`args` are how Palisade launched this agent; per ACP a terminal auth
@@ -199,8 +230,20 @@ pub(crate) fn logins_from(
     methods
         .iter()
         .filter_map(|method| {
-            let v1::AuthMethod::Terminal(terminal) = method else {
-                return None;
+            // The protocol's default: the agent owns the flow and the client
+            // starts it with `authenticate`.
+            let terminal = match method {
+                v1::AuthMethod::Terminal(terminal) => terminal,
+                other => {
+                    return Some(AgentLogin {
+                        method_id: other.id().to_string(),
+                        label: login_label(other),
+                        kind: AgentLoginKind::Protocol,
+                        command: String::new(),
+                        args: Vec::new(),
+                        env: Vec::new(),
+                    })
+                }
             };
             let resolved = terminal
                 .meta
@@ -236,6 +279,7 @@ pub(crate) fn logins_from(
             Some(AgentLogin {
                 method_id: terminal.id.to_string(),
                 label,
+                kind: AgentLoginKind::Terminal,
                 command,
                 args: login_args,
                 env,
@@ -922,6 +966,9 @@ async fn run_bridge(
     ready_tx: mpsc::Sender<Result<ReadyReport, String>>,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>,
     probe_only: bool,
+    // Set to run one `authenticate` for this method and stop — the sign-in
+    // path for an agent whose login the protocol drives (#19).
+    auth_only: Option<String>,
 ) -> Result<(), String> {
     let notif_sink = sink.clone();
     let notif_session = palisade_session_id.clone();
@@ -1102,6 +1149,26 @@ async fn run_bridge(
                 }
                 cx.send_request(req).block_task().await.map(|_| ())
             };
+            // An explicit sign-in: run exactly the method the user chose and
+            // report how it went. No session follows — the agent keeps its own
+            // credentials, and the next turn starts a fresh handshake.
+            if let Some(method_id) = &auth_only {
+                let creds = lookup_agent_credentials(&spawn.agent_id, method_id);
+                let mut req =
+                    v1::AuthenticateRequest::new(v1::AuthMethodId::new(method_id.as_str()));
+                if let Some(meta) = creds {
+                    req = req.meta(meta);
+                }
+                let outcome = cx.send_request(req).block_task().await;
+                let _ = ready_tx.send(match outcome {
+                    Ok(_) => Ok(ReadyReport {
+                        acp_session_id: String::new(),
+                        models: ModelState::default(),
+                    }),
+                    Err(e) => Err(format!("{e}")),
+                });
+                return Ok(());
+            }
             if protocol_method.is_some() {
                 if let Err(e) = authenticate().await {
                     eprintln!("acp: pre-emptive authenticate failed, continuing: {e}");
@@ -1292,6 +1359,7 @@ fn start_with_transport(
     spawn: AcpSpawn,
     sink: Arc<dyn Sink>,
     probe_only: bool,
+    auth_only: Option<String>,
 ) -> Result<
     (
         String,
@@ -1312,6 +1380,7 @@ fn start_with_transport(
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<BridgeCommand>();
 
     let thread_session = palisade_session_id.clone();
+    let auth_only_for_bridge = auth_only.clone();
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1334,10 +1403,14 @@ fn start_with_transport(
             ready_tx,
             cmd_rx,
             probe_only,
+            auth_only_for_bridge,
         ));
     });
 
-    match ready_rx.recv_timeout(STARTUP_TIMEOUT) {
+    // A sign-in waits on a person — a browser round trip, a pasted code — so
+    // it gets its own deadline rather than the handshake's.
+    let deadline = if auth_only.is_some() { AUTH_TIMEOUT } else { STARTUP_TIMEOUT };
+    match ready_rx.recv_timeout(deadline) {
         Ok(Ok(report)) => Ok((
             palisade_session_id,
             report.models,
@@ -1347,7 +1420,7 @@ fn start_with_transport(
             pending_permissions,
         )),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(format!("agent did not answer within {STARTUP_TIMEOUT:?}")),
+        Err(_) => Err(format!("agent did not answer within {deadline:?}")),
     }
 }
 
@@ -1361,7 +1434,7 @@ pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Result<AcpSess
     let agent = agent_config(&spawn);
     let identity = SessionIdentity::from(&spawn);
     let (id, models, cmd_tx, busy, acp_session_id, pending_permissions) =
-        start_with_transport(agent, spawn, sink, false)?;
+        start_with_transport(agent, spawn, sink, false, None)?;
     let mut session = identity.into_session(id, models, cmd_tx, busy, pending_permissions);
     session.acp_session_id = Some(acp_session_id);
     Ok(session)
@@ -1396,8 +1469,43 @@ pub fn probe_models(
     };
     let agent = agent_config(&spawn);
     let (_id, models, _cmd_tx, _busy, _acp_id, _pending) =
-        start_with_transport(agent, spawn, Arc::new(NullSink), true)?;
+        start_with_transport(agent, spawn, Arc::new(NullSink), true, None)?;
     Ok(models)
+}
+
+/// Run one advertised login against an agent and report how it went.
+///
+/// This is the protocol half of signing in: for a `type: "agent"` method the
+/// client calls `authenticate` and the agent runs its own flow (an OAuth
+/// round trip, a key exchange). No session is created — the agent keeps the
+/// credential itself, and the next turn starts a fresh handshake that finds
+/// it. Every agent probed advertises one of these or a terminal login, so
+/// between the two there is a sign-in for each of them (#19).
+pub fn authenticate_agent(
+    agent_id: String,
+    cmd: String,
+    bin: PathBuf,
+    args: Vec<String>,
+    project_root: PathBuf,
+    method_id: String,
+) -> Result<(), String> {
+    let spawn = AcpSpawn {
+        agent_id,
+        agent_name: String::new(),
+        bin,
+        cmd,
+        args,
+        project_root,
+        project_hash: String::new(),
+        thread_id: String::new(),
+        mode: "spec".into(),
+        bypass: false,
+        model: None,
+        palisade_home: PathBuf::new(),
+    };
+    let agent = agent_config(&spawn);
+    start_with_transport(agent, spawn, Arc::new(NullSink), false, Some(method_id))?;
+    Ok(())
 }
 
 /// A sink for probes — no UI is listening.
@@ -1458,7 +1566,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result
     let sink = Arc::new(CollectingSink(collected.clone()));
     let agent = agent_config(&spawn);
     let (_id, models, cmd_tx, busy, _acp_id, _pending) =
-        start_with_transport(agent, spawn, sink, false)?;
+        start_with_transport(agent, spawn, sink, false, None)?;
     let _ = models;
 
     busy.store(true, Ordering::SeqCst);
@@ -2461,7 +2569,7 @@ mod tests {
     async fn bridge_session_reports_models() {
         let (transport, _fake, _agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
-        let session = start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false);
+        let session = start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None);
         let (_id, models, _cmds, _busy, acp_id, _pending) = session.expect("session should start");
         assert_eq!(models.current.as_deref(), Some("model-a"));
         assert_eq!(models.models.len(), 2);
@@ -2476,7 +2584,7 @@ mod tests {
         let (transport, _fake, _agent) = fake_agent_pair();
         let (tx, rx) = std::sync::mpsc::channel();
         let (id, _models, cmds, busy, _acp_id, pending) =
-            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false)
+            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None)
                 .unwrap();
 
         let session = SessionIdentity::from(&test_spawn(None))
@@ -2508,7 +2616,7 @@ mod tests {
         let (transport, _fake, _agent) = fake_agent_pair_with(true);
         let (tx, rx) = std::sync::mpsc::channel();
         let (id, _models, cmds, busy, _acp_id, pending) =
-            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false)
+            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None)
                 .unwrap();
         let session = SessionIdentity::from(&test_spawn(None))
             .into_session(id, ModelState::default(), cmds, busy, pending);
@@ -2561,7 +2669,7 @@ mod tests {
         let (transport, _fake, agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
         let (_id, models, _cmds, _busy, _acp_id, _pending) =
-            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), true)
+            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), true, None)
                 .unwrap();
         assert_eq!(models.models.len(), 2);
         // The bridge returned, so the agent sees EOF and exits too.
@@ -2751,15 +2859,19 @@ mod tests {
         assert_eq!(logins[0].label, "Claude Login");
     }
 
-    /// Methods the client can't run itself are not offered as a sign-in the
-    /// user can click — those go through the protocol's `authenticate`.
+    /// Methods the client can't run itself are still offered — as a protocol
+    /// login, which `authenticate` drives. Treating "not terminal" as "no
+    /// login" is what hid Codex's, OpenCode's and Devin's sign-ins (#19).
     #[test]
-    fn non_terminal_methods_are_not_offered_as_a_terminal_login() {
+    fn a_non_terminal_method_is_offered_as_a_protocol_login() {
         let methods = vec![v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
             v1::AuthMethodId::new("windsurf-api-key"),
             "API key",
         ))];
-        assert!(logins_from(&methods, "devin", &["acp".into()]).is_empty());
+        let logins = logins_from(&methods, "devin", &["acp".into()]);
+        assert_eq!(logins.len(), 1);
+        assert_eq!(logins[0].kind, AgentLoginKind::Protocol);
+        assert_eq!(logins[0].method_id, "windsurf-api-key");
     }
 
     #[test]
@@ -2869,15 +2981,17 @@ mod tests {
         assert_eq!(logins[0].shell_line(), "TOKEN_HINT='two words' agent");
     }
 
-    /// Agent-typed methods are the protocol's default and are never a
-    /// client-run login, so they are not offered as one.
+    /// An agent-typed method is never *run* by the client, but it is still a
+    /// login the client can start — with `authenticate`, not a command.
     #[test]
-    fn an_agent_typed_method_is_not_a_terminal_login() {
+    fn an_agent_typed_method_is_a_protocol_login_not_a_command() {
         let methods = vec![v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
             v1::AuthMethodId::new("oauth"),
             "OAuth",
         ))];
-        assert!(logins_from(&methods, "agent", &[]).is_empty());
+        let logins = logins_from(&methods, "agent", &[]);
+        assert_eq!(logins[0].kind, AgentLoginKind::Protocol);
+        assert!(logins[0].command.is_empty());
         assert!(protocol_login_method(&methods).is_some());
     }
 
@@ -2896,11 +3010,16 @@ mod tests {
         let response: v1::InitializeResponse =
             serde_json::from_value(wire).expect("an unknown method type must not fail initialize");
 
-        // The login this build understands is still offered.
+        // The terminal login is understood as such; the unknown type falls
+        // back to the protocol's default rather than being dropped.
         let logins = logins_from(&response.auth_methods, "agent", &["acp".into()]);
-        assert_eq!(logins.len(), 1);
-        assert_eq!(logins[0].method_id, "agent-login");
-        assert_eq!(logins[0].shell_line(), "agent acp --login");
+        let terminal = logins.iter().find(|l| l.kind == AgentLoginKind::Terminal).unwrap();
+        assert_eq!(terminal.method_id, "agent-login");
+        assert_eq!(terminal.shell_line(), "agent acp --login");
+        assert!(
+            logins.iter().any(|l| l.method_id == "future" && l.kind == AgentLoginKind::Protocol),
+            "an unrecognised type is the protocol's default, not a dropped method"
+        );
     }
 
     /// The same applies to a response that carries no auth surface at all —
@@ -2911,5 +3030,79 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "protocolVersion": 1 })).unwrap();
         assert!(logins_from(&response.auth_methods, "agent", &[]).is_empty());
         assert_eq!(protocol_login_method(&response.auth_methods), None);
+    }
+
+    /// Every agent probed advertises a login; they just don't all advertise
+    /// the same *kind*. Codex/OpenCode/Devin offer `agent`-typed methods,
+    /// which ACP drives with `authenticate` — surfacing only the client-run
+    /// kind meant three of four agents appeared to offer nothing (#19).
+    #[test]
+    fn both_kinds_of_login_are_offered() {
+        let methods = vec![
+            terminal_method("claude-ai-login", "Claude Subscription", &["--claudeai"]),
+            v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
+                v1::AuthMethodId::new("chat-gpt"),
+                "ChatGPT",
+            )),
+        ];
+        let logins = logins_from(&methods, "npx", &["pkg".into()]);
+
+        assert_eq!(logins.len(), 2);
+        assert_eq!(logins[0].kind, AgentLoginKind::Terminal);
+        assert_eq!(logins[0].shell_line(), "npx pkg --claudeai");
+
+        assert_eq!(logins[1].kind, AgentLoginKind::Protocol);
+        assert_eq!(logins[1].method_id, "chat-gpt");
+        assert_eq!(logins[1].label, "ChatGPT");
+        assert!(
+            logins[1].command.is_empty(),
+            "a protocol login has no command — the client calls `authenticate`"
+        );
+    }
+
+    /// The real shapes, from probing each agent directly.
+    #[test]
+    fn the_installed_agents_all_produce_a_usable_login() {
+        let cases: Vec<(&str, &str, &[String], Vec<v1::AuthMethod>, Vec<(&str, AgentLoginKind)>)> = vec![
+            (
+                "codex-acp",
+                "npx",
+                &[],
+                vec![
+                    v1::AuthMethod::Agent(v1::AuthMethodAgent::new(v1::AuthMethodId::new("api-key"), "API Key")),
+                    v1::AuthMethod::Agent(v1::AuthMethodAgent::new(v1::AuthMethodId::new("chat-gpt"), "ChatGPT")),
+                ],
+                vec![("api-key", AgentLoginKind::Protocol), ("chat-gpt", AgentLoginKind::Protocol)],
+            ),
+            (
+                "opencode",
+                "opencode",
+                &[],
+                vec![v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
+                    v1::AuthMethodId::new("opencode-login"),
+                    "Login with opencode",
+                ))],
+                vec![("opencode-login", AgentLoginKind::Protocol)],
+            ),
+            (
+                "devin",
+                "devin",
+                &[],
+                vec![v1::AuthMethod::Agent(v1::AuthMethodAgent::new(
+                    v1::AuthMethodId::new("windsurf-api-key"),
+                    "API Key",
+                ))],
+                vec![("windsurf-api-key", AgentLoginKind::Protocol)],
+            ),
+        ];
+
+        for (agent, cmd, args, methods, expected) in cases {
+            let logins = logins_from(&methods, cmd, args);
+            assert_eq!(
+                logins.iter().map(|l| (l.method_id.as_str(), l.kind)).collect::<Vec<_>>(),
+                expected,
+                "{agent} must offer a login"
+            );
+        }
     }
 }

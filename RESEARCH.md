@@ -308,3 +308,10 @@ A new `complete_code` Tauri command requires:
 
 ### What to do first
 **Benchmark the model standalone before writing any app code.** If llama.cpp can't load the GGUF or the TTFT is over 500ms with a realistic context window, the plan needs to change before any integration work is invested.
+
+## ACP agent authentication
+
+How ACP agents advertise and drive logins — the two method shapes (`terminal`
+vs `agent`), the client capability that gates the first, what each installed
+agent actually advertises, and the v1/v2 differences: [docs/ACP-AUTH.md](docs/ACP-AUTH.md).
+Measured, not inferred; re-run with `python3 scripts/acp-probe.py <agent-id>`.

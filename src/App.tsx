@@ -2629,10 +2629,30 @@ export default function App() {
 
   const onAgentLogin = useCallback(
     (login: api.AgentLogin) => {
-      // The agent's own login, run in Palisade's terminal so the user can
-      // complete it (browser handoff, device code, whatever the agent does)
-      // without leaving the app.
-      runCommand(`Sign in — ${login.label}`, login.shellLine);
+      // Two shapes, both from the agent's own manifest. A terminal login is a
+      // command Palisade runs so the user can complete it here; a protocol
+      // login is an `authenticate` call the agent answers itself (#19).
+      if (login.kind === "terminal") {
+        runCommand(`Sign in — ${login.label}`, login.shellLine);
+        return;
+      }
+      const { project, thread } = current.current;
+      if (!project) return;
+      setBusy(true);
+      api
+        .agentAuthenticate(project.hash, thread?.id ?? null, null, login.methodId)
+        // The agent owns the result; a failed sign-in surfaces the agent's
+        // own words rather than a Palisade-invented summary.
+        .then(() =>
+          setBar({
+            kind: "confirm",
+            label: `Signed in with ${login.label}. Retry the turn?`,
+            confirmLabel: "Close",
+            onConfirm: () => setBar(null),
+          })
+        )
+        .catch(fail)
+        .finally(() => setBusy(false));
     },
     [runCommand]
   );
