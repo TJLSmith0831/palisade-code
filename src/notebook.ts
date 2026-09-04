@@ -10,10 +10,13 @@ export type ExecuteResultOutput = {
   output_type: "execute_result";
   execution_count: number | null;
   data: Record<string, string[] | string>;
+  /** Required by the nbformat schema on both rich-output types, even empty. */
+  metadata: Record<string, unknown>;
 };
 export type DisplayDataOutput = {
   output_type: "display_data";
   data: Record<string, string[] | string>;
+  metadata: Record<string, unknown>;
 };
 export type ErrorOutput = {
   output_type: "error";
@@ -141,4 +144,67 @@ export function setCellSource(doc: NotebookDoc, cellId: string, source: string):
     ...doc,
     cells: doc.cells.map((c) => (c.id === cellId ? { ...c, source } : c)),
   };
+}
+
+/** Stream text as nbformat's list of lines. Unlike cell source, a trailing
+ *  newline ends the last line rather than starting an empty one — Jupyter
+ *  writes `["done\n"]`, not `["done\n", ""]`. */
+function splitStreamText(text: string): string[] {
+  const lines = splitSource(text);
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** One driver event (notebook_driver.py) as the nbformat output it
+ *  represents, or null for events that aren't outputs at all (ExecuteReply,
+ *  Started, Restarted, Crashed). Converting on arrival rather than at save
+ *  time means the live output list and the one loaded from the file are the
+ *  same shape, so one renderer serves both and what reaches disk is valid
+ *  nbformat that Jupyter and VS Code can open. */
+export function outputFromEvent(event: Record<string, unknown>): CellOutput | null {
+  const data = (event.data ?? {}) as Record<string, string[] | string>;
+  switch (event.event) {
+    case "Stream":
+      return {
+        output_type: "stream",
+        name: event.name === "stderr" ? "stderr" : "stdout",
+        text: splitStreamText(String(event.text ?? "")),
+      };
+    case "ExecuteResult":
+      return {
+        output_type: "execute_result",
+        execution_count: typeof event.executionCount === "number" ? event.executionCount : null,
+        data,
+        metadata: {},
+      };
+    case "DisplayData":
+      return { output_type: "display_data", data, metadata: {} };
+    case "Error":
+      return {
+        output_type: "error",
+        ename: String(event.ename ?? ""),
+        evalue: String(event.evalue ?? ""),
+        traceback: Array.isArray(event.traceback) ? (event.traceback as string[]) : [],
+      };
+    default:
+      return null;
+  }
+}
+
+/** Appends an output to a cell's list, merging consecutive stream chunks of
+ *  the same name into one entry the way Jupyter's own frontend does — a
+ *  chatty cell otherwise writes hundreds of one-line stream outputs to the
+ *  file. */
+export function appendOutput(outputs: CellOutput[], output: CellOutput): CellOutput[] {
+  const last = outputs[outputs.length - 1];
+  if (output.output_type === "stream" && last?.output_type === "stream" && last.name === output.name) {
+    return [...outputs.slice(0, -1), { ...last, text: [...last.text, ...output.text] }];
+  }
+  return [...outputs, output];
+}
+
+/** nbformat stores multi-line strings (stream text, `text/plain` data) as a
+ *  list of lines; a value may be either that or a plain string. */
+export function joinLines(value: string[] | string | undefined): string {
+  return Array.isArray(value) ? value.join("") : (value ?? "");
 }

@@ -22,13 +22,17 @@ import * as api from "./api";
 import type { NotebookEnvelope, NotebookWarning } from "./api";
 import { codeColorTheme, codeHighlightStyle, markdownPreviewSchema } from "./FileEditorPane";
 import {
+  appendOutput,
   Cell,
+  CellOutput,
   deleteCell,
   insertCell,
   kernelspecName,
   moveCell,
+  joinLines,
   newCell,
   NotebookDoc,
+  outputFromEvent,
   parseNotebook,
   serializeNotebook,
   setCellSource,
@@ -95,15 +99,14 @@ function CellEditor({
 // sequences in the output block.
 const ANSI = /\u001b\[[0-9;]*m/g;
 
-function OutputBlock({ event }: { event: Record<string, unknown> }) {
-  const kind = event.event as string;
-  if (kind === "Stream") {
-    return <pre className="ds-notebook-output-text">{String(event.text ?? "")}</pre>;
+function OutputBlock({ output }: { output: CellOutput }) {
+  if (output.output_type === "stream") {
+    return <pre className="ds-notebook-output-text">{joinLines(output.text)}</pre>;
   }
-  if (kind === "ExecuteResult" || kind === "DisplayData") {
-    const data = (event.data ?? {}) as Record<string, unknown>;
-    const png = data["image/png"];
-    if (typeof png === "string") {
+  if (output.output_type === "execute_result" || output.output_type === "display_data") {
+    const data = output.data ?? {};
+    const png = joinLines(data["image/png"]);
+    if (png) {
       // alignSelf: the output Stack is a flex column, so a bare image would
       // be stretched to the full pane width instead of its natural size.
       return (
@@ -118,14 +121,15 @@ function OutputBlock({ event }: { event: Record<string, unknown> }) {
         />
       );
     }
-    const text = data["text/plain"];
-    return <pre className="ds-notebook-output-text">{Array.isArray(text) ? text.join("") : String(text ?? "")}</pre>;
+    // Unsupported rich types (text/html and friends) fall back to the
+    // text/plain nbformat always carries alongside them.
+    return <pre className="ds-notebook-output-text">{joinLines(data["text/plain"])}</pre>;
   }
-  if (kind === "Error") {
+  if (output.output_type === "error") {
+    const traceback = output.traceback.join("\n").replace(ANSI, "");
     return (
       <pre className="ds-notebook-output-error">
-        {(event.traceback as string[] | undefined)?.join("\n").replace(ANSI, "") ??
-          `${event.ename}: ${event.evalue}`}
+        {traceback || `${output.ename}: ${output.evalue}`}
       </pre>
     );
   }
@@ -149,7 +153,7 @@ export default function NotebookTab({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runningCellId, setRunningCellId] = useState<string | null>(null);
   const [kernelStarting, setKernelStarting] = useState(false);
-  const [outputsByCellRun, setOutputsByCellRun] = useState<Map<string, Record<string, unknown>[]>>(new Map());
+  const [outputsByCellRun, setOutputsByCellRun] = useState<Map<string, CellOutput[]>>(new Map());
   const [warning, setWarning] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [colorMode] = useState<"light" | "dark">(() =>
@@ -258,7 +262,7 @@ export default function NotebookTab({
         const next: NotebookDoc = {
           ...current,
           cells: current.cells.map((c) =>
-            c.id === cellId ? { ...c, outputs: collected as Cell["outputs"], execution_count: executionCount } : c
+            c.id === cellId ? { ...c, outputs: collected, execution_count: executionCount } : c
           ),
         };
         setDoc(next);
@@ -268,12 +272,16 @@ export default function NotebookTab({
 
       // Stream/ExecuteResult/DisplayData/Error: accumulate for this cell's
       // current run, and show live in the outputs map immediately.
-      // Written through the ref synchronously rather than via the state
-      // updater: ExecuteReply can arrive in the same tick as the output
-      // events, before the effect below has synced the ref, and the snapshot
-      // it takes would otherwise be empty (outputs never reached the file).
+      // Converted to its nbformat output here, on arrival, so the live list
+      // and the one loaded from the file are the same shape (see
+      // outputFromEvent). Written through the ref synchronously rather than
+      // via the state updater: ExecuteReply can arrive in the same tick as
+      // the output events, before a state update has been applied, and the
+      // snapshot it takes would otherwise be empty.
+      const output = outputFromEvent(event);
+      if (!output) return;
       const next = new Map(outputsRef.current);
-      next.set(cellId, [...(next.get(cellId) ?? []), event]);
+      next.set(cellId, appendOutput(next.get(cellId) ?? [], output));
       outputsRef.current = next;
       setOutputsByCellRun(next);
     });
@@ -451,8 +459,8 @@ export default function NotebookTab({
 
             {outputs.length > 0 && (
               <Stack gap={2} className="ds-notebook-output">
-                {outputs.map((event, i) => (
-                  <OutputBlock key={i} event={event} />
+                {outputs.map((output, i) => (
+                  <OutputBlock key={i} output={output} />
                 ))}
               </Stack>
             )}
