@@ -194,11 +194,27 @@ impl NotebookKernel {
         self.stopping.store(true, Ordering::SeqCst);
         self.alive.store(false, Ordering::SeqCst);
 
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        // Closing stdin tells the driver's request loop to return. Do this
+        // before waiting on the process so its `finally` block can stop the
+        // Jupyter kernel it owns; killing the driver first orphaned that
+        // kernel whenever a notebook tab closed.
         *self.stdin.lock().unwrap() = None;
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Ok(None) | Err(_) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+        }
 
         if let Some(handle) = self.reader_handle.lock().unwrap().take() {
             let _ = handle.join();
