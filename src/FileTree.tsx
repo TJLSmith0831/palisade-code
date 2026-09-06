@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tree, useTree, type RenderTreeNodePayload, type TreeNodeData } from "@mantine/core";
-import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { IconChevronDown, IconChevronRight, IconFolder, IconFolderOpen } from "@tabler/icons-react";
 import * as api from "./api";
 import { describeError } from "./errors";
-import { NewFileIcon, NewFolderIcon } from "./icons";
+import { NewFileIcon, NewFolderIcon, FileTypeIcon, RenameIcon, DeleteIcon } from "./icons";
 
 type Props = {
   projectHash: string;
@@ -408,13 +408,44 @@ export default function FileTree({
         data-testid="tree-row"
       >
         <span className="ds-chevron">
-          {entry.is_dir && expanded ? (
-            <IconChevronDown size={13} stroke={2} />
+          {entry.is_dir ? (
+            expanded ? <IconChevronDown size={13} stroke={2} /> : <IconChevronRight size={13} stroke={2} />
+          ) : null}
+        </span>
+        <span className="ds-node-icon">
+          {entry.is_dir ? (
+            expanded ? <IconFolderOpen size={14} stroke={1.75} /> : <IconFolder size={14} stroke={1.75} />
           ) : (
-            <IconChevronRight size={13} stroke={2} />
+            <FileTypeIcon name={entry.name} />
           )}
         </span>
         <span className="ds-tree-label">{entry.name}</span>
+        <div className="ds-tree-row-actions">
+          <button
+            className="ds-tree-row-action"
+            title="Rename"
+            aria-label="Rename"
+            onClick={(event) => {
+              event.stopPropagation();
+              setRenaming(entry.path);
+            }}
+            data-testid="tree-row-rename"
+          >
+            <RenameIcon />
+          </button>
+          <button
+            className="ds-tree-row-action delete"
+            title="Delete"
+            aria-label="Delete"
+            onClick={(event) => {
+              event.stopPropagation();
+              setConfirmingDelete(entry.path);
+            }}
+            data-testid="tree-row-delete"
+          >
+            <DeleteIcon />
+          </button>
+        </div>
       </div>
     );
   };
