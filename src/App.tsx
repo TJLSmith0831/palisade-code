@@ -49,6 +49,7 @@ import {
   IconPlayerPlay,
   IconFolder,
   IconFolders,
+  IconFolderOpen,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
@@ -107,7 +108,6 @@ import {
   filterForTab,
   itemsFromMessages,
   mergeDeltas,
-  type Item,
 } from "./EventView";
 import FileEditorPane, {
   evictEditorSession,
@@ -125,6 +125,8 @@ import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
+import LiveFileChips from "./LiveFileChips";
+import MergeGate from "./MergeGate";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
@@ -187,6 +189,12 @@ type ChatSurfaceProps = {
   worktree?: api.WorktreeStatus;
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
+  /** Archive this thread — the merge gate offers it once work has landed. */
+  onArchiveSelf?: () => void;
+  /** The worktree changed (a commit, a merge): re-poll the thread stats. */
+  onWorktreeChanged?: () => void;
+  /** Raise a message in the app's own error banner. */
+  onError?: (message: string) => void;
   executor: Preflight["selected"] | null;
   flight: Preflight | null;
   flightSelected: boolean;
@@ -249,6 +257,12 @@ type ChatSurfaceProps = {
   onOpenSpec?: (specName: string) => void;
   threadBypass: boolean;
   onToggleBypass: () => void;
+  /** Whether this thread runs in its own worktree. Decided at creation and
+   *  locked once the thread has run — the directory an agent is writing in
+   *  cannot move underneath it. */
+  worktreeEnabled?: boolean;
+  worktreeLocked?: boolean;
+  onToggleWorktree?: () => void;
   prefsMenuOpen: boolean;
   setPrefsMenuOpen: (open: boolean) => void;
   hasLiveSession: boolean;
@@ -416,6 +430,9 @@ export const ChatSurface = memo(
     busy,
     worktree,
     onViewDiff,
+    onArchiveSelf,
+    onWorktreeChanged,
+    onError,
     executor,
     flight,
     flightSelected,
@@ -455,6 +472,9 @@ export const ChatSurface = memo(
     onOpenSpec,
     threadBypass,
     onToggleBypass,
+    worktreeEnabled = true,
+    worktreeLocked = false,
+    onToggleWorktree,
     prefsMenuOpen,
     setPrefsMenuOpen,
     hasLiveSession,
@@ -468,6 +488,7 @@ export const ChatSurface = memo(
     // Confirmation popover for the Accept→Bypass direction only (D2e) — the
     // reverse (Bypass→Accept) is a plain click, no popover state needed.
     const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
+    const [worktreeOffConfirmOpen, setWorktreeOffConfirmOpen] = useState(false);
     // D6/D15: "Other" spec-type text input state — local to the framing menu.
     const [otherSpecText, setOtherSpecText] = useState("");
     const [showOtherInput, setShowOtherInput] = useState(false);
@@ -1278,27 +1299,24 @@ export const ChatSurface = memo(
 
             It says what changed, never that the change is correct: only a
             verify run can claim that. */}
-        {worktree && worktree.added + worktree.removed > 0 && (
-          <div className="ds-worktree-strip" data-testid="worktree-strip">
-            <IconGitBranch size={12} />
-            <span className="ds-worktree-strip-branch">{worktree.branch}</span>
-            <span className="ds-worktree-strip-stat">
-              <span className="added">+{worktree.added}</span>
-              <span className="removed">−{worktree.removed}</span>
-            </span>
-            <div className="spacer" />
-            {onViewDiff && (
-              <button
-                type="button"
-                className="ds-worktree-strip-link"
-                onClick={onViewDiff}
-                data-testid="worktree-view-diff"
-              >
-                View diff
-              </button>
-            )}
-          </div>
-        )}
+        {/* What the running turn is touching right now, one chip per file,
+            expandable in place — reviewing an edit should not cost a pane
+            switch, and the row stays one line tall however many files a turn
+            gets through. */}
+        <LiveFileChips live={live} busy={busy} />
+
+        {worktree && project && thread &&
+          (worktree.added + worktree.removed > 0 || worktree.ahead > 0) && (
+            <MergeGate
+              projectHash={project.hash}
+              threadId={thread.id}
+              worktree={worktree}
+              onViewDiff={onViewDiff}
+              onArchive={onArchiveSelf}
+              onChanged={onWorktreeChanged}
+              onError={onError}
+            />
+          )}
 
         <form
           className={`composer ${dragActive ? "drag-active" : ""}`}
@@ -1390,6 +1408,104 @@ export const ChatSurface = memo(
               </div>
             </Paper>
           )}
+
+          {/* Worktree isolation, sitting next to the permission toggle because
+              it is the same kind of decision: what this thread is allowed to
+              touch. Off means the agent edits the project's own working
+              directory live, which is why turning it off asks first and why
+              it locks once the thread has run. */}
+          <Popover
+            opened={worktreeOffConfirmOpen}
+            onChange={setWorktreeOffConfirmOpen}
+            withArrow
+            position="top-end"
+          >
+            <Popover.Target>
+              {/* The tooltip lives *inside* the target rather than wrapping
+                  it: Popover.Target needs the ref on the element it anchors
+                  to, and a disabled ActionIcon never fires the events a
+                  tooltip listens for either — hence the wrapper span, which
+                  carries both. */}
+              <span
+                style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
+                data-tauri-drag-region-exclude
+              >
+                <Tooltip
+                  label={
+                    worktreeLocked
+                      ? `Set when this thread started — it runs ${
+                          worktreeEnabled ? "in its own worktree" : "in the project directory"
+                        } for good now`
+                      : worktreeEnabled
+                        ? "Runs in its own git worktree — click to edit the project directly"
+                        : "Edits the project directory directly — click to isolate this thread"
+                  }
+                  openDelay={300}
+                  multiline
+                  w={240}
+                >
+                  <ActionIcon
+                    variant="subtle"
+                    color={worktreeEnabled ? "neutral" : "warn"}
+                    data-testid="worktree-mode-btn"
+                    data-locked={worktreeLocked ? "true" : undefined}
+                    aria-label={
+                      worktreeEnabled ? "Isolated worktree on" : "Isolated worktree off"
+                    }
+                    aria-disabled={worktreeLocked || !onToggleWorktree}
+                    style={worktreeLocked ? { opacity: 0.45, cursor: "default" } : undefined}
+                    onClick={() => {
+                      // Not `disabled`: a disabled control swallows the hover
+                      // too, and the tooltip explaining *why* it is locked is
+                      // the only thing that makes the lock legible.
+                      if (worktreeLocked || !onToggleWorktree) return;
+                      if (!worktreeEnabled) {
+                        onToggleWorktree();
+                      } else {
+                        setWorktreeOffConfirmOpen(true);
+                      }
+                    }}
+                  >
+                    {worktreeEnabled ? (
+                      <IconGitBranch size={16} />
+                    ) : (
+                      <IconFolderOpen size={16} />
+                    )}
+                  </ActionIcon>
+                </Tooltip>
+              </span>
+            </Popover.Target>
+            <Popover.Dropdown data-testid="worktree-mode-confirm">
+              <Stack gap="xs">
+                <span style={{ fontSize: 13, maxWidth: 280, display: "block" }}>
+                  Turn off worktree isolation? The agent edits your working
+                  directory live — uncommitted changes there can be overwritten,
+                  and this thread gets no merge, PR or clean-up step. It can't be
+                  changed after the first message.
+                </span>
+                <Group gap="xs" justify="flex-end">
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    onClick={() => setWorktreeOffConfirmOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    color="warn"
+                    data-testid="worktree-mode-confirm-off"
+                    onClick={() => {
+                      onToggleWorktree?.();
+                      setWorktreeOffConfirmOpen(false);
+                    }}
+                  >
+                    Turn off
+                  </Button>
+                </Group>
+              </Stack>
+            </Popover.Dropdown>
+          </Popover>
 
           {/* Standalone permission-mode toggle, always visible top-right of
               the composer (D2c) — separate from the executor/model pickers
@@ -2438,10 +2554,24 @@ export default function App() {
     setThreadPrefs(project.hash, thread.id, prefs);
     setThreadPrefsState(prefs);
   };
+  /** Flip this thread's worktree isolation. Only offered before the thread
+   *  has run — the backend refuses once a worktree exists, so this can never
+   *  leave the flag disagreeing with what is on disk. */
+  const onToggleWorktree = () => {
+    if (!project || !thread) return;
+    api
+      .setThreadWorktreeEnabled(
+        project.hash,
+        thread.id,
+        thread.worktreeEnabled === false,
+      )
+      .then((meta) => {
+        setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
+        setThread(meta);
+      })
+      .catch(fail);
+  };
   const [dragActive, setDragActive] = useState(false);
-  const [fileEdits, setFileEdits] = useState<
-    { path: string; before: string; after: string }[]
-  >([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -2663,7 +2793,7 @@ export default function App() {
 
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
-      setFileEdits((prev) => [...prev, edit]);
+      void edit;
       // Test results recorded before this write describe code that no longer
       // exists; the explorer reads this to say so.
       setLastEditAt(Date.now());
@@ -2814,7 +2944,6 @@ export default function App() {
         }
         currentProjectRef.current = refreshed.hash;
         tabsRef.current.closeAll();
-        setFileEdits([]);
 
         // Reopen what was on screen last time. Files that have since gone
         // are dropped silently — an agent deleting one between sessions is
@@ -3301,7 +3430,35 @@ export default function App() {
 
   const onArchiveThread = (target: ThreadMeta) => {
     if (!project) return;
-    pm.setThreadArchived(project.hash, target.id, !target.archived).catch(fail);
+    const archiving = !target.archived;
+    const worktree = worktrees.get(target.id);
+    // Archiving is reversible and must stay that way, so it never discards
+    // work on its own: the backend's sweep only prunes a worktree whose
+    // commits the base branch already has. Unmerged work is the one case the
+    // user has to answer for, and it is offered as its own destructive
+    // choice — the same confirm bar deleting a thread uses.
+    const unmerged =
+      archiving && worktree && (!worktree.clean || worktree.ahead > 0);
+    pm.setThreadArchived(project.hash, target.id, archiving)
+      .then(() => {
+        loadWorktrees();
+        if (!unmerged) return;
+        setBar({
+          kind: "confirm",
+          label: `"${target.title}" still has work that ${worktree.baseBranch} doesn't. Delete its worktree and branch anyway?`,
+          confirmLabel: "Clean up",
+          onConfirm: async () => {
+            setBar(null);
+            try {
+              await api.pruneThreadWorktree(project.hash, target.id, true);
+              loadWorktrees();
+            } catch (err) {
+              fail(err);
+            }
+          },
+        });
+      })
+      .catch(fail);
   };
 
   const onDeleteThread = (target: ThreadMeta) => {
@@ -4624,6 +4781,9 @@ export default function App() {
     sessionId: liveSessionId,
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
+    onArchiveSelf: thread ? () => onArchiveThread(thread) : undefined,
+    onWorktreeChanged: loadWorktrees,
+    onError: (message: string) => banner(message, "error"),
     // The code changes themselves, in the editor column — not the Source
     // Control panel, which is where committing and pushing live.
     onViewDiff: () => {
@@ -4679,6 +4839,11 @@ export default function App() {
     onOpenSpec: (name: string) => tabs.openSpec(name),
     threadBypass: threadPrefs.bypass,
     onToggleBypass,
+    worktreeEnabled: thread?.worktreeEnabled !== false,
+    // The lock is the first message: a thread that made a worktree but never
+    // spoke has nothing invested in it, and switching removes it again.
+    worktreeLocked: messages.length > 0,
+    onToggleWorktree,
     prefsMenuOpen,
     setPrefsMenuOpen,
     hasLiveSession,
@@ -5415,40 +5580,6 @@ export default function App() {
                           onClearFocus={() => setDiffFocusPath(null)}
                         />
                       )}
-                      {(() => {
-                        const threadEdits = thread
-                          ? filterForTab(
-                              [
-                                ...itemsFromMessages(messages),
-                                ...mergeDeltas(live),
-                              ],
-                              "diff"
-                            )
-                          : [];
-                        const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                          kind: "fileEdit" as const,
-                          id: `manual-${i}`,
-                          path: e.path,
-                          before: e.before,
-                          after: e.after,
-                        }));
-                        const allEdits = [...threadEdits, ...manualEdits];
-                        return (
-                          <section
-                            className="diff-section"
-                            data-testid="turn-history-section"
-                          >
-                            <h2 className="ds-section-heading">Turn History</h2>
-                            {allEdits.length === 0 && (
-                              <p className="empty">No file changes yet.</p>
-                            )}
-                            <EventList
-                              items={allEdits}
-                              executor={flight?.selected ?? null}
-                            />
-                          </section>
-                        );
-                      })()}
                     </div>
                   )}
                 </main>

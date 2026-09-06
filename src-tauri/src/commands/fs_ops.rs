@@ -307,9 +307,16 @@ pub(crate) fn looks_binary(path: &Path) -> bool {
 }
 
 #[tauri::command]
-pub async fn read_file_content(project_hash: String, relative_path: String) -> Res<String> {
+pub async fn read_file_content(
+    project_hash: String,
+    relative_path: String,
+    thread_id: Option<String>,
+) -> Res<String> {
     tokio::task::spawn_blocking(move || {
-        let root = project_root(&project_hash)?;
+        // Same contract as the `git_*` commands: `thread_id` names the tree
+        // to read, so a view rendered from a thread's worktree reads that
+        // worktree instead of the project root's copy of the same path.
+        let root = super::git_cmds::tree_root(&project_hash, thread_id.as_deref())?;
         let resolved = resolve_existing_path(&root, &relative_path)?;
 
         let size = std::fs::metadata(&resolved)
@@ -408,10 +415,14 @@ pub async fn write_file_content(
     relative_path: String,
     content: String,
     expected_previous: Option<String>,
+    thread_id: Option<String>,
 ) -> Res<Option<String>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let root = project_root(&project_hash)?;
+        // Writes follow reads: an edit made in a view of a thread's worktree
+        // has to land in that worktree, or it silently edits a different file
+        // than the one on screen.
+        let root = super::git_cmds::tree_root(&project_hash, thread_id.as_deref())?;
         let resolved = resolve_creatable_path(&root, &relative_path)?;
 
         check_not_stale(&resolved, expected_previous.as_deref(), &relative_path)?;

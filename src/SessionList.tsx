@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, TextInput, Tooltip } from "@mantine/core";
+import { Badge, Button, TextInput, Tooltip } from "@mantine/core";
 import {
   IconArchive,
   IconPencil,
@@ -44,6 +44,31 @@ export function filterThreads(threads: ThreadMeta[], query: string) {
  *  worktree are evidence that something happened, never evidence that it
  *  worked. Only a verify run can say that. */
 export type ThreadState = "needs-attention" | "running" | "changed" | "idle";
+
+/** How a thread's branch stands against the branch it was cut from, as the
+ *  row's readiness badge. Distinct from [`ThreadState`], which is about the
+ *  agent: a thread can be idle and still hold work that conflicts.
+ *
+ *  "Ready" here means "merges cleanly", never "correct" — the merge gate in
+ *  the conversation is where verification is shown, and even there a green
+ *  verify is a command's exit code, not a judgement. */
+export const READINESS: Record<
+  WorktreeStatus["state"],
+  { label: (w: WorktreeStatus) => string; color: string; tip: string } | null
+> = {
+  clean: null,
+  ahead: {
+    label: (w) => (w.ahead > 0 ? `${w.ahead} ahead` : "uncommitted"),
+    color: "green",
+    tip: "Merges cleanly into its base branch",
+  },
+  conflict: {
+    label: (w) => `conflicts w/ ${w.baseBranch}`,
+    color: "red",
+    tip: "A trial merge into the base branch hit conflicts",
+  },
+  merged: { label: () => "merged", color: "gray", tip: "Palisade merged this branch into its base" },
+};
 
 export function threadState(
   thread: ThreadMeta,
@@ -200,6 +225,21 @@ export default function SessionList({
                 {worktree && (
                   <div className="ds-session-branch" title={worktree.branch}>
                     {worktree.branch}
+                    {READINESS[worktree.state] && (
+                      <Tooltip label={READINESS[worktree.state]!.tip} openDelay={400}>
+                        <Badge
+                          size="xs"
+                          radius="sm"
+                          variant="light"
+                          color={READINESS[worktree.state]!.color}
+                          ml={6}
+                          data-testid="session-readiness"
+                          data-state={worktree.state}
+                        >
+                          {READINESS[worktree.state]!.label(worktree)}
+                        </Badge>
+                      </Tooltip>
+                    )}
                   </div>
                 )}
                 {/* Same two verbs the Editor preset's History panel offers.

@@ -272,7 +272,190 @@ pub fn remove_worktree(bin: &Path, root: &Path, path: &Path, branch: Option<&str
     Ok(())
 }
 
+// ------------------------------------------------------------ merge-back
+
+/// How a thread's branch stands against the branch it was cut from. Every
+/// field is measured, never inferred: `ahead` is a rev-list count, `clean`
+/// is `git status`, and `mergeable` is a real trial merge (`merge-tree`),
+/// not a guess from whether the diffs overlap.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeReadiness {
+    pub ahead: u32,
+    pub clean: bool,
+    pub mergeable: bool,
+}
+
+/// Commits on `branch` that `base` does not have yet.
+pub fn ahead_of(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<u32> {
+    let raw = run(bin, root, &["rev-list", "--count", &format!("{base}..{branch}")])?;
+    Ok(raw.trim().parse::<u32>().unwrap_or(0))
+}
+
+/// Does `branch` merge into `base` without conflicts? A trial merge done
+/// entirely in the object database — no worktree, no index, nothing to clean
+/// up — so this is safe to call on every status poll. Exit 0 is a clean
+/// merge, 1 is conflicts; anything else is a real failure.
+///
+/// ponytail: `merge-tree --write-tree` needs git 2.38 (Oct 2022). An older
+/// git reports the unknown flag as a hard error, which surfaces as "could not
+/// check" rather than a wrong answer — swap in a scratch-worktree probe if
+/// that ever matters.
+pub fn merges_cleanly(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<bool> {
+    let output = Command::new(bin)
+        .args(["merge-tree", "--write-tree", base, branch])
+        .current_dir(root)
+        .env("PATH", crate::executor::child_path_env())
+        .output()
+        .map_err(|err| format!("could not run git: {err}"))?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!(
+            "git merge-tree failed:\n{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
+/// Everything the merge gate needs about one thread's worktree, measured in
+/// one pass. `root` is the project root; `worktree` is the thread's.
+pub fn merge_readiness(
+    bin: &Path,
+    root: &Path,
+    worktree: &Path,
+    base: &str,
+    branch: &str,
+) -> Res<MergeReadiness> {
+    let ahead = ahead_of(bin, root, base, branch)?;
+    let clean = status(bin, worktree)?.is_empty();
+    // Nothing to merge is trivially mergeable; skip the trial merge.
+    let mergeable = ahead == 0 || merges_cleanly(bin, root, base, branch)?;
+    Ok(MergeReadiness { ahead, clean, mergeable })
+}
+
+/// What a merge attempt did. A conflict is not an error: it leaves the
+/// half-merged scratch worktree on disk at `conflict_path` so a session can
+/// be pointed at it and resolve the merge the same way it does any other
+/// work — that is the whole conflict story, no bespoke merge editor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeOutcome {
+    pub merged: bool,
+    pub conflict_path: Option<std::path::PathBuf>,
+    pub conflict_branch: Option<String>,
+    pub detail: String,
+}
+
+/// Where a merge attempt for `branch` gets staged. Alongside the thread
+/// worktrees, under `.git/`, for the same reason they live there.
+fn merge_scratch(root: &Path, branch: &str) -> (std::path::PathBuf, String) {
+    let slug = branch.rsplit('/').next().unwrap_or(branch);
+    (
+        root.join(".git").join("palisade-worktrees").join(format!("merge-{slug}")),
+        format!("palisade/merge-{slug}"),
+    )
+}
+
+/// Merge a thread's branch into its base branch.
+///
+/// The merge is attempted in a scratch worktree cut from `base`, never in the
+/// project root: a conflicted merge left in the user's own working tree would
+/// block every other thread, and a merge that touches the root while an agent
+/// is mid-turn there is exactly the race worktrees exist to avoid.
+///
+/// On success the base branch is advanced to the merge commit — by
+/// fast-forwarding the worktree that has `base` checked out when there is one
+/// (so git's own index and working tree stay in sync), and by moving the ref
+/// directly when `base` is checked out nowhere. A fast-forward into a dirty
+/// root is refused rather than forced; the caller reports it and the user
+/// commits or stashes.
+pub fn merge_into_base(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<MergeOutcome> {
+    if ahead_of(bin, root, base, branch)? == 0 {
+        return Ok(MergeOutcome {
+            merged: false,
+            conflict_path: None,
+            conflict_branch: None,
+            detail: format!("`{branch}` has no commits that `{base}` does not already have."),
+        });
+    }
+    // A base checked out in a dirty worktree can't take the fast-forward, and
+    // finding that out *after* the merge means cleaning up a scratch worktree
+    // for nothing. Check first.
+    // `worktree_holding` only knows about *linked* worktrees; the project
+    // root is the common case and it has to be checked separately.
+    let host = if current_branch_name(bin, root).as_deref() == Ok(base) {
+        Some(root.to_path_buf())
+    } else {
+        worktree_holding(bin, root, base)
+    };
+    if let Some(path) = &host {
+        if !status(bin, path)?.is_empty() {
+            return Err(format!(
+                "`{base}` is checked out at {} with uncommitted changes — commit or stash them before merging.",
+                path.display()
+            ));
+        }
+    }
+
+    let (scratch, tmp_branch) = merge_scratch(root, branch);
+    // A scratch worktree left behind by an earlier conflict is stale the
+    // moment a new attempt starts: the branch has moved on since.
+    if scratch.exists() {
+        let _ = run(bin, root, &["worktree", "remove", "--force", &scratch.to_string_lossy()]);
+    }
+    let _ = run(bin, root, &["branch", "-D", &tmp_branch]);
+    run(bin, root, &["worktree", "add", "-b", &tmp_branch, &scratch.to_string_lossy(), base])?;
+
+    let message = format!("Merge {branch} into {base}");
+    match run(bin, &scratch, &["merge", "--no-ff", "-m", &message, branch]) {
+        Ok(_) => {}
+        Err(detail) => {
+            // Conflicts stay on disk to be resolved; anything else (a merge
+            // that could not even start) cleans up after itself.
+            let conflicted = status(bin, &scratch)
+                .map(|files| files.iter().any(|f| f.code.contains('U')))
+                .unwrap_or(false);
+            if !conflicted {
+                let _ = run(bin, root, &["worktree", "remove", "--force", &scratch.to_string_lossy()]);
+                let _ = run(bin, root, &["branch", "-D", &tmp_branch]);
+                return Err(detail);
+            }
+            return Ok(MergeOutcome {
+                merged: false,
+                conflict_path: Some(scratch),
+                conflict_branch: Some(tmp_branch),
+                detail,
+            });
+        }
+    }
+
+    // The merge commit exists on the scratch branch; move `base` onto it.
+    let advanced = match &host {
+        Some(path) => run(bin, path, &["merge", "--ff-only", &tmp_branch]).map(|_| ()),
+        None => {
+            let tip = run(bin, root, &["rev-parse", &tmp_branch])?;
+            run(bin, root, &["update-ref", &format!("refs/heads/{base}"), tip.trim()]).map(|_| ())
+        }
+    };
+    // Clean up regardless: the merge commit is safe on `base` (or the error
+    // below explains why it isn't), so the scratch worktree has no more to say.
+    let _ = run(bin, root, &["worktree", "remove", "--force", &scratch.to_string_lossy()]);
+    let _ = run(bin, root, &["branch", "-D", &tmp_branch]);
+    advanced?;
+
+    Ok(MergeOutcome {
+        merged: true,
+        conflict_path: None,
+        conflict_branch: None,
+        detail: message,
+    })
+}
+
 // --------------------------------------------------------- remote sync
+
+/// `origin`'s URL, for turning a branch into a web link when `gh` can't.
+pub fn remote_url(bin: &Path, root: &Path) -> Res<String> {
+    run(bin, root, &["remote", "get-url", "origin"])
+}
 
 pub fn fetch(bin: &Path, root: &Path) -> Res<()> {
     run(bin, root, &["fetch"]).map(|_| ())
@@ -1189,5 +1372,44 @@ world
 
         assert_eq!(branch, "palisade/IJKLMNOP");
         assert_eq!(path, Path::new("/proj/.git/palisade-worktrees/01ABCDEFGHIJKLMNOP"));
+    }
+    /// The merge-back happy path and its one interesting failure, end to end
+    /// on a real repo: a clean merge advances the base branch and leaves no
+    /// scratch worktree behind, and a conflicting one leaves the half-merged
+    /// worktree on disk for a session to resolve instead of erroring out.
+    #[test]
+    fn merge_back_advances_the_base_and_parks_conflicts_in_a_worktree() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let base = current_branch_name(git(), root).unwrap();
+
+        // A thread worktree with one commit that does not touch `tracked`.
+        let (wt, branch) = add_worktree(git(), root, "01thread-clean").unwrap();
+        fs::write(wt.join("new.txt"), "from the thread\n").unwrap();
+        run(git(), &wt, &["add", "-A"]).unwrap();
+        run(git(), &wt, &["commit", "-q", "-m", "thread work"]).unwrap();
+
+        let ready = merge_readiness(git(), root, &wt, &base, &branch).unwrap();
+        assert_eq!(ready, MergeReadiness { ahead: 1, clean: true, mergeable: true });
+
+        let out = merge_into_base(git(), root, &base, &branch).unwrap();
+        assert!(out.merged, "clean merge should land: {}", out.detail);
+        assert_eq!(ahead_of(git(), root, &base, &branch).unwrap(), 0);
+        assert!(root.join("new.txt").is_file(), "base worktree should have the merged file");
+        assert!(!merge_scratch(root, &branch).0.exists(), "scratch worktree should be gone");
+
+        // A second thread that rewrites the same line the base is about to.
+        let (wt2, branch2) = add_worktree(git(), root, "02thread-conflict").unwrap();
+        fs::write(wt2.join(&tracked), "thread version\n").unwrap();
+        run(git(), &wt2, &["commit", "-qam", "thread edit"]).unwrap();
+        fs::write(root.join(&tracked), "base version\n").unwrap();
+        run(git(), root, &["commit", "-qam", "base edit"]).unwrap();
+
+        assert!(!merges_cleanly(git(), root, &base, &branch2).unwrap());
+        let out = merge_into_base(git(), root, &base, &branch2).unwrap();
+        assert!(!out.merged);
+        let parked = out.conflict_path.expect("conflict leaves a worktree to resolve in");
+        assert!(parked.is_dir(), "conflicted merge stays on disk");
+        assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "base version\n");
     }
 }

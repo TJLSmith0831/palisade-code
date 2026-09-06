@@ -43,6 +43,14 @@ function mockGit(handler: Handler) {
   });
 }
 
+
+/** The working-tree diff now lives behind its file's row, so a test that
+ *  wants to see hunks opens them first — the same click a reviewer makes. */
+async function expandChangedFiles() {
+  const rows = await screen.findAllByTestId("diff-row-expand");
+  for (const row of rows) fireEvent.click(row);
+}
+
 describe("DiffPane", () => {
   afterEach(() => {
     invokeMock.mockReset();
@@ -52,6 +60,7 @@ describe("DiffPane", () => {
     mockGit(() => undefined);
 
     render(<DiffPane projectHash="proj-1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getByText(/working tree clean/i)).toBeDefined());
   });
 
@@ -70,13 +79,14 @@ describe("DiffPane", () => {
     });
 
     render(<DiffPane projectHash="proj-1" />);
-    await waitFor(() => expect(screen.getByTestId("changes-section")).toBeDefined());
+    await expandChangedFiles().catch(() => undefined);
+    await waitFor(() => expect(screen.getByTestId("diff-scan-list")).toBeDefined());
     expect(screen.queryByTestId("staged-section")).toBeNull();
 
     await user.click(screen.getByTestId("hunk-action-btn"));
 
     await waitFor(() => expect(screen.getByTestId("staged-section")).toBeDefined());
-    expect(screen.queryByTestId("changes-section")).toBeNull();
+    expect(screen.queryByTestId("diff-scan-list")).toBeNull();
     expect(invokeMock).toHaveBeenCalledWith("git_stage_hunk", expect.objectContaining({ projectHash: "proj-1" }));
   });
 
@@ -95,11 +105,12 @@ describe("DiffPane", () => {
     });
 
     render(<DiffPane projectHash="proj-1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getByTestId("staged-section")).toBeDefined());
 
     await user.click(screen.getByTestId("hunk-action-btn"));
 
-    await waitFor(() => expect(screen.getByTestId("changes-section")).toBeDefined());
+    await waitFor(() => expect(screen.getByTestId("diff-scan-list")).toBeDefined());
     expect(screen.queryByTestId("staged-section")).toBeNull();
   });
 
@@ -112,6 +123,7 @@ describe("DiffPane", () => {
     });
 
     render(<DiffPane projectHash="proj-1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getByTestId("init-repo-btn")).toBeDefined());
     expect(screen.queryByTestId("commit-message")).toBeNull();
   });
@@ -129,6 +141,7 @@ describe("DiffPane", () => {
     });
 
     render(<DiffPane projectHash="proj-1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getByTestId("init-repo-btn")).toBeDefined());
 
     await user.click(screen.getByTestId("init-repo-btn"));
@@ -152,6 +165,7 @@ describe("DiffPane", () => {
     });
 
     render(<DiffPane projectHash="proj-1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getByTestId("discard-btn")).toBeDefined());
 
     await user.click(screen.getByTestId("discard-btn"));
@@ -169,8 +183,9 @@ describe("DiffPane", () => {
       return undefined;
     });
     render(<DiffPane projectHash="proj-1" />);
-    await waitFor(() => expect(screen.getByTestId("changes-section")).toBeDefined());
-    expect(screen.getByText("Changes").tagName).toBe("H2");
+    await expandChangedFiles().catch(() => undefined);
+    await waitFor(() => expect(screen.getByTestId("diff-scan-list")).toBeDefined());
+    expect(screen.getByText("Changed Files").tagName).toBe("H2");
     expect(screen.queryByRole("heading", { level: 4 })).toBeNull();
   });
 
@@ -181,6 +196,7 @@ describe("DiffPane", () => {
     // panel's when a change was clicked open.
     mockGit(() => undefined);
     render(<DiffPane projectHash="p1" />);
+    await expandChangedFiles().catch(() => undefined);
     await screen.findByTestId("diff-pane");
     expect(screen.queryByTestId("commit-btn")).toBeNull();
     expect(screen.queryByTestId("commit-message")).toBeNull();
@@ -219,8 +235,10 @@ describe("DiffPane", () => {
       <DiffPane projectHash="p1" focusPath="a.ts" onClearFocus={onClearFocus} />
     );
     await waitFor(() =>
-      expect(screen.getAllByTestId("diff-file")).toHaveLength(1)
+      expect(screen.getAllByTestId("diff-scan-file")).toHaveLength(1)
     );
+    await expandChangedFiles();
+    expect(screen.getAllByTestId("diff-file")).toHaveLength(1);
     expect(screen.getByTestId("diff-focus-bar").textContent).toContain("a.ts");
 
     fireEvent.click(screen.getByTestId("diff-show-all"));
@@ -236,6 +254,7 @@ describe("DiffPane worktree review", () => {
     });
 
     render(<DiffPane projectHash="p1" threadId="t1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
 
     const call = invokeMock.mock.calls.find(([cmd]) => cmd === "git_working_diff");
@@ -256,6 +275,7 @@ describe("DiffPane worktree review", () => {
     });
 
     render(<DiffPane projectHash="p1" threadId="t1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
 
     fireEvent.click(screen.getByTestId("stage-all-btn"));
@@ -273,6 +293,7 @@ describe("DiffPane worktree review", () => {
     });
 
     render(<DiffPane projectHash="p1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
 
     expect(screen.getByTestId("stage-all-btn")).toBeTruthy();
@@ -303,6 +324,7 @@ describe("DiffPane worktree review", () => {
     });
 
     render(<DiffPane projectHash="p1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getAllByTestId("diff-file")).toHaveLength(1));
 
     expect(screen.queryByTestId("diff-rows-split")).toBeNull();
@@ -320,6 +342,7 @@ describe("DiffPane worktree review", () => {
     });
 
     render(<DiffPane projectHash="p1" />);
+    await expandChangedFiles().catch(() => undefined);
     await waitFor(() => expect(screen.getByTestId("diff-rows-inline")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("radio", { name: "Side by Side" }));
@@ -327,4 +350,81 @@ describe("DiffPane worktree review", () => {
     await waitFor(() => expect(screen.getByTestId("diff-rows-split")).toBeTruthy());
     expect(screen.queryByTestId("diff-rows-inline")).toBeNull();
   });
+
+  // Scan-then-edit: the list is for finding the file that matters, and the
+  // file opens as the real buffer — reviewing and fixing are the same view.
+  it("lists changed files with their size, and opens one as an editable buffer", async () => {
+    const user = userEvent.setup();
+    mockGit((cmd) => {
+      if (cmd === "git_status") return Promise.resolve([{ path: "tracked.txt", code: " M" }]);
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      if (cmd === "read_file_content")
+        return Promise.resolve("line one\nCHANGED\nline three\n");
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="proj-1" threadId="t1" />);
+    await expandChangedFiles().catch(() => undefined);
+    const row = await screen.findByTestId("diff-scan-file");
+    expect(row).toHaveAttribute("data-path", "tracked.txt");
+    expect(row).toHaveTextContent("+1 −1");
+
+    // The pencil is the visible way in; the filename is the shortcut.
+    await user.click(screen.getByTestId("diff-row-edit"));
+    await waitFor(() => expect(screen.getByTestId("editable-diff")).toBeDefined());
+    // The buffer reads the tree it was rendered from, not the project root.
+    expect(invokeMock).toHaveBeenCalledWith(
+      "read_file_content",
+      expect.objectContaining({ threadId: "t1", relativePath: "tracked.txt" }),
+    );
+
+    await user.click(screen.getByTestId("editable-diff-back"));
+    await waitFor(() => expect(screen.getByTestId("diff-scan-list")).toBeDefined());
+  });
+
+
+  // One control for the common case: read everything, or clear the deck.
+  it("expands and collapses every changed file at once", async () => {
+    const user = userEvent.setup();
+    mockGit((cmd) => {
+      if (cmd === "git_status") return Promise.resolve([{ path: "tracked.txt", code: " M" }]);
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    const toggle = await screen.findByTestId("diff-expand-all");
+    expect(toggle).toHaveTextContent("Expand all");
+    expect(screen.queryByTestId("diff-file")).toBeNull();
+
+    await user.click(toggle);
+    expect(screen.getAllByTestId("diff-file")).toHaveLength(1);
+    // The label follows the state, so the next click is the opposite action.
+    expect(screen.getByTestId("diff-expand-all")).toHaveTextContent("Collapse all");
+
+    await user.click(screen.getByTestId("diff-expand-all"));
+    expect(screen.queryByTestId("diff-file")).toBeNull();
+  });
+
+
+  // The single-file view is the file, not its hunks: a reviewer who wants to
+  // change a line the agent never touched can, without leaving the pane.
+  it("opens the whole file, not just the changed region", async () => {
+    const user = userEvent.setup();
+    const whole = "line one\nCHANGED\nline three\nuntouched tail\n";
+    mockGit((cmd) => {
+      if (cmd === "git_status") return Promise.resolve([{ path: "tracked.txt", code: " M" }]);
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      if (cmd === "read_file_content") return Promise.resolve(whole);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    await user.click(await screen.findByTestId("diff-row-edit"));
+    const editor = await screen.findByTestId("editable-diff-editor");
+    // Including the line no hunk mentions.
+    await waitFor(() => expect(editor.textContent).toContain("untouched tail"));
+    expect(screen.getByTestId("editable-diff-changed")).toHaveTextContent("full file");
+  });
+
 });

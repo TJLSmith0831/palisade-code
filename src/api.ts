@@ -29,6 +29,15 @@ export type ThreadMeta = {
   /** The thread's isolated git worktree; null until its first session runs. */
   worktreePath?: string | null;
   worktreeBranch?: string | null;
+  /** The branch the worktree was cut from — what "Merge to <base>" targets.
+   *  Null on threads created before merge-back existed. */
+  worktreeBaseBranch?: string | null;
+  /** When Palisade merged this thread's branch into its base. A recorded
+   *  fact, not an inference from an empty diff. */
+  mergedAt?: string | null;
+  /** False when the user opted out of worktree isolation at thread creation:
+   *  the thread edits the project root live and has no merge/PR/prune step. */
+  worktreeEnabled?: boolean;
   /** "auto" = Palisade named this thread (and may rename it while it is still
    *  a placeholder); "manual" = the user did, and it is never touched. */
   titleSource?: "auto" | "manual";
@@ -363,12 +372,60 @@ export type WorktreeStatus = {
   branch: string;
   added: number;
   removed: number;
+  /** The branch this thread merges back into. */
+  baseBranch: string;
+  /** Commits the base branch does not have yet. */
+  ahead: number;
+  /** Nothing uncommitted or untracked in the worktree. */
+  clean: boolean;
+  /** A real trial merge said this lands without conflicts. */
+  mergeable: boolean;
+  /** What the sidebar dot shows. */
+  state: "merged" | "conflict" | "ahead" | "clean";
+  /** The worktree's HEAD — what a verification run has to have run at for
+   *  its result to still be about this code. */
+  head: string | null;
+};
+
+/** What a merge-back attempt did. A conflict is not an error: the half-merged
+ *  state is parked in `conflictPath` for a session to resolve in place. */
+export type MergeResult = {
+  merged: boolean;
+  conflictPath: string | null;
+  conflictBranch: string | null;
+  detail: string;
 };
 
 /** Only threads that have a worktree appear — never-run threads and non-git
  *  projects are simply absent. */
 export const threadWorktrees = (projectHash: string) =>
   invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
+/** Merge a thread's branch into the branch it was cut from. Rejects a busy
+ *  thread and an uncommitted worktree — what lands must be what was reviewed. */
+export const mergeThreadWorktree = (projectHash: string, threadId: string) =>
+  invoke<MergeResult>("merge_thread_worktree", { projectHash, threadId });
+
+/** Push the thread's branch and open a PR for it, returning the URL to open.
+ *  Uses `gh` when it is on PATH, and the host's compare page when it isn't. */
+export const openThreadPr = (projectHash: string, threadId: string) =>
+  invoke<string>("open_thread_pr", { projectHash, threadId });
+
+/** Remove an archived thread's worktree. Without `force` this only proceeds
+ *  when the work has provably landed; `force` is the confirmed clean-up. */
+export const pruneThreadWorktree = (
+  projectHash: string,
+  threadId: string,
+  force = false,
+) => invoke<void>("prune_thread_worktree", { projectHash, threadId, force });
+
+/** Turn a thread's worktree isolation on or off. Only before its first
+ *  session — once a worktree exists the choice is fixed for the thread. */
+export const setThreadWorktreeEnabled = (
+  projectHash: string,
+  threadId: string,
+  enabled: boolean,
+) => invoke<ThreadMeta>("set_thread_worktree_enabled", { projectHash, threadId, enabled });
+
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
 /** Release a thread's idle sessions. Sessions mid-turn keep running. */
@@ -924,6 +981,12 @@ export const gitLog = (projectHash: string, limit = 20, threadId?: string) =>
  *  the user picked in the chat pane. Without it the draft ran on whatever
  *  auto-detection found, on that agent's default model, which is a dead end
  *  on a machine where that agent isn't installed or is over its usage limit. */
+/** A one-line commit subject from the *local* model, for pre-filling the
+ *  merge gate. Resolves to "" when no local model is running — that is an
+ *  ordinary state, not an error. */
+export const suggestCommitMessage = (projectHash: string, threadId?: string) =>
+  invoke<string>("suggest_commit_message", { projectHash, threadId });
+
 export const draftCommitMessage = (projectHash: string, threadId: string | null) =>
   invoke<string>("draft_commit_message", { projectHash, threadId });
 
@@ -1013,8 +1076,14 @@ export const searchText = (
     options: options ?? null,
   });
 
-export const readFileContent = (projectHash: string, relativePath: string) =>
-  invoke<string>("read_file_content", { projectHash, relativePath });
+/** `threadId` names the working tree to read, exactly as the `git*` calls
+ *  above do: a thread's own worktree when it has one, the project root
+ *  otherwise. Pass the same id the view was rendered from. */
+export const readFileContent = (
+  projectHash: string,
+  relativePath: string,
+  threadId?: string,
+) => invoke<string>("read_file_content", { projectHash, relativePath, threadId });
 
 export const readFileBase64 = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_base64", { projectHash, relativePath });
@@ -1056,13 +1125,15 @@ export const writeFileContent = (
   projectHash: string,
   relativePath: string,
   content: string,
-  expectedPrevious: string | null = null
+  expectedPrevious: string | null = null,
+  threadId?: string,
 ) =>
   invoke<string | null>("write_file_content", {
     projectHash,
     relativePath,
     content,
     expectedPrevious,
+    threadId,
   });
 
 /** Renames or moves a file/directory — a full path edit doubles as a move. */

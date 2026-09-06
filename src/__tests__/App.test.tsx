@@ -1489,7 +1489,11 @@ describe("Editor chrome (merged-design v2)", () => {
           "Create a thread to get started."
         )
       ).toBeNull();
-      expect(screen.getByText(/no file changes/i)).toBeDefined();
+      // The pane's own empty state, now that Turn History is gone: the diff
+      // view says what the working tree holds, and nothing else claims to.
+      expect(
+        screen.getByText(/working tree clean|isn't a git repository/i)
+      ).toBeDefined();
     });
   });
 });
