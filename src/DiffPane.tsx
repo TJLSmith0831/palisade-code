@@ -9,10 +9,14 @@ import {
   Progress,
   SegmentedControl,
   Text,
+  Tooltip,
   UnstyledButton,
 } from "@mantine/core";
 import {
   IconChevronRight,
+  IconFoldDown,
+  IconFoldUp,
+  IconPencil,
   IconGitBranch,
   IconMinus,
   IconPlus,
@@ -121,6 +125,19 @@ function ChangedFileRow({
         <Text size="xs" ff="monospace" c="dimmed" style={{ width: 62, textAlign: "right" }}>
           +{added} −{removed}
         </Text>
+        {/* The filename opens the file too, but a name that happens to be
+            clickable is not an affordance — this is the one that says so. */}
+        <Tooltip label={`Edit ${path}`} openDelay={300}>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            onClick={onOpen}
+            aria-label={`Edit ${path}`}
+            data-testid="diff-row-edit"
+          >
+            <IconPencil size={13} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
       {expanded && children}
     </div>
@@ -344,7 +361,7 @@ export default function DiffPane({
 
   if (editing) {
     return (
-      <div className="diff-pane" data-testid="diff-pane">
+      <div className="diff-pane diff-pane-editing" data-testid="diff-pane">
         <EditableDiffView
           projectHash={projectHash}
           threadId={threadId}
@@ -377,6 +394,13 @@ export default function DiffPane({
   const shownUntracked = focusPath
     ? untracked.filter((f) => f.path === focusPath)
     : untracked;
+  /** Only files with a diff to show can be expanded — a binary or unreadable
+   *  untracked file has nothing behind its row, and counting it would leave
+   *  "Expand all" permanently unfinished. */
+  const expandablePaths = shownWorking.map(pathFromPatch);
+  const allExpanded =
+    expandablePaths.length > 0 && expandablePaths.every((path) => expanded.has(path));
+
   const isClean =
     workingFiles.length === 0 && stagedFiles.length === 0 && untracked.length === 0;
 
@@ -432,7 +456,27 @@ export default function DiffPane({
 
       {(shownWorking.length > 0 || shownUntracked.length > 0) && (
         <section className="diff-section" data-testid="diff-scan-list">
-          <h2 className="ds-section-heading">Changed Files</h2>
+          <Group gap={8} wrap="nowrap" pr={12}>
+            <h2 className="ds-section-heading" style={{ flex: 1 }}>
+              Changed Files
+            </h2>
+            {/* Reads the current state rather than a remembered intent: after
+                opening two files by hand, the button offers the thing that is
+                still left to do. */}
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              leftSection={
+                allExpanded ? <IconFoldUp size={13} /> : <IconFoldDown size={13} />
+              }
+              onClick={() =>
+                setExpanded(allExpanded ? new Set() : new Set(expandablePaths))
+              }
+              data-testid="diff-expand-all"
+            >
+              {allExpanded ? "Collapse all" : "Expand all"}
+            </Button>
+          </Group>
           {shownWorking.map((file) => {
             const path = pathFromPatch(file);
             const stat = patchStat(file);

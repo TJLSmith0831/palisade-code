@@ -369,7 +369,8 @@ describe("DiffPane worktree review", () => {
     expect(row).toHaveAttribute("data-path", "tracked.txt");
     expect(row).toHaveTextContent("+1 −1");
 
-    await user.click(screen.getByTestId("diff-row-open"));
+    // The pencil is the visible way in; the filename is the shortcut.
+    await user.click(screen.getByTestId("diff-row-edit"));
     await waitFor(() => expect(screen.getByTestId("editable-diff")).toBeDefined());
     // The buffer reads the tree it was rendered from, not the project root.
     expect(invokeMock).toHaveBeenCalledWith(
@@ -379,6 +380,51 @@ describe("DiffPane worktree review", () => {
 
     await user.click(screen.getByTestId("editable-diff-back"));
     await waitFor(() => expect(screen.getByTestId("diff-scan-list")).toBeDefined());
+  });
+
+
+  // One control for the common case: read everything, or clear the deck.
+  it("expands and collapses every changed file at once", async () => {
+    const user = userEvent.setup();
+    mockGit((cmd) => {
+      if (cmd === "git_status") return Promise.resolve([{ path: "tracked.txt", code: " M" }]);
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    const toggle = await screen.findByTestId("diff-expand-all");
+    expect(toggle).toHaveTextContent("Expand all");
+    expect(screen.queryByTestId("diff-file")).toBeNull();
+
+    await user.click(toggle);
+    expect(screen.getAllByTestId("diff-file")).toHaveLength(1);
+    // The label follows the state, so the next click is the opposite action.
+    expect(screen.getByTestId("diff-expand-all")).toHaveTextContent("Collapse all");
+
+    await user.click(screen.getByTestId("diff-expand-all"));
+    expect(screen.queryByTestId("diff-file")).toBeNull();
+  });
+
+
+  // The single-file view is the file, not its hunks: a reviewer who wants to
+  // change a line the agent never touched can, without leaving the pane.
+  it("opens the whole file, not just the changed region", async () => {
+    const user = userEvent.setup();
+    const whole = "line one\nCHANGED\nline three\nuntouched tail\n";
+    mockGit((cmd) => {
+      if (cmd === "git_status") return Promise.resolve([{ path: "tracked.txt", code: " M" }]);
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      if (cmd === "read_file_content") return Promise.resolve(whole);
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="p1" />);
+    await user.click(await screen.findByTestId("diff-row-edit"));
+    const editor = await screen.findByTestId("editable-diff-editor");
+    // Including the line no hunk mentions.
+    await waitFor(() => expect(editor.textContent).toContain("untouched tail"));
+    expect(screen.getByTestId("editable-diff-changed")).toHaveTextContent("full file");
   });
 
 });

@@ -2058,6 +2058,13 @@ input[type="checkbox"] {
   gap: 14px;
 }
 
+.diff-pane-editing {
+  padding: 0;
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+}
+
 .diff-section {
   display: flex;
   flex-direction: column;
@@ -2112,15 +2119,40 @@ input[type="checkbox"] {
   margin: 0;
 }
 
+/* The editable single-file view borrows .ds-editor-body's editor theme, so
+   only its own frame is defined here. */
+.diff-editable .cm-editor {
+  border-top: 1px solid var(--border);
+}
+/* Fills the pane: this is an editor, and a file that stops halfway down with
+   dead space under it reads as a diff excerpt instead of a whole file. */
+.diff-editable {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.diff-editable .cm-editor {
+  flex: 1;
+  min-height: 0;
+}
+.diff-editable .cm-scroller {
+  overflow: auto;
+}
+
 /* The diff gutter over an ordinary editable buffer: what changed is marked
-   in place, so reviewing and fixing are the same view. */
+   in place, so reviewing and fixing are the same view. The mark shares the
+   line-number column's ground so the two read as one gutter rather than as a
+   pale block bolted to the editor's edge. */
 .ds-diff-gutter-col {
-  width: 14px;
+  background: var(--editor-bg);
+  padding-right: 2px;
+  min-width: 12px;
 }
 .ds-diff-gutter-mark {
   color: var(--success);
   font-size: 11px;
-  line-height: 1.4;
+  opacity: 0.85;
 }
 .ds-diff-changed-line {
   background: color-mix(in oklch, var(--success) 12%, transparent);

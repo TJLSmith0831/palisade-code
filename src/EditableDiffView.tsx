@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Group, Text } from "@mantine/core";
-import { IconArrowLeft, IconDeviceFloppy } from "@tabler/icons-react";
+import { ActionIcon, Alert, Button, Group, Text, Tooltip } from "@mantine/core";
+import {
+  IconArrowLeft,
+  IconChevronDown,
+  IconChevronUp,
+  IconDeviceFloppy,
+} from "@tabler/icons-react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+// The project's own token colors, not CodeMirror's defaults: one
+// syntaxHighlighting extension only — a second one silently disables the
+// first (see the note on codeHighlightStyle).
+import { codeColorTheme, codeHighlightStyle } from "./FileEditorPane";
 import type { StructuredPatch } from "diff";
 
 import * as api from "./api";
 import { languageExtensionFor, loadLanguageFor } from "./codeLanguage";
-import { addedLines, diffGutter, setDiffLines } from "./diffGutter";
+import { addedLines, diffGutter, markedLines, setDiffLines } from "./diffGutter";
 import { describeError } from "./errors";
 
 type Props = {
@@ -48,6 +56,9 @@ export default function EditableDiffView({
    *  refused instead of silently overwriting it. */
   const baseline = useRef<string>("");
   const [dirty, setDirty] = useState(false);
+  /** How many lines this working tree changed — the header's way of saying
+   *  "this is the whole file, and this much of it is new". */
+  const [changed, setChanged] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,7 +109,8 @@ export default function EditableDiffView({
               diffGutter(),
               history(),
               highlightActiveLine(),
-              syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+              codeHighlightStyle,
+              codeColorTheme,
               languageCompartment.of(languageExtensionFor(path)),
               keymap.of([
                 { key: "Mod-s", run: () => (void saveRef.current(), true) },
@@ -116,6 +128,7 @@ export default function EditableDiffView({
         });
         view.current = editor;
         editor.dispatch({ effects: setDiffLines.of(addedLines(patch)) });
+        setChanged(markedLines(editor.state).length);
         // Grammars load on demand; the buffer is usable before it arrives.
         const language = await loadLanguageFor(path);
         if (!cancelled && language) {
@@ -130,8 +143,29 @@ export default function EditableDiffView({
     };
   }, [projectHash, path, threadId, patch]);
 
+  /** Move the cursor to the next (or previous) changed line and scroll it
+   *  into view. The file is shown whole, so on a large file the changes need
+   *  a way to be reached that isn't scrolling until one appears. */
+  const jump = (direction: 1 | -1) => {
+    const editor = view.current;
+    if (!editor) return;
+    const lines = markedLines(editor.state);
+    if (lines.length === 0) return;
+    const here = editor.state.doc.lineAt(editor.state.selection.main.head).number;
+    const next =
+      direction === 1
+        ? (lines.find((line) => line > here) ?? lines[0])
+        : ([...lines].reverse().find((line) => line < here) ?? lines[lines.length - 1]);
+    const pos = editor.state.doc.line(next).from;
+    editor.dispatch({
+      selection: { anchor: pos },
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
+    });
+    editor.focus();
+  };
+
   return (
-    <div className="diff-editable" data-testid="editable-diff">
+    <div className="diff-editable ds-editor-body" data-testid="editable-diff">
       <Group gap={8} px={12} py={8} wrap="nowrap">
         <Button
           size="compact-xs"
@@ -145,6 +179,35 @@ export default function EditableDiffView({
         <Text size="xs" ff="monospace" truncate style={{ flex: 1 }}>
           {path}
         </Text>
+        {/* The whole file is here, not just its hunks — this says how much of
+            it changed, and the arrows walk between those lines. */}
+        <Text size="xs" c="dimmed" data-testid="editable-diff-changed">
+          {changed === 0 ? "full file" : `full file · ${changed} changed`}
+        </Text>
+        <Tooltip label="Previous change" openDelay={300}>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            onClick={() => jump(-1)}
+            disabled={changed === 0}
+            aria-label="Previous change"
+            data-testid="editable-diff-prev"
+          >
+            <IconChevronUp size={13} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Next change" openDelay={300}>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            onClick={() => jump(1)}
+            disabled={changed === 0}
+            aria-label="Next change"
+            data-testid="editable-diff-next"
+          >
+            <IconChevronDown size={13} />
+          </ActionIcon>
+        </Tooltip>
         <Button
           size="compact-xs"
           leftSection={<IconDeviceFloppy size={13} />}

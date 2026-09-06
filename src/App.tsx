@@ -108,7 +108,6 @@ import {
   filterForTab,
   itemsFromMessages,
   mergeDeltas,
-  type Item,
 } from "./EventView";
 import FileEditorPane, {
   evictEditorSession,
@@ -2563,9 +2562,6 @@ export default function App() {
       .catch(fail);
   };
   const [dragActive, setDragActive] = useState(false);
-  const [fileEdits, setFileEdits] = useState<
-    { path: string; before: string; after: string }[]
-  >([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -2737,7 +2733,7 @@ export default function App() {
 
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
-      setFileEdits((prev) => [...prev, edit]);
+      void edit;
       // Test results recorded before this write describe code that no longer
       // exists; the explorer reads this to say so.
       setLastEditAt(Date.now());
@@ -2888,7 +2884,6 @@ export default function App() {
         }
         currentProjectRef.current = refreshed.hash;
         tabsRef.current.closeAll();
-        setFileEdits([]);
 
         // Reopen what was on screen last time. Files that have since gone
         // are dropped silently — an agent deleting one between sessions is
@@ -5511,40 +5506,6 @@ export default function App() {
                           onClearFocus={() => setDiffFocusPath(null)}
                         />
                       )}
-                      {(() => {
-                        const threadEdits = thread
-                          ? filterForTab(
-                              [
-                                ...itemsFromMessages(messages),
-                                ...mergeDeltas(live),
-                              ],
-                              "diff"
-                            )
-                          : [];
-                        const manualEdits: Item[] = fileEdits.map((e, i) => ({
-                          kind: "fileEdit" as const,
-                          id: `manual-${i}`,
-                          path: e.path,
-                          before: e.before,
-                          after: e.after,
-                        }));
-                        const allEdits = [...threadEdits, ...manualEdits];
-                        return (
-                          <section
-                            className="diff-section"
-                            data-testid="turn-history-section"
-                          >
-                            <h2 className="ds-section-heading">Turn History</h2>
-                            {allEdits.length === 0 && (
-                              <p className="empty">No file changes yet.</p>
-                            )}
-                            <EventList
-                              items={allEdits}
-                              executor={flight?.selected ?? null}
-                            />
-                          </section>
-                        );
-                      })()}
                     </div>
                   )}
                 </main>
