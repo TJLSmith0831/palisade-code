@@ -1040,6 +1040,26 @@ describe("Status bar (mockup parity)", () => {
       /Ln \d+, Col \d+/
     );
   });
+
+  it("reopens the collapsed editor column when a file is clicked in the explorer", async () => {
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+
+    // Vibe hides the editor column behind a collapse toggle; collapse it,
+    // then click a file the way a user would.
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    fireEvent.click(screen.getByTestId("toggle-editor"));
+    expect(screen.queryByTestId("editor-col")).toBeNull();
+
+    fireEvent.click(await screen.findByText("AGENTS.md"));
+
+    expect(await screen.findByTestId("editor-col")).toBeDefined();
+    expect(screen.getByTestId("toggle-editor")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  });
 });
 
 describe("Chat column width per preset (Governing Rule)", () => {

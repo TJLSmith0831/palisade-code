@@ -2957,12 +2957,17 @@ export default function App() {
   const selectFile = useCallback(
     (path: string, line?: number) => {
       shell.setDiffOpen(false);
+      // Vibe hides the editor column when collapsed — opening a tab behind
+      // it would be state changing invisibly, so reclaim the pane first.
+      if (shell.centerShell === "vibe" && shell.editorCollapsed) {
+        shell.toggleEditor();
+      }
       tabs.open(path);
       // Consumed once by the editor pane; the timestamp makes a repeat jump
       // to the same line a new instruction rather than a no-op.
       if (line !== undefined) setRevealLine({ path, line, at: Date.now() });
     },
-    [tabs]
+    [tabs, shell.centerShell, shell.editorCollapsed, shell.toggleEditor]
   );
 
   // Opens a location a test runner reported. Its paths are relative to
