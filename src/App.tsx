@@ -134,6 +134,7 @@ const DatabasePanel = lazy(() => import("./DatabasePanel"));
 const SessionsPanel = lazy(() => import("./SessionsPanel"));
 const DataGridTab = lazy(() => import("./DataGridTab"));
 const SqlQueryTab = lazy(() => import("./SqlQueryTab"));
+const NotebookTab = lazy(() => import("./NotebookTab"));
 import RunPanel from "./RunPanel";
 import ProblemsPane from "./ProblemsPane";
 import EditorStatusBar from "./EditorStatusBar";
@@ -2358,6 +2359,9 @@ export default function App() {
   // Editor never closes anything or loses where you were in a file.
   const tabs = useOpenTabs();
   const selectedFile = tabs.activePath;
+  // Notebooks that failed to parse as nbformat JSON — falls back to
+  // FileEditorPane's plain-text view instead (design.md Migration Plan).
+  const [unopenableNotebooks, setUnopenableNotebooks] = useState<Set<string>>(new Set());
   // Cmd+Shift+V or the IconMarkdown button flips the active Markdown tab
   // between its CodeMirror source and the WYSIWYG editor. No-op for non-md.
   const toggleMdPreview = useCallback(() => {
@@ -4693,6 +4697,24 @@ export default function App() {
           // opening a different chain mid-run still shows a normal canvas.
           run={chainRun?.chain === tab.chainName ? chainRun : null}
         />
+      );
+    }
+    // .ipynb opens as an ordinary file tab (decisions.md D21) — branch here
+    // rather than a new tab type, same divergence point table/query/chain
+    // already use. onUnopenable falls through to FileEditorPane below by
+    // forcing a re-render as a non-notebook path via unopenableNotebooks.
+    if (selectedFile?.toLowerCase().endsWith(".ipynb") && !unopenableNotebooks.has(selectedFile)) {
+      return (
+        <Suspense fallback={<div style={{ padding: 12 }}>Loading notebook…</div>}>
+          <NotebookTab
+            projectHash={project.hash}
+            path={selectedFile}
+            onDirtyChange={tabs.setDirty}
+            onUnopenable={() =>
+              setUnopenableNotebooks((prev) => new Set(prev).add(selectedFile))
+            }
+          />
+        </Suspense>
       );
     }
     return (

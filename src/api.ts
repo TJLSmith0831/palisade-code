@@ -785,6 +785,52 @@ export const terminalKillProject = (projectHash: string) =>
 export const terminalList = (projectHash: string) =>
   invoke<string[]>("terminal_list", { projectHash });
 
+// ----------------------------------------------------------------- notebook
+
+/** Runs one cell against the notebook's kernel, spawning it first if this is
+ *  the notebook's first execution (design.md D8/D9). Results arrive as
+ *  `notebook-event`/`notebook-warning` window events, not this call's return
+ *  value — execution can outlive the request/response round trip. */
+export const runNotebookCell = (
+  projectHash: string,
+  relativePath: string,
+  kernelspecName: string | null,
+  cellId: string,
+  source: string
+) =>
+  invoke<void>("run_notebook_cell", {
+    projectHash,
+    relativePath,
+    kernelspecName,
+    cellId,
+    source,
+  });
+
+export const interruptNotebookKernel = (projectHash: string, relativePath: string) =>
+  invoke<void>("interrupt_notebook_kernel", { projectHash, relativePath });
+
+/** Discards the kernel's in-process state; a fresh kernel starts on the next run. */
+export const restartNotebookKernel = (projectHash: string, relativePath: string) =>
+  invoke<void>("restart_notebook_kernel", { projectHash, relativePath });
+
+/** Stops and drops a notebook's kernel — call on tab close. A no-op if no
+ *  cell was ever run in this notebook (D8: opening one doesn't spawn a kernel). */
+export const closeNotebookKernel = (projectHash: string, relativePath: string) =>
+  invoke<void>("close_notebook_kernel", { projectHash, relativePath });
+
+/** One driver event forwarded verbatim (see notebook_driver.py's docstring
+ *  for the `event` field's possible shapes: Started/Stream/ExecuteResult/
+ *  DisplayData/Error/ExecuteReply/Restarted/Crashed). */
+export type NotebookEnvelope = {
+  notebookId: string;
+  event: Record<string, unknown>;
+};
+
+export type NotebookWarning = {
+  notebookId: string;
+  message: string;
+};
+
 // --------------------------------------------------------------------- git
 
 export type FileStatus = { path: string; code: string };

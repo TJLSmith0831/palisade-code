@@ -18,6 +18,7 @@ mod git_repo;
 mod integrations;
 mod lsp;
 mod mcp;
+mod notebook;
 mod pidguard;
 mod session_log_writer;
 mod openspec_cache;
@@ -2532,6 +2533,10 @@ pub fn run() {
             commands::terminal_cmds::terminal_kill,
             commands::terminal_cmds::terminal_kill_project,
             commands::terminal_cmds::terminal_list,
+            commands::notebook_cmds::run_notebook_cell,
+            commands::notebook_cmds::interrupt_notebook_kernel,
+            commands::notebook_cmds::restart_notebook_kernel,
+            commands::notebook_cmds::close_notebook_kernel,
             commands::debug_cmds::debug_breakpoints,
             commands::debug_cmds::debug_toggle_breakpoint,
             commands::debug_cmds::debug_set_breakpoint_enabled,
@@ -2593,6 +2598,9 @@ pub fn run() {
                 release_idle_sessions(&app.state::<Harness>(), None);
                 let _ = app.state::<Harness>().session_log_writer.lock().unwrap().flush();
                 stop_completion_server(&app.state::<Harness>());
+                for (_, kernel) in app.state::<Harness>().notebook_kernels.lock().unwrap().drain() {
+                    kernel.terminate();
+                }
             }
         });
 }

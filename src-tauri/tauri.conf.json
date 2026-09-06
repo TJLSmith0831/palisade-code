@@ -42,6 +42,9 @@
     "externalBin": [
       "llama-server"
     ],
+    "resources": [
+      "driver/notebook_driver.py"
+    ],
     "macOS": {
       "hardenedRuntime": true,
       "minimumSystemVersion": "11.0",
