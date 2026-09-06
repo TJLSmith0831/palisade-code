@@ -189,8 +189,8 @@ type ChatSurfaceProps = {
   worktree?: api.WorktreeStatus;
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
-  /** Verification runs for this project, for the merge gate's checklist. */
-  verifications?: api.VerificationRun[];
+  /** Archive this thread — the merge gate offers it once work has landed. */
+  onArchiveSelf?: () => void;
   /** The worktree changed (a commit, a merge): re-poll the thread stats. */
   onWorktreeChanged?: () => void;
   /** Raise a message in the app's own error banner. */
@@ -428,7 +428,7 @@ export const ChatSurface = memo(
     busy,
     worktree,
     onViewDiff,
-    verifications = [],
+    onArchiveSelf,
     onWorktreeChanged,
     onError,
     executor,
@@ -1305,8 +1305,8 @@ export const ChatSurface = memo(
               projectHash={project.hash}
               threadId={thread.id}
               worktree={worktree}
-              verifications={verifications}
               onViewDiff={onViewDiff}
+              onArchive={onArchiveSelf}
               onChanged={onWorktreeChanged}
               onError={onError}
             />
@@ -1415,41 +1415,59 @@ export const ChatSurface = memo(
             position="top-end"
           >
             <Popover.Target>
-              <Tooltip
-                label={
-                  worktreeLocked
-                    ? "Set when this thread started — it can't change now"
-                    : worktreeEnabled
-                      ? "Runs in its own git worktree"
-                      : "Edits the project directory directly"
-                }
-                openDelay={400}
+              {/* The tooltip lives *inside* the target rather than wrapping
+                  it: Popover.Target needs the ref on the element it anchors
+                  to, and a disabled ActionIcon never fires the events a
+                  tooltip listens for either — hence the wrapper span, which
+                  carries both. */}
+              <span
+                style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
+                data-tauri-drag-region-exclude
               >
-                <ActionIcon
-                  variant="subtle"
-                  color={worktreeEnabled ? "neutral" : "warn"}
-                  disabled={worktreeLocked || !onToggleWorktree}
-                  data-testid="worktree-mode-btn"
-                  data-tauri-drag-region-exclude
-                  aria-label={
-                    worktreeEnabled ? "Isolated worktree on" : "Isolated worktree off"
+                <Tooltip
+                  label={
+                    worktreeLocked
+                      ? `Set when this thread started — it runs ${
+                          worktreeEnabled ? "in its own worktree" : "in the project directory"
+                        } for good now`
+                      : worktreeEnabled
+                        ? "Runs in its own git worktree — click to edit the project directly"
+                        : "Edits the project directory directly — click to isolate this thread"
                   }
-                  style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
-                  onClick={() => {
-                    if (!worktreeEnabled) {
-                      onToggleWorktree?.();
-                    } else {
-                      setWorktreeOffConfirmOpen(true);
-                    }
-                  }}
+                  openDelay={300}
+                  multiline
+                  w={240}
                 >
-                  {worktreeEnabled ? (
-                    <IconGitBranch size={16} />
-                  ) : (
-                    <IconFolderOpen size={16} />
-                  )}
-                </ActionIcon>
-              </Tooltip>
+                  <ActionIcon
+                    variant="subtle"
+                    color={worktreeEnabled ? "neutral" : "warn"}
+                    data-testid="worktree-mode-btn"
+                    data-locked={worktreeLocked ? "true" : undefined}
+                    aria-label={
+                      worktreeEnabled ? "Isolated worktree on" : "Isolated worktree off"
+                    }
+                    aria-disabled={worktreeLocked || !onToggleWorktree}
+                    style={worktreeLocked ? { opacity: 0.45, cursor: "default" } : undefined}
+                    onClick={() => {
+                      // Not `disabled`: a disabled control swallows the hover
+                      // too, and the tooltip explaining *why* it is locked is
+                      // the only thing that makes the lock legible.
+                      if (worktreeLocked || !onToggleWorktree) return;
+                      if (!worktreeEnabled) {
+                        onToggleWorktree();
+                      } else {
+                        setWorktreeOffConfirmOpen(true);
+                      }
+                    }}
+                  >
+                    {worktreeEnabled ? (
+                      <IconGitBranch size={16} />
+                    ) : (
+                      <IconFolderOpen size={16} />
+                    )}
+                  </ActionIcon>
+                </Tooltip>
+              </span>
             </Popover.Target>
             <Popover.Dropdown data-testid="worktree-mode-confirm">
               <Stack gap="xs">
@@ -4568,9 +4586,6 @@ export default function App() {
   // rows) and the editor gutter (which marks the failing lines) so the two
   // can never disagree about what the last run said.
   const [testReport, setTestReport] = useState<api.TestReport | null>(null);
-  // Every verification run for this project. The merge gate reads it to find
-  // the run — if any — that happened at the thread worktree's current commit.
-  const [verifications, setVerifications] = useState<api.VerificationRun[]>([]);
   // Every breakpoint in the project, keyed by project-relative path. Held
   // here rather than in the debug panel: the editor gutter needs them
   // whether or not that panel is open.
@@ -4591,7 +4606,6 @@ export default function App() {
   useEffect(() => {
     if (!project) {
       setTestReport(null);
-      setVerifications([]);
       return;
     }
     let cancelled = false;
@@ -4599,7 +4613,6 @@ export default function App() {
       .listVerifications(project.hash)
       .then((runs) => {
         if (cancelled) return;
-        setVerifications(runs);
         const parsed = runs.filter((run) => run.tests?.parsed);
         setTestReport(parsed.length > 0 ? parsed[parsed.length - 1].tests : null);
       })
@@ -4614,7 +4627,6 @@ export default function App() {
       "verification-finished",
       ({ payload }) => {
         if (payload.projectHash !== project?.hash) return;
-        setVerifications((runs) => [...runs, payload]);
         if (payload.tests?.parsed) setTestReport(payload.tests);
       }
     );
@@ -4720,7 +4732,7 @@ export default function App() {
     sessionId: liveSessionId,
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
-    verifications,
+    onArchiveSelf: thread ? () => onArchiveThread(thread) : undefined,
     onWorktreeChanged: loadWorktrees,
     onError: (message: string) => banner(message, "error"),
     // The code changes themselves, in the editor column — not the Source
@@ -4777,9 +4789,9 @@ export default function App() {
     threadBypass: threadPrefs.bypass,
     onToggleBypass,
     worktreeEnabled: thread?.worktreeEnabled !== false,
-    // A thread that has already run has a worktree (or deliberately doesn't),
-    // and an agent's working directory cannot move mid-conversation.
-    worktreeLocked: !!thread?.worktreePath || messages.length > 0,
+    // The lock is the first message: a thread that made a worktree but never
+    // spoke has nothing invested in it, and switching removes it again.
+    worktreeLocked: messages.length > 0,
     onToggleWorktree,
     prefsMenuOpen,
     setPrefsMenuOpen,

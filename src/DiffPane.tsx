@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  ActionIcon,
   Alert,
   Badge,
   Button,
@@ -11,6 +12,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import {
+  IconChevronRight,
   IconGitBranch,
   IconMinus,
   IconPlus,
@@ -53,52 +55,75 @@ type Props = {
   refreshToken?: number;
 };
 
-/** One row of the scan list: how big the change is, at a glance.
+/** One changed file: its size at a glance, its diff on demand, and the two
+ *  ways to act on it.
  *
- *  The bar is the primary signal and the counts are the detail — a reviewer
- *  picking which of twelve files to read first is comparing shapes, not
- *  reading numbers. Click to open the file itself, editable, with its changed
- *  lines marked.
+ *  There is one list, not a list *and* a stack of every diff below it — the
+ *  panel is narrow, and the same file appearing twice made it impossible to
+ *  tell what the pane was for. The chevron expands this file's diff in place
+ *  with its staging actions; the filename opens it as a real editable buffer.
  *
  *  ponytail: the bar is add/remove *ratio*, not magnitude, so a 2-line file
  *  and a 200-line one can look alike. Scale by total if that misleads. */
-function ScanRow({
+function ChangedFileRow({
   path,
   added,
   removed,
   isNew,
+  expanded,
+  onToggle,
   onOpen,
+  children,
 }: {
   path: string;
   added: number;
   removed: number;
   isNew: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   onOpen: () => void;
+  children?: React.ReactNode;
 }) {
   const total = added + removed || 1;
   return (
-    <UnstyledButton
-      className="diff-scan-row"
-      onClick={onOpen}
-      data-testid="diff-scan-row"
-      data-path={path}
-    >
-      <Group gap={10} wrap="nowrap" px={12} py={7}>
+    <div className="diff-scan-file" data-testid="diff-scan-file" data-path={path}>
+      <Group gap={8} px={12} py={7} wrap="nowrap" className="diff-scan-row">
+        <ActionIcon
+          size="sm"
+          variant="subtle"
+          onClick={onToggle}
+          aria-label={expanded ? `Collapse ${path}` : `Expand ${path}`}
+          aria-expanded={expanded}
+          data-testid="diff-row-expand"
+        >
+          <IconChevronRight
+            size={13}
+            style={{ transform: expanded ? "rotate(90deg)" : undefined }}
+          />
+        </ActionIcon>
         <Badge size="xs" variant="light" color={isNew ? "success" : "warn"}>
           {isNew ? "new" : "mod"}
         </Badge>
-        <Text size="xs" ff="monospace" truncate style={{ flex: 1 }} title={path}>
-          {path}
-        </Text>
-        <Progress.Root size="sm" style={{ width: 90, flex: "none" }}>
+        <UnstyledButton
+          onClick={onOpen}
+          title={`Open ${path}`}
+          style={{ flex: 1, minWidth: 0, textAlign: "left" }}
+          data-testid="diff-row-open"
+        >
+          <Text size="xs" ff="monospace" truncate>
+            {path}
+          </Text>
+        </UnstyledButton>
+        <Progress.Root size="sm" style={{ width: 70, flex: "none" }}>
           <Progress.Section value={(added / total) * 100} color="success" />
           <Progress.Section value={(removed / total) * 100} color="danger" />
         </Progress.Root>
-        <Text size="xs" ff="monospace" c="dimmed" style={{ width: 66, textAlign: "right" }}>
+        <Text size="xs" ff="monospace" c="dimmed" style={{ width: 62, textAlign: "right" }}>
           +{added} −{removed}
         </Text>
       </Group>
-    </UnstyledButton>
+      {expanded && children}
+    </div>
   );
 }
 
@@ -220,6 +245,15 @@ export default function DiffPane({
    *  the list. Scan to find what matters, open it to read — and, since it is
    *  the real buffer, to fix it. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** Files whose diff is open inline. A set, not one selection: comparing two
+   *  files means seeing both. */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = (path: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
   const [view, setView] = useState<DiffView>(
     () => (localStorage.getItem(VIEW_KEY) as DiffView | null) ?? "inline"
   );
@@ -396,34 +430,81 @@ export default function DiffPane({
         </div>
       )}
 
-      {/* Scan first: every changed file on one screen, sized by how much of
-          it changed. The stacked diffs below are the read pass. */}
-      {!focusPath && (shownWorking.length > 0 || shownUntracked.length > 0) && (
+      {(shownWorking.length > 0 || shownUntracked.length > 0) && (
         <section className="diff-section" data-testid="diff-scan-list">
           <h2 className="ds-section-heading">Changed Files</h2>
           {shownWorking.map((file) => {
             const path = pathFromPatch(file);
             const stat = patchStat(file);
+            const untrackedFile = untrackedPaths.has(path);
             return (
-              <ScanRow
+              <ChangedFileRow
                 key={path}
                 path={path}
                 added={stat.added}
                 removed={stat.removed}
-                isNew={untrackedPaths.has(path)}
+                isNew={untrackedFile}
+                expanded={expanded.has(path)}
+                onToggle={() => toggleExpanded(path)}
                 onOpen={() => setEditing(path)}
-              />
+              >
+                <FileDiff
+                  file={file}
+                  actionLabel="Stage hunk"
+                  onHunkAction={(hunk) =>
+                    run(() =>
+                      api.gitStageHunk(projectHash, patchForHunk(file, hunk), threadId)
+                    )
+                  }
+                  onStageAll={() =>
+                    run(() => api.gitStageFile(projectHash, path, threadId))
+                  }
+                  onDiscard={() =>
+                    setConfirmDiscard({ path, untracked: untrackedFile })
+                  }
+                  busy={busy}
+                  view={view}
+                />
+              </ChangedFileRow>
             );
           })}
+          {/* Files git could not diff at all (binary, unreadable) still get a
+              row — with nothing to expand, only the two actions. */}
           {shownUntracked.map((entry) => (
-            <ScanRow
+            <ChangedFileRow
               key={entry.path}
               path={entry.path}
               added={0}
               removed={0}
               isNew
+              expanded={false}
+              onToggle={() => undefined}
               onOpen={() => setEditing(entry.path)}
-            />
+            >
+              <Group gap={8} px={12} pb={8} justify="flex-end">
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="danger"
+                  leftSection={<IconTrash size={12} />}
+                  onClick={() => setConfirmDiscard({ path: entry.path, untracked: true })}
+                  disabled={busy}
+                  data-testid="discard-untracked-btn"
+                >
+                  Discard
+                </Button>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  leftSection={<IconPlus size={12} />}
+                  onClick={() => run(() => api.gitStageFile(projectHash, entry.path, threadId))}
+                  disabled={busy}
+                  data-testid="stage-untracked-btn"
+                >
+                  Stage
+                </Button>
+              </Group>
+            </ChangedFileRow>
           ))}
         </section>
       )}
@@ -444,73 +525,6 @@ export default function DiffPane({
               busy={busy}
               view={view}
             />
-          ))}
-        </section>
-      )}
-
-      {(shownWorking.length > 0 || shownUntracked.length > 0) && (
-        <section className="diff-section" data-testid="changes-section">
-          <h2 className="ds-section-heading">Changes</h2>
-          {shownWorking.map((file) => (
-            <FileDiff
-              key={pathFromPatch(file)}
-              file={file}
-              actionLabel="Stage hunk"
-              onHunkAction={(hunk) =>
-                run(() =>
-                  api.gitStageHunk(projectHash, patchForHunk(file, hunk), threadId)
-                )
-              }
-              onStageAll={() =>
-                run(() =>
-                  api.gitStageFile(projectHash, pathFromPatch(file), threadId)
-                )
-              }
-              onDiscard={() =>
-                setConfirmDiscard({
-                  path: pathFromPatch(file),
-                  untracked: untrackedPaths.has(pathFromPatch(file)),
-                })
-              }
-              busy={busy}
-              view={view}
-            />
-          ))}
-          {shownUntracked.map((entry) => (
-            <div key={entry.path} className="diff-file" data-testid="diff-untracked-file">
-              <div className="diff-file-head">
-                <span className="diff-file-path">{entry.path}</span>
-                <Badge size="xs" variant="light" color="success">
-                  new
-                </Badge>
-                <span className="diff-spacer" />
-                <Button
-                  size="compact-xs"
-                  variant="subtle"
-                  color="danger"
-                  leftSection={<IconTrash size={12} />}
-                  onClick={() =>
-                    setConfirmDiscard({ path: entry.path, untracked: true })
-                  }
-                  disabled={busy}
-                  data-testid="discard-untracked-btn"
-                >
-                  Discard
-                </Button>
-                <Button
-                  size="compact-xs"
-                  variant="subtle"
-                  leftSection={<IconPlus size={12} />}
-                  onClick={() =>
-                    run(() => api.gitStageFile(projectHash, entry.path, threadId))
-                  }
-                  disabled={busy}
-                  data-testid="stage-untracked-btn"
-                >
-                  Stage
-                </Button>
-              </div>
-            </div>
           ))}
         </section>
       )}

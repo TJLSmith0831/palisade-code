@@ -999,13 +999,21 @@ async fn send_message(
         // Name the thread after the turn that opened it, so "New thread" is
         // never what the user has to live with. Silent on failure: a title is
         // cosmetic and must not cost the user their message.
+        let local = model_title(&harness, &content);
         let _ = store::set_auto_title(
             &palisade_home(),
             &project_hash,
             &thread_id,
             &content,
-            model_title(&harness, &content).as_deref(),
+            local.as_deref(),
         );
+        // Local model first (fast, free), the thread's own agent second, and
+        // the truncated first line only as the last resort — which is what a
+        // machine with no local model was getting every time. The agent call
+        // is detached: a title is cosmetic and must never delay the turn.
+        if local.is_none() {
+            agent_title_later(&app, &project_hash, &thread_id, &content);
+        }
         if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
             // Chat-only mode: the turn is still recorded, nothing answers it.
             return Ok(message);
@@ -1026,6 +1034,56 @@ async fn send_message(
 /// turn, and spawning a model to earn a nicer label would delay the message
 /// they actually sent. If inline completion has the model warm, titles get
 /// the good path; otherwise the caller trims the prompt instead.
+/// Ask the thread's own agent to name the thread, in the background, and
+/// upgrade the title if it answers.
+///
+/// Detached on purpose: this spawns an agent process, which takes seconds,
+/// and the user's message must not wait behind a cosmetic rename. Silent on
+/// every failure — the truncated placeholder already on screen is a working
+/// title, just a worse one.
+fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str, prompt: &str) {
+    let app = app.clone();
+    let project_hash = project_hash.to_string();
+    let thread_id = thread_id.to_string();
+    let prompt: String = prompt.chars().take(600).collect();
+    std::thread::spawn(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let Ok(root) = project_root(&project_hash) else {
+            return;
+        };
+        let Ok((agent, bin)) = selected_executor(&app, &harness, &project_hash, Some(&thread_id))
+        else {
+            return;
+        };
+        let spawn = acp_client::AcpSpawn {
+            agent_id: agent.id.clone(),
+            agent_name: agent.name.clone(),
+            bin,
+            cmd: agent.cmd.clone(),
+            args: agent.args.clone(),
+            project_root: root,
+            project_hash: project_hash.clone(),
+            thread_id: String::new(),
+            mode: "spec".into(),
+            bypass: false,
+            model: None,
+            palisade_home: palisade_home(),
+        };
+        let asked = format!(
+            "Name this coding thread in 3-6 words, as a title. Reply with the title              and nothing else: no quotes, no punctuation at the end, no commentary.\n\n             Request: {prompt}"
+        );
+        let Ok(answer) = acp_client::agent_oneshot(spawn, &asked, std::time::Duration::from_secs(45)) else {
+            return;
+        };
+        let Some(title) = completion::clean_title(&answer) else {
+            return;
+        };
+        if store::upgrade_auto_title(&palisade_home(), &project_hash, &thread_id, &title).is_ok() {
+            let _ = app.emit("thread-updated", &thread_id);
+        }
+    });
+}
+
 fn model_title(harness: &Harness, prompt: &str) -> Option<String> {
     let server = harness.completion_server.lock().unwrap();
     let server = server.as_ref()?;
@@ -1361,6 +1419,43 @@ fn cap_diff(diff: &str) -> String {
 /// borrows that thread's *choice* of provider and model — drafting on the
 /// auto-detected agent's default model is a dead end on a machine where that
 /// agent isn't installed, or where the user is over its usage limit.
+/// A commit subject drafted by the *local* model, for the merge gate to
+/// pre-fill with the moment it opens.
+///
+/// Empty string when there is no local model running — the gate shows an
+/// empty box and the user writes their own (or asks the agent). Deliberately
+/// not an error: "no model installed" is an ordinary state, not a failure,
+/// and a red banner every time the gate opens would be noise.
+#[tauri::command]
+async fn suggest_commit_message(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: Option<String>,
+) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let root = commands::git_cmds::tree_root(&project_hash, thread_id.as_deref())?;
+        let bin = git_bin()?;
+        let staged = git::staged_diff(&bin, &root)?;
+        let working = git::working_tree_diff(&bin, &root)?;
+        let untracked: Vec<String> = git::status(&bin, &root)?
+            .into_iter()
+            .filter(|file| file.code.trim() == "??")
+            .map(|file| file.path)
+            .collect();
+        let Some((_scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
+            return Ok(String::new());
+        };
+        let server = harness.completion_server.lock().unwrap();
+        let Some(server) = server.as_ref().filter(|s| s.is_alive()) else {
+            return Ok(String::new());
+        };
+        Ok(server.commit_subject(&diff).unwrap_or_default())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn draft_commit_message(
     app: tauri::AppHandle,
@@ -1369,7 +1464,10 @@ async fn draft_commit_message(
 ) -> Res<String> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let root = project_root(&project_hash)?;
+        // The tree the caller is looking at, not the project root: a thread's
+        // worktree holds the diff being described, and drafting from the root
+        // described a different set of changes entirely.
+        let root = commands::git_cmds::tree_root(&project_hash, thread_id.as_deref())?;
         let bin = git_bin()?;
         let staged = git::staged_diff(&bin, &root)?;
         let working = git::working_tree_diff(&bin, &root)?;
@@ -1677,13 +1775,25 @@ async fn set_thread_worktree_enabled(
     enabled: bool,
 ) -> Res<store::ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        if thread_meta(&project_hash, &thread_id).is_some_and(|t| t.worktree_path.is_some()) {
+        let home = palisade_home();
+        // The lock is the first message, not the worktree: a thread that has
+        // started one but never spoken has nothing invested in it, and the
+        // empty worktree is removed rather than left orphaned. Once an agent
+        // has written a turn, its working directory cannot move underneath it.
+        if !store::read_thread(&home, &project_hash, &thread_id)?.is_empty() {
             return Err(
-                "This thread already has a worktree — its isolation is set for the life of the thread."
+                "This thread has already run — its worktree setting is fixed for the life of the thread."
                     .into(),
             );
         }
-        store::set_thread_worktree_enabled(&palisade_home(), &project_hash, &thread_id, enabled)
+        if let Some(meta) = thread_meta(&project_hash, &thread_id) {
+            if let Some(path) = meta.worktree_path {
+                let (bin, root) = (git_bin()?, project_root(&project_hash)?);
+                git::remove_worktree(&bin, &root, Path::new(&path), meta.worktree_branch.as_deref())?;
+                store::clear_thread_worktree(&home, &project_hash, &thread_id)?;
+            }
+        }
+        store::set_thread_worktree_enabled(&home, &project_hash, &thread_id, enabled)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2797,6 +2907,7 @@ pub fn run() {
             spec_mode,
             propose,
             draft_commit_message,
+            suggest_commit_message,
             apply_skill,
             change_status,
             stop_executor,

@@ -2099,14 +2099,17 @@ input[type="checkbox"] {
   margin-bottom: 10px;
 }
 
-/* Scan list: one row per changed file, sized by how much of it changed. */
-.diff-scan-row {
-  display: block;
-  width: 100%;
+/* One list: a row per changed file, expandable to its own diff. */
+.diff-scan-file {
   border-bottom: 1px solid var(--border);
 }
 .diff-scan-row:hover {
   background: var(--surface);
+}
+.diff-scan-file .diff-file {
+  border: none;
+  border-radius: 0;
+  margin: 0;
 }
 
 /* The diff gutter over an ordinary editable buffer: what changed is marked

@@ -297,6 +297,67 @@ impl CompletionServer {
             .to_string();
         clean_title(&raw).ok_or_else(|| "model returned no usable title".to_string())
     }
+
+    /// A one-line commit subject for a diff, from the local model.
+    ///
+    /// Same shape as [`title`]: a small local model answering a summarisation
+    /// question in a few hundred milliseconds, so the merge gate can offer a
+    /// message the moment it opens instead of spending an agent turn on one.
+    /// The agent-backed `draft_commit_message` stays as the better answer for
+    /// anyone who asks for it.
+    pub fn commit_subject(&self, diff: &str) -> Res<String> {
+        let url = format!("http://127.0.0.1:{}/completion", self.port());
+        let resp = ureq::post(&url)
+            .timeout(Duration::from_secs(6))
+            .send_json(&commit_request_body(diff))
+            .map_err(|err| format!("commit-message request failed: {err}"))?;
+        let text = resp
+            .into_string()
+            .map_err(|err| format!("failed to read commit-message response: {err}"))?;
+        let raw = serde_json::from_str::<serde_json::Value>(&text)
+            .map_err(|err| format!("failed to parse commit-message response: {err}"))?
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        clean_title(&raw).ok_or_else(|| "model returned no usable subject".to_string())
+    }
+}
+
+/// The diff handed to the local model. Far smaller than the agent's cap: a
+/// 0.5B model's context is short, and the head of a diff is what a subject
+/// line describes anyway.
+const LOCAL_DIFF_CAP: usize = 4000;
+
+fn commit_request_body(diff: &str) -> serde_json::Value {
+    let mut end = diff.len().min(LOCAL_DIFF_CAP);
+    while end > 0 && !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+    serde_json::json!({
+        "prompt": build_commit_prompt(&diff[..end]),
+        "n_predict": 24,
+        "temperature": DEFAULT_TEMPERATURE,
+        "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+        "top_p": DEFAULT_TOP_P,
+        "stop": ["\n", "Diff:", "Message:", FIM_END.to_string()],
+    })
+}
+
+/// Few-shot for the same reason the title prompt is: asked bare for "a commit
+/// message", a small model narrates the diff instead of naming it.
+pub fn build_commit_prompt(diff: &str) -> String {
+    format!(
+        "Write a one-line git commit subject for the diff below. \
+         Imperative mood, under 72 characters. Subject only, no quotes, no body.\n\n\
+         Diff: +def retry(fn, attempts=3):\n\
+         Message: Add retry helper\n\n\
+         Diff: -timeout = 5\n+timeout = 30\n\
+         Message: Raise request timeout to 30s\n\n\
+         Diff: {}\n\
+         Message:",
+        diff.trim()
+    )
 }
 
 /// An instruction-style prompt rather than FIM: this is a summarisation task,

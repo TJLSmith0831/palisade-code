@@ -885,6 +885,12 @@ export const gitLog = (projectHash: string, limit = 20, threadId?: string) =>
  *  the user picked in the chat pane. Without it the draft ran on whatever
  *  auto-detection found, on that agent's default model, which is a dead end
  *  on a machine where that agent isn't installed or is over its usage limit. */
+/** A one-line commit subject from the *local* model, for pre-filling the
+ *  merge gate. Resolves to "" when no local model is running — that is an
+ *  ordinary state, not an error. */
+export const suggestCommitMessage = (projectHash: string, threadId?: string) =>
+  invoke<string>("suggest_commit_message", { projectHash, threadId });
+
 export const draftCommitMessage = (projectHash: string, threadId: string | null) =>
   invoke<string>("draft_commit_message", { projectHash, threadId });
 

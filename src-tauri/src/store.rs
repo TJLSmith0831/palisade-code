@@ -410,6 +410,21 @@ pub fn set_auto_title(
     Ok(())
 }
 
+/// Replace an auto-generated title with a better one — the agent's answer
+/// arriving after the local model declined, or after the truncated first line
+/// went up as a placeholder.
+///
+/// Only touches titles Palisade owns: a name the user typed is never
+/// overwritten, however late a better suggestion turns up.
+pub fn upgrade_auto_title(home: &Path, hash: &str, id: &str, title: &str) -> Res<()> {
+    update_thread(home, hash, id, |m| {
+        if m.title_source == "auto" {
+            m.title = title.to_string();
+        }
+    })?;
+    Ok(())
+}
+
 /// A thread title from the turn that started it: the first real line, cut to
 /// something that fits a sidebar row.
 ///
