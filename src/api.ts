@@ -29,6 +29,15 @@ export type ThreadMeta = {
   /** The thread's isolated git worktree; null until its first session runs. */
   worktreePath?: string | null;
   worktreeBranch?: string | null;
+  /** The branch the worktree was cut from — what "Merge to <base>" targets.
+   *  Null on threads created before merge-back existed. */
+  worktreeBaseBranch?: string | null;
+  /** When Palisade merged this thread's branch into its base. A recorded
+   *  fact, not an inference from an empty diff. */
+  mergedAt?: string | null;
+  /** False when the user opted out of worktree isolation at thread creation:
+   *  the thread edits the project root live and has no merge/PR/prune step. */
+  worktreeEnabled?: boolean;
   /** "auto" = Palisade named this thread (and may rename it while it is still
    *  a placeholder); "manual" = the user did, and it is never touched. */
   titleSource?: "auto" | "manual";
@@ -313,12 +322,52 @@ export type WorktreeStatus = {
   branch: string;
   added: number;
   removed: number;
+  /** The branch this thread merges back into. */
+  baseBranch: string;
+  /** Commits the base branch does not have yet. */
+  ahead: number;
+  /** Nothing uncommitted or untracked in the worktree. */
+  clean: boolean;
+  /** A real trial merge said this lands without conflicts. */
+  mergeable: boolean;
+  /** What the sidebar dot shows. */
+  state: "merged" | "conflict" | "ahead" | "clean";
+  /** The worktree's HEAD — what a verification run has to have run at for
+   *  its result to still be about this code. */
+  head: string | null;
+};
+
+/** What a merge-back attempt did. A conflict is not an error: the half-merged
+ *  state is parked in `conflictPath` for a session to resolve in place. */
+export type MergeResult = {
+  merged: boolean;
+  conflictPath: string | null;
+  conflictBranch: string | null;
+  detail: string;
 };
 
 /** Only threads that have a worktree appear — never-run threads and non-git
  *  projects are simply absent. */
 export const threadWorktrees = (projectHash: string) =>
   invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
+/** Merge a thread's branch into the branch it was cut from. Rejects a busy
+ *  thread and an uncommitted worktree — what lands must be what was reviewed. */
+export const mergeThreadWorktree = (projectHash: string, threadId: string) =>
+  invoke<MergeResult>("merge_thread_worktree", { projectHash, threadId });
+
+/** Push the thread's branch and open a PR for it, returning the URL to open.
+ *  Uses `gh` when it is on PATH, and the host's compare page when it isn't. */
+export const openThreadPr = (projectHash: string, threadId: string) =>
+  invoke<string>("open_thread_pr", { projectHash, threadId });
+
+/** Remove an archived thread's worktree. Without `force` this only proceeds
+ *  when the work has provably landed; `force` is the confirmed clean-up. */
+export const pruneThreadWorktree = (
+  projectHash: string,
+  threadId: string,
+  force = false,
+) => invoke<void>("prune_thread_worktree", { projectHash, threadId, force });
+
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
 /** Release a thread's idle sessions. Sessions mid-turn keep running. */

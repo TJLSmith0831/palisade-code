@@ -206,6 +206,12 @@ pub fn touch_project(home: &Path, hash: &str) -> Res<Project> {
 
 // ----------------------------------------------------------------- threads
 
+/// serde default for a bool that is `true` on records written before the
+/// field existed.
+fn yes() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadMeta {
@@ -246,6 +252,22 @@ pub struct ThreadMeta {
     pub worktree_path: Option<String>,
     #[serde(default)]
     pub worktree_branch: Option<String>,
+    /// The branch the worktree was cut from, captured at creation — the
+    /// branch "Merge to <base>" merges into. `None` on threads that predate
+    /// merge-back; those fall back to whatever the project is on now, which
+    /// the gate says out loud rather than guessing silently.
+    #[serde(default)]
+    pub worktree_base_branch: Option<String>,
+    /// When this thread's branch was last merged into its base by Palisade.
+    /// A recorded fact, not an inference: "merged" in the sidebar means this
+    /// merge happened, never that the diffs happen to look empty.
+    #[serde(default)]
+    pub merged_at: Option<String>,
+    /// `false` when the user turned isolation off at thread creation: the
+    /// thread's sessions run in the project root and it gets no merge, PR or
+    /// prune step. Absent on older records, which all had worktrees.
+    #[serde(default = "yes")]
+    pub worktree_enabled: bool,
     /// Who owns `title`: "auto" means Palisade named it (or hasn't yet) and
     /// may rename it, "manual" means the user did and it is never touched
     /// again. Threads that predate auto-titling default to "manual" — they
@@ -288,6 +310,9 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         archived: false,
         worktree_path: None,
         worktree_branch: None,
+        worktree_base_branch: None,
+        merged_at: None,
+        worktree_enabled: true,
         // A brand new thread's title is a placeholder ("New thread"), not a
         // choice — the first turn replaces it.
         title_source: "auto".into(),
@@ -428,11 +453,31 @@ pub fn set_thread_worktree(
     id: &str,
     path: &str,
     branch: &str,
+    base: &str,
 ) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| {
         m.worktree_path = Some(path.to_string());
         m.worktree_branch = Some(branch.to_string());
+        m.worktree_base_branch = Some(base.to_string());
     })
+}
+
+/// Forget a thread's worktree after it has been pruned off disk. The branch
+/// name stays recorded on purpose — it is how a pruned-but-unmerged thread
+/// can still say which branch its work is on.
+pub fn clear_thread_worktree(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| m.worktree_path = None)
+}
+
+/// Record that this thread's branch landed on its base, and when.
+pub fn set_thread_merged(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| m.merged_at = Some(now()))
+}
+
+/// Whether this thread runs in its own worktree. Set once, at creation, and
+/// locked by the UI after the first message.
+pub fn set_thread_worktree_enabled(home: &Path, hash: &str, id: &str, on: bool) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| m.worktree_enabled = on)
 }
 
 /// Link a thread to the OpenSpec change `/propose` created for it.

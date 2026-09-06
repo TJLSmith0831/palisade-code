@@ -281,7 +281,13 @@ async fn set_thread_archived(
     archived: bool,
 ) -> Res<store::ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        store::set_thread_archived(&palisade_home(), &project_hash, &thread_id, archived)
+        let meta = store::set_thread_archived(&palisade_home(), &project_hash, &thread_id, archived)?;
+        // Archiving is the moment a worktree becomes prunable; sweeping here
+        // means the safe case is already gone by the time anyone looks.
+        if archived {
+            sweep_archived_worktrees(&project_hash);
+        }
+        Ok(meta)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -690,7 +696,14 @@ fn thread_worktree(
     project_hash: &str,
     thread_id: &str,
 ) -> PathBuf {
-    if let Some(recorded) = thread_meta(project_hash, thread_id).and_then(|t| t.worktree_path) {
+    let meta = thread_meta(project_hash, thread_id);
+    // The user turned isolation off for this thread at creation: it runs in
+    // the project root, live, and gets no merge/PR/prune step. The warning
+    // that says so is shown once, in the composer, not on every turn.
+    if meta.as_ref().is_some_and(|t| !t.worktree_enabled) {
+        return project.to_path_buf();
+    }
+    if let Some(recorded) = meta.and_then(|t| t.worktree_path) {
         let path = PathBuf::from(recorded);
         if path.is_dir() {
             return path;
@@ -705,12 +718,16 @@ fn thread_worktree(
     }
     match git::add_worktree(&bin, project, thread_id) {
         Ok((path, branch)) => {
+            // The branch the project is on right now is what this thread
+            // branched from, and therefore what it merges back into.
+            let base = git::current_branch_name(&bin, project).unwrap_or_else(|_| "HEAD".into());
             let _ = store::set_thread_worktree(
                 home,
                 project_hash,
                 thread_id,
                 &path.to_string_lossy(),
                 &branch,
+                &base,
             );
             path
         }
@@ -948,6 +965,14 @@ async fn leave_thread(app: tauri::AppHandle, thread_id: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         release_idle_sessions(&harness, Some(&thread_id));
+        // The other half of prune-on-archive: a thread archived while its work
+        // was still unmerged becomes prunable the moment that work lands, and
+        // leaving a thread is the idle moment to notice. Cheap when there is
+        // nothing to do — an archived thread with no worktree on disk costs a
+        // directory check.
+        for project in store::list_projects(&palisade_home()).unwrap_or_default() {
+            sweep_archived_worktrees(&project.hash);
+        }
         Ok(())
     })
     .await
@@ -1564,6 +1589,19 @@ struct WorktreeStatus {
     branch: String,
     added: u32,
     removed: u32,
+    /// The branch this thread merges back into.
+    base_branch: String,
+    /// Commits on the thread's branch that the base does not have.
+    ahead: u32,
+    /// Nothing uncommitted or untracked in the worktree.
+    clean: bool,
+    /// A real trial merge said this lands without conflicts.
+    mergeable: bool,
+    /// "merged" | "conflict" | "ahead" | "clean" — what the sidebar dot shows.
+    state: String,
+    /// The worktree's HEAD, so a verification run can be matched to the exact
+    /// commit it ran at instead of being assumed still current.
+    head: Option<String>,
 }
 
 /// What each thread's worktree holds, for the sidebar's diff stat and the
@@ -1577,6 +1615,7 @@ struct WorktreeStatus {
 async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
     tokio::task::spawn_blocking(move || {
         let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
         let mut out = vec![];
         for thread in store::list_threads(&palisade_home(), &project_hash)? {
             let (Some(path), Some(branch)) = (thread.worktree_path, thread.worktree_branch) else {
@@ -1587,12 +1626,259 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
                 continue;
             }
             let (added, removed) = git::diff_stat(&bin, &path).unwrap_or((0, 0));
-            out.push(WorktreeStatus { thread_id: thread.id, branch, added, removed });
+            let base = thread
+                .worktree_base_branch
+                .clone()
+                .or_else(|| git::current_branch_name(&bin, &root).ok())
+                .unwrap_or_else(|| "HEAD".into());
+            // A readiness probe must never fail the whole list: a repo git
+            // can't answer for reports as "nothing to land", not as an error.
+            let ready = git::merge_readiness(&bin, &root, &path, &base, &branch)
+                .unwrap_or(git::MergeReadiness { ahead: 0, clean: true, mergeable: true });
+            let state = if !ready.mergeable {
+                "conflict"
+            } else if ready.ahead > 0 || !ready.clean {
+                "ahead"
+            } else if thread.merged_at.is_some() {
+                "merged"
+            } else {
+                "clean"
+            };
+            out.push(WorktreeStatus {
+                thread_id: thread.id,
+                branch,
+                added,
+                removed,
+                base_branch: base,
+                ahead: ready.ahead,
+                clean: ready.clean,
+                mergeable: ready.mergeable,
+                state: state.into(),
+                head: git::rev_parse_head(&bin, &path),
+            });
         }
         Ok(out)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// What a merge-back attempt did, as the gate card renders it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeResult {
+    merged: bool,
+    /// Set when the merge conflicted: the worktree the half-merged state is
+    /// parked in, for a session to resolve in place.
+    conflict_path: Option<String>,
+    conflict_branch: Option<String>,
+    detail: String,
+}
+
+/// Merge a thread's branch into the branch it was cut from.
+///
+/// Refuses a busy thread (an agent mid-turn is still writing the commits this
+/// would merge) and refuses an unclean worktree: uncommitted work is not part
+/// of any commit, so merging would silently land less than the user sees.
+#[tauri::command]
+async fn merge_thread_worktree(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: String,
+) -> Res<MergeResult> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        if harness.thread_is_busy(&thread_id) {
+            return Err("This thread has a turn in progress — wait for it to finish before merging.".into());
+        }
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        let (path, branch, base) = thread_branch(&bin, &root, &project_hash, &thread_id)?;
+        if !git::status(&bin, &path)?.is_empty() {
+            return Err(
+                "This thread has uncommitted changes — commit them before merging, so what lands is what you reviewed."
+                    .into(),
+            );
+        }
+        let out = git::merge_into_base(&bin, &root, &base, &branch)?;
+        if out.merged {
+            let _ = store::set_thread_merged(&palisade_home(), &project_hash, &thread_id);
+        }
+        Ok(MergeResult {
+            merged: out.merged,
+            conflict_path: out.conflict_path.map(|p| p.to_string_lossy().into_owned()),
+            conflict_branch: out.conflict_branch,
+            detail: out.detail,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Push the thread's branch and open a pull request for it, returning the URL
+/// to open.
+///
+/// `gh` is discovered on PATH the same way every agent CLI is — when it is
+/// missing, or not logged in, or the repo isn't on GitHub, this falls back to
+/// the host's compare URL, which does the same job in the browser. No API
+/// client, no token handling.
+#[tauri::command]
+async fn open_thread_pr(project_hash: String, thread_id: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        let (path, branch, base) = thread_branch(&bin, &root, &project_hash, &thread_id)?;
+        // A PR is a request to merge commits; a remote can only see pushed ones.
+        git::push(&bin, &path)?;
+        if let Some(gh) = executor::find_on_path("gh") {
+            let out = std::process::Command::new(&gh)
+                .args(["pr", "create", "--head", &branch, "--base", &base, "--fill"])
+                .current_dir(&path)
+                .env("PATH", executor::child_path_env())
+                .output()
+                .map_err(|err| format!("could not run gh: {err}"))?;
+            if out.status.success() {
+                if let Some(url) = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .rev()
+                    .find(|l| l.starts_with("http"))
+                {
+                    return Ok(url.to_string());
+                }
+            }
+            // A PR that already exists is a success as far as the user is
+            // concerned — `gh pr view` knows its URL.
+            let existing = std::process::Command::new(&gh)
+                .args(["pr", "view", &branch, "--json", "url", "--jq", ".url"])
+                .current_dir(&path)
+                .env("PATH", executor::child_path_env())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|u| u.starts_with("http"));
+            if let Some(url) = existing {
+                return Ok(url);
+            }
+        }
+        compare_url(&bin, &root, &base, &branch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The thread's worktree path, branch, and base branch — the trio every
+/// merge-back command needs, with the same "this thread has no worktree"
+/// error for all of them.
+fn thread_branch(
+    bin: &Path,
+    root: &Path,
+    project_hash: &str,
+    thread_id: &str,
+) -> Res<(PathBuf, String, String)> {
+    let meta = thread_meta(project_hash, thread_id)
+        .ok_or_else(|| "This thread no longer exists.".to_string())?;
+    let (Some(path), Some(branch)) = (meta.worktree_path, meta.worktree_branch) else {
+        return Err(
+            "This thread has no worktree of its own, so there is nothing separate to merge back."
+                .into(),
+        );
+    };
+    let base = meta
+        .worktree_base_branch
+        .or_else(|| git::current_branch_name(bin, root).ok())
+        .ok_or_else(|| "Could not tell which branch to merge into.".to_string())?;
+    Ok((PathBuf::from(path), branch, base))
+}
+
+/// `origin`'s web compare page for `base...branch`. Handles the two URL
+/// shapes git remotes come in (`git@host:owner/repo` and `https://host/...`).
+fn compare_url(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<String> {
+    let remote = git::remote_url(bin, root)?;
+    let trimmed = remote.trim().trim_end_matches(".git");
+    let web = match trimmed.split_once('@') {
+        Some((_, rest)) if !trimmed.starts_with("http") => {
+            format!("https://{}", rest.replacen(':', "/", 1))
+        }
+        _ => trimmed.to_string(),
+    };
+    Ok(format!("{web}/compare/{base}...{branch}?expand=1"))
+}
+
+/// Remove an archived thread's worktree.
+///
+/// Without `force` this only proceeds when the worktree is clean and its
+/// branch holds nothing the base lacks — provably lossless, which is why the
+/// idle sweep can do it with no confirmation. `force` is the explicit
+/// "Archive & clean up" for unmerged work, and is confirmed in the UI the
+/// same way deleting a thread is.
+#[tauri::command]
+async fn prune_thread_worktree(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: String,
+    force: bool,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        if harness.thread_is_busy(&thread_id) {
+            return Err("This thread has a turn in progress — wait for it to finish.".into());
+        }
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        let (path, branch, base) = thread_branch(&bin, &root, &project_hash, &thread_id)?;
+        if !force {
+            let ready = git::merge_readiness(&bin, &root, &path, &base, &branch)?;
+            if !ready.clean || ready.ahead > 0 {
+                return Err(format!(
+                    "`{branch}` still has work that `{base}` does not — merge it first, or clean up anyway to discard it."
+                ));
+            }
+        }
+        git::remove_worktree(&bin, &root, &path, Some(&branch))?;
+        store::clear_thread_worktree(&palisade_home(), &project_hash, &thread_id)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Drop the worktrees of archived threads whose work has provably landed.
+///
+/// Runs at the same idle moments that release sessions, and only ever removes
+/// what a merge already carried into the base branch — so it needs no
+/// confirmation and can never be the reason work went missing. Everything
+/// else is left exactly where it is for the explicit clean-up action.
+fn sweep_archived_worktrees(project_hash: &str) {
+    let (Ok(bin), Ok(root)) = (git_bin(), project_root(project_hash)) else {
+        return;
+    };
+    let Ok(threads) = store::list_threads(&palisade_home(), project_hash) else {
+        return;
+    };
+    for thread in threads.into_iter().filter(|t| t.archived) {
+        let (Some(path), Some(branch)) = (thread.worktree_path.clone(), thread.worktree_branch.clone())
+        else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        if !path.is_dir() {
+            continue;
+        }
+        let base = thread
+            .worktree_base_branch
+            .clone()
+            .or_else(|| git::current_branch_name(&bin, &root).ok())
+            .unwrap_or_else(|| "HEAD".into());
+        let Ok(ready) = git::merge_readiness(&bin, &root, &path, &base, &branch) else {
+            continue;
+        };
+        if ready.clean && ready.ahead == 0 {
+            if git::remove_worktree(&bin, &root, &path, Some(&branch)).is_ok() {
+                let _ = store::clear_thread_worktree(&palisade_home(), project_hash, &thread.id);
+            }
+        }
+    }
 }
 
 /// Every session ever run against a thread.
@@ -2492,6 +2778,9 @@ pub fn run() {
             executor_status,
             list_sessions,
             thread_worktrees,
+            merge_thread_worktree,
+            open_thread_pr,
+            prune_thread_worktree,
             leave_thread,
             run_verify,
             list_verifications,
@@ -2810,6 +3099,9 @@ mod tests {
             archived: false,
             worktree_path: None,
             worktree_branch: None,
+            worktree_base_branch: None,
+            merged_at: None,
+            worktree_enabled: true,
             title_source: "manual".into(),
         }
     }

@@ -125,6 +125,7 @@ import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
+import MergeGate from "./MergeGate";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
@@ -186,6 +187,12 @@ type ChatSurfaceProps = {
   worktree?: api.WorktreeStatus;
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
+  /** Verification runs for this project, for the merge gate's checklist. */
+  verifications?: api.VerificationRun[];
+  /** The worktree changed (a commit, a merge): re-poll the thread stats. */
+  onWorktreeChanged?: () => void;
+  /** Raise a message in the app's own error banner. */
+  onError?: (message: string) => void;
   executor: Preflight["selected"] | null;
   flight: Preflight | null;
   flightSelected: boolean;
@@ -413,6 +420,9 @@ export const ChatSurface = memo(
     busy,
     worktree,
     onViewDiff,
+    verifications = [],
+    onWorktreeChanged,
+    onError,
     executor,
     flight,
     flightSelected,
@@ -1271,27 +1281,18 @@ export const ChatSurface = memo(
 
             It says what changed, never that the change is correct: only a
             verify run can claim that. */}
-        {worktree && worktree.added + worktree.removed > 0 && (
-          <div className="ds-worktree-strip" data-testid="worktree-strip">
-            <IconGitBranch size={12} />
-            <span className="ds-worktree-strip-branch">{worktree.branch}</span>
-            <span className="ds-worktree-strip-stat">
-              <span className="added">+{worktree.added}</span>
-              <span className="removed">−{worktree.removed}</span>
-            </span>
-            <div className="spacer" />
-            {onViewDiff && (
-              <button
-                type="button"
-                className="ds-worktree-strip-link"
-                onClick={onViewDiff}
-                data-testid="worktree-view-diff"
-              >
-                View diff
-              </button>
-            )}
-          </div>
-        )}
+        {worktree && project && thread &&
+          (worktree.added + worktree.removed > 0 || worktree.ahead > 0) && (
+            <MergeGate
+              projectHash={project.hash}
+              threadId={thread.id}
+              worktree={worktree}
+              verifications={verifications}
+              onViewDiff={onViewDiff}
+              onChanged={onWorktreeChanged}
+              onError={onError}
+            />
+          )}
 
         <form
           className={`composer ${dragActive ? "drag-active" : ""}`}
@@ -4424,6 +4425,9 @@ export default function App() {
   // rows) and the editor gutter (which marks the failing lines) so the two
   // can never disagree about what the last run said.
   const [testReport, setTestReport] = useState<api.TestReport | null>(null);
+  // Every verification run for this project. The merge gate reads it to find
+  // the run — if any — that happened at the thread worktree's current commit.
+  const [verifications, setVerifications] = useState<api.VerificationRun[]>([]);
   // Every breakpoint in the project, keyed by project-relative path. Held
   // here rather than in the debug panel: the editor gutter needs them
   // whether or not that panel is open.
@@ -4444,6 +4448,7 @@ export default function App() {
   useEffect(() => {
     if (!project) {
       setTestReport(null);
+      setVerifications([]);
       return;
     }
     let cancelled = false;
@@ -4451,6 +4456,7 @@ export default function App() {
       .listVerifications(project.hash)
       .then((runs) => {
         if (cancelled) return;
+        setVerifications(runs);
         const parsed = runs.filter((run) => run.tests?.parsed);
         setTestReport(parsed.length > 0 ? parsed[parsed.length - 1].tests : null);
       })
@@ -4465,6 +4471,7 @@ export default function App() {
       "verification-finished",
       ({ payload }) => {
         if (payload.projectHash !== project?.hash) return;
+        setVerifications((runs) => [...runs, payload]);
         if (payload.tests?.parsed) setTestReport(payload.tests);
       }
     );
@@ -4570,6 +4577,9 @@ export default function App() {
     sessionId: liveSessionId,
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
+    verifications,
+    onWorktreeChanged: loadWorktrees,
+    onError: (message: string) => banner(message, "error"),
     // The code changes themselves, in the editor column — not the Source
     // Control panel, which is where committing and pushing live.
     onViewDiff: () => {
