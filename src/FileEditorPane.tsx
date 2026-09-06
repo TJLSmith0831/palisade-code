@@ -952,6 +952,26 @@ export default function FileEditorPane({
     return () => window.removeEventListener("keydown", onKey);
   }, [path]);
 
+  // CodeMirror owns the ordinary editor shortcut, but it is intentionally
+  // hidden while Markdown's WYSIWYG editor has focus. Catch Cmd/Ctrl+S at the
+  // window capture phase so the rich editor cannot consume it first, then use
+  // the same save path and CodeMirror-backed source of truth as every file.
+  useEffect(() => {
+    if (!isMarkdownPath(path)) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "s"
+      ) {
+        event.preventDefault();
+        saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [path]);
+
   // Enter on a list line correctly starts a new "- "/"1. " line (the RTE's
   // own behavior), but its Tab handler only inserts spaces at the caret —
   // with nothing selected (the common case right after that Enter) the

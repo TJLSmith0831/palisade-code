@@ -1423,9 +1423,9 @@ export const ChatSurface = memo(
             <Popover.Target>
               {/* The tooltip lives *inside* the target rather than wrapping
                   it: Popover.Target needs the ref on the element it anchors
-                  to, and a disabled ActionIcon never fires the events a
-                  tooltip listens for either — hence the wrapper span, which
-                  carries both. */}
+                  to, and a disabled button never fires the events a tooltip
+                  listens for either — hence the wrapper span, which carries
+                  both. */}
               <span
                 style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
                 data-tauri-drag-region-exclude
@@ -1444,13 +1444,14 @@ export const ChatSurface = memo(
                   multiline
                   w={240}
                 >
-                  <ActionIcon
-                    variant="subtle"
-                    color={worktreeEnabled ? "neutral" : "warn"}
+                  <Button
+                    size="compact-xs"
+                    variant="light"
+                    color={worktreeEnabled ? "success" : "warn"}
                     data-testid="worktree-mode-btn"
                     data-locked={worktreeLocked ? "true" : undefined}
                     aria-label={
-                      worktreeEnabled ? "Isolated worktree on" : "Isolated worktree off"
+                      worktreeEnabled ? "Isolated worktree" : "Project root"
                     }
                     aria-disabled={worktreeLocked || !onToggleWorktree}
                     style={worktreeLocked ? { opacity: 0.45, cursor: "default" } : undefined}
@@ -1465,13 +1466,16 @@ export const ChatSurface = memo(
                         setWorktreeOffConfirmOpen(true);
                       }
                     }}
+                    leftSection={
+                      worktreeEnabled ? (
+                        <IconGitBranch size={14} />
+                      ) : (
+                        <IconFolderOpen size={14} />
+                      )
+                    }
                   >
-                    {worktreeEnabled ? (
-                      <IconGitBranch size={16} />
-                    ) : (
-                      <IconFolderOpen size={16} />
-                    )}
-                  </ActionIcon>
+                    {worktreeEnabled ? "Isolated" : "Project root"}
+                  </Button>
                 </Tooltip>
               </span>
             </Popover.Target>

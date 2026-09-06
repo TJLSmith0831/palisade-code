@@ -222,6 +222,18 @@ describe("ChatSurface auto-scroll", () => {
   });
 });
 
+describe("worktree isolation control", () => {
+  it("names the active destination instead of relying on an icon alone", () => {
+    renderSurface({ worktreeEnabled: true });
+    expect(screen.getByTestId("worktree-mode-btn")).toHaveTextContent("Isolated");
+  });
+
+  it("names the project directory when isolation is off", () => {
+    renderSurface({ worktreeEnabled: false });
+    expect(screen.getByTestId("worktree-mode-btn")).toHaveTextContent("Project root");
+  });
+});
+
 describe("executor switch during a live session (Amendment 5)", () => {
   // `prefsMenuOpen` is App state, so the menu is opened by prop here; the
   // App-level test covers the real open-then-close path.

@@ -895,6 +895,25 @@ describe("FileEditorPane", () => {
       expect(onSave.mock.calls[0][0].after).toContain("!");
     });
 
+    it("saves a Markdown edit on Cmd+S from the rich editor", async () => {
+      const onSave = vi.fn();
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_content") return Promise.resolve("# Title\n");
+        if (cmd === "write_file_content") return Promise.resolve();
+        return Promise.reject(new Error(`unexpected command ${cmd}`));
+      });
+      render(
+        <FileEditorPane projectHash="abc" path="README.md" onSave={onSave} />
+      );
+      const editor = await screen.findByTestId("md-editor");
+      fireEvent.change(editor, { target: { value: "# Updated\n" } });
+
+      fireEvent.keyDown(editor, { key: "s", metaKey: true });
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].after).toBe("# Updated\n");
+    });
+
     it("promotes a list line to a nested item on Tab at the marker (no selection)", async () => {
       // jsdom doesn't implement execCommand; simulate what a real browser
       // does so the fix's insertText/delete calls actually mutate the
