@@ -174,7 +174,15 @@ def main():
 
     requests = queue.Queue()
     threading.Thread(target=stdin_reader, args=(requests,), daemon=True).start()
-    run(km, client, requests)
+    try:
+        run(km, client, requests)
+    finally:
+        # The Rust parent terminates this driver when a notebook tab closes.
+        # Killing only the driver leaves the kernel it spawned running in the
+        # background, so tear down both the client channels and child kernel
+        # whenever this process exits normally.
+        client.stop_channels()
+        km.shutdown_kernel(now=True)
 
 
 if __name__ == "__main__":

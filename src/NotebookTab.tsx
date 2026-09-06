@@ -308,14 +308,18 @@ export default function NotebookTab({
 
   const run = useCallback(
     (cell: Cell) => {
-      if (!doc) return;
+      // The driver can technically queue multiple executions, but the UI
+      // stores one active cell and snapshots output on each reply. Letting a
+      // second cell start before the first settles can therefore clear the
+      // first spinner and race its automatic save.
+      if (!doc || runningCellId !== null) return;
       setWarning(null);
       const cleared = new Map(outputsRef.current);
       cleared.set(cell.id, []);
       outputsRef.current = cleared;
       setOutputsByCellRun(cleared);
       setRunningCellId(cell.id);
-      if (runningCellId === null) setKernelStarting(true);
+      setKernelStarting(true);
       api
         .runNotebookCell(projectHash, path, kernelspecName(doc), cell.id, cell.source)
         .catch((err) => {
@@ -398,6 +402,7 @@ export default function NotebookTab({
                     size="sm"
                     variant="subtle"
                     loading={isRunning}
+                    disabled={runningCellId !== null && !isRunning}
                     onClick={() => run(cell)}
                     data-testid={`run-cell-${index}`}
                   >
