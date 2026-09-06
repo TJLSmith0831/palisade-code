@@ -2957,18 +2957,33 @@ export default function App() {
   const selectFile = useCallback(
     (path: string, line?: number) => {
       shell.setDiffOpen(false);
-      // Vibe hides the editor column when collapsed — opening a tab behind
-      // it would be state changing invisibly, so reclaim the pane first.
-      if (shell.centerShell === "vibe" && shell.editorCollapsed) {
-        shell.toggleEditor();
-      }
       tabs.open(path);
       // Consumed once by the editor pane; the timestamp makes a repeat jump
       // to the same line a new instruction rather than a no-op.
       if (line !== undefined) setRevealLine({ path, line, at: Date.now() });
     },
-    [tabs, shell.centerShell, shell.editorCollapsed, shell.toggleEditor]
+    [tabs]
   );
+
+  // Every rail panel that hands the editor column something to show (a
+  // file, spec, table, chain, query) does it by changing the active tab —
+  // so this is the one place that needs to reclaim a collapsed Vibe editor
+  // column, rather than every panel's open-handler remembering to. Keyed
+  // only on activePath actually changing: including editorCollapsed itself
+  // would refight a deliberate manual collapse of an already-open tab.
+  const prevActivePathRef = useRef<string | null>(null);
+  useEffect(() => {
+    const changed = tabs.activePath !== prevActivePathRef.current;
+    prevActivePathRef.current = tabs.activePath;
+    if (
+      changed &&
+      tabs.activePath &&
+      shell.centerShell === "vibe" &&
+      shell.editorCollapsed
+    ) {
+      shell.toggleEditor();
+    }
+  }, [tabs.activePath]);
 
   // Opens a location a test runner reported. Its paths are relative to
   // wherever the runner ran, which for a nested crate is not the project

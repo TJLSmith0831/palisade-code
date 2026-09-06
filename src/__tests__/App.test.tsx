@@ -1041,7 +1041,11 @@ describe("Status bar (mockup parity)", () => {
     );
   });
 
-  it("reopens the collapsed editor column when a file is clicked in the explorer", async () => {
+  it("reopens the collapsed editor column when any rail panel opens a tab (via the file explorer)", async () => {
+    // Exercises the general fix (App.tsx: activePath-change effect) through
+    // its most common entry point. The fix isn't file-specific — it fires
+    // whenever tabs.activePath changes, so Database/Chains/Specs panels get
+    // the same reopen for free without their own handlers knowing about it.
     render(<App />);
     await openProject();
     openExplorerPanel();
