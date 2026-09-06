@@ -26,6 +26,9 @@ pnpm start
 | `cd src-tauri && cargo test git::` | Run one Rust module's tests |
 | `pnpm start` | Launch the dev window (`tauri dev`) |
 
+See [tester releases](docs/tester-releases.md) for the GitHub-only release
+process. Local `package.sh` builds never publish updates.
+
 ## Project layout
 
 - `src/App.tsx` — the IDE shell: panes, threads, chat, routing

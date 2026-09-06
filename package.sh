@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build Palisade Code.app and install it to /Applications.
 #
-#   CODESIGN_ID="Palisade Code Dev" ./package.sh
-#   CODESIGN_ID="Palisade Code Dev" ./package.sh --no-install   # build only
-#   ./package.sh --installer                                    # bundle the model
+#   ./package.sh                                 # signs with the dev identity
+#   ./package.sh --no-install                    # build only
+#   ./package.sh --installer                     # bundle the model
+#   CODESIGN_ID=- ./package.sh                   # force ad-hoc (resets TCC grants)
 #
 # Two builds ship from here. The default is the slim build: no model inside
 # the .app, ~11MB, and what the updater hands to existing testers. The
@@ -132,13 +133,28 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   [[ "$INSTALL" == "0" ]] && exit 0
 else
 
-CODESIGN_ID="${CODESIGN_ID:--}"
+# Default to this machine's dev identity rather than to ad-hoc. The old default
+# was `-`, which meant a bare ./package.sh quietly re-signed with a cdhash
+# requirement and reset every TCC grant — even on a machine with a perfectly
+# good identity sitting in its keychain. Ad-hoc is still reachable explicitly
+# (CODESIGN_ID=-) and is still the automatic fallback on a machine that has not
+# created an identity yet, so a fresh clone builds rather than failing on a
+# certificate it has never heard of.
+DEFAULT_CODESIGN_ID="Palisade Code Dev"
+if [[ -z "${CODESIGN_ID:-}" ]]; then
+  if security find-certificate -c "$DEFAULT_CODESIGN_ID" >/dev/null 2>&1; then
+    CODESIGN_ID="$DEFAULT_CODESIGN_ID"
+  else
+    CODESIGN_ID="-"
+  fi
+fi
+
 if [[ "$CODESIGN_ID" == "-" ]]; then
   echo "==> WARNING: ad-hoc signing."
   echo "    The designated requirement will be a cdhash, so macOS will treat every"
   echo "    rebuild as a different app and every permission you grant will be"
-  echo "    re-requested. Set CODESIGN_ID to a stable identity — see this script's"
-  echo "    comments for how to create one."
+  echo "    re-requested. This machine has no '$DEFAULT_CODESIGN_ID' certificate —"
+  echo "    see this script's comments for the one-time commands to create one."
 else
   echo "==> signing as '$CODESIGN_ID'"
 fi

@@ -1,0 +1,238 @@
+name: Tester release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tester-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify tagged source
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Tests never execute the sidecar, but tauri-build requires the declared
+      # external binary to exist before it compiles the Rust crate.
+      - name: Stub the sidecar for tests
+        run: touch src-tauri/llama-server-aarch64-apple-darwin
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Validate the version tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Release tags must look like vX.Y.Z; got $TAG" >&2
+            exit 1
+          }
+          expected="${TAG#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          cargo_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          [[ "$package_version" == "$expected" ]] || { echo "package.json is $package_version, expected $expected" >&2; exit 1; }
+          [[ "$tauri_version" == "$expected" ]] || { echo "tauri.conf.json is $tauri_version, expected $expected" >&2; exit 1; }
+          [[ "$cargo_version" == "$expected" ]] || { echo "Cargo.toml is $cargo_version, expected $expected" >&2; exit 1; }
+
+      - name: Typecheck and build the frontend
+        run: pnpm build
+
+      - name: Run frontend tests
+        run: pnpm test
+
+      - name: Run Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Run Worker tests
+        run: node worker/test.mjs
+
+  release:
+    name: Build and publish tester release
+    needs: verify
+    runs-on: macos-15
+    environment: testers
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      # This is the exact revision reported by the current local sidecar. CI
+      # rebuilds it from source rather than copying an untracked local binary.
+      - name: Build the bundled llama.cpp sidecar
+        env:
+          LLAMA_CPP_REVISION: 308f61c
+        run: |
+          set -euo pipefail
+          git init vendor/llama.cpp
+          git -C vendor/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C vendor/llama.cpp fetch --depth=1 origin "$LLAMA_CPP_REVISION"
+          git -C vendor/llama.cpp checkout --detach FETCH_HEAD
+          cmake -S vendor/llama.cpp -B vendor/llama.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON -DLLAMA_BUILD_SERVER=ON
+          cmake --build vendor/llama.cpp/build --target llama-server --parallel 3
+          install -m 755 vendor/llama.cpp/build/bin/llama-server \
+            src-tauri/llama-server-aarch64-apple-darwin
+          src-tauri/llama-server-aarch64-apple-darwin --version
+
+      # The model repo is private. Its read token is release-only, just like
+      # signing credentials; neither is available to normal CI or local builds.
+      - name: Fetch and verify the installer model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODEL_REPOSITORY: TJLSmith0831/palisade-models
+          MODEL_FILE: Qwen2.5-Coder-0.5B-Q5_K_M.gguf
+          MODEL_SHA256: 59fa334682d4125690371970e07994e47b1c1dd151b8f280fcae019df9eeddfc
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/resources/models
+          curl --fail --location --retry 3 \
+            --header "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/$MODEL_REPOSITORY/resolve/main/$MODEL_FILE?download=true" \
+            --output "src-tauri/resources/models/$MODEL_FILE"
+          printf '%s  %s\n' "$MODEL_SHA256" "src-tauri/resources/models/$MODEL_FILE" | shasum -a 256 --check
+
+      - name: Import Apple signing certificate
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/palisade-signing.keychain-db"
+          certificate="$RUNNER_TEMP/palisade-signing.p12"
+          printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 -D > "$certificate"
+          security create-keychain -p "" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$keychain"
+          security list-keychain -d user -s "$keychain"
+          rm -f "$certificate"
+
+      - name: Write the App Store Connect API key
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Build signed updater artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          pnpm tauri build --config src-tauri/tauri.release.conf.json
+          app="src-tauri/target/release/bundle/macos/Palisade.app"
+          updater="$(find src-tauri/target/release/bundle/macos -type f -name '*.app.tar.gz' -print -quit)"
+          [[ -n "$updater" && -f "$updater.sig" ]] || { echo "Missing updater archive or signature" >&2; exit 1; }
+          codesign --verify --deep --strict "$app"
+          mkdir -p release-assets
+          cp "$updater" "$updater.sig" release-assets/
+
+      - name: Build the model-included installer DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+        run: |
+          set -euo pipefail
+          pnpm tauri build --config src-tauri/tauri.installer-release.conf.json
+          installer_dmg="$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          [[ -n "$installer_dmg" ]] || { echo "Missing installer DMG" >&2; exit 1; }
+          xcrun notarytool submit "$installer_dmg" --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple "$installer_dmg"
+          cp "$installer_dmg" release-assets/
+
+      - name: Verify the distributable installer
+        run: |
+          set -euo pipefail
+          installer_dmg="$(find release-assets -type f -name '*.dmg' -print -quit)"
+          mountpoint="$RUNNER_TEMP/palisade-dmg"
+          mkdir "$mountpoint"
+          hdiutil attach "$installer_dmg" -nobrowse -readonly -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint" -quiet || true; rmdir "$mountpoint" || true' EXIT
+          codesign --verify --deep --strict "$mountpoint/Palisade.app"
+          spctl -a -vvv -t install "$mountpoint/Palisade.app"
+
+      - name: Publish the tester prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" release-assets/* --title "$TAG" --generate-notes --prerelease --target "$GITHUB_SHA"
+
+      - name: Smoke-test the published update manifest
+        env:
+          EXPECTED_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --retry 3 \
+            "https://palisade-updates.tjlsmith0831.workers.dev/latest.json?release=$EXPECTED_VERSION" \
+            --output "$RUNNER_TEMP/latest.json"
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/latest.json", "utf8"));
+            const expected = process.env.EXPECTED_VERSION.slice(1);
+            const platform = manifest.platforms?.["darwin-aarch64"];
+            if (manifest.version !== expected || !platform?.signature || !platform?.url) {
+              throw new Error("Published update manifest does not describe the new signed macOS artifact");
+            }
+          '
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/palisade-signing.p12"
+          security delete-keychain "$RUNNER_TEMP/palisade-signing.keychain-db" 2>/dev/null || true
