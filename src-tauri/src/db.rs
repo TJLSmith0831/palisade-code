@@ -21,9 +21,10 @@ fn e(ctx: &str, err: impl std::fmt::Display) -> String {
 // ------------------------------------------------------------------ backends
 
 /// Which concrete driver a connection URL selects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
+    #[default]
     Postgres,
     Sqlite,
 }
@@ -44,31 +45,391 @@ pub fn backend_of(url: &str) -> Res<Backend> {
 
 // --------------------------------------------------------------- connections
 
+/// A connection's non-secret details. Discrete fields rather than a URL string:
+/// a password embedded in a URL cannot be separated from the rest, which is why
+/// DataGrip warns against its own URL-only mode and why Palisade stopped using
+/// one (D21).
+///
+/// `tag = "backend"` keeps the discriminator the frontend already reads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "backend", rename_all = "lowercase")]
+pub enum Details {
+    Postgres {
+        host: String,
+        port: u16,
+        user: String,
+        database: String,
+    },
+    /// A path and nothing else — SQLite has no secret, so these connections
+    /// never touch the credential store (D22).
+    Sqlite {
+        path: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbConnection {
     pub id: String,
     pub name: String,
-    pub url: String,
-    pub backend: Backend,
+    #[serde(flatten)]
+    pub details: Details,
+    /// Resolved from the credential store on connect, never serialized — not to
+    /// disk and not across IPC (D16, D21).
+    #[serde(default, skip_serializing)]
+    pub password: Option<String>,
+}
+
+impl Details {
+    /// Stand-in for a record whose details cannot be read without opening the
+    /// credential store. `with_secret` fills it in on connect.
+    fn placeholder(backend: Backend) -> Self {
+        match backend {
+            Backend::Sqlite => Details::Sqlite { path: String::new() },
+            Backend::Postgres => Details::Postgres {
+                host: String::new(),
+                port: 5432,
+                user: String::new(),
+                database: String::new(),
+            },
+        }
+    }
+
+    /// True when this carries nothing to connect with yet.
+    pub fn is_placeholder(&self) -> bool {
+        match self {
+            Details::Sqlite { path } => path.is_empty(),
+            Details::Postgres { host, .. } => host.is_empty(),
+        }
+    }
+
+    pub fn backend(&self) -> Backend {
+        match self {
+            Details::Postgres { .. } => Backend::Postgres,
+            Details::Sqlite { .. } => Backend::Sqlite,
+        }
+    }
+
+    /// True when this connection has a secret worth storing. SQLite never does,
+    /// which is what lets it skip the credential store entirely (D22).
+    pub fn has_secret(&self) -> bool {
+        matches!(self, Details::Postgres { .. })
+    }
+}
+
+impl DbConnection {
+    pub fn backend(&self) -> Backend {
+        self.details.backend()
+    }
+
+    /// Assembles what sqlx connects with. Built only in memory, never stored
+    /// (D21) — the password is re-inserted here and nowhere else.
+    pub fn to_url(&self) -> String {
+        match &self.details {
+            Details::Sqlite { path } => format!("sqlite://{path}"),
+            Details::Postgres { host, port, user, database } => {
+                let auth = match self.password.as_deref().filter(|p| !p.is_empty()) {
+                    Some(pw) => format!("{}:{}", encode(user), encode(pw)),
+                    None => encode(user),
+                };
+                format!("postgres://{auth}@{host}:{port}/{}", encode(database))
+            }
+        }
+    }
+
+    /// A stable key for the pool map that cannot leak a password into it.
+    pub(crate) fn pool_key(&self) -> String {
+        match &self.details {
+            Details::Sqlite { path } => format!("sqlite://{path}"),
+            Details::Postgres { host, port, user, database } => {
+                format!("postgres://{user}@{host}:{port}/{database}")
+            }
+        }
+    }
+}
+
+/// Percent-encodes the characters that would otherwise end a URL component.
+/// A password containing `@`, `/`, `:`, or `#` is ordinary and must survive.
+fn encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for b in raw.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Splits a connection string into fields plus its password — the paste
+/// shortcut in the add form (D24), and how a pre-fields entry migrates (D9).
+pub fn parse_url(url: &str) -> Res<(Details, Option<String>)> {
+    let url = url.trim();
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or("connection string is missing a scheme (expected postgres:// or sqlite://)")?;
+    match scheme.trim().to_lowercase().as_str() {
+        "sqlite" => Ok((Details::Sqlite { path: rest.to_string() }, None)),
+        "postgres" | "postgresql" => {
+            // The last '@' separates userinfo from the host: a password may
+            // legitimately contain one when it was never percent-encoded.
+            let (userinfo, hostpart) = match rest.rsplit_once('@') {
+                Some((u, h)) => (u, h),
+                None => ("", rest),
+            };
+            let (user, password) = match userinfo.split_once(':') {
+                Some((u, p)) => (decode(u), Some(decode(p))),
+                None => (decode(userinfo), None),
+            };
+            let (hostport, database) = match hostpart.split_once('/') {
+                Some((h, d)) => (h, decode(d.split('?').next().unwrap_or(d))),
+                None => (hostpart, String::new()),
+            };
+            let (host, port) = match hostport.rsplit_once(':') {
+                Some((h, p)) => (
+                    h.to_string(),
+                    p.parse::<u16>().map_err(|_| format!("'{p}' is not a valid port"))?,
+                ),
+                None => (hostport.to_string(), 5432),
+            };
+            if host.is_empty() {
+                return Err("connection string is missing a host".into());
+            }
+            Ok((
+                Details::Postgres { host, port, user, database },
+                password.filter(|p| !p.is_empty()),
+            ))
+        }
+        other => Err(format!(
+            "unsupported database scheme '{other}' — this build speaks postgres:// and sqlite://"
+        )),
+    }
+}
+
+/// The on-disk record. Deliberately flat and tolerant rather than reusing
+/// `Details`: a file can hold records written before the field split alongside
+/// records written after it, and a strict enum would fail the whole read on the
+/// first legacy entry. The strict type is the in-memory one.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredConnection {
+    id: String,
+    name: String,
+    backend: Backend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    /// Set only when the credential store refused the password (D8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+    /// A connection string written before the field split. Parsed and cleared
+    /// on first connect (D23, task 5.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+impl StoredConnection {
+    /// The record's fields, or `None` when it still needs splitting from a URL.
+    fn details(&self) -> Option<Details> {
+        match self.backend {
+            Backend::Sqlite => self.path.clone().map(|path| Details::Sqlite { path }),
+            Backend::Postgres => Some(Details::Postgres {
+                host: self.host.clone()?,
+                port: self.port.unwrap_or(5432),
+                user: self.user.clone().unwrap_or_default(),
+                database: self.database.clone().unwrap_or_default(),
+            }),
+        }
+    }
+
+    fn from_parts(id: String, name: String, details: &Details, password: Option<String>) -> Self {
+        let mut rec = StoredConnection {
+            id,
+            name,
+            backend: details.backend(),
+            password,
+            ..Default::default()
+        };
+        match details {
+            Details::Sqlite { path } => rec.path = Some(path.clone()),
+            Details::Postgres { host, port, user, database } => {
+                rec.host = Some(host.clone());
+                rec.port = Some(*port);
+                rec.user = Some(user.clone());
+                rec.database = Some(database.clone());
+            }
+        }
+        rec
+    }
+}
+
+/// The OS credential store, when this target has one compiled in (D15).
+/// `Err` means unavailable — locked, refused, or absent — which is a signal to
+/// fall back to the file, not a failure (D8).
+#[cfg(all(not(test), any(target_os = "macos", target_os = "windows")))]
+mod vault {
+    const SERVICE: &str = "palisade-code";
+
+    fn entry(hash: &str, id: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(SERVICE, &format!("{hash}:{id}")).map_err(|err| err.to_string())
+    }
+
+    /// Idempotent on purpose. macOS rejects a write over an existing item with
+    /// `errSecDuplicateItem` rather than updating it, and two `list_connections`
+    /// calls can race during migration — the panel mounts and refreshes before
+    /// the first has rewritten the file — so the loser must converge, not warn.
+    pub fn set(hash: &str, id: &str, url: &str) -> Result<(), String> {
+        let entry = entry(hash, id)?;
+        match entry.set_password(url) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                let _ = entry.delete_credential();
+                entry.set_password(url).map_err(|err| err.to_string())
+            }
+        }
+    }
+
+    pub fn get(hash: &str, id: &str) -> Result<Option<String>, String> {
+        match entry(hash, id)?.get_password() {
+            Ok(v) => Ok(Some(v)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    /// Deleting what is already gone is success — removal must not fail
+    /// because a credential never made it into the store (D9).
+    pub fn delete(hash: &str, id: &str) -> Result<(), String> {
+        match entry(hash, id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+}
+
+/// No credential store compiled in — every call reports unavailable so the
+/// file fallback is the only path (D15).
+#[cfg(all(not(test), not(any(target_os = "macos", target_os = "windows"))))]
+mod vault {
+    const NONE: &str = "no OS credential store on this platform";
+
+    pub fn set(_: &str, _: &str, _: &str) -> Result<(), String> {
+        Err(NONE.into())
+    }
+    pub fn get(_: &str, _: &str) -> Result<Option<String>, String> {
+        Err(NONE.into())
+    }
+    pub fn delete(_: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// In-memory stand-in. Tests must not touch the real keychain — it prompts,
+/// needs an unlocked login session, and would leak between runs. The real
+/// backends are exercised by running the app.
+#[cfg(test)]
+pub mod vault {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Mutex;
+
+    /// Unavailability is per project hash, not global: cargo runs tests in
+    /// parallel, and a global flag would let one test's simulated outage break
+    /// every other test sharing the process.
+    fn store() -> &'static Mutex<(HashSet<String>, HashMap<String, String>)> {
+        static S: std::sync::OnceLock<Mutex<(HashSet<String>, HashMap<String, String>)>> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| Mutex::new((HashSet::new(), HashMap::new())))
+    }
+
+    /// Simulates a locked, refused, or absent credential store for one project.
+    pub fn set_unavailable(hash: &str) {
+        store().lock().unwrap().0.insert(hash.to_string());
+    }
+
+    pub fn set_available(hash: &str) {
+        store().lock().unwrap().0.remove(hash);
+    }
+
+    pub fn has(hash: &str, id: &str) -> bool {
+        store().lock().unwrap().1.contains_key(&format!("{hash}:{id}"))
+    }
+
+    fn down(g: &(HashSet<String>, HashMap<String, String>), hash: &str) -> bool {
+        g.0.contains(hash)
+    }
+
+    pub fn set(hash: &str, id: &str, url: &str) -> Result<(), String> {
+        let mut g = store().lock().unwrap();
+        if down(&g, hash) {
+            return Err("credential store unavailable".into());
+        }
+        g.1.insert(format!("{hash}:{id}"), url.to_string());
+        Ok(())
+    }
+
+    pub fn get(hash: &str, id: &str) -> Result<Option<String>, String> {
+        let g = store().lock().unwrap();
+        if down(&g, hash) {
+            return Err("credential store unavailable".into());
+        }
+        Ok(g.1.get(&format!("{hash}:{id}")).cloned())
+    }
+
+    pub fn delete(hash: &str, id: &str) -> Result<(), String> {
+        let mut g = store().lock().unwrap();
+        if down(&g, hash) {
+            return Err("credential store unavailable".into());
+        }
+        g.1.remove(&format!("{hash}:{id}"));
+        Ok(())
+    }
+}
+
+/// The message shown when a credential lands in the file instead of the
+/// credential store. D8 forbids falling back silently — the user would
+/// otherwise believe a secret is in the keychain when it is on disk.
+fn degraded(name: &str, why: &str) -> String {
+    format!(
+        "Database connection \"{name}\": credential saved to a user-only file \
+         instead of the OS credential store ({why})."
+    )
 }
 
 fn connections_path(home: &Path, hash: &str) -> PathBuf {
     crate::store::project_dir(home, hash).join("db-connections.json")
 }
 
-pub fn list_connections(home: &Path, hash: &str) -> Res<Vec<DbConnection>> {
-    let path = connections_path(home, hash);
-    match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).map_err(|err| e(&format!("parse {}", path.display()), err)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(err) => Err(e(&format!("read {}", path.display()), err)),
-    }
-}
-
 /// Writes the whole list back at 0600. The mode is set before the bytes land,
-/// so a credential is never briefly world-readable.
-fn save_connections(home: &Path, hash: &str, list: &[DbConnection]) -> Res<()> {
+/// so a credential is never briefly world-readable. Still 0600 even when the
+/// credential lives in the OS store: the file names every connection.
+fn save_stored(home: &Path, hash: &str, list: &[StoredConnection]) -> Res<()> {
     let path = connections_path(home, hash);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| e("create dir", err))?;
@@ -93,29 +454,183 @@ fn save_connections(home: &Path, hash: &str, list: &[DbConnection]) -> Res<()> {
     Ok(())
 }
 
-pub fn add_connection(home: &Path, hash: &str, name: &str, url: &str) -> Res<DbConnection> {
+/// Reads the on-disk records as written, without resolving credentials.
+fn read_stored(home: &Path, hash: &str) -> Res<Vec<StoredConnection>> {
+    let path = connections_path(home, hash);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|err| e(&format!("parse {}", path.display()), err)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(e(&format!("read {}", path.display()), err)),
+    }
+}
+
+/// Every saved connection, from the file alone.
+///
+/// This does **not** read the credential store (D23). Listing renders names and
+/// non-secret details, so opening the panel raises no OS authorization prompt —
+/// the secret is fetched in `pool_for`, when a connection is actually opened.
+/// A record still holding a pre-split `url` is parsed for display here but not
+/// rewritten; migration happens on first connect (task 5.6).
+pub fn list_connections(home: &Path, hash: &str) -> Res<(Vec<DbConnection>, Option<String>)> {
+    let stored = read_stored(home, hash)?;
+    let mut out = Vec::with_capacity(stored.len());
+    let mut warning = None;
+
+    for rec in &stored {
+        let details = match rec.details() {
+            Some(d) => d,
+            // Not yet split: show what the URL says, without storing anything.
+            None => match rec.url.as_deref().map(parse_url) {
+                Some(Ok((details, _))) => details,
+                // Neither fields nor a URL on disk: the connection string is in
+                // the credential store, written by a build that kept the whole
+                // URL there. It is recoverable, but only on connect — listing
+                // must not read the store (D23) — so show the connection with
+                // blank details rather than dropping it from the panel.
+                _ => Details::placeholder(rec.backend),
+            },
+        };
+        out.push(DbConnection {
+            id: rec.id.clone(),
+            name: rec.name.clone(),
+            details,
+            password: None,
+        });
+    }
+    Ok((out, warning))
+}
+
+/// Resolves a connection's password, splitting a pre-fields record on the way
+/// (task 5.6). Called on connect, never on list.
+pub fn with_secret(home: &Path, hash: &str, conn: &DbConnection) -> Res<(DbConnection, Option<String>)> {
+    let mut resolved = conn.clone();
+    let mut warning = None;
+    // SQLite has no secret (D22) — unless its details are still locked in the
+    // credential store from an older layout, which needs recovering below.
+    if !conn.details.has_secret() && !conn.details.is_placeholder() {
+        return Ok((resolved, None));
+    }
+
+    let mut stored = read_stored(home, hash)?;
+    let Some(i) = stored.iter().position(|r| r.id == conn.id) else {
+        return Err(format!("no connection {}", conn.id));
+    };
+
+    // Details are missing entirely: a build that stored the whole connection
+    // string in the credential store wrote this. Recover the URL from there and
+    // split it into fields, so the connection repairs itself on first use.
+    if conn.details.is_placeholder() && stored[i].url.is_none() {
+        let recovered = vault::get(hash, &conn.id).map_err(|why| {
+            format!("connection \"{}\": its details are in the credential store and it is unavailable ({why})", conn.name)
+        })?;
+        let url = recovered.ok_or_else(|| {
+            format!(
+                "connection \"{}\" has no stored details left — re-enter its connection details",
+                conn.name
+            )
+        })?;
+        stored[i].url = Some(url);
+    }
+
+    // A record written before the field split still carries its URL: split it
+    // now, move the password into the store, and rewrite without either.
+    if let Some(url) = stored[i].url.clone() {
+        let (details, password) = parse_url(&url)?;
+        let kept = match password.as_deref() {
+            Some(pw) => match vault::set(hash, &conn.id, pw) {
+                Ok(()) => None,
+                Err(why) => {
+                    warning = Some(degraded(&stored[i].name, &why));
+                    password.clone()
+                }
+            },
+            None => None,
+        };
+        stored[i] = StoredConnection::from_parts(
+            stored[i].id.clone(),
+            stored[i].name.clone(),
+            &details,
+            kept,
+        );
+        save_stored(home, hash, &stored)?;
+        resolved.details = details;
+        resolved.password = password;
+        return Ok((resolved, warning));
+    }
+
+    // The file is carrying the password because the store refused it (D8).
+    if let Some(pw) = stored[i].password.clone() {
+        resolved.password = Some(pw);
+        return Ok((resolved, None));
+    }
+
+    match vault::get(hash, &conn.id) {
+        Ok(password) => resolved.password = password,
+        Err(why) => {
+            warning = Some(format!(
+                "Database connection \"{}\": credential store unavailable ({why}).",
+                conn.name
+            ))
+        }
+    }
+    Ok((resolved, warning))
+}
+
+/// Saves the password to the store, falling back to the file with a warning
+/// when the store will not take it (D8). SQLite never gets here.
+fn stow(hash: &str, id: &str, name: &str, details: &Details, password: Option<&str>) -> (StoredConnection, Option<String>) {
+    let mut warning = None;
+    let kept = match password.filter(|p| !p.is_empty()) {
+        None => None,
+        Some(pw) => match vault::set(hash, id, pw) {
+            Ok(()) => None,
+            Err(why) => {
+                warning = Some(degraded(name, &why));
+                Some(pw.to_string())
+            }
+        },
+    };
+    (
+        StoredConnection::from_parts(id.to_string(), name.to_string(), details, kept),
+        warning,
+    )
+}
+
+pub fn add_connection(
+    home: &Path,
+    hash: &str,
+    name: &str,
+    details: Details,
+    password: Option<&str>,
+) -> Res<(DbConnection, Option<String>)> {
     let name = name.trim();
     if name.is_empty() {
         return Err("connection needs a name".into());
     }
-    let url = url.trim();
-    let backend = backend_of(url)?;
-    let conn = DbConnection {
-        id: ulid::Ulid::new().to_string(),
-        name: name.to_string(),
-        url: url.to_string(),
-        backend,
-    };
-    let mut list = list_connections(home, hash)?;
-    list.push(conn.clone());
-    save_connections(home, hash, &list)?;
-    Ok(conn)
+    let id = ulid::Ulid::new().to_string();
+    let (record, warning) = stow(hash, &id, name, &details, password);
+    let mut list = read_stored(home, hash)?;
+    list.push(record);
+    save_stored(home, hash, &list)?;
+    Ok((
+        DbConnection {
+            id,
+            name: name.to_string(),
+            details,
+            password: password.map(str::to_string),
+        },
+        warning,
+    ))
 }
 
+/// Removing a connection deletes its credential too — otherwise removal leaves
+/// a secret in the store with no connection referring to it (D9).
 pub fn remove_connection(home: &Path, hash: &str, id: &str) -> Res<()> {
-    let mut list = list_connections(home, hash)?;
+    let mut list = read_stored(home, hash)?;
     list.retain(|c| c.id != id);
-    save_connections(home, hash, &list)
+    save_stored(home, hash, &list)?;
+    let _ = vault::delete(hash, id);
+    Ok(())
 }
 
 pub fn rename_connection(home: &Path, hash: &str, id: &str, name: &str) -> Res<DbConnection> {
@@ -123,22 +638,183 @@ pub fn rename_connection(home: &Path, hash: &str, id: &str, name: &str) -> Res<D
     if name.is_empty() {
         return Err("connection needs a name".into());
     }
-    let mut list = list_connections(home, hash)?;
+    let mut list = read_stored(home, hash)?;
     let found = list
         .iter_mut()
         .find(|c| c.id == id)
         .ok_or_else(|| format!("no connection {id}"))?;
     found.name = name.to_string();
-    let updated = found.clone();
-    save_connections(home, hash, &list)?;
-    Ok(updated)
+    save_stored(home, hash, &list)?;
+    find_connection(home, hash, id)
 }
 
+/// The connection as listed — no secret. Callers that connect go through
+/// `with_secret` (D23).
 pub fn find_connection(home: &Path, hash: &str, id: &str) -> Res<DbConnection> {
     list_connections(home, hash)?
+        .0
         .into_iter()
         .find(|c| c.id == id)
         .ok_or_else(|| format!("no connection {id}"))
+}
+
+// ------------------------------------------------------------------ timeout
+
+/// How long any single database operation may run before Palisade stops
+/// waiting. Fixed rather than configurable (D10).
+const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Bounds one operation. Dropping the future returns the pool slot it held,
+/// which is the resource this protects. It does **not** cancel the statement
+/// server-side — a runaway query keeps burning database CPU until the server
+/// ends it; `SET statement_timeout` is the named upgrade path (D10).
+async fn bounded<T>(what: &str, op: impl std::future::Future<Output = Res<T>>) -> Res<T> {
+    bounded_for(QUERY_TIMEOUT, what, op).await
+}
+
+/// The bound itself, with the duration injectable so a test can prove the
+/// timeout path without waiting 30 seconds for it.
+async fn bounded_for<T>(
+    limit: std::time::Duration,
+    what: &str,
+    op: impl std::future::Future<Output = Res<T>>,
+) -> Res<T> {
+    match tokio::time::timeout(limit, op).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "{what} timed out after {}s — Palisade stopped waiting; the database may still be running it",
+            limit.as_secs()
+        )),
+    }
+}
+
+// --------------------------------------------------------------- query history
+
+/// One line of `db-audit.jsonl`: what ran against a database, when, and how it
+/// went. A history for the person using the app, not compliance evidence
+/// (D19) — it is appended after the operation and never blocks it (D6).
+///
+/// There is no `actor` field: the app is single-user and the OS account is the
+/// actor. There is deliberately no `url` — the one field that embeds a
+/// password, which logging would leak into a second file (D4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    pub ts: String,
+    /// `connection.add` | `connection.remove` | `connection.rename` | `query` | `edit`
+    pub kind: String,
+    pub connection_id: String,
+    pub connection_name: String,
+    pub backend: Backend,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    /// The statement verbatim. Sensitive by construction — this file is written
+    /// 0600 for the same reason the connection file is (D4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_affected: Option<i64>,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl AuditEntry {
+    /// Builds an entry from a connection, so the URL is structurally unable to
+    /// reach the log — callers never assemble the identity fields themselves.
+    pub fn new(kind: &str, conn: &DbConnection) -> Self {
+        AuditEntry {
+            ts: chrono::Utc::now().to_rfc3339(),
+            kind: kind.to_string(),
+            connection_id: conn.id.clone(),
+            connection_name: conn.name.clone(),
+            backend: conn.backend(),
+            schema: None,
+            table: None,
+            statement: None,
+            rows_affected: None,
+            ok: true,
+            error: None,
+        }
+    }
+
+    pub fn statement(mut self, sql: &str) -> Self {
+        self.statement = Some(sql.to_string());
+        self
+    }
+
+    pub fn at(mut self, schema: Option<&str>, table: &str) -> Self {
+        self.schema = schema.map(str::to_string);
+        self.table = Some(table.to_string());
+        self
+    }
+
+    /// Records the outcome, collapsing a `Res<T>` into ok/error plus whatever
+    /// count the caller pulls out of the success value.
+    pub fn outcome<T>(mut self, result: &Res<T>, rows: impl Fn(&T) -> Option<i64>) -> Self {
+        match result {
+            Ok(v) => {
+                self.ok = true;
+                self.rows_affected = rows(v);
+            }
+            Err(err) => {
+                self.ok = false;
+                self.error = Some(err.clone());
+            }
+        }
+        self
+    }
+}
+
+fn audit_path(home: &Path, hash: &str) -> PathBuf {
+    crate::store::project_dir(home, hash).join("db-audit.jsonl")
+}
+
+/// Appends one line, 0600, fsynced — `store::append_verification`'s shape,
+/// including closing a torn line left by a previous crash.
+pub fn append_audit(home: &Path, hash: &str, entry: &AuditEntry) -> Res<()> {
+    use std::io::Write;
+    let path = audit_path(home, hash);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| e("create project dir", err))?;
+    }
+    let line = serde_json::to_string(entry).map_err(|err| e("serialize audit entry", err))?;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // The statement text is as sensitive as the credential file's contents.
+        opts.mode(0o600);
+    }
+    let mut file = opts
+        .open(&path)
+        .map_err(|err| e(&format!("open {}", path.display()), err))?;
+    if !crate::store::ends_with_newline(&path)? {
+        file.write_all(b"\n").map_err(|err| e("close torn line", err))?;
+    }
+    file.write_all(line.as_bytes()).map_err(|err| e("append audit entry", err))?;
+    file.write_all(b"\n").map_err(|err| e("append newline", err))?;
+    file.sync_all().map_err(|err| e("fsync audit log", err))?;
+    Ok(())
+}
+
+/// Every recorded entry for a project, oldest first. Unparseable lines are
+/// skipped rather than failing the read — a torn tail must not hide the
+/// history before it.
+pub fn read_audit(home: &Path, hash: &str) -> Res<Vec<AuditEntry>> {
+    match std::fs::read_to_string(audit_path(home, hash)) {
+        Ok(body) => Ok(body
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(e("read audit log", err)),
+    }
 }
 
 // ----------------------------------------------------------- SQL text shapes
@@ -419,26 +1095,29 @@ fn pools() -> &'static std::sync::Mutex<std::collections::HashMap<String, sqlx::
 /// the app — reconnecting per query would make every keystroke in a filter box
 /// a fresh handshake.
 pub async fn pool_for(conn: &DbConnection) -> Res<sqlx::AnyPool> {
-    if let Some(pool) = pools().lock().ok().and_then(|p| p.get(&conn.url).cloned()) {
+    let key = conn.pool_key();
+    if let Some(pool) = pools().lock().ok().and_then(|p| p.get(&key).cloned()) {
         return Ok(pool);
     }
     sqlx::any::install_default_drivers();
+    // The one place a password is read (D23): listing connections never gets
+    // here, so opening the panel raises no OS authorization prompt.
     let pool = sqlx::any::AnyPoolOptions::new()
         .max_connections(4)
-        .connect(&conn.url)
+        .connect(&conn.to_url())
         .await
         .map_err(|err| e(&format!("connect to {}", conn.name), err))?;
     if let Ok(mut map) = pools().lock() {
-        map.insert(conn.url.clone(), pool.clone());
+        map.insert(key, pool.clone());
     }
     Ok(pool)
 }
 
-/// Drops the cached pool so the next use reconnects — what a removed or
-/// renamed connection needs, and the only way a changed URL takes effect.
-pub fn forget_pool(url: &str) {
+/// Drops the cached pool so the next use reconnects — what a removed connection
+/// needs, and the only way changed details take effect.
+pub fn forget_pool(conn: &DbConnection) {
     if let Ok(mut map) = pools().lock() {
-        map.remove(url);
+        map.remove(&conn.pool_key());
     }
 }
 
@@ -476,8 +1155,12 @@ fn rows_of(rows: &[sqlx::any::AnyRow]) -> Vec<Vec<Option<String>>> {
 
 /// Tables and views, both backends, under one shape (D16).
 pub async fn list_tables(conn: &DbConnection) -> Res<Vec<TableInfo>> {
+    bounded("listing tables", list_tables_inner(conn)).await
+}
+
+async fn list_tables_inner(conn: &DbConnection) -> Res<Vec<TableInfo>> {
     let pool = pool_for(conn).await?;
-    let sql = match conn.backend {
+    let sql = match conn.backend() {
         Backend::Postgres => {
             "SELECT table_schema::text, table_name::text, \
              CASE WHEN table_type = 'VIEW' THEN 'view' ELSE 'table' END \
@@ -509,8 +1192,12 @@ pub async fn list_tables(conn: &DbConnection) -> Res<Vec<TableInfo>> {
 /// The type is what a text bind gets cast back to on write (Postgres) and what
 /// decides whether the grid is editable at all (D9).
 pub async fn columns_of(conn: &DbConnection, schema: Option<&str>, table: &str) -> Res<Vec<ColumnInfo>> {
+    bounded("reading columns", columns_of_inner(conn, schema, table)).await
+}
+
+async fn columns_of_inner(conn: &DbConnection, schema: Option<&str>, table: &str) -> Res<Vec<ColumnInfo>> {
     let pool = pool_for(conn).await?;
-    let rows = match conn.backend {
+    let rows = match conn.backend() {
         Backend::Postgres => {
             sqlx::query(
                 "SELECT c.column_name::text, c.udt_name::text, (pk.attname IS NOT NULL)::text \
@@ -569,6 +1256,17 @@ pub async fn fetch_page(
     sort: Option<&Sort>,
     filter: Option<&Filter>,
 ) -> Res<Page> {
+    bounded("reading rows", fetch_page_inner(conn, schema, table, page, sort, filter)).await
+}
+
+async fn fetch_page_inner(
+    conn: &DbConnection,
+    schema: Option<&str>,
+    table: &str,
+    page: i64,
+    sort: Option<&Sort>,
+    filter: Option<&Filter>,
+) -> Res<Page> {
     let pool = pool_for(conn).await?;
     let columns = columns_of(conn, schema, table).await?;
     let known = |name: &str| columns.iter().any(|c| c.name == name);
@@ -589,7 +1287,7 @@ pub async fn fetch_page(
         sql.push_str(&format!(
             " WHERE CAST({} AS TEXT) LIKE {}",
             quote_ident(&f.column),
-            placeholder(conn.backend, binds.len())
+            placeholder(conn.backend(), binds.len())
         ));
     }
     if let Some(s) = sort {
@@ -633,6 +1331,10 @@ pub async fn fetch_page(
 /// Runs user-written SQL. Statements that return rows are fetched; everything
 /// else reports an affected-row count.
 pub async fn run_query(conn: &DbConnection, sql: &str) -> Res<QueryResult> {
+    bounded("query", run_query_inner(conn, sql)).await
+}
+
+async fn run_query_inner(conn: &DbConnection, sql: &str) -> Res<QueryResult> {
     use sqlx::{Column, Executor, Row};
     let pool = pool_for(conn).await?;
     let head = sql
@@ -674,7 +1376,7 @@ async fn updates_for(
     let table_ref = table_ref(schema, table);
     edits
         .iter()
-        .map(|edit| build_update(conn.backend, &table_ref, &columns, edit))
+        .map(|edit| build_update(conn.backend(), &table_ref, &columns, edit))
         .collect()
 }
 
@@ -696,6 +1398,15 @@ pub async fn preview_edits(
 /// touches no row means the row changed since it was fetched (D10) — that is a
 /// conflict, and it rolls the whole batch back rather than half-writing it.
 pub async fn apply_edits(
+    conn: &DbConnection,
+    schema: Option<&str>,
+    table: &str,
+    edits: &[RowEdit],
+) -> Res<i64> {
+    bounded("applying edits", apply_edits_inner(conn, schema, table, edits)).await
+}
+
+async fn apply_edits_inner(
     conn: &DbConnection,
     schema: Option<&str>,
     table: &str,
@@ -742,6 +1453,24 @@ fn describe_row(edit: &RowEdit) -> String {
 mod tests {
     use super::*;
 
+    fn pg_at(host: &str, port: u16, user: &str, db: &str) -> Details {
+        Details::Postgres {
+            host: host.into(),
+            port,
+            user: user.into(),
+            database: db.into(),
+        }
+    }
+
+    fn pg(host: &str, user: &str, db: &str) -> Details {
+        Details::Postgres {
+            host: host.into(),
+            port: 5432,
+            user: user.into(),
+            database: db.into(),
+        }
+    }
+
     fn cols() -> Vec<ColumnInfo> {
         vec![
             ColumnInfo { name: "id".into(), data_type: "int4".into(), primary_key: true },
@@ -774,36 +1503,155 @@ mod tests {
     fn connections_round_trip_and_are_not_world_readable() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        assert_eq!(list_connections(home, "h").unwrap(), Vec::new());
+        let h = "round-trip";
+        assert_eq!(list_connections(home, h).unwrap().0, Vec::new());
 
-        let dev = add_connection(home, "h", "dev", "postgres://localhost/dev").unwrap();
-        let stg = add_connection(home, "h", "staging", "sqlite://stg.db").unwrap();
-        let all = list_connections(home, "h").unwrap();
+        let (dev, warning) =
+            add_connection(home, h, "dev", pg("localhost", "ada", "dev"), Some("hunter2")).unwrap();
+        assert_eq!(warning, None, "a working credential store warns about nothing");
+        let (stg, _) = add_connection(
+            home,
+            h,
+            "staging",
+            Details::Sqlite { path: "stg.db".into() },
+            None,
+        )
+        .unwrap();
+        let (all, _) = list_connections(home, h).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].name, "dev");
-        assert_eq!(all[1].backend, Backend::Sqlite);
+        assert_eq!(all[0].password, None, "listing must not resolve secrets (D23)");
+        assert_eq!(all[1].backend(), Backend::Sqlite);
+
+        // The password is fetched only when connecting.
+        let (opened, _) = with_secret(home, h, &all[0]).unwrap();
+        assert_eq!(opened.password.as_deref(), Some("hunter2"));
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let path = connections_path(home, "h");
+            let path = connections_path(home, h);
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "connection strings must not be group/world readable");
+            assert_eq!(mode, 0o600, "the file still names every connection");
+            let body = std::fs::read_to_string(&path).unwrap();
+            assert!(!body.contains("hunter2"), "password must not be in the file: {body}");
+            assert!(body.contains("localhost"), "non-secret details stay readable");
         }
 
-        rename_connection(home, "h", &dev.id, "development").unwrap();
-        assert_eq!(list_connections(home, "h").unwrap()[0].name, "development");
+        rename_connection(home, h, &dev.id, "development").unwrap();
+        assert_eq!(list_connections(home, h).unwrap().0[0].name, "development");
 
-        remove_connection(home, "h", &stg.id).unwrap();
-        assert_eq!(list_connections(home, "h").unwrap().len(), 1);
+        remove_connection(home, h, &stg.id).unwrap();
+        assert_eq!(list_connections(home, h).unwrap().0.len(), 1);
+    }
+
+    /// D16: the credential must not reach the frontend, and `DbConnection` is
+    /// what crosses IPC.
+    #[test]
+    fn a_serialized_connection_never_carries_the_url() {
+        let conn = DbConnection {
+            id: "01".into(),
+            name: "dev".into(),
+            details: pg("localhost", "ada", "dev"),
+            password: Some("hunter2".into()),
+        };
+        let json = serde_json::to_string(&conn).unwrap();
+        assert!(!json.contains("hunter2"), "credential crossed IPC: {json}");
+        assert!(!json.contains("url"), "url field crossed IPC: {json}");
+        assert!(json.contains("\"name\":\"dev\""));
+    }
+
+    /// D8: no credential store means the file carries the secret and the user
+    /// is told — never silently, never a refusal to save.
+    #[test]
+    fn no_credential_store_falls_back_to_the_file_with_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "no-store";
+        vault::set_unavailable(h);
+
+        let (conn, warning) =
+            add_connection(home, h, "dev", pg("localhost", "ada", "dev"), Some("hunter2")).unwrap();
+        assert!(warning.unwrap().contains("instead of the OS credential store"));
+
+        let body = std::fs::read_to_string(connections_path(home, h)).unwrap();
+        assert!(body.contains("hunter2"), "fallback must persist the password");
+
+        let (all, _) = list_connections(home, h).unwrap();
+        assert_eq!(all.len(), 1, "the connection is still usable");
+        assert_eq!(all[0].id, conn.id);
+        let (opened, _) = with_secret(home, h, &all[0]).unwrap();
+        assert_eq!(opened.password.as_deref(), Some("hunter2"), "resolves from the file");
+    }
+
+    /// D9/D23: a pre-fields entry splits on first *connect*, not on list.
+    #[test]
+    fn a_legacy_url_connection_splits_on_connect() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "migrate";
+        // Exactly what a version before the field split wrote.
+        let legacy = vec![StoredConnection {
+            id: "01ABC".into(),
+            name: "dev".into(),
+            backend: Backend::Postgres,
+            url: Some("postgres://ada:hunter2@db.internal:6543/app".into()),
+            ..Default::default()
+        }];
+        save_stored(home, h, &legacy).unwrap();
+
+        // Listing shows the parsed details and touches nothing.
+        let (all, warning) = list_connections(home, h).unwrap();
+        assert_eq!(warning, None);
+        assert_eq!(all[0].details, pg_at("db.internal", 6543, "ada", "app"));
+        assert!(
+            std::fs::read_to_string(connections_path(home, h)).unwrap().contains("hunter2"),
+            "listing must not rewrite the file (D23)"
+        );
+
+        // Connecting splits it: password to the store, URL gone from the file.
+        let (opened, warning) = with_secret(home, h, &all[0]).unwrap();
+        assert_eq!(warning, None);
+        assert_eq!(opened.password.as_deref(), Some("hunter2"));
+        let body = std::fs::read_to_string(connections_path(home, h)).unwrap();
+        assert!(!body.contains("hunter2"), "password must leave the file: {body}");
+        assert!(!body.contains("postgres://"), "the url must be gone: {body}");
+        assert!(body.contains("db.internal"), "details stay readable");
+        assert!(vault::has(h, "01ABC"));
+
+        // Idempotent.
+        let (again, _) = with_secret(home, h, &list_connections(home, h).unwrap().0[0]).unwrap();
+        assert_eq!(again.password.as_deref(), Some("hunter2"));
+    }
+
+    /// D9: removal must not leave a credential no connection refers to.
+    #[test]
+    fn removing_a_connection_deletes_its_credential() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "removal";
+        let (conn, _) =
+            add_connection(home, h, "dev", pg("localhost", "ada", "dev"), Some("pw")).unwrap();
+        assert!(vault::has(h, &conn.id));
+
+        remove_connection(home, h, &conn.id).unwrap();
+        assert!(!vault::has(h, &conn.id), "credential outlived its connection");
+        assert_eq!(list_connections(home, h).unwrap().0.len(), 0);
     }
 
     #[test]
     fn a_broken_connection_string_is_never_saved() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(add_connection(tmp.path(), "h", "bad", "mysql://x/y").is_err());
-        assert!(add_connection(tmp.path(), "h", "", "sqlite://x.db").is_err());
-        assert_eq!(list_connections(tmp.path(), "h").unwrap(), Vec::new());
+        assert!(parse_url("mysql://x/y").is_err());
+        assert!(add_connection(
+            tmp.path(),
+            "broken",
+            "",
+            Details::Sqlite { path: "x.db".into() },
+            None
+        )
+        .is_err());
+        assert_eq!(list_connections(tmp.path(), "broken").unwrap().0, Vec::new());
     }
 
     #[test]
@@ -866,8 +1714,10 @@ mod tests {
         let conn = DbConnection {
             id: "t".into(),
             name: "test".into(),
-            url: format!("sqlite://{}?mode=rwc", dir.join("t.db").display()),
-            backend: Backend::Sqlite,
+            details: Details::Sqlite {
+                path: format!("{}?mode=rwc", dir.join("t.db").display()),
+            },
+            password: None,
         };
         let pool = pool_for(&conn).await.unwrap();
         for sql in [
@@ -1117,5 +1967,314 @@ mod tests {
         ] {
             assert!(!is_destructive(sql), "expected ungated: {sql}");
         }
+    }
+
+    // ------------------------------------------------------- query history
+
+    fn conn_for_audit() -> DbConnection {
+        DbConnection {
+            id: "01AUDIT".into(),
+            name: "prod".into(),
+            details: pg("db.internal", "ada", "prod"),
+            password: Some("hunter2".into()),
+        }
+    }
+
+    /// D4: the log must never become a second place the credential lives.
+    #[test]
+    fn an_audit_entry_never_carries_the_connection_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = conn_for_audit();
+        let entry = AuditEntry::new("query", &conn)
+            .statement("select * from users where email = 'a@b.c'")
+            .outcome(&Ok::<i64, String>(3), |r: &i64| Some(*r));
+        append_audit(tmp.path(), "h", &entry).unwrap();
+
+        let body = std::fs::read_to_string(audit_path(tmp.path(), "h")).unwrap();
+        assert!(!body.contains("hunter2"), "credential reached the log: {body}");
+        assert!(!body.contains("ada"), "user reached the log: {body}");
+        assert!(body.contains("prod"), "the connection is still identifiable");
+        assert!(body.contains("a@b.c"), "statement text is kept verbatim (D4)");
+    }
+
+    #[test]
+    fn entries_append_in_order_and_survive_a_torn_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let conn = conn_for_audit();
+
+        append_audit(home, "h", &AuditEntry::new("connection.add", &conn)).unwrap();
+        append_audit(
+            home,
+            "h",
+            &AuditEntry::new("edit", &conn)
+                .at(Some("public"), "users")
+                .outcome(&Ok::<i64, String>(2), |r: &i64| Some(*r)),
+        )
+        .unwrap();
+
+        // A crash mid-write leaves no trailing newline; the next append must
+        // not glue two records together.
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(audit_path(home, "h"))
+                .unwrap();
+            f.write_all(b"{\"ts\":\"broken").unwrap();
+        }
+        append_audit(home, "h", &AuditEntry::new("query", &conn).statement("select 1")).unwrap();
+
+        let all = read_audit(home, "h").unwrap();
+        assert_eq!(all.len(), 3, "the torn line is skipped, the rest survive");
+        assert_eq!(all[0].kind, "connection.add");
+        assert_eq!(all[1].kind, "edit");
+        assert_eq!(all[1].table.as_deref(), Some("users"));
+        assert_eq!(all[1].rows_affected, Some(2));
+        assert_eq!(all[2].statement.as_deref(), Some("select 1"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(audit_path(home, "h")).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "statement text is as sensitive as the credential file");
+        }
+    }
+
+    /// D6 (amended): a failure is recorded as one, not swallowed into `ok`.
+    #[test]
+    fn a_failed_operation_is_recorded_as_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = conn_for_audit();
+        let failed: Res<i64> = Err("relation \"nope\" does not exist".into());
+        append_audit(
+            tmp.path(),
+            "h",
+            &AuditEntry::new("query", &conn)
+                .statement("select * from nope")
+                .outcome(&failed, |r: &i64| Some(*r)),
+        )
+        .unwrap();
+
+        let all = read_audit(tmp.path(), "h").unwrap();
+        assert!(!all[0].ok);
+        assert!(all[0].error.as_deref().unwrap().contains("does not exist"));
+        assert_eq!(all[0].rows_affected, None);
+    }
+
+    #[test]
+    fn no_history_file_reads_as_empty_not_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(read_audit(tmp.path(), "never-used").unwrap().len(), 0);
+    }
+
+    // ------------------------------------------------------------ timeout
+
+    /// D10: the bound reports a timeout distinctly from a query error, and the
+    /// abandoned work does not poison what runs next.
+    #[tokio::test]
+    async fn a_slow_operation_times_out_and_the_next_one_still_runs() {
+        // Stands in for a statement the server is still chewing on. The real
+        // 30s bound is not something a test should wait for, so the duration
+        // is injected — the code path under test is the shipped one.
+        let hung = async {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            Ok::<i64, String>(1)
+        };
+        let err = bounded_for(std::time::Duration::from_millis(50), "query", hung)
+            .await
+            .expect_err("a hung operation must not report success");
+        assert!(err.contains("timed out"), "a timeout must not read as a query error");
+        assert!(err.contains("query"), "the message names the operation");
+
+        // And the shipped bound is the one D10 specifies.
+        assert_eq!(QUERY_TIMEOUT.as_secs(), 30);
+
+        // The helper passes a fast operation straight through.
+        let ok = bounded("query", async { Ok::<i64, String>(7) }).await.unwrap();
+        assert_eq!(ok, 7);
+    }
+
+    /// The bound must not truncate ordinary work.
+    #[tokio::test]
+    async fn a_fast_operation_is_unaffected_by_the_bound() {
+        let out = bounded("reading rows", async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Ok::<&str, String>("done")
+        })
+        .await;
+        assert_eq!(out.unwrap(), "done");
+    }
+
+    // -------------------------------------------------- connection details
+
+    /// D24: the paste shortcut must survive a round trip, including the
+    /// characters that would otherwise end a URL component.
+    #[test]
+    fn a_pasted_url_splits_into_fields_and_rebuilds() {
+        let (details, password) = parse_url("postgres://ada:p%40ss%2Fword@db.internal:6543/app").unwrap();
+        assert_eq!(details, pg_at("db.internal", 6543, "ada", "app"));
+        assert_eq!(password.as_deref(), Some("p@ss/word"), "percent-encoding decoded");
+
+        let conn = DbConnection {
+            id: "1".into(),
+            name: "n".into(),
+            details,
+            password,
+        };
+        let (again, pw) = parse_url(&conn.to_url()).unwrap();
+        assert_eq!(again, conn.details, "details survive the round trip");
+        assert_eq!(pw.as_deref(), Some("p@ss/word"), "so does an awkward password");
+    }
+
+    #[test]
+    fn url_parsing_covers_the_shapes_users_actually_paste() {
+        // No port: Postgres' default.
+        let (d, _) = parse_url("postgres://localhost/dev").unwrap();
+        assert_eq!(d, pg_at("localhost", 5432, "", "dev"));
+        // The `postgresql://` spelling.
+        assert_eq!(parse_url("postgresql://h/d").unwrap().0.backend(), Backend::Postgres);
+        // SQLite is a path and carries no secret.
+        let (d, pw) = parse_url("sqlite:///tmp/app.db").unwrap();
+        assert_eq!(d, Details::Sqlite { path: "/tmp/app.db".into() });
+        assert_eq!(pw, None);
+        assert!(!d.has_secret());
+        // Rejections stay explicit.
+        assert!(parse_url("mysql://h/d").unwrap_err().contains("unsupported"));
+        assert!(parse_url("localhost/dev").unwrap_err().contains("scheme"));
+        assert!(parse_url("postgres://h:notaport/d").unwrap_err().contains("valid port"));
+    }
+
+    /// D22: a SQLite connection has no secret, so it must never reach the
+    /// credential store — which is what removes the OS prompt for it entirely.
+    #[test]
+    fn a_sqlite_connection_never_touches_the_credential_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "sqlite-only";
+        // Any vault access at all would fail here.
+        vault::set_unavailable(h);
+
+        let (conn, warning) = add_connection(
+            home,
+            h,
+            "local",
+            Details::Sqlite { path: "app.db".into() },
+            None,
+        )
+        .unwrap();
+        assert_eq!(warning, None, "no store access means nothing to warn about");
+
+        let (all, warning) = list_connections(home, h).unwrap();
+        assert_eq!(warning, None);
+        assert_eq!(all.len(), 1);
+
+        let (opened, warning) = with_secret(home, h, &all[0]).unwrap();
+        assert_eq!(warning, None);
+        assert_eq!(opened.password, None);
+        assert_eq!(opened.to_url(), "sqlite://app.db");
+        assert!(!vault::has(h, &conn.id));
+    }
+
+    /// D23: the whole point of the field split — listing reads no secrets, so
+    /// opening the panel raises no OS prompt.
+    #[test]
+    fn listing_connections_reads_no_secrets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "listing";
+        add_connection(home, h, "dev", pg("localhost", "ada", "dev"), Some("hunter2")).unwrap();
+
+        // A store that errors on every access proves listing never calls it.
+        vault::set_unavailable(h);
+        let (all, warning) = list_connections(home, h).unwrap();
+        assert_eq!(warning, None, "listing must not report a store failure it never caused");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "dev");
+        assert_eq!(all[0].password, None);
+        match &all[0].details {
+            Details::Postgres { host, user, .. } => {
+                assert_eq!(host, "localhost");
+                assert_eq!(user, "ada", "non-secret details are listable");
+            }
+            other => panic!("wrong backend: {other:?}"),
+        }
+    }
+
+    /// The pool key must not become a place the password lives.
+    #[test]
+    fn the_pool_key_carries_no_password() {
+        let conn = DbConnection {
+            id: "1".into(),
+            name: "n".into(),
+            details: pg("localhost", "ada", "dev"),
+            password: Some("hunter2".into()),
+        };
+        assert!(!conn.pool_key().contains("hunter2"));
+        assert!(conn.to_url().contains("hunter2"), "but the live URL still connects");
+    }
+
+    /// A record written by a build that kept the whole connection string in the
+    /// credential store: no fields and no url on disk. It must stay listed and
+    /// repair itself on connect, not vanish from the panel.
+    #[test]
+    fn a_connection_whose_details_live_in_the_vault_recovers_on_connect() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "vault-only";
+        save_stored(
+            home,
+            h,
+            &[StoredConnection {
+                id: "01OLD".into(),
+                name: "demo".into(),
+                backend: Backend::Sqlite,
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        vault::set(h, "01OLD", "sqlite:///tmp/demo.db").unwrap();
+
+        // Listed, not dropped — and still without reading the store.
+        let (all, _) = list_connections(home, h).unwrap();
+        assert_eq!(all.len(), 1, "the connection must not disappear from the panel");
+        assert_eq!(all[0].name, "demo");
+        assert!(all[0].details.is_placeholder());
+
+        // Connecting recovers and splits it.
+        let (opened, warning) = with_secret(home, h, &all[0]).unwrap();
+        assert_eq!(warning, None);
+        assert_eq!(opened.details, Details::Sqlite { path: "/tmp/demo.db".into() });
+        assert_eq!(opened.to_url(), "sqlite:///tmp/demo.db");
+
+        // Repaired on disk, so the next listing needs no recovery.
+        let (all, _) = list_connections(home, h).unwrap();
+        assert!(!all[0].details.is_placeholder());
+        assert_eq!(all[0].details, Details::Sqlite { path: "/tmp/demo.db".into() });
+    }
+
+    /// A record with nothing recoverable anywhere must say so, not fail blankly.
+    #[test]
+    fn an_unrecoverable_connection_explains_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = "lost";
+        save_stored(
+            home,
+            h,
+            &[StoredConnection {
+                id: "01GONE".into(),
+                name: "orphan".into(),
+                backend: Backend::Postgres,
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        let (all, _) = list_connections(home, h).unwrap();
+        assert_eq!(all.len(), 1, "still listed so the user can see and remove it");
+        let err = with_secret(home, h, &all[0]).unwrap_err();
+        assert!(err.contains("re-enter"), "must tell the user what to do: {err}");
+        assert!(err.contains("orphan"), "and which connection: {err}");
     }
 }

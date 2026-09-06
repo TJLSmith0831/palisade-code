@@ -51,9 +51,16 @@ sqlx = { version = "0.8", default-features = false, features = [
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 
+# Credential storage. keyring enables no backend by default — every platform
+# store is an opt-in feature — so each target names its own. Linux compiles
+# none and falls back to the 0600 file path (design.md D15).
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2.7"
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 
 [dev-dependencies]
 tempfile = "3"

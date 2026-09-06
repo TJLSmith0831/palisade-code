@@ -15,6 +15,7 @@ const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider })
 vi.mock("../api", () => ({
   dbListConnections: vi.fn(),
   dbAddConnection: vi.fn(),
+  dbParseUrl: vi.fn(),
   dbRemoveConnection: vi.fn(),
   dbRenameConnection: vi.fn(),
   dbListTables: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("../api", () => ({
 const mocked = api as unknown as {
   dbListConnections: ReturnType<typeof vi.fn>;
   dbAddConnection: ReturnType<typeof vi.fn>;
+  dbParseUrl: ReturnType<typeof vi.fn>;
   dbRemoveConnection: ReturnType<typeof vi.fn>;
   dbRenameConnection: ReturnType<typeof vi.fn>;
   dbListTables: ReturnType<typeof vi.fn>;
@@ -31,7 +33,6 @@ const mocked = api as unknown as {
 const dev: api.DbConnection = {
   id: "c1",
   name: "dev",
-  url: "postgres://localhost/dev",
   backend: "postgres",
 };
 
@@ -51,6 +52,7 @@ beforeEach(() => {
   onOpenQuery.mockReset();
   mocked.dbListConnections.mockReset().mockResolvedValue([]);
   mocked.dbAddConnection.mockReset().mockResolvedValue(dev);
+  mocked.dbParseUrl.mockReset();
   mocked.dbRemoveConnection.mockReset().mockResolvedValue(undefined);
   mocked.dbRenameConnection.mockReset().mockResolvedValue({ ...dev, name: "prod" });
   mocked.dbListTables.mockReset().mockResolvedValue([
@@ -73,15 +75,53 @@ describe("DatabasePanel", () => {
     render(panel());
     fireEvent.click(await screen.findByRole("button", { name: "Add connection" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "dev" } });
-    fireEvent.change(screen.getByLabelText("Connection string"), {
-      target: { value: "postgres://nope/dev" },
-    });
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "nope" } });
+    fireEvent.change(screen.getByLabelText("Database"), { target: { value: "dev" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     // Inline, not a toast (D18) — and the form stays open with the text in it.
     expect(await screen.findByTestId("db-error")).toBeTruthy();
     expect(screen.getByText(/no such host/)).toBeTruthy();
     expect(screen.getByTestId("db-connection-form")).toBeTruthy();
+  });
+
+  // D24: pasting fills the fields; the string itself is never submitted.
+  it("splits a pasted connection string into fields", async () => {
+    mocked.dbParseUrl.mockResolvedValue({
+      details: {
+        backend: "postgres",
+        host: "db.internal",
+        port: 6543,
+        user: "ada",
+        database: "app",
+      },
+      password: "hunter2",
+    });
+    render(panel());
+    fireEvent.click(await screen.findByRole("button", { name: "Add connection" }));
+    fireEvent.change(screen.getByLabelText("Or paste a connection string"), {
+      target: { value: "postgres://ada:hunter2@db.internal:6543/app" },
+    });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("Host") as HTMLInputElement).value).toBe("db.internal")
+    );
+    expect((screen.getByLabelText("Database") as HTMLInputElement).value).toBe("app");
+    expect((screen.getByLabelText("User") as HTMLInputElement).value).toBe("ada");
+    expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("hunter2");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "prod" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(mocked.dbAddConnection).toHaveBeenCalled());
+    const [, , details, password] = mocked.dbAddConnection.mock.calls[0];
+    expect(details).toEqual({
+      backend: "postgres",
+      host: "db.internal",
+      port: 6543,
+      user: "ada",
+      database: "app",
+    });
+    expect(password).toBe("hunter2");
   });
 
   it("lists tables and views when a connection is expanded, and opens one", async () => {
