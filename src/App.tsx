@@ -3154,6 +3154,26 @@ export default function App() {
     [tabs]
   );
 
+  // Every rail panel that hands the editor column something to show (a
+  // file, spec, table, chain, query) does it by changing the active tab —
+  // so this is the one place that needs to reclaim a collapsed Vibe editor
+  // column, rather than every panel's open-handler remembering to. Keyed
+  // only on activePath actually changing: including editorCollapsed itself
+  // would refight a deliberate manual collapse of an already-open tab.
+  const prevActivePathRef = useRef<string | null>(null);
+  useEffect(() => {
+    const changed = tabs.activePath !== prevActivePathRef.current;
+    prevActivePathRef.current = tabs.activePath;
+    if (
+      changed &&
+      tabs.activePath &&
+      shell.centerShell === "vibe" &&
+      shell.editorCollapsed
+    ) {
+      shell.toggleEditor();
+    }
+  }, [tabs.activePath]);
+
   // Opens a location a test runner reported. Its paths are relative to
   // wherever the runner ran, which for a nested crate is not the project
   // root — resolve against the project's own files before opening.

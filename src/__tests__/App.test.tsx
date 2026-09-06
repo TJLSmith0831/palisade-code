@@ -1040,6 +1040,30 @@ describe("Status bar (mockup parity)", () => {
       /Ln \d+, Col \d+/
     );
   });
+
+  it("reopens the collapsed editor column when any rail panel opens a tab (via the file explorer)", async () => {
+    // Exercises the general fix (App.tsx: activePath-change effect) through
+    // its most common entry point. The fix isn't file-specific — it fires
+    // whenever tabs.activePath changes, so Database/Chains/Specs panels get
+    // the same reopen for free without their own handlers knowing about it.
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+
+    // Vibe hides the editor column behind a collapse toggle; collapse it,
+    // then click a file the way a user would.
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    fireEvent.click(screen.getByTestId("toggle-editor"));
+    expect(screen.queryByTestId("editor-col")).toBeNull();
+
+    fireEvent.click(await screen.findByText("AGENTS.md"));
+
+    expect(await screen.findByTestId("editor-col")).toBeDefined();
+    expect(screen.getByTestId("toggle-editor")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  });
 });
 
 describe("Chat column width per preset (Governing Rule)", () => {
