@@ -387,3 +387,80 @@ describe("EventList crash banner", () => {
     expect(screen.queryByTestId("crash-banner-retry")).not.toBeInTheDocument();
   });
 });
+
+
+/** #19: an agent whose login expired can be signed in from inside Palisade —
+ *  ACP agents advertise an interactive login for the client to run, and
+ *  Palisade has a terminal to run it in. Without this the banner could only
+ *  tell the user to go elsewhere. */
+describe("EventList agent sign-in", () => {
+  const crash: Item[] = [
+    { kind: "plain", role: "user", mode: "go", text: "do the thing" },
+    {
+      kind: "plain",
+      role: "system",
+      mode: "go",
+      text: "Claude Agent needs to be signed in — Internal error: Failed to authenticate: OAuth session expired.",
+    },
+  ];
+  const logins = [
+    { methodId: "claude-ai-login", label: "Claude Subscription", shellLine: "npx -y pkg --cli auth login --claudeai" },
+    { methodId: "console-login", label: "Anthropic Console", shellLine: "npx -y pkg --cli auth login --console" },
+  ];
+
+  it("offers one sign-in button per advertised login on an auth failure", () => {
+    renderWithMantine(
+      <EventList items={crash} executor={null} agentLogins={logins} onAgentLogin={() => {}} />
+    );
+    const buttons = screen.getAllByTestId("crash-banner-signin");
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Sign in with Claude Subscription",
+      "Sign in with Anthropic Console",
+    ]);
+  });
+
+  it("hands the chosen login back so the app can run it", () => {
+    const ran: unknown[] = [];
+    renderWithMantine(
+      <EventList
+        items={crash}
+        executor={null}
+        agentLogins={logins}
+        onAgentLogin={(login) => ran.push(login)}
+      />
+    );
+    fireEvent.click(screen.getAllByTestId("crash-banner-signin")[1]);
+    expect(ran).toEqual([logins[1]]);
+  });
+
+  /** An agent that advertises no client-runnable login gets no button — the
+   *  banner must not promise a sign-in that does not exist. */
+  it("offers nothing when the agent advertises no login", () => {
+    renderWithMantine(
+      <EventList items={crash} executor={null} agentLogins={[]} onAgentLogin={() => {}} />
+    );
+    expect(screen.queryByTestId("crash-banner-signin")).toBeNull();
+  });
+
+  it("offers nothing on a failure that is not an auth failure", () => {
+    const other: Item[] = [
+      { kind: "plain", role: "user", mode: "go", text: "do the thing" },
+      { kind: "plain", role: "system", mode: "go", text: "prompt failed: context window exceeded" },
+    ];
+    renderWithMantine(
+      <EventList items={other} executor={null} agentLogins={logins} onAgentLogin={() => {}} />
+    );
+    expect(screen.queryByTestId("crash-banner-signin")).toBeNull();
+  });
+
+  /** The old copy told the user to leave the app. With a login available it
+   *  has to say what the button does instead. */
+  it("stops telling the user to sign in outside Palisade when it can do it here", () => {
+    renderWithMantine(
+      <EventList items={crash} executor={null} agentLogins={logins} onAgentLogin={() => {}} />
+    );
+    const summary = screen.getByTestId("crash-banner-auth-summary");
+    expect(summary.textContent).not.toMatch(/outside Palisade/);
+    expect(summary.textContent).toMatch(/terminal/i);
+  });
+});

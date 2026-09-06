@@ -150,7 +150,16 @@ export type ExecutorEvent =
       warning: string | null;
     }
   | { kind: "done" }
-  | { kind: "crashed"; exitCode: number | null; message: string };
+  | {
+      kind: "crashed";
+      exitCode: number | null;
+      message: string;
+      /** Whether the agent is still alive and the turn can simply be retried
+       *  (an expired login, a cancelled turn) rather than the process being
+       *  gone. Only a non-retryable crash drops the thread back to Spec mode.
+       *  Absent on events persisted before the flag existed. */
+      retryable?: boolean;
+    };
 
 /**
  * What the `executor-event` listener actually receives. Every event names the
@@ -242,13 +251,54 @@ export const goMode = (
   bypass: boolean
 ) =>
   invoke<ThreadMeta>("go_mode", { projectHash, threadId, model: null, bypass });
+/** `start` is the deliberate "begin exploring" act — picking a spec type in
+ *  the framing menu. The Spec/Go toggle passes false: it records the thread's
+ *  mode and must not spawn a session or send a turn (#17). */
+/** One interactive login an agent advertised at `initialize`. */
+export type AgentLogin = {
+  methodId: string;
+  label: string;
+  /** How the login runs: "terminal" means execute `shellLine`; "protocol"
+   *  means call `agentAuthenticate` and let the agent run its own flow. */
+  kind: "terminal" | "protocol";
+  /** The agent's own login command, ready to run in a terminal. Empty for a
+   *  protocol login. */
+  shellLine: string;
+};
+
+/** Runs an agent's protocol-driven login (`authenticate`). The agent keeps the
+ *  credential itself; the next turn's handshake picks it up. */
+export const agentAuthenticate = (
+  projectHash: string,
+  threadId: string | null,
+  agentId: string | null,
+  methodId: string
+) =>
+  invoke<void>("agent_authenticate", { projectHash, threadId, agentId, methodId });
+
+/** Interactive logins the thread's agent advertises over ACP. Agents that own
+ *  a login expect the *client* to run it — Palisade runs it in a terminal, so
+ *  an expired agent login is fixable without leaving the app (#19). */
+export const agentLogins = (
+  projectHash: string,
+  threadId: string | null,
+  agentId: string | null = null
+) => invoke<AgentLogin[]>("agent_logins", { projectHash, threadId, agentId });
+
 export const specMode = (
   projectHash: string,
   threadId: string,
   specType: string,
-  bypass: boolean
+  bypass: boolean,
+  start: boolean
 ) =>
-  invoke<ThreadMeta>("spec_mode", { projectHash, threadId, specType, bypass });
+  invoke<ThreadMeta>("spec_mode", {
+    projectHash,
+    threadId,
+    specType,
+    bypass,
+    start,
+  });
 export const propose = (
   projectHash: string,
   threadId: string,

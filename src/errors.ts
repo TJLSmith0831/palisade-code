@@ -12,7 +12,7 @@ export function describeError(err: unknown): string {
  *  There's no structured error code from any of them, so this is a text
  *  match on their observed wording rather than a machine-checkable status. */
 export function isAuthError(message: string): boolean {
-  return /unauthoriz|not logged in|not authenticated|please (log|sign) in|log in (again|to)|authentication (failed|required|expired)|re-?auth|session expired|token (expired|invalid)|credentials (expired|invalid)|\b401\b/i.test(
+  return /unauthoriz|not logged in|not authenticated|(please |needs? to be )?(log|sign)(ged)? in( for| again| to)?|authentication (failed|required|expired)|re-?auth|session expired|token (expired|invalid)|credentials (expired|invalid)|\b401\b/i.test(
     message
   );
 }

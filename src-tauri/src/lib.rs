@@ -489,7 +489,13 @@ impl Sink for AppSink {
         match &envelope_ref.event {
             ExecutorEvent::Crashed { .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
-                let _ = executor::on_crash(&palisade_home(), &self.project_hash, &thread_id);
+                // #18: only a dead agent drops the thread back to spec. A
+                // retryable turn failure (expired auth, a cancelled turn)
+                // leaves the user's Go intent where they put it — the UI is
+                // offering them a Retry for that very error.
+                if executor::crash_resets_mode(&envelope_ref.event) {
+                    let _ = executor::on_crash(&palisade_home(), &self.project_hash, &thread_id);
+                }
                 let _ = self.app.emit("thread-updated", &thread_id);
             }
             ExecutorEvent::Done => {
@@ -1057,7 +1063,15 @@ async fn go_mode(
             check_agents_available(&harness, &loaded)?;
             return Ok(meta);
         }
-        let _ = ensure_session(&app, &harness, &project_hash, &thread_id, "go", model, bypass)?;
+        // No session is started here (#17). Flipping to go-mode is a statement
+        // of intent, not a request: `send_message` calls `ensure_session`
+        // itself, so the agent comes up when the user actually sends
+        // something. The preflight and chain checks above stay — they are what
+        // makes the toggle refuse a mode this thread can't run.
+        //
+        // `model` and `bypass` stay on the command: they describe the session
+        // the *next* send will bring up, and `send_message` passes its own.
+        let _ = (model, bypass);
         // Per amended D19: go-mode has no skill injection. The user toggles
         // go-mode to let the agent write code; grill-apply is a separate
         // UI-triggered one-shot in spec-mode.
@@ -1101,7 +1115,18 @@ fn spec_type_reinjection(mode: &str, meta: &store::ThreadMeta) -> Option<String>
 /// Per D5: `spec_type` is the user turn body (replacing the bare "grill-explore"
 /// literal). Per D10: when an existing change is open, spec_type is silently
 /// dropped — no auto-injection, the user is past explore.
-fn spec_mode_initial_prompt(meta: &store::ThreadMeta, spec_type: &str) -> Option<String> {
+///
+/// `start` is what separates the two callers (#17): picking a spec type in the
+/// framing menu is a deliberate "begin exploring" act, while flipping the mode
+/// toggle is not a request at all — it records intent and sends nothing.
+fn spec_mode_initial_prompt(
+    meta: &store::ThreadMeta,
+    spec_type: &str,
+    start: bool,
+) -> Option<String> {
+    if !start {
+        return None;
+    }
     if meta.open_spec_change_name.is_none() {
         Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type)))
     } else {
@@ -1109,10 +1134,17 @@ fn spec_mode_initial_prompt(meta: &store::ThreadMeta, spec_type: &str) -> Option
     }
 }
 
-/// Sets the thread's default mode back to spec. Under amended D19, entering
-/// spec-mode with no open change auto-fires grill-explore — the first stage
-/// of the explore → propose → apply progression. With an existing change,
-/// it just sets the mode (the user is past explore).
+/// Sets the thread's default mode back to spec. Under amended D19, *starting*
+/// spec-mode with no open change auto-fires grill-explore — the first stage of
+/// the explore → propose → apply progression. With an existing change, it just
+/// sets the mode (the user is past explore).
+///
+/// `start` is false for the mode toggle, which must be inert: it records the
+/// thread's intent and nothing else. It used to spawn a session, append a
+/// visible user message and send a grill-explore turn on every flip back into
+/// Spec, so switching modes with an empty composer fired a real agent request
+/// (#17). Only the framing menu — where the user picks what they are exploring
+/// — passes true.
 #[tauri::command]
 async fn spec_mode(
     app: tauri::AppHandle,
@@ -1120,6 +1152,7 @@ async fn spec_mode(
     thread_id: String,
     spec_type: String,
     bypass: bool,
+    start: bool,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
@@ -1132,7 +1165,7 @@ async fn spec_mode(
         } else {
             store::set_spec_type(&palisade_home(), &project_hash, &thread_id, &spec_type)?
         };
-        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type) {
+        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, start) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
                 let id =
                     ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
@@ -1205,7 +1238,119 @@ async fn list_models(
             Some(hash) => project_root(hash)?,
             None => dirs_home(),
         };
-        acp_client::probe_models(PathBuf::from(path), agent.args.clone(), root)
+        acp_client::probe_models(
+            agent.id.clone(),
+            agent.cmd.clone(),
+            PathBuf::from(path),
+            agent.args.clone(),
+            root,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One interactive login an agent advertised, as the frontend can offer it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLoginOption {
+    method_id: String,
+    label: String,
+    /// "terminal" (run `shell_line`) or "protocol" (call `agent_authenticate`).
+    kind: acp_client::AgentLoginKind,
+    /// Empty for a protocol login — there is no command to run.
+    shell_line: String,
+}
+
+/// The logins this thread's agent says the *client* should run.
+///
+/// ACP agents that own an interactive login advertise it at `initialize` and
+/// expect the client to run it — their own `authenticate` refuses those
+/// methods. Palisade has a terminal, so it can run one, which is what makes an
+/// expired agent login fixable without leaving the app (#19). Empty for an
+/// agent that advertises none.
+#[tauri::command]
+async fn agent_logins(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: Option<String>,
+    agent_id: Option<String>,
+) -> Res<Vec<AgentLoginOption>> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        // Named agent, or whatever this thread resolves to. The picker asks
+        // by name — it offers a sign-in before any thread has been pointed at
+        // that agent.
+        let agent = match agent_id {
+            Some(id) => preflight_for_harness(&*harness, false)
+                .agent(&id)
+                .cloned()
+                .ok_or_else(|| format!("unknown or unavailable agent `{id}`"))?,
+            None => selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?.0,
+        };
+        // Nothing cached means no session has reached this agent yet this run.
+        // A probe completes the same handshake, which is where the methods are
+        // advertised — cheap, and only on the path that needs an answer.
+        if acp_client::logins_for(&agent.id).is_empty() {
+            if let Some(path) = agent.path.clone() {
+                let _ = acp_client::probe_models(
+                    agent.id.clone(),
+                    agent.cmd.clone(),
+                    PathBuf::from(path),
+                    agent.args.clone(),
+                    project_root(&project_hash)?,
+                );
+            }
+        }
+        Ok(acp_client::logins_for(&agent.id)
+            .into_iter()
+            .map(|login| AgentLoginOption {
+                method_id: login.method_id.clone(),
+                label: login.label.clone(),
+                kind: login.kind,
+                shell_line: match login.kind {
+                    acp_client::AgentLoginKind::Terminal => login.shell_line(),
+                    acp_client::AgentLoginKind::Protocol => String::new(),
+                },
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Run one of an agent's advertised logins that the protocol drives.
+///
+/// The counterpart to running a `terminal` login in Palisade's terminal: here
+/// the client calls `authenticate` with the chosen method and the agent runs
+/// its own flow. Between the two kinds, every agent that advertises anything
+/// can be signed in from inside the app (#19).
+#[tauri::command]
+async fn agent_authenticate(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: Option<String>,
+    agent_id: Option<String>,
+    method_id: String,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let agent = match agent_id {
+            Some(id) => preflight_for_harness(&*harness, false)
+                .agent(&id)
+                .cloned()
+                .ok_or_else(|| format!("unknown or unavailable agent `{id}`"))?,
+            None => selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?.0,
+        };
+        let path = agent.path.clone().ok_or("agent has no path")?;
+        acp_client::authenticate_agent(
+            agent.id.clone(),
+            agent.cmd.clone(),
+            PathBuf::from(path),
+            agent.args.clone(),
+            project_root(&project_hash)?,
+            method_id,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1472,10 +1617,9 @@ async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res
             let envelope = executor::Envelope {
                 session_id: id.clone(),
                 thread_id: thread_id.clone(),
-                event: executor::ExecutorEvent::Crashed {
-                    exit_code: None,
-                    message: "Cancelled by user".into(),
-                },
+                // The user stopped the turn; nothing died and nothing about
+                // their mode choice should change (#18).
+                event: executor::ExecutorEvent::turn_failed("Cancelled by user".into()),
             };
             let _ = app.emit("executor-event", &envelope);
             // This event is emitted straight at the frontend rather than
@@ -2476,6 +2620,8 @@ pub fn run() {
             set_thread_mode,
             set_thread_executor,
             list_models,
+            agent_logins,
+            agent_authenticate,
             delete_thread,
             set_thread_archived,
             append_message,
@@ -2828,7 +2974,7 @@ mod tests {
     #[test]
     fn spec_mode_initial_prompt_with_no_change_uses_spec_type_as_body() {
         let meta = thread_meta(None);
-        let prompt = spec_mode_initial_prompt(&meta, "Feature").unwrap();
+        let prompt = spec_mode_initial_prompt(&meta, "Feature", true).unwrap();
         // The grill-explore skill content is still prepended (it contains the
         // label "grill-explore" and a "---" separator before the body).
         assert!(prompt.contains("grill-explore"));
@@ -2846,7 +2992,33 @@ mod tests {
     #[test]
     fn spec_mode_initial_prompt_with_change_is_none() {
         let meta = thread_meta(Some("my-change"));
-        assert!(spec_mode_initial_prompt(&meta, "Feature").is_none());
+        assert!(spec_mode_initial_prompt(&meta, "Feature", true).is_none());
+    }
+
+    /// #17 RED: flipping the mode toggle is not a request. Nothing is typed,
+    /// nothing is sent — the toggle only records the thread's intent, so
+    /// there is no initial prompt to fire whatever the thread looks like.
+    #[test]
+    fn a_mode_toggle_never_produces_an_initial_prompt() {
+        for change in [None, Some("my-change")] {
+            let meta = thread_meta(change);
+            assert!(
+                spec_mode_initial_prompt(&meta, "Feature", false).is_none(),
+                "the toggle must stay inert"
+            );
+            assert!(
+                spec_mode_initial_prompt(&meta, "", false).is_none(),
+                "even with no spec type to frame"
+            );
+        }
+    }
+
+    /// The deliberate act — picking a spec type in the framing menu — is what
+    /// still starts the explore turn.
+    #[test]
+    fn an_explicit_start_with_no_open_change_still_fires_grill_explore() {
+        let meta = thread_meta(None);
+        assert!(spec_mode_initial_prompt(&meta, "Bugfix", true).is_some());
     }
 
     // ----------------------------------------------- D12: handoff re-injection

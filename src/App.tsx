@@ -214,6 +214,8 @@ type ChatSurfaceProps = {
   onGo: () => void;
   /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
   onApply: () => void;
+  agentLogins?: api.AgentLogin[];
+  onAgentLogin?: (login: api.AgentLogin) => void;
   /** Spec-mode stage derivation (amended D19). */
   stage: SpecStage;
   dragActive: boolean;
@@ -431,6 +433,8 @@ export const ChatSurface = memo(
     onSpec,
     onGo,
     onApply,
+    agentLogins,
+    onAgentLogin,
     stage,
     dragActive,
     newThreadPicker,
@@ -1244,6 +1248,8 @@ export const ChatSurface = memo(
                 setDraft(text);
                 handleSend();
               }}
+              agentLogins={agentLogins}
+              onAgentLogin={onAgentLogin}
             />
           </>
           {busy && (
@@ -2605,6 +2611,56 @@ export default function App() {
     ]
   );
 
+  // #19: the interactive logins this thread's agent advertises over ACP.
+  // Agents that own a login expect the *client* to run it — their own
+  // `authenticate` refuses those methods — so an expired agent login is only
+  // fixable in-app if Palisade asks for the command and runs it.
+  const [agentLogins, setAgentLogins] = useState<api.AgentLogin[]>([]);
+  useEffect(() => {
+    if (!project) {
+      setAgentLogins([]);
+      return;
+    }
+    let live = true;
+    api
+      .agentLogins(project.hash, thread?.id ?? null)
+      .then((logins) => live && setAgentLogins(logins))
+      .catch(() => live && setAgentLogins([]));
+    return () => {
+      live = false;
+    };
+  }, [project?.hash, thread?.id]);
+
+  const onAgentLogin = useCallback(
+    (login: api.AgentLogin) => {
+      // Two shapes, both from the agent's own manifest. A terminal login is a
+      // command Palisade runs so the user can complete it here; a protocol
+      // login is an `authenticate` call the agent answers itself (#19).
+      if (login.kind === "terminal") {
+        runCommand(`Sign in — ${login.label}`, login.shellLine);
+        return;
+      }
+      const { project, thread } = current.current;
+      if (!project) return;
+      setBusy(true);
+      api
+        .agentAuthenticate(project.hash, thread?.id ?? null, null, login.methodId)
+        // The agent owns the result; a failed sign-in surfaces the agent's
+        // own words rather than a Palisade-invented summary.
+        .then(() =>
+          setBar({
+            kind: "confirm",
+            label: `Signed in with ${login.label}. Retry the turn?`,
+            confirmLabel: "Close",
+            onConfirm: () => setBar(null),
+          })
+        )
+        .catch(fail)
+        .finally(() => setBusy(false));
+    },
+    [runCommand]
+  );
+
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
       setFileEdits((prev) => [...prev, edit]);
@@ -3204,7 +3260,7 @@ export default function App() {
       // Fire specMode without awaiting — don't block the UI. The busy state
       // stays true until the agent's turn ends (ExecutorEvent::Done clears it).
       api
-        .specMode(project.hash, updated.id, specType, false)
+        .specMode(project.hash, updated.id, specType, false, true)
         .then((meta) => {
           setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
           setThread(meta);
@@ -3730,8 +3786,9 @@ export default function App() {
         );
         return;
       }
-      // A linked change means /grill-apply was just sent; otherwise we're idle.
-      if (!meta.openSpecChangeName) setBusy(false);
+      // #17: go-mode no longer brings a session up — `send_message` does
+      // that on the user's first actual turn — so the toggle is never busy.
+      setBusy(false);
     } catch (err) {
       setBusy(false);
       fail(err);
@@ -3855,24 +3912,17 @@ export default function App() {
       setComposerSpecTypePicker(true);
       return;
     }
-    setBusy(true);
     const prefs = resolvePrefs(project.hash, thread.id);
     // Reuse the stored spec_type if available; otherwise the change is
     // already open so spec_type is silently dropped (D10).
     const specType = thread.specType ?? "grill-explore";
-    // Fire specMode without awaiting — busy stays true until the agent's
-    // turn ends (ExecutorEvent::Done clears it). If there's an open change,
-    // spec_mode just sets the mode (no session started) so clear busy.
+    // #17: the toggle records the mode and nothing else — no session, no
+    // turn, so nothing to be busy for. The framing menu below is the one
+    // path that starts anything.
     api
-      .specMode(project.hash, thread.id, specType, prefs.bypass)
-      .then((meta) => {
-        if (meta.openSpecChangeName) setBusy(false);
-        refresh();
-      })
-      .catch((err) => {
-        setBusy(false);
-        fail(err);
-      });
+      .specMode(project.hash, thread.id, specType, prefs.bypass, false)
+      .then(() => refresh())
+      .catch(fail);
   };
 
   // D9: spec-type selection from the composer-toggle framing menu — the
@@ -3886,7 +3936,7 @@ export default function App() {
     // Fire specMode without awaiting — busy stays true until the agent's
     // turn ends (ExecutorEvent::Done clears it).
     api
-      .specMode(project.hash, thread.id, specType, prefs.bypass)
+      .specMode(project.hash, thread.id, specType, prefs.bypass, true)
       .then(() => refresh())
       .catch((err) => {
         setBusy(false);
@@ -4604,6 +4654,8 @@ export default function App() {
     onSpec,
     onGo,
     onApply,
+    agentLogins,
+    onAgentLogin,
     stage,
     dragActive,
     newThreadPicker,
