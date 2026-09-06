@@ -1602,42 +1602,6 @@ input[type="checkbox"] {
   font-weight: 600;
 }
 
-.ds-right-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.ds-right-tabs button {
-  flex: 1;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  padding: 8px 6px;
-  cursor: pointer;
-  transition: color 120ms ease-out;
-}
-
-.ds-right-tabs button[data-active] {
-  color: var(--fg);
-  border-bottom: 2px solid var(--accent);
-}
-
-.ds-right-tabs button:hover {
-  color: var(--fg);
-}
-
-.ds-right-panes {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
 /* Lets the Vibe/Editor shell-toggle wrapper divs carry a data-testid without
    participating in .body's flex layout — their children (nav/main/aside,
    or the Vibe columns) stay direct flex items as if unwrapped. */

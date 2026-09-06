@@ -314,7 +314,12 @@ describe("Icon button sizing", () => {
 });
 
 describe("Responsive breakpoints", () => {
-  it("never hides the file explorer with display:none (its toggle button would go dead — it only controls margin-left)", () => {
+  // Repointed from `.ds-nav-rail`, a v2 class no component has carried since
+  // the shell redesign — the guard was passing vacuously against a selector
+  // that matched nothing. `.ds-rail` is the icon rail the shell actually
+  // renders, and hiding it outright would strip every panel's only
+  // affordance, so that is what needs guarding.
+  it("never hides the icon rail with display:none (it is the only way to reach any panel)", () => {
     const allRules = [...document.styleSheets].flatMap((s) => {
       try {
         return [...s.cssRules];
@@ -330,7 +335,7 @@ describe("Responsive breakpoints", () => {
       .filter(
         (r): r is CSSStyleRule =>
           r instanceof CSSStyleRule &&
-          r.selectorText === ".ds-nav-rail" &&
+          r.selectorText === ".ds-rail" &&
           r.style.display === "none"
       );
     expect(navRailDisplayNoneRules).toHaveLength(0);
