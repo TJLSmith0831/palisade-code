@@ -11,14 +11,14 @@ const MARKER = { add: "+", remove: "−", context: " " } as const;
 /** One side of the split view. A null row is the blank cell opposite a pure
  *  add or delete — it carries no marker and no number. */
 function SplitCell({ row, side }: { row: DiffRow | null; side: "old" | "new" }) {
-  if (!row) return <div className="diff-cell empty" aria-hidden="true" />;
+  if (!row) return <div className="diff-cell blank" aria-hidden="true" />;
   const number = side === "old" ? row.oldLine : row.newLine;
   // A context line shows on both sides; an add has no old side and a remove
   // no new side, so the opposite cell renders blank rather than repeating it.
   if (side === "old" && row.type === "add")
-    return <div className="diff-cell empty" aria-hidden="true" />;
+    return <div className="diff-cell blank" aria-hidden="true" />;
   if (side === "new" && row.type === "remove")
-    return <div className="diff-cell empty" aria-hidden="true" />;
+    return <div className="diff-cell blank" aria-hidden="true" />;
   return (
     <div className={`diff-cell ${row.type}`}>
       <span className="diff-lineno">{number ?? ""}</span>

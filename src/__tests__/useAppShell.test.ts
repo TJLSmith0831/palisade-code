@@ -119,3 +119,54 @@ describe("bottom panel", () => {
     expect(result.current.terminalPanel.collapsed).toBe(collapsedAtStart);
   });
 });
+
+describe("opening the diff reclaims the pane that renders it", () => {
+  // The diff is a mode of the editor column, which Vibe lets you collapse.
+  // Before this, "View diff" in the chat, a Source Control click and the
+  // turn-start auto-open all set diffOpen against an unmounted pane and
+  // looked inert. Every one of those callers goes through setDiffOpen.
+  it("uncollapses the editor column when the diff is opened", () => {
+    const { result } = render();
+    act(() => result.current.toggleEditor());
+    expect(result.current.editorCollapsed).toBe(true);
+
+    act(() => result.current.setDiffOpen(true));
+    expect(result.current.diffOpen).toBe(true);
+    expect(result.current.editorCollapsed).toBe(false);
+  });
+
+  it("reclaims it for the updater form too, as the tab bar's toggle uses", () => {
+    const { result } = render();
+    act(() => result.current.toggleEditor());
+    expect(result.current.editorCollapsed).toBe(true);
+
+    act(() => result.current.setDiffOpen((open) => !open));
+    expect(result.current.diffOpen).toBe(true);
+    expect(result.current.editorCollapsed).toBe(false);
+  });
+
+  it("leaves a deliberate collapse alone when the diff is being closed", () => {
+    const { result } = render();
+    act(() => result.current.setDiffOpen(true));
+    act(() => result.current.toggleEditor());
+    expect(result.current.editorCollapsed).toBe(true);
+
+    act(() => result.current.setDiffOpen(false));
+    expect(result.current.diffOpen).toBe(false);
+    expect(result.current.editorCollapsed).toBe(true);
+  });
+});
+
+describe("opening a thread reclaims a collapsed chat pane", () => {
+  // Editor lets you send the chat pane away, and every route to a thread
+  // ends up in openThread — so that is where the reclaim belongs.
+  it("uncollapses the chat pane when a thread is opened", () => {
+    const { result } = render();
+    act(() => result.current.toggleChat());
+    expect(result.current.chatCollapsed).toBe(true);
+
+    act(() => result.current.openThread("t1"));
+    expect(result.current.openThreadIds).toContain("t1");
+    expect(result.current.chatCollapsed).toBe(false);
+  });
+});

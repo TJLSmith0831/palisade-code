@@ -2552,6 +2552,29 @@ export default function App() {
   // hint on a thread that had never sent a message, just because a
   // *previous* thread's stale `hasLiveSession` value was still in state.
   const hasLiveSession = thread ? busyThreads.has(thread.id) : false;
+  /** The worktree choice made in a composer that has no thread yet, handed to
+   *  whichever thread gets created next. Sticky for the session and always
+   *  reflected by the composer's badge, so it is never a hidden setting. */
+  const [pendingWorktreeEnabled, setPendingWorktreeEnabled] = useState(true);
+
+  /** Create a thread and apply that pending choice to it. Every creation path
+   *  goes through here so the choice cannot be dropped by whichever route the
+   *  user happened to take into a new thread. */
+  const createThreadWithPrefs = useCallback(
+    async (projectHash: string, title = "New thread") => {
+      const created = await api.createThread(projectHash, title);
+      if (pendingWorktreeEnabled) return created;
+      try {
+        return await api.setThreadWorktreeEnabled(projectHash, created.id, false);
+      } catch {
+        // A project that isn't a git repo has no isolation to turn off. The
+        // thread is still fine, so don't fail creation over it.
+        return created;
+      }
+    },
+    [pendingWorktreeEnabled]
+  );
+
   const onToggleBypass = () => {
     if (!project || !thread) return;
     const prefs = { bypass: !threadPrefs.bypass };
@@ -2562,7 +2585,17 @@ export default function App() {
    *  has run — the backend refuses once a worktree exists, so this can never
    *  leave the flag disagreeing with what is on disk. */
   const onToggleWorktree = () => {
-    if (!project || !thread) return;
+    if (!project) return;
+    if (!thread) {
+      // D20 leaves go-mode's composer with no thread until the first send,
+      // but this toggle lives in that composer and locks the moment the
+      // thread runs — so the only window in which the choice can be made was
+      // exactly the window in which there was nothing to store it on, and the
+      // click returned here silently. That is what made the toggle look dead.
+      // Hold the choice instead; `createThreadWithPrefs` applies it.
+      setPendingWorktreeEnabled((on) => !on);
+      return;
+    }
     api
       .setThreadWorktreeEnabled(
         project.hash,
@@ -3093,7 +3126,7 @@ export default function App() {
       const added = await api.addProject(picked);
       setProjects(await api.listProjects());
       await selectProjectNow(added);
-      const created = await api.createThread(added.hash, "New thread");
+      const created = await createThreadWithPrefs(added.hash);
       let activeThread = await api.setThreadMode(added.hash, created.id, "go");
       const persisted = await persistFramingChoice(added.hash, activeThread.id);
       if (persisted) activeThread = persisted;
@@ -3399,7 +3432,7 @@ export default function App() {
     setTransitioning(true);
     setBusy(true);
     try {
-      const created = await api.createThread(project.hash, "New thread");
+      const created = await createThreadWithPrefs(project.hash);
       // Persist the framing-menu executor/model on the thread before
       // specMode fires — ensure_session reads the thread's stored executor
       // to decide which agent to start. Without this, it falls back to
@@ -4185,7 +4218,7 @@ export default function App() {
     if (!activeThread) {
       if (pendingMode !== "go") return;
       try {
-        const created = await api.createThread(project.hash, "New thread");
+        const created = await createThreadWithPrefs(project.hash);
         activeThread = await api.setThreadMode(project.hash, created.id, "go");
         // Same persistence the Spec path does (see onPickSpecType): without
         // it the composer's provider/model pick is dropped on the floor and
@@ -4863,7 +4896,9 @@ export default function App() {
     onOpenSpec: (name: string) => tabs.openSpec(name),
     threadBypass: threadPrefs.bypass,
     onToggleBypass,
-    worktreeEnabled: thread?.worktreeEnabled !== false,
+    worktreeEnabled: thread
+      ? thread.worktreeEnabled !== false
+      : pendingWorktreeEnabled,
     // The lock is the first message: a thread that made a worktree but never
     // spoke has nothing invested in it, and switching removes it again.
     worktreeLocked: messages.length > 0,

@@ -279,7 +279,11 @@ export default function MergeGate({
             </Group>
           )}
 
-          <Group gap={8} mt={10} wrap="nowrap">
+          {/* Wraps rather than shrinking. `nowrap` let these three squeeze
+              below their own label widths in a narrow chat pane, which
+              clipped them to "View dif" and "Open P" instead of moving the
+              row onto a second line. */}
+          <Group gap={8} mt={10} wrap="wrap">
             {onViewDiff && (
               <Button
                 size="compact-xs"

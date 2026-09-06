@@ -12,6 +12,13 @@ export interface RoundedCornersConfig {
 
 let currentConfig: RoundedCornersConfig | null = null;
 
+// No resize listener here on purpose. Repositioning the traffic lights from
+// the webview meant `onResized` -> IPC -> `with_webview`, two async hops that
+// landed the correction a frame or more after AppKit had already drawn the
+// buttons at their default spot — the flicker. The Rust side now does it
+// synchronously on the event-loop thread (see `mac_rounded_corners.rs`).
+// `repositionTrafficLights` stays for one-off nudges, e.g. after fullscreen.
+
 export async function repositionTrafficLights(): Promise<void> {
   if (!currentConfig) return;
   try {
@@ -23,20 +30,6 @@ export async function repositionTrafficLights(): Promise<void> {
     });
   } catch (error) {
     console.error("Failed to reposition traffic lights:", error);
-  }
-}
-
-let unlistenResize: (() => void) | null = null;
-
-async function setupResizeListener() {
-  if (unlistenResize) unlistenResize();
-  const window = getCurrentWebviewWindow();
-  try {
-    unlistenResize = await window.onResized(() => {
-      repositionTrafficLights();
-    });
-  } catch (error) {
-    console.error("Failed to setup resize listener:", error);
   }
 }
 
@@ -54,7 +47,6 @@ export async function enableModernWindowStyle(
       offsetX: config?.offsetX ?? 0.0,
       offsetY: config?.offsetY ?? 0.0,
     });
-    setupResizeListener();
   } catch (error) {
     console.error("Failed to enable modern window style:", error);
     throw error;
@@ -62,9 +54,5 @@ export async function enableModernWindowStyle(
 }
 
 export function cleanupRoundedCorners(): void {
-  if (unlistenResize) {
-    unlistenResize();
-    unlistenResize = null;
-  }
   currentConfig = null;
 }

@@ -113,6 +113,28 @@ pub fn enable_modern_window_style<R: Runtime>(
             })
             .map_err(|e| e.to_string())?;
 
+        // Keep them put across a live resize. AppKit re-lays-out the titlebar
+        // on every step of a drag, which drops the buttons back at their
+        // default spot; the correction has to land in the same main-thread
+        // pass or you see both positions. Driving it from the webview
+        // (`window.onResized` -> IPC -> `with_webview`) put two async hops in
+        // between, so the correction arrived a frame or more late and the
+        // buttons visibly jumped — the flicker. Tauri runs this handler on
+        // the event-loop thread, so the reposition happens before the frame
+        // is presented.
+        let (dx, dy) = (offset_x.unwrap_or(0.0), offset_y.unwrap_or(0.0));
+        let handle = window.clone();
+        window.on_window_event(move |event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                if let Ok(ns_window) = handle.ns_window() {
+                    unsafe { position_traffic_lights(ns_window as id, dx, dy) };
+                }
+            }
+        });
+
         Ok(())
     }
 

@@ -41,7 +41,7 @@ export function useAppShell(projectHash: string | undefined) {
   const layoutHash = projectHash ?? "default";
   const { setColorScheme: setMantineColorScheme } = useMantineColorScheme();
 
-  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffOpen, setDiffOpenState] = useState(false);
 
   const [centerShell, setCenterShellState] = useState<"vibe" | "editor">(
     "editor"
@@ -87,6 +87,21 @@ export function useAppShell(projectHash: string | undefined) {
     []
   );
 
+  // Opening the diff has to reclaim the pane that renders it. The diff is a
+  // mode of the editor column, which Vibe lets you collapse — so "View diff"
+  // in the chat, a click in Source Control, and the turn-start auto-open all
+  // pointed at an unmounted pane and looked inert. Wrapped here because every
+  // one of those callers already goes through this setter; the tab-open path
+  // in App.tsx makes the same reclaim for the same reason.
+  const setDiffOpen = useCallback(
+    (next: boolean | ((open: boolean) => boolean)) => {
+      const value = typeof next === "function" ? next(diffOpen) : next;
+      if (value) setEditorCollapsed(false);
+      setDiffOpenState(value);
+    },
+    [diffOpen]
+  );
+
   const [bottomTab, setBottomTab] = useState<BottomTab>("terminal");
 
   // Which threads have a tab in the chat strip. Like editor tabs: selecting
@@ -95,6 +110,12 @@ export function useAppShell(projectHash: string | undefined) {
   const [openThreadIds, setOpenThreadIds] = useState<string[]>([]);
   const openThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    // Editor lets you send the chat pane away, and every route to a thread
+    // (the strip's +, History, a brand-new thread) ends up here — so this is
+    // the one place that has to reclaim it, rather than each call site
+    // remembering to. Only fires when the active thread actually changes,
+    // so it never refights a deliberate collapse of the thread you're on.
+    setChatCollapsed(false);
   }, []);
   const closeThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => prev.filter((existing) => existing !== id));
