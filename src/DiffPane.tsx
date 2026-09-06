@@ -5,8 +5,10 @@ import {
   Button,
   Group,
   Modal as MantineModal,
+  Progress,
   SegmentedControl,
   Text,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   IconGitBranch,
@@ -19,6 +21,7 @@ import type { StructuredPatch, StructuredPatchHunk } from "diff";
 import * as api from "./api";
 import type { FileStatus } from "./api";
 import DiffRows from "./DiffRows";
+import EditableDiffView from "./EditableDiffView";
 import type { DiffView } from "./DiffRows";
 import { describeError } from "./errors";
 import { isOneSided, rowsFromHunk } from "./diffLines";
@@ -49,6 +52,68 @@ type Props = {
    * when the pane mounted, which is stale the moment the agent writes. */
   refreshToken?: number;
 };
+
+/** One row of the scan list: how big the change is, at a glance.
+ *
+ *  The bar is the primary signal and the counts are the detail — a reviewer
+ *  picking which of twelve files to read first is comparing shapes, not
+ *  reading numbers. Click to open the file itself, editable, with its changed
+ *  lines marked.
+ *
+ *  ponytail: the bar is add/remove *ratio*, not magnitude, so a 2-line file
+ *  and a 200-line one can look alike. Scale by total if that misleads. */
+function ScanRow({
+  path,
+  added,
+  removed,
+  isNew,
+  onOpen,
+}: {
+  path: string;
+  added: number;
+  removed: number;
+  isNew: boolean;
+  onOpen: () => void;
+}) {
+  const total = added + removed || 1;
+  return (
+    <UnstyledButton
+      className="diff-scan-row"
+      onClick={onOpen}
+      data-testid="diff-scan-row"
+      data-path={path}
+    >
+      <Group gap={10} wrap="nowrap" px={12} py={7}>
+        <Badge size="xs" variant="light" color={isNew ? "success" : "warn"}>
+          {isNew ? "new" : "mod"}
+        </Badge>
+        <Text size="xs" ff="monospace" truncate style={{ flex: 1 }} title={path}>
+          {path}
+        </Text>
+        <Progress.Root size="sm" style={{ width: 90, flex: "none" }}>
+          <Progress.Section value={(added / total) * 100} color="success" />
+          <Progress.Section value={(removed / total) * 100} color="danger" />
+        </Progress.Root>
+        <Text size="xs" ff="monospace" c="dimmed" style={{ width: 66, textAlign: "right" }}>
+          +{added} −{removed}
+        </Text>
+      </Group>
+    </UnstyledButton>
+  );
+}
+
+/** Adds and removes in one file's patch, for the scan row's bar. */
+export function patchStat(file: StructuredPatch): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const hunk of file.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith("+")) added += 1;
+      else if (line.startsWith("-")) removed += 1;
+    }
+  }
+  return { added, removed };
+}
 
 function FileDiff({
   file,
@@ -151,6 +216,10 @@ export default function DiffPane({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState<{ path: string; untracked: boolean } | null>(null);
+  /** The file open in the editable single-file view, or null while scanning
+   *  the list. Scan to find what matters, open it to read — and, since it is
+   *  the real buffer, to fix it. */
+  const [editing, setEditing] = useState<string | null>(null);
   const [view, setView] = useState<DiffView>(
     () => (localStorage.getItem(VIEW_KEY) as DiffView | null) ?? "inline"
   );
@@ -239,6 +308,21 @@ export default function DiffPane({
     );
   }
 
+  if (editing) {
+    return (
+      <div className="diff-pane" data-testid="diff-pane">
+        <EditableDiffView
+          projectHash={projectHash}
+          threadId={threadId}
+          path={editing}
+          patch={workingFiles.find((f) => pathFromPatch(f) === editing)}
+          onBack={() => setEditing(null)}
+          onSaved={refresh}
+        />
+      </div>
+    );
+  }
+
   const focused = <T extends StructuredPatch>(files: T[]) =>
     focusPath ? files.filter((f) => pathFromPatch(f) === focusPath) : files;
   const shownWorking = focused(workingFiles);
@@ -310,6 +394,38 @@ export default function DiffPane({
             Show all changes
           </button>
         </div>
+      )}
+
+      {/* Scan first: every changed file on one screen, sized by how much of
+          it changed. The stacked diffs below are the read pass. */}
+      {!focusPath && (shownWorking.length > 0 || shownUntracked.length > 0) && (
+        <section className="diff-section" data-testid="diff-scan-list">
+          <h2 className="ds-section-heading">Changed Files</h2>
+          {shownWorking.map((file) => {
+            const path = pathFromPatch(file);
+            const stat = patchStat(file);
+            return (
+              <ScanRow
+                key={path}
+                path={path}
+                added={stat.added}
+                removed={stat.removed}
+                isNew={untrackedPaths.has(path)}
+                onOpen={() => setEditing(path)}
+              />
+            );
+          })}
+          {shownUntracked.map((entry) => (
+            <ScanRow
+              key={entry.path}
+              path={entry.path}
+              added={0}
+              removed={0}
+              isNew
+              onOpen={() => setEditing(entry.path)}
+            />
+          ))}
+        </section>
       )}
 
       {shownStaged.length > 0 && (

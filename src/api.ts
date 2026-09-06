@@ -368,6 +368,14 @@ export const pruneThreadWorktree = (
   force = false,
 ) => invoke<void>("prune_thread_worktree", { projectHash, threadId, force });
 
+/** Turn a thread's worktree isolation on or off. Only before its first
+ *  session — once a worktree exists the choice is fixed for the thread. */
+export const setThreadWorktreeEnabled = (
+  projectHash: string,
+  threadId: string,
+  enabled: boolean,
+) => invoke<ThreadMeta>("set_thread_worktree_enabled", { projectHash, threadId, enabled });
+
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
 /** Release a thread's idle sessions. Sessions mid-turn keep running. */
@@ -966,8 +974,14 @@ export const searchText = (
     options: options ?? null,
   });
 
-export const readFileContent = (projectHash: string, relativePath: string) =>
-  invoke<string>("read_file_content", { projectHash, relativePath });
+/** `threadId` names the working tree to read, exactly as the `git*` calls
+ *  above do: a thread's own worktree when it has one, the project root
+ *  otherwise. Pass the same id the view was rendered from. */
+export const readFileContent = (
+  projectHash: string,
+  relativePath: string,
+  threadId?: string,
+) => invoke<string>("read_file_content", { projectHash, relativePath, threadId });
 
 export const readFileBase64 = (projectHash: string, relativePath: string) =>
   invoke<string>("read_file_base64", { projectHash, relativePath });
@@ -1009,13 +1023,15 @@ export const writeFileContent = (
   projectHash: string,
   relativePath: string,
   content: string,
-  expectedPrevious: string | null = null
+  expectedPrevious: string | null = null,
+  threadId?: string,
 ) =>
   invoke<string | null>("write_file_content", {
     projectHash,
     relativePath,
     content,
     expectedPrevious,
+    threadId,
   });
 
 /** Renames or moves a file/directory — a full path edit doubles as a move. */

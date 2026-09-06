@@ -2099,6 +2099,30 @@ input[type="checkbox"] {
   margin-bottom: 10px;
 }
 
+/* Scan list: one row per changed file, sized by how much of it changed. */
+.diff-scan-row {
+  display: block;
+  width: 100%;
+  border-bottom: 1px solid var(--border);
+}
+.diff-scan-row:hover {
+  background: var(--surface);
+}
+
+/* The diff gutter over an ordinary editable buffer: what changed is marked
+   in place, so reviewing and fixing are the same view. */
+.ds-diff-gutter-col {
+  width: 14px;
+}
+.ds-diff-gutter-mark {
+  color: var(--success);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.ds-diff-changed-line {
+  background: color-mix(in oklch, var(--success) 12%, transparent);
+}
+
 .diff-file-head {
   display: flex;
   align-items: center;

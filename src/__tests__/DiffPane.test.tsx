@@ -327,4 +327,34 @@ describe("DiffPane worktree review", () => {
     await waitFor(() => expect(screen.getByTestId("diff-rows-split")).toBeTruthy());
     expect(screen.queryByTestId("diff-rows-inline")).toBeNull();
   });
+
+  // Scan-then-edit: the list is for finding the file that matters, and the
+  // file opens as the real buffer — reviewing and fixing are the same view.
+  it("lists changed files with their size, and opens one as an editable buffer", async () => {
+    const user = userEvent.setup();
+    mockGit((cmd) => {
+      if (cmd === "git_status") return Promise.resolve([{ path: "tracked.txt", code: " M" }]);
+      if (cmd === "git_working_diff") return Promise.resolve(ONE_HUNK_DIFF);
+      if (cmd === "read_file_content")
+        return Promise.resolve("line one\nCHANGED\nline three\n");
+      return undefined;
+    });
+
+    render(<DiffPane projectHash="proj-1" threadId="t1" />);
+    const row = await screen.findByTestId("diff-scan-row");
+    expect(row).toHaveAttribute("data-path", "tracked.txt");
+    expect(row).toHaveTextContent("+1 −1");
+
+    await user.click(row);
+    await waitFor(() => expect(screen.getByTestId("editable-diff")).toBeDefined());
+    // The buffer reads the tree it was rendered from, not the project root.
+    expect(invokeMock).toHaveBeenCalledWith(
+      "read_file_content",
+      expect.objectContaining({ threadId: "t1", relativePath: "tracked.txt" }),
+    );
+
+    await user.click(screen.getByTestId("editable-diff-back"));
+    await waitFor(() => expect(screen.getByTestId("diff-scan-list")).toBeDefined());
+  });
+
 });

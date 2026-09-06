@@ -49,6 +49,7 @@ import {
   IconPlayerPlay,
   IconFolder,
   IconFolders,
+  IconFolderOpen,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
@@ -125,6 +126,7 @@ import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
 import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
+import LiveFileChips from "./LiveFileChips";
 import MergeGate from "./MergeGate";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
@@ -253,6 +255,12 @@ type ChatSurfaceProps = {
   onOpenSpec?: (specName: string) => void;
   threadBypass: boolean;
   onToggleBypass: () => void;
+  /** Whether this thread runs in its own worktree. Decided at creation and
+   *  locked once the thread has run — the directory an agent is writing in
+   *  cannot move underneath it. */
+  worktreeEnabled?: boolean;
+  worktreeLocked?: boolean;
+  onToggleWorktree?: () => void;
   prefsMenuOpen: boolean;
   setPrefsMenuOpen: (open: boolean) => void;
   hasLiveSession: boolean;
@@ -460,6 +468,9 @@ export const ChatSurface = memo(
     onOpenSpec,
     threadBypass,
     onToggleBypass,
+    worktreeEnabled = true,
+    worktreeLocked = false,
+    onToggleWorktree,
     prefsMenuOpen,
     setPrefsMenuOpen,
     hasLiveSession,
@@ -473,6 +484,7 @@ export const ChatSurface = memo(
     // Confirmation popover for the Accept→Bypass direction only (D2e) — the
     // reverse (Bypass→Accept) is a plain click, no popover state needed.
     const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
+    const [worktreeOffConfirmOpen, setWorktreeOffConfirmOpen] = useState(false);
     // D6/D15: "Other" spec-type text input state — local to the framing menu.
     const [otherSpecText, setOtherSpecText] = useState("");
     const [showOtherInput, setShowOtherInput] = useState(false);
@@ -1281,6 +1293,12 @@ export const ChatSurface = memo(
 
             It says what changed, never that the change is correct: only a
             verify run can claim that. */}
+        {/* What the running turn is touching right now, one chip per file,
+            expandable in place — reviewing an edit should not cost a pane
+            switch, and the row stays one line tall however many files a turn
+            gets through. */}
+        <LiveFileChips live={live} busy={busy} />
+
         {worktree && project && thread &&
           (worktree.added + worktree.removed > 0 || worktree.ahead > 0) && (
             <MergeGate
@@ -1384,6 +1402,86 @@ export const ChatSurface = memo(
               </div>
             </Paper>
           )}
+
+          {/* Worktree isolation, sitting next to the permission toggle because
+              it is the same kind of decision: what this thread is allowed to
+              touch. Off means the agent edits the project's own working
+              directory live, which is why turning it off asks first and why
+              it locks once the thread has run. */}
+          <Popover
+            opened={worktreeOffConfirmOpen}
+            onChange={setWorktreeOffConfirmOpen}
+            withArrow
+            position="top-end"
+          >
+            <Popover.Target>
+              <Tooltip
+                label={
+                  worktreeLocked
+                    ? "Set when this thread started — it can't change now"
+                    : worktreeEnabled
+                      ? "Runs in its own git worktree"
+                      : "Edits the project directory directly"
+                }
+                openDelay={400}
+              >
+                <ActionIcon
+                  variant="subtle"
+                  color={worktreeEnabled ? "neutral" : "warn"}
+                  disabled={worktreeLocked || !onToggleWorktree}
+                  data-testid="worktree-mode-btn"
+                  data-tauri-drag-region-exclude
+                  aria-label={
+                    worktreeEnabled ? "Isolated worktree on" : "Isolated worktree off"
+                  }
+                  style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
+                  onClick={() => {
+                    if (!worktreeEnabled) {
+                      onToggleWorktree?.();
+                    } else {
+                      setWorktreeOffConfirmOpen(true);
+                    }
+                  }}
+                >
+                  {worktreeEnabled ? (
+                    <IconGitBranch size={16} />
+                  ) : (
+                    <IconFolderOpen size={16} />
+                  )}
+                </ActionIcon>
+              </Tooltip>
+            </Popover.Target>
+            <Popover.Dropdown data-testid="worktree-mode-confirm">
+              <Stack gap="xs">
+                <span style={{ fontSize: 13, maxWidth: 280, display: "block" }}>
+                  Turn off worktree isolation? The agent edits your working
+                  directory live — uncommitted changes there can be overwritten,
+                  and this thread gets no merge, PR or clean-up step. It can't be
+                  changed after the first message.
+                </span>
+                <Group gap="xs" justify="flex-end">
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    onClick={() => setWorktreeOffConfirmOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    color="warn"
+                    data-testid="worktree-mode-confirm-off"
+                    onClick={() => {
+                      onToggleWorktree?.();
+                      setWorktreeOffConfirmOpen(false);
+                    }}
+                  >
+                    Turn off
+                  </Button>
+                </Group>
+              </Stack>
+            </Popover.Dropdown>
+          </Popover>
 
           {/* Standalone permission-mode toggle, always visible top-right of
               the composer (D2c) — separate from the executor/model pickers
@@ -2429,6 +2527,23 @@ export default function App() {
     setThreadPrefs(project.hash, thread.id, prefs);
     setThreadPrefsState(prefs);
   };
+  /** Flip this thread's worktree isolation. Only offered before the thread
+   *  has run — the backend refuses once a worktree exists, so this can never
+   *  leave the flag disagreeing with what is on disk. */
+  const onToggleWorktree = () => {
+    if (!project || !thread) return;
+    api
+      .setThreadWorktreeEnabled(
+        project.hash,
+        thread.id,
+        thread.worktreeEnabled === false,
+      )
+      .then((meta) => {
+        setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
+        setThread(meta);
+      })
+      .catch(fail);
+  };
   const [dragActive, setDragActive] = useState(false);
   const [fileEdits, setFileEdits] = useState<
     { path: string; before: string; after: string }[]
@@ -3242,7 +3357,35 @@ export default function App() {
 
   const onArchiveThread = (target: ThreadMeta) => {
     if (!project) return;
-    pm.setThreadArchived(project.hash, target.id, !target.archived).catch(fail);
+    const archiving = !target.archived;
+    const worktree = worktrees.get(target.id);
+    // Archiving is reversible and must stay that way, so it never discards
+    // work on its own: the backend's sweep only prunes a worktree whose
+    // commits the base branch already has. Unmerged work is the one case the
+    // user has to answer for, and it is offered as its own destructive
+    // choice — the same confirm bar deleting a thread uses.
+    const unmerged =
+      archiving && worktree && (!worktree.clean || worktree.ahead > 0);
+    pm.setThreadArchived(project.hash, target.id, archiving)
+      .then(() => {
+        loadWorktrees();
+        if (!unmerged) return;
+        setBar({
+          kind: "confirm",
+          label: `"${target.title}" still has work that ${worktree.baseBranch} doesn't. Delete its worktree and branch anyway?`,
+          confirmLabel: "Clean up",
+          onConfirm: async () => {
+            setBar(null);
+            try {
+              await api.pruneThreadWorktree(project.hash, target.id, true);
+              loadWorktrees();
+            } catch (err) {
+              fail(err);
+            }
+          },
+        });
+      })
+      .catch(fail);
   };
 
   const onDeleteThread = (target: ThreadMeta) => {
@@ -4633,6 +4776,11 @@ export default function App() {
     onOpenSpec: (name: string) => tabs.openSpec(name),
     threadBypass: threadPrefs.bypass,
     onToggleBypass,
+    worktreeEnabled: thread?.worktreeEnabled !== false,
+    // A thread that has already run has a worktree (or deliberately doesn't),
+    // and an agent's working directory cannot move mid-conversation.
+    worktreeLocked: !!thread?.worktreePath || messages.length > 0,
+    onToggleWorktree,
     prefsMenuOpen,
     setPrefsMenuOpen,
     hasLiveSession,

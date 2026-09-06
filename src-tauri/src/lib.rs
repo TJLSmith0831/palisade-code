@@ -1663,6 +1663,32 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
     .map_err(|e| e.to_string())?
 }
 
+/// Turn this thread's worktree isolation on or off.
+///
+/// Decided once, at thread creation, and locked by the UI after the first
+/// message: the directory an agent has been writing in cannot change
+/// underneath a thread mid-conversation without stranding its work. Refused
+/// outright once a worktree exists, so the flag can never disagree with what
+/// is on disk.
+#[tauri::command]
+async fn set_thread_worktree_enabled(
+    project_hash: String,
+    thread_id: String,
+    enabled: bool,
+) -> Res<store::ThreadMeta> {
+    tokio::task::spawn_blocking(move || {
+        if thread_meta(&project_hash, &thread_id).is_some_and(|t| t.worktree_path.is_some()) {
+            return Err(
+                "This thread already has a worktree — its isolation is set for the life of the thread."
+                    .into(),
+            );
+        }
+        store::set_thread_worktree_enabled(&palisade_home(), &project_hash, &thread_id, enabled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What a merge-back attempt did, as the gate card renders it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2781,6 +2807,7 @@ pub fn run() {
             merge_thread_worktree,
             open_thread_pr,
             prune_thread_worktree,
+            set_thread_worktree_enabled,
             leave_thread,
             run_verify,
             list_verifications,
