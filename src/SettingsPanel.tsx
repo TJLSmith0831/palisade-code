@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { Modal, Button, NumberInput, Select, Switch, SegmentedControl, Alert } from "@mantine/core";
 import * as api from "./api";
-import { updateProjectSettings } from "./projectSettings";
 import {
   COMPLETION_ENABLED_KEY,
   COMPLETION_KEYBINDING_KEY,
@@ -291,9 +290,7 @@ async function loadProjectAppearance(projectHash: string): Promise<Appearance> {
 }
 
 async function saveAppearance(projectHash: string, appearance: Appearance) {
-  await updateProjectSettings(projectHash, (settings) => {
-    settings.appearance = appearance;
-  });
+  await api.saveAppearance(projectHash, appearance);
 }
 
 /* -------------------------------------------------------------------------- */

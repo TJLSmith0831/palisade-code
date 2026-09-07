@@ -799,6 +799,14 @@ export const saveRunCommands = (
 /** What the project root suggests. A proposal: it writes nothing. */
 export const detectRunCommands = (projectHash: string) =>
   invoke<[string, string][]>("detect_run_commands", { projectHash });
+/** Replaces the whole `verifyPins` map — the single writer for this field. */
+export const saveVerifyPins = (
+  projectHash: string,
+  pins: Record<string, string[]>
+) => invoke<void>("save_verify_pins", { projectHash, pins });
+/** Replaces the whole `appearance` object — opaque to the backend. */
+export const saveAppearance = (projectHash: string, appearance: unknown) =>
+  invoke<void>("save_appearance", { projectHash, appearance });
 export const sessionAttribution = (
   projectHash: string,
   threadId: string,

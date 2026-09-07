@@ -76,7 +76,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import * as api from "./api";
-import { updateProjectSettings } from "./projectSettings";
 import { useAppShell } from "./hooks/useAppShell";
 import { useProjectManager } from "./hooks/useProjectManager";
 import { useExecutor } from "./hooks/useExecutor";
@@ -2966,42 +2965,37 @@ export default function App() {
   const addVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
+      const current = verifyPins[specName] ?? [];
+      if (current.includes(commandName)) return;
+      const next = { ...verifyPins, [specName]: [...current, commandName] };
       try {
-        const parsed = await updateProjectSettings(project.hash, (settings) => {
-          const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
-          const current = pins[specName] ?? [];
-          if (!current.includes(commandName)) pins[specName] = [...current, commandName];
-          settings.verifyPins = pins;
-        });
-        const pins = parsed.verifyPins as Record<string, string[]>;
-        setVerifyPins(pins);
+        await api.saveVerifyPins(project.hash, next);
+        setVerifyPins(next);
       } catch {
-        // Malformed project-settings.json: nothing was written. Resync from
-        // disk so the pin buttons reflect reality instead of a stale guess.
+        // The write failed (or a concurrent writer's version won). Resync
+        // from disk so the pin buttons reflect reality, not a stale guess.
         reloadVerifyPins(project.hash);
       }
     },
-    [project, reloadVerifyPins]
+    [project, verifyPins, reloadVerifyPins]
   );
 
   const removeVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
+      const current = verifyPins[specName] ?? [];
+      const filtered = current.filter((c) => c !== commandName);
+      const next = { ...verifyPins };
+      if (filtered.length === 0) delete next[specName];
+      else next[specName] = filtered;
       try {
-        const parsed = await updateProjectSettings(project.hash, (settings) => {
-          const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
-          const current = pins[specName] ?? [];
-          pins[specName] = current.filter((c) => c !== commandName);
-          if (pins[specName].length === 0) delete pins[specName];
-          settings.verifyPins = pins;
-        });
-        const pins = parsed.verifyPins as Record<string, string[]>;
-        setVerifyPins(pins);
+        await api.saveVerifyPins(project.hash, next);
+        setVerifyPins(next);
       } catch {
         reloadVerifyPins(project.hash);
       }
     },
-    [project, reloadVerifyPins]
+    [project, verifyPins, reloadVerifyPins]
   );
   // Bumped when the working tree changes under the diff — an agent turn
   // ending, or a save. The pane used to fetch once on mount and then show

@@ -261,9 +261,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     });
   });
 
-  it("clicking an app-shell swatch sets only the outer-shell overrides and persists the merged appearance alongside existing settings", async () => {
-    // The file already has formatOnSave + executorOverride; the appearance
-    // key must be merged in without clobbering them.
+  it("clicking an app-shell swatch sets only the outer-shell overrides and persists the appearance via save_appearance", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args: Record<string, unknown>) => {
         if (
@@ -277,7 +275,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
             })
           );
         }
-        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "save_appearance") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
@@ -314,20 +312,22 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       ).toBe("");
     });
 
-    // The persisted JSON should contain both the original keys and the new appearance.
+    // The backend owns merging this into the rest of the settings file now
+    // (settings.rs's save_appearance) — the frontend only has to send the
+    // new appearance object.
     await waitFor(() => {
-      const writeCall = invokeMock.mock.calls.find(
-        (c) => c[0] === "write_file_content"
+      const saveCall = invokeMock.mock.calls.find(
+        (c) => c[0] === "save_appearance"
       );
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1].content as string);
-      expect(written.formatOnSave).toEqual({ "\\.rs$": "cargo fmt" });
-      expect(written.executorOverride).toBe("codex");
-      expect(written.appearance.appShellColor.light).toBe("#eceff4");
+      expect(saveCall).toBeDefined();
+      const appearance = saveCall![1].appearance as {
+        appShellColor: { light: string };
+      };
+      expect(appearance.appShellColor.light).toBe("#eceff4");
     });
   });
 
-  it("clicking a shell-accent swatch sets only the raised-surface overrides and persists shellAccentColor", async () => {
+  it("clicking a shell-accent swatch sets only the raised-surface overrides and persists shellAccentColor via save_appearance", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args: Record<string, unknown>) => {
         if (
@@ -341,7 +341,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
             })
           );
         }
-        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "save_appearance") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
@@ -378,12 +378,14 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     });
 
     await waitFor(() => {
-      const writeCall = invokeMock.mock.calls.find(
-        (c) => c[0] === "write_file_content"
+      const saveCall = invokeMock.mock.calls.find(
+        (c) => c[0] === "save_appearance"
       );
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1].content as string);
-      expect(written.appearance.shellAccentColor.light).toBe("#eceff4");
+      expect(saveCall).toBeDefined();
+      const appearance = saveCall![1].appearance as {
+        shellAccentColor: { light: string };
+      };
+      expect(appearance.shellAccentColor.light).toBe("#eceff4");
     });
   });
 
@@ -405,7 +407,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
             })
           );
         }
-        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "save_appearance") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
@@ -452,13 +454,12 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
 
     // The persisted appearance should be empty.
     await waitFor(() => {
-      const writeCall = invokeMock.mock.calls
+      const saveCall = invokeMock.mock.calls
         .slice()
         .reverse()
-        .find((c) => c[0] === "write_file_content");
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1].content as string);
-      expect(written.appearance).toEqual({});
+        .find((c) => c[0] === "save_appearance");
+      expect(saveCall).toBeDefined();
+      expect(saveCall![1].appearance).toEqual({});
     });
   });
 });
@@ -503,11 +504,25 @@ it("reports a failed project save and restores the persisted appearance", async 
   expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe("");
 });
 
-it("does not overwrite other settings when the project settings file is malformed", async () => {
-  invokeMock.mockReset().mockImplementation(() => Promise.resolve('{"formatOnSave":'));
+it("saving appearance no longer depends on the project settings file parsing cleanly", async () => {
+  // The guarded read-merge-write moved to the backend (settings.rs's
+  // save_appearance), which defaults to {} on malformed content instead of
+  // failing the save — so a broken settings file only affects what's
+  // *displayed* on load (loadProjectAppearance), not whether a new
+  // appearance can be saved.
+  invokeMock.mockReset().mockImplementation((cmd: string) =>
+    cmd === "read_file_content"
+      ? Promise.resolve('{"formatOnSave":')
+      : Promise.resolve()
+  );
   render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
   await waitFor(() => expect(invokeMock).toHaveBeenCalled());
   fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
-  expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
-  expect(invokeMock).not.toHaveBeenCalledWith("write_file_content", expect.anything());
+  await waitFor(() =>
+    expect(invokeMock).toHaveBeenCalledWith(
+      "save_appearance",
+      expect.objectContaining({ projectHash: "proj1" })
+    )
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
 });

@@ -2585,6 +2585,34 @@ async fn save_run_commands(project_hash: String, commands: Vec<(String, String)>
     .map_err(|e| e.to_string())?
 }
 
+/// Replaces the project's `verifyPins` map. The whole map, not one entry:
+/// pin/unpin both read the current pins for a spec change and rewrite the
+/// list (D8).
+#[tauri::command]
+async fn save_verify_pins(
+    project_hash: String,
+    pins: std::collections::HashMap<String, Vec<String>>,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        settings::save_verify_pins(&root, pins)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Replaces the project's `appearance` object. Opaque to Palisade — see
+/// `settings::save_appearance`.
+#[tauri::command]
+async fn save_appearance(project_hash: String, appearance: serde_json::Value) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let root = project_root(&project_hash)?;
+        settings::save_appearance(&root, appearance)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /* -------------------------------------------------------------------------- */
 /* Agent chains                                                               */
 /* -------------------------------------------------------------------------- */
@@ -3229,6 +3257,8 @@ pub fn run() {
             lsp_shutdown,
             run_commands,
             save_run_commands,
+            save_verify_pins,
+            save_appearance,
             detect_run_commands,
             session_attribution,
             commands::db_cmds::db_list_connections,

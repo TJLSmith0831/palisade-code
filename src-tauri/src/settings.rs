@@ -145,29 +145,55 @@ pub fn run_format_on_save(settings: &ProjectSettings, project_root: &Path, relat
     })
 }
 
-/// Replaces the `run` map, leaving every other setting in the file alone.
-/// Re-reads before writing rather than holding state: this file is meant to
-/// be hand-edited, so anything changed since load must survive the write.
-///
-/// `src/projectSettings.ts`'s `updateProjectSettings` does the same
-/// read-merge-write shape against this file for `verifyPins`/`appearance`
-/// from the frontend, with one deliberate difference: this defaults to `{}`
-/// on malformed JSON (safe for an automatic, agent-triggered save), while
-/// the TS side throws (a user-initiated settings edit should surface
-/// corruption, not silently start over). Keep both in sync if the guarded
-/// read-merge-write behavior here changes.
-pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<()> {
+/// Reads the settings file as raw JSON rather than the typed
+/// `ProjectSettings`, so a field one of the `save_*` functions below doesn't
+/// know about (e.g. `appearance`, which is frontend-owned and has no Rust
+/// model) survives a merge-and-rewrite untouched. Malformed or missing
+/// content defaults to `{}` — every `save_*` caller here is a single-field
+/// replace, so starting fresh loses only the one field a corrupt file would
+/// have lost anyway.
+fn read_doc(project_root: &Path) -> serde_json::Value {
     let path = project_root.join(FILE_NAME);
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+    let doc: serde_json::Value = std::fs::read_to_string(&path)
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_else(|| serde_json::json!({}));
-    if !doc.is_object() {
-        doc = serde_json::json!({});
-    }
-    doc["run"] = serde_json::to_value(commands).map_err(|err| err.to_string())?;
+    if doc.is_object() { doc } else { serde_json::json!({}) }
+}
+
+fn write_doc(project_root: &Path, doc: serde_json::Value) -> Res<()> {
     let body = serde_json::to_string_pretty(&doc).map_err(|err| err.to_string())?;
     write_file(project_root, &(body + "\n")).map_err(|err| format!("write {FILE_NAME}: {err}"))
+}
+
+/// Replaces the `run` map, leaving every other setting in the file alone.
+/// Re-reads before writing rather than holding state: this file is meant to
+/// be hand-edited, so anything changed since load must survive the write.
+pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<()> {
+    let mut doc = read_doc(project_root);
+    doc["run"] = serde_json::to_value(commands).map_err(|err| err.to_string())?;
+    write_doc(project_root, doc)
+}
+
+/// Replaces the `verifyPins` map (D8: spec change name → pinned verify
+/// command names), leaving every other setting alone. The single writer for
+/// this field — the frontend calls this instead of reading, merging, and
+/// writing the file itself.
+pub fn save_verify_pins(project_root: &Path, pins: HashMap<String, Vec<String>>) -> Res<()> {
+    let mut doc = read_doc(project_root);
+    doc["verifyPins"] = serde_json::to_value(pins).map_err(|err| err.to_string())?;
+    write_doc(project_root, doc)
+}
+
+/// Replaces the `appearance` object, leaving every other setting alone.
+/// `appearance` has no Rust model — it's a frontend-owned color-override
+/// blob (`src/SettingsPanel.tsx`'s `Appearance` type) that Palisade only
+/// stores and hands back, so this takes it as opaque JSON rather than a
+/// typed struct.
+pub fn save_appearance(project_root: &Path, appearance: serde_json::Value) -> Res<()> {
+    let mut doc = read_doc(project_root);
+    doc["appearance"] = appearance;
+    write_doc(project_root, doc)
 }
 
 /// Proposes run commands by looking at what's actually in the project root.
@@ -536,6 +562,83 @@ mod tests {
         commands.insert("build".to_string(), "cargo build".to_string());
         save_run(root.path(), commands).unwrap();
         assert_eq!(load(root.path()).0.run.get("build").map(String::as_str), Some("cargo build"));
+    }
+
+    #[test]
+    fn saving_verify_pins_keeps_every_other_setting() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(),
+            r#"{"executorOverride": "codex", "run": {"dev": "pnpm start"}}"#,
+        )
+        .unwrap();
+        let mut pins = HashMap::new();
+        pins.insert("vibe-spec-tabs".to_string(), vec!["test".to_string()]);
+        save_verify_pins(root.path(), pins).unwrap();
+
+        let (settings, warning) = load(root.path());
+        assert!(warning.is_none());
+        assert_eq!(
+            settings.verify_pins.get("vibe-spec-tabs"),
+            Some(&vec!["test".to_string()])
+        );
+        assert_eq!(settings.executor_override.as_deref(), Some("codex"));
+        assert_eq!(settings.run.get("dev").map(String::as_str), Some("pnpm start"));
+    }
+
+    /// `appearance` has no field on `ProjectSettings` — it's frontend-owned
+    /// JSON that Palisade only stores. Saving it must not clobber fields the
+    /// typed struct doesn't know about, and a round trip through raw JSON
+    /// must return exactly what was saved.
+    #[test]
+    fn saving_appearance_is_opaque_and_keeps_every_other_setting() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(), r#"{"executorOverride": "codex"}"#).unwrap();
+
+        save_appearance(root.path(), serde_json::json!({"accentHue": {"light": "210"}})).unwrap();
+
+        let (settings, warning) = load(root.path());
+        assert!(warning.is_none());
+        assert_eq!(settings.executor_override.as_deref(), Some("codex"));
+
+        let raw = std::fs::read_to_string(root.path().join(FILE_NAME)).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["appearance"]["accentHue"]["light"], "210");
+    }
+
+    /// A save must never fail just because the file it's about to replace one
+    /// field of is unreadable — that would turn a recoverable corruption into
+    /// "you can no longer change your appearance." Starting over from `{}`
+    /// loses only the fields the malformed file already lost.
+    #[test]
+    fn saving_appearance_over_a_malformed_file_succeeds_and_starts_fresh() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(), r#"{"formatOnSave":"#).unwrap();
+
+        save_appearance(root.path(), serde_json::json!({"accentHue": {"light": "210"}})).unwrap();
+
+        let raw = std::fs::read_to_string(root.path().join(FILE_NAME)).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["appearance"]["accentHue"]["light"], "210");
+    }
+
+    #[test]
+    fn saving_verify_pins_or_appearance_works_without_an_existing_file() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pins = HashMap::new();
+        pins.insert("change".to_string(), vec!["typecheck".to_string()]);
+        save_verify_pins(root.path(), pins).unwrap();
+        assert_eq!(
+            load(root.path()).0.verify_pins.get("change"),
+            Some(&vec!["typecheck".to_string()])
+        );
+
+        save_appearance(root.path(), serde_json::json!({"shellAccentColor": {"dark": "5"}})).unwrap();
+        let raw = std::fs::read_to_string(root.path().join(FILE_NAME)).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["appearance"]["shellAccentColor"]["dark"], "5");
+        // The earlier save_verify_pins call must still be intact after this
+        // second single-field write.
+        assert_eq!(doc["verifyPins"]["change"][0], "typecheck");
     }
 
     #[test]
