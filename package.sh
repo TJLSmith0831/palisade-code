@@ -18,6 +18,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Auto-load signing/notarization vars (see .env.example) so the release path
+# doesn't need them typed by hand each time. Gitignored — never commit it.
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
 APP_NAME="Palisade"
 BUNDLE_ID="com.tjlsmith0831.palisade-code"
 APP="src-tauri/target/release/bundle/macos/$APP_NAME.app"
