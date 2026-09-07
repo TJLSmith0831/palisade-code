@@ -6079,3 +6079,4 @@ describe("Session list on a narrow window", () => {
     expect(list).toHaveAttribute("data-user-opened");
   });
 });
+

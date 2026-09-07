@@ -64,6 +64,31 @@ describe("notebook doc model", () => {
     expect(() => parseNotebook(JSON.stringify({ nbformat: 4 }))).toThrow();
   });
 
+  // A brand-new `hello.ipynb` is a zero-byte file, which is not malformed —
+  // it is a notebook nobody has written a cell into yet. Treating it as
+  // malformed sent the tab to the plain text editor, so creating a notebook
+  // and opening it showed an empty text buffer with no cells and no
+  // explanation.
+  it("reads an empty file as a new notebook with one cell to type in", () => {
+    for (const empty of ["", "   ", "\n\t "]) {
+      const doc = parseNotebook(empty);
+      expect(doc.cells).toHaveLength(1);
+      expect(doc.cells[0].cell_type).toBe("code");
+      expect(doc.cells[0].source).toBe("");
+      expect(doc.nbformat).toBe(4);
+    }
+    // Round-trips to a file Jupyter will open.
+    const written = JSON.parse(serializeNotebook(parseNotebook("")));
+    expect(written.cells).toHaveLength(1);
+    expect(written.nbformat).toBe(4);
+  });
+
+  it("still refuses a file that is genuinely not a notebook", () => {
+    expect(() => parseNotebook("this is not json")).toThrow();
+    expect(() => parseNotebook(JSON.stringify({ cells: "nope" }))).toThrow();
+    expect(() => parseNotebook(JSON.stringify([1, 2, 3]))).toThrow();
+  });
+
   it("supports structural edits: add, delete, reorder, retype", () => {
     let doc = parseNotebook(JSON.stringify(fixture));
 

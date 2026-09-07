@@ -5406,9 +5406,15 @@ export default function App() {
             projectHash={project.hash}
             path={selectedFile}
             onDirtyChange={tabs.setDirty}
-            onUnopenable={() =>
-              setUnopenableNotebooks((prev) => new Set(prev).add(selectedFile))
-            }
+            onUnopenable={() => {
+              // Falling back to the text editor with no explanation left the
+              // user looking at a .ipynb that simply refused to render as a
+              // notebook. Say why, then let them fix the JSON by hand.
+              warn(
+                `${selectedFile} isn't valid notebook JSON — opening it as text so you can repair it.`
+              );
+              setUnopenableNotebooks((prev) => new Set(prev).add(selectedFile));
+            }}
           />
         </Suspense>
       );
