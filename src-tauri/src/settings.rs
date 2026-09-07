@@ -148,6 +148,14 @@ pub fn run_format_on_save(settings: &ProjectSettings, project_root: &Path, relat
 /// Replaces the `run` map, leaving every other setting in the file alone.
 /// Re-reads before writing rather than holding state: this file is meant to
 /// be hand-edited, so anything changed since load must survive the write.
+///
+/// `src/projectSettings.ts`'s `updateProjectSettings` does the same
+/// read-merge-write shape against this file for `verifyPins`/`appearance`
+/// from the frontend, with one deliberate difference: this defaults to `{}`
+/// on malformed JSON (safe for an automatic, agent-triggered save), while
+/// the TS side throws (a user-initiated settings edit should surface
+/// corruption, not silently start over). Keep both in sync if the guarded
+/// read-merge-write behavior here changes.
 pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<()> {
     let path = project_root.join(FILE_NAME);
     let mut doc: serde_json::Value = std::fs::read_to_string(&path)

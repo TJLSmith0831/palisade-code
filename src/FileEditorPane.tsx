@@ -491,13 +491,22 @@ export default function FileEditorPane({
   // so undoing back to the original correctly reads as clean.
   const baselineRef = useRef("");
 
-  // Tagged with the path: the tab list owns dirtiness, and an untagged
-  // report would land on whichever tab happened to be active. Deliberately
-  // has no unmount reset — a tab with unsaved work stays dirty while you
-  // look at the diff or switch shells.
-  useEffect(() => {
-    if (path) onDirtyChange?.(path, dirty);
-  }, [path, dirty, onDirtyChange]);
+  // The single place `dirty` changes: local state and the tab list's copy
+  // are set together, in the same call, so the two can never observe a
+  // different order than the caller wrote them in. An effect reacting to
+  // `dirty` here would re-report it a render late — exactly the gap that let
+  // a save's `onSave` callback (which can swap this pane for another editor,
+  // e.g. notebook recovery) run before the tab list heard the buffer was
+  // clean. Tagged with `path`, not `forPath`-at-callback-time, because the
+  // tab list owns dirtiness per path and an untagged report would land on
+  // whichever tab happened to be active.
+  const markDirty = useCallback(
+    (next: boolean) => {
+      setDirty(next);
+      if (path) onDirtyChange?.(path, next);
+    },
+    [path, onDirtyChange]
+  );
 
   const reload = useCallback(() => {
     setConflict(false);
@@ -523,16 +532,16 @@ export default function FileEditorPane({
         .writeFileContent(projectHash, path, after, expectedPrevious)
         .then((format) => {
           // A successful save can switch this pane to another editor (notebook
-          // recovery does this). Tell the tab list it is clean before that
-          // parent callback has a chance to replace this component.
-          onDirtyChange?.(path, false);
+          // recovery does this). Clear dirtiness — locally and in the tab
+          // list, atomically via markDirty — before that parent callback has
+          // a chance to replace this component.
+          markDirty(false);
           onSaveRef.current?.({ path, before: baselineRef.current, after });
           baselineRef.current = after;
           sessions.set(sessionKey(projectHash, path), {
             json: view.state.toJSON(SERIALIZED_FIELDS),
             baseline: after,
           });
-          setDirty(false);
           setConflict(false);
           setSaved(true);
           setTimeout(() => setSaved(false), 2000);
@@ -548,7 +557,7 @@ export default function FileEditorPane({
         })
         .finally(() => setSaving(false));
     },
-    [projectHash, path, saving]
+    [projectHash, path, saving, markDirty]
   );
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -616,14 +625,14 @@ export default function FileEditorPane({
           });
         }
         if (!update.docChanged) return;
-        setDirty(update.state.doc.toString() !== baselineRef.current);
+        markDirty(update.state.doc.toString() !== baselineRef.current);
       }),
       wrapCompartment.current.of(
         loadEditorWrap() ? EditorView.lineWrapping : []
       ),
       fontCompartment.current.of(editorFontTheme()),
     ],
-    [projectHash, path]
+    [projectHash, path, markDirty]
   );
 
   // Read through a ref so this reacts only to a new change event, not to the
@@ -684,7 +693,7 @@ export default function FileEditorPane({
     const cached = sessions.get(key);
     if (cached) {
       baselineRef.current = cached.baseline;
-      setDirty(docOf(cached) !== cached.baseline);
+      markDirty(docOf(cached) !== cached.baseline);
       setViewSeq((seq) => seq + 1);
       return;
     }
@@ -708,7 +717,7 @@ export default function FileEditorPane({
           baseline: text,
         });
         baselineRef.current = text;
-        setDirty(false);
+        markDirty(false);
         setViewSeq((seq) => seq + 1);
       })
       .catch((err) => {
@@ -721,7 +730,7 @@ export default function FileEditorPane({
     return () => {
       cancelled = true;
     };
-  }, [projectHash, path, reloadToken]);
+  }, [projectHash, path, reloadToken, markDirty]);
 
   // Build the view from the file's session. Recreating it from the cached
   // EditorState restores document, cursor, selection and undo history

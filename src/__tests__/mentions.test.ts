@@ -36,6 +36,16 @@ describe("applyMention (#32)", () => {
     const mention = mentionAt(text, 15)!;
     expect(applyMention(text, mention, "src/App.tsx")).toEqual({
       text: "look at @src/App.tsx and fix it",
+      caret: "look at @src/App.tsx".length,
+    });
+  });
+
+  it("doesn't stack a second space, and lands the caret right after the path", () => {
+    // No trailing text at all: a space is inserted, and the caret sits after it.
+    const bare = "look at @src/Ap";
+    const bareMention = mentionAt(bare, 15)!;
+    expect(applyMention(bare, bareMention, "src/App.tsx")).toEqual({
+      text: "look at @src/App.tsx ",
       caret: "look at @src/App.tsx ".length,
     });
   });

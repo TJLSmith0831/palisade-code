@@ -132,6 +132,16 @@ fn lock_index() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub fn list_projects(home: &Path) -> Res<Vec<Project>> {
+    let _guard = lock_index();
+    list_projects_locked(home)
+}
+
+/// The body of `list_projects`, for callers that already hold `INDEX_LOCK` —
+/// `add_project`/`remove_project`/`update_project` read the list as part of
+/// their own locked read-modify-write and must not lock again (the mutex
+/// isn't reentrant), but still need the same orphan-adoption save that
+/// `list_projects` does.
+fn list_projects_locked(home: &Path) -> Res<Vec<Project>> {
     let mut projects: Vec<Project> = read_json(&index_path(home))?;
     projects.retain(|p| !project_dir(home, &p.hash).join("removed").exists());
     if adopt_orphan_projects(home, &mut projects) {
@@ -190,7 +200,7 @@ pub fn add_project(home: &Path, dir: &Path) -> Res<Project> {
     let root = canonical.to_string_lossy().to_string();
     let hash = project_hash(&root);
 
-    let mut projects = list_projects(home)?;
+    let mut projects = list_projects_locked(home)?;
     let stamp = now();
     if let Some(existing) = projects.iter_mut().find(|p| p.hash == hash) {
         existing.last_accessed_at = stamp;
@@ -224,7 +234,7 @@ pub fn add_project(home: &Path, dir: &Path) -> Res<Project> {
 /// The marker distinguishes intentional removal from a lost project index.
 pub fn remove_project(home: &Path, hash: &str) -> Res<()> {
     let _guard = lock_index();
-    let mut projects = list_projects(home)?;
+    let mut projects = list_projects_locked(home)?;
     if !projects.iter().any(|p| p.hash == hash) {
         return Err(format!("unknown project: {hash}"));
     }
@@ -236,7 +246,7 @@ pub fn remove_project(home: &Path, hash: &str) -> Res<()> {
 
 fn update_project(home: &Path, hash: &str, f: impl FnOnce(&mut Project)) -> Res<Project> {
     let _guard = lock_index();
-    let mut projects = list_projects(home)?;
+    let mut projects = list_projects_locked(home)?;
     let project = projects
         .iter_mut()
         .find(|p| p.hash == hash)
@@ -416,7 +426,15 @@ pub fn list_threads(home: &Path, hash: &str) -> Res<Vec<ThreadMeta>> {
     Ok(threads)
 }
 
+/// Serializes read-modify-write of a thread's `.meta.json`. Two windows can
+/// show the same project (#33) and both edit the same thread — e.g. an
+/// auto-title from one window's turn landing while the other renames it —
+/// so this needs the same lock-around-the-whole-RMW treatment as the project
+/// index, not just the atomic write `write_json` already gives the file.
+static THREAD_LOCK: Mutex<()> = Mutex::new(());
+
 fn update_thread(home: &Path, hash: &str, id: &str, f: impl FnOnce(&mut ThreadMeta)) -> Res<ThreadMeta> {
+    let _guard = THREAD_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = meta_path(home, hash, id);
     let body = fs::read_to_string(&path).map_err(|err| e(&format!("unknown thread {id}"), err))?;
     let mut meta: ThreadMeta = serde_json::from_str(&body).map_err(|err| e("parse meta", err))?;

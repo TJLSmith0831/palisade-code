@@ -45,7 +45,7 @@ export function applyMention(
   const gap = /^\s/.test(rest) ? "" : " ";
   return {
     text: `${text.slice(0, mention.start)}@${path}${gap}${rest}`,
-    caret: mention.start + path.length + 2,
+    caret: mention.start + 1 + path.length + gap.length,
   };
 }
 

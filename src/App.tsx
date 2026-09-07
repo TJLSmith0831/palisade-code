@@ -2966,32 +2966,42 @@ export default function App() {
   const addVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
-      const parsed = await updateProjectSettings(project.hash, (settings) => {
-        const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
-        const current = pins[specName] ?? [];
-        if (!current.includes(commandName)) pins[specName] = [...current, commandName];
-        settings.verifyPins = pins;
-      });
-      const pins = parsed.verifyPins as Record<string, string[]>;
-      setVerifyPins(pins);
+      try {
+        const parsed = await updateProjectSettings(project.hash, (settings) => {
+          const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
+          const current = pins[specName] ?? [];
+          if (!current.includes(commandName)) pins[specName] = [...current, commandName];
+          settings.verifyPins = pins;
+        });
+        const pins = parsed.verifyPins as Record<string, string[]>;
+        setVerifyPins(pins);
+      } catch {
+        // Malformed project-settings.json: nothing was written. Resync from
+        // disk so the pin buttons reflect reality instead of a stale guess.
+        reloadVerifyPins(project.hash);
+      }
     },
-    [project]
+    [project, reloadVerifyPins]
   );
 
   const removeVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
-      const parsed = await updateProjectSettings(project.hash, (settings) => {
-        const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
-        const current = pins[specName] ?? [];
-        pins[specName] = current.filter((c) => c !== commandName);
-        if (pins[specName].length === 0) delete pins[specName];
-        settings.verifyPins = pins;
-      });
-      const pins = parsed.verifyPins as Record<string, string[]>;
-      setVerifyPins(pins);
+      try {
+        const parsed = await updateProjectSettings(project.hash, (settings) => {
+          const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
+          const current = pins[specName] ?? [];
+          pins[specName] = current.filter((c) => c !== commandName);
+          if (pins[specName].length === 0) delete pins[specName];
+          settings.verifyPins = pins;
+        });
+        const pins = parsed.verifyPins as Record<string, string[]>;
+        setVerifyPins(pins);
+      } catch {
+        reloadVerifyPins(project.hash);
+      }
     },
-    [project]
+    [project, reloadVerifyPins]
   );
   // Bumped when the working tree changes under the diff — an agent turn
   // ending, or a save. The pane used to fetch once on mount and then show

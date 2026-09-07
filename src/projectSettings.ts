@@ -12,6 +12,13 @@ function isMissingFile(error: unknown) {
  * Changes one setting without giving any caller a chance to replace the rest
  * of the project file. A malformed non-empty file is deliberately left alone:
  * settings edits must not turn a recoverable parse error into data loss.
+ *
+ * `src-tauri/src/settings.rs`'s `save_run` does the same read-merge-write
+ * shape against this same file for the `run` map, from the backend — with
+ * one deliberate difference: it defaults to `{}` on malformed JSON (safe for
+ * an automatic, agent-triggered save), while this throws (a user-initiated
+ * settings edit should surface corruption, not silently start over). Keep
+ * both in sync if the guarded read-merge-write behavior here changes.
  */
 export async function updateProjectSettings(
   projectHash: string,

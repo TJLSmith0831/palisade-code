@@ -87,9 +87,11 @@ pub fn window_config(home: &Path, hash: &str) -> Res<tauri::utils::config::Windo
 }
 
 pub fn remove_saved_project(home: &Path, harness: &Harness, hash: &str) -> Res<()> {
-    let sessions = harness.acp_sessions.lock().unwrap_or_else(|e| e.into_inner());
-    if sessions.values().any(|s| s.project_hash == hash && s.is_busy()) {
-        return Err("This project has a turn in progress. Wait for it to finish before removing it.".into());
+    {
+        let sessions = harness.acp_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if sessions.values().any(|s| s.project_hash == hash && s.is_busy()) {
+            return Err("This project has a turn in progress. Wait for it to finish before removing it.".into());
+        }
     }
     store::remove_project(home, hash)
 }
