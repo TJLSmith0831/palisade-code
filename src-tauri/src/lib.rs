@@ -716,12 +716,38 @@ fn thread_worktree(
             return path;
         }
     }
+    // Isolation is decided once, at the thread's first run, and never
+    // revisited: a thread that started in the project root stays there for
+    // life. Letting it acquire a worktree on a later turn silently moved the
+    // thread off the files it had already written — the work stayed in the
+    // root while every later turn edited an empty worktree, and the UI called
+    // that thread "Isolated" the whole time.
+    let pin = |reason: Option<String>| -> PathBuf {
+        let _ = store::set_thread_worktree_enabled(home, project_hash, thread_id, false);
+        if let Some(reason) = reason {
+            let _ = app.emit(
+                "harness-warning",
+                format!(
+                    "{reason} — this thread runs in the project directory for its whole life, \
+                     where concurrent edits are not coordinated and there is nothing to merge back."
+                ),
+            );
+        }
+        project.to_path_buf()
+    };
     let Ok(bin) = git_bin() else {
-        return project.to_path_buf();
+        return pin(Some("git is not available".into()));
     };
     // A project that isn't a repo never had isolation to lose — no warning.
     if !git::is_git_repo(&bin, project) {
-        return project.to_path_buf();
+        return pin(None);
+    }
+    // An unborn branch has nothing to branch from, and `git worktree add`
+    // does not fail there — it infers `--orphan` and hands back an *empty*
+    // worktree that shares no history and no files with the project. Nothing
+    // downstream can tell that apart from a real one, so refuse it here.
+    if git::rev_parse_head(&bin, project).is_none() {
+        return pin(None);
     }
     match git::add_worktree(&bin, project, thread_id) {
         Ok((path, branch)) => {
@@ -738,16 +764,7 @@ fn thread_worktree(
             );
             path
         }
-        Err(err) => {
-            let _ = app.emit(
-                "harness-warning",
-                format!(
-                    "Could not create an isolated worktree for this thread ({err}) — \
-                     it will run in the project root, where concurrent edits are not coordinated."
-                ),
-            );
-            project.to_path_buf()
-        }
+        Err(err) => pin(Some(format!("Could not create an isolated worktree ({err})"))),
     }
 }
 

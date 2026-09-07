@@ -31,6 +31,43 @@ fn tool_content_text(content: &[v1::ToolCallContent]) -> String {
         .join("\n")
 }
 
+/// Every file edit an update reports, as `FileEdit` events.
+///
+/// ACP carries file edits only as `diff` blocks hanging off a tool call, and
+/// `from_session_update` collapses a tool call to call/result — so the diffs
+/// are pulled out here instead, off both `tool_call` and `tool_call_update`
+/// and at any status. Waiting for `completed` would lose the agents that
+/// report the diff once, up front, and never repeat it.
+///
+/// Repeats are the caller's problem: an agent may resend the same diff on
+/// every status change, and the notification loop drops ones already emitted.
+pub fn file_edits(update: &v1::SessionUpdate) -> Vec<ExecutorEvent> {
+    let (id, content) = match update {
+        v1::SessionUpdate::ToolCall(call) => {
+            (call.tool_call_id.to_string(), call.content.as_slice())
+        }
+        v1::SessionUpdate::ToolCallUpdate(update) => (
+            update.tool_call_id.to_string(),
+            update.fields.content.as_deref().unwrap_or(&[]),
+        ),
+        _ => return vec![],
+    };
+    content
+        .iter()
+        .filter_map(|c| match c {
+            v1::ToolCallContent::Diff(diff) => Some(ExecutorEvent::FileEdit {
+                id: id.clone(),
+                path: diff.path.to_string_lossy().into_owned(),
+                // A new file has no original text; an empty `before` renders
+                // as an all-additions diff, which is what it is.
+                before: diff.old_text.clone().unwrap_or_default(),
+                after: diff.new_text.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A shell command embedded in raw tool input, if there is one.
 fn raw_command(raw_input: Option<&serde_json::Value>) -> String {
     raw_input
@@ -430,6 +467,38 @@ mod tests {
         pending.status = Some(v1::ToolCallStatus::InProgress);
         let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", pending));
         assert_eq!(from_session_update(&update), None);
+    }
+
+    /// A tool call's diff blocks become FileEdit events — the only path by
+    /// which ACP reports a file edit, and what the chat's diff row reads.
+    #[test]
+    fn wire_tool_diffs_become_file_edits() {
+        let diff = v1::ToolCallContent::Diff(v1::Diff::new("/repo/a.ts", "after\n"));
+        let mut fields = v1::ToolCallUpdateFields::new();
+        fields.status = Some(v1::ToolCallStatus::InProgress);
+        fields.content = Some(vec![diff.clone()]);
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
+        // In-progress still yields the edit, even though it yields no result.
+        assert_eq!(from_session_update(&update), None);
+        assert_eq!(
+            file_edits(&update),
+            vec![ExecutorEvent::FileEdit {
+                id: "tc-1".into(),
+                path: "/repo/a.ts".into(),
+                // A new file: no old text, so the diff is all additions.
+                before: String::new(),
+                after: "after\n".into(),
+            }]
+        );
+
+        // A plain text tool call has no edits to report.
+        let mut plain = v1::ToolCallUpdateFields::new();
+        plain.status = Some(v1::ToolCallStatus::Completed);
+        plain.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
+            v1::ContentBlock::Text(v1::TextContent::new("done!")),
+        ))]);
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-2", plain));
+        assert!(file_edits(&update).is_empty());
     }
 
     /// RED→GREEN: usage updates carry through; user echoes are dropped.

@@ -33,7 +33,48 @@ beforeEach(() => {
   mocked.executorStatus.mockReset().mockResolvedValue([]);
 });
 
+const worktree = {
+  threadId: "t1",
+  branch: "palisade/AAAA1111",
+  added: 12,
+  removed: 3,
+  baseBranch: "main",
+  ahead: 2,
+  clean: true,
+  mergeable: true,
+  state: "ahead" as const,
+  head: "abc1234",
+};
+
 describe("SessionsPanel", () => {
+  /** The Editor preset's thread list has to say the same thing about a
+   *  thread's worktree as the Vibe sidebar does — two lists disagreeing
+   *  about whether a thread has work is worse than one list not saying. */
+  it("shows a thread's branch, diff stat and readiness from its worktree", async () => {
+    render(
+      <SessionsPanel
+        projectHash="h"
+        threads={[thread]}
+        worktrees={new Map([["t1", worktree]])}
+      />
+    );
+
+    expect(screen.getByTestId("sessions-thread-diff").textContent).toContain("+12");
+    expect(screen.getByTestId("sessions-thread-diff").textContent).toContain("3");
+    expect(screen.getByText("palisade/AAAA1111")).toBeTruthy();
+    expect(screen.getByTestId("sessions-thread-readiness").getAttribute("data-state")).toBe(
+      "ahead"
+    );
+  });
+
+  /** A thread with no worktree — never run, non-git project, or pinned to
+   *  the project root at its first run — claims nothing. */
+  it("says nothing about a thread that has no worktree", () => {
+    render(<SessionsPanel projectHash="h" threads={[thread]} worktrees={new Map()} />);
+
+    expect(screen.queryByTestId("sessions-thread-worktree")).toBeNull();
+  });
+
   it("lists a thread's sessions with busy/idle state and agent attribution", async () => {
     mocked.executorStatus.mockResolvedValue([
       { id: "s1", threadId: "t1", agentId: "claude-code", mode: "go", busy: true },
@@ -54,7 +95,7 @@ describe("SessionsPanel", () => {
       },
     ]);
 
-    render(<SessionsPanel projectHash="h" threads={[thread]} />);
+    render(<SessionsPanel projectHash="h" threads={[thread]} worktrees={new Map()} />);
     fireEvent.click(await screen.findByText("Fix the parser"));
 
     await waitFor(() => expect(screen.getByTestId("session-s1")).toBeTruthy());
@@ -80,7 +121,7 @@ describe("SessionsPanel", () => {
       },
     ]);
 
-    render(<SessionsPanel projectHash="h" threads={[thread]} />);
+    render(<SessionsPanel projectHash="h" threads={[thread]} worktrees={new Map()} />);
     fireEvent.click(await screen.findByText("Fix the parser"));
 
     await waitFor(() => expect(screen.getByTestId("session-s2")).toBeTruthy());

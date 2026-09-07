@@ -5178,7 +5178,11 @@ export default function App() {
                   are inspectable. */}
               <h2 className="ds-section-heading">Sessions</h2>
               <Suspense fallback={<div style={{ padding: 12 }}>Loading…</div>}>
-                <SessionsPanel projectHash={project.hash} threads={threads} />
+                <SessionsPanel
+                  projectHash={project.hash}
+                  threads={threads}
+                  worktrees={worktrees}
+                />
               </Suspense>
             </div>
           </>
