@@ -1259,6 +1259,25 @@ world
         assert!(add_worktree(git(), dir.path(), "01THREADAAAA").is_err());
     }
 
+    /// A repo with no commits is the trap `thread_worktree` guards against:
+    /// `git worktree add -b` does not fail on an unborn branch, it infers
+    /// `--orphan` and returns a worktree sharing neither history nor files
+    /// with the project. `rev_parse_head` is the predicate that catches it.
+    #[test]
+    fn a_worktree_off_an_unborn_branch_is_empty_and_head_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        run(git(), root, &["init"]).unwrap();
+        fs::write(root.join("already_here.txt"), "work done before any commit\n").unwrap();
+
+        assert!(rev_parse_head(git(), root).is_none(), "no commits yet");
+
+        // The add itself succeeds — which is exactly why the guard cannot
+        // rely on its error.
+        let (path, _) = add_worktree(git(), root, "01THREADAAAA").unwrap();
+        assert!(!path.join("already_here.txt").exists(), "orphan worktree carries nothing over");
+    }
+
     /// A new file is the most visible thing an agent does, and `git diff`
     /// never lists untracked paths — so an unmodified counter would report
     /// "+0 −0" for a thread that just wrote a module.

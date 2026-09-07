@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Badge, Loader, NavLink, Stack, Text } from "@mantine/core";
+import { Badge, Group, Loader, NavLink, Stack, Text, Tooltip } from "@mantine/core";
 import * as api from "./api";
-import type { SessionRecord, SessionStatus, ThreadMeta } from "./api";
+import type { SessionRecord, SessionStatus, ThreadMeta, WorktreeStatus } from "./api";
+import { READINESS } from "./SessionList";
 
 // THR-12/THR-13: a sessions-list view distinct from the thread list, showing
 // each session's busy/idle state and which agent/provider produced it — the
@@ -19,12 +20,57 @@ function statusOf(session: SessionRecord, live: Map<string, SessionStatus>) {
   return session.outcome ?? "ended";
 }
 
+/** A thread's branch, what it has changed, and whether it lands cleanly —
+ *  the same line the Vibe sidebar shows, from the same `READINESS` map, so
+ *  the two thread lists never disagree about a thread's state.
+ *
+ *  Absent for a thread with no worktree: never run, a non-git project, or a
+ *  thread pinned to the project root at its first run. */
+function WorktreeLine({ worktree }: { worktree: WorktreeStatus }) {
+  const readiness = READINESS[worktree.state];
+  return (
+    <Group gap={6} wrap="nowrap" data-testid="sessions-thread-worktree">
+      <Text span size="xs" c="dimmed" ff="monospace" truncate title={worktree.branch}>
+        {worktree.branch}
+      </Text>
+      {worktree.added + worktree.removed > 0 && (
+        <Text span size="xs" data-testid="sessions-thread-diff">
+          <Text span c="teal" size="xs">
+            +{worktree.added}
+          </Text>{" "}
+          <Text span c="red" size="xs">
+            −{worktree.removed}
+          </Text>
+        </Text>
+      )}
+      {readiness && (
+        <Tooltip label={readiness.tip} openDelay={400}>
+          <Badge
+            size="xs"
+            radius="sm"
+            variant="light"
+            color={readiness.color}
+            data-testid="sessions-thread-readiness"
+            data-state={worktree.state}
+          >
+            {readiness.label(worktree)}
+          </Badge>
+        </Tooltip>
+      )}
+    </Group>
+  );
+}
+
 export default function SessionsPanel({
   projectHash,
   threads,
+  worktrees,
 }: {
   projectHash: string;
   threads: ThreadMeta[];
+  /** Each thread's isolated worktree, keyed by thread id — the same map the
+   *  Vibe sidebar reads. */
+  worktrees: Map<string, WorktreeStatus>;
 }) {
   const [expanded, setExpanded] = useState<Record<string, Loaded>>({});
 
@@ -57,10 +103,12 @@ export default function SessionsPanel({
     <div data-testid="sessions-panel">
       {threads.map((thread) => {
         const state = expanded[thread.id];
+        const worktree = worktrees.get(thread.id);
         return (
           <NavLink
             key={thread.id}
             label={thread.title}
+            description={worktree ? <WorktreeLine worktree={worktree} /> : undefined}
             opened={!!state}
             onClick={() => toggle(thread)}
             data-testid={`sessions-thread-${thread.id}`}

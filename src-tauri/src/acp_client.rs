@@ -1007,6 +1007,10 @@ async fn run_bridge(
     // judged by the write guard (see `write_guard_input`).
     let notif_kinds =
         Arc::new(std::sync::Mutex::new(HashMap::<String, permissions::ToolKind>::new()));
+    // File edits already emitted this session, keyed by call + path + body.
+    // An agent that repeats a diff on every status change would otherwise
+    // stack a duplicate diff block in the transcript for each repeat.
+    let notif_edits = Arc::new(std::sync::Mutex::new(std::collections::HashSet::<String>::new()));
     let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
@@ -1055,6 +1059,18 @@ async fn run_bridge(
                             return Ok(());
                         }
                     }
+                }
+                // File edits ride on tool calls as `diff` blocks, which
+                // `from_session_update` does not carry — they are pulled off
+                // the raw update so chat shows the code as it changes.
+                for event in crate::acp_events::file_edits(&notification.update) {
+                    if let ExecutorEvent::FileEdit { id, path, after, .. } = &event {
+                        let key = format!("{id}\0{path}\0{after}");
+                        if !notif_edits.lock().unwrap().insert(key) {
+                            continue;
+                        }
+                    }
+                    emit(&notif_sink, &notif_session, &notif_thread, event);
                 }
                 if let Some(update) = crate::acp_events::from_session_update(&notification.update)
                 {
