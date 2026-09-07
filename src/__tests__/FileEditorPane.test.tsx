@@ -213,6 +213,24 @@ describe("FileEditorPane", () => {
     );
   });
 
+  it("reports a clean tab before a save callback can replace the editor", async () => {
+    const user = userEvent.setup();
+    const onDirtyChange = vi.fn();
+    let dirtyAtSave: unknown;
+    const onSave = vi.fn(() => {
+      dirtyAtSave = onDirtyChange.mock.lastCall?.[1];
+    });
+    render(<FileEditorPane projectHash="abc" path="broken.ipynb" onDirtyChange={onDirtyChange} onSave={onSave} />);
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "x");
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith("broken.ipynb", true));
+    await user.click(screen.getByRole("button", { name: /save \*/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(dirtyAtSave).toBe(false);
+  });
+
   it("does not remount the CodeMirror view on save (preserves cursor/undo/scroll state)", async () => {
     const user = userEvent.setup();
     render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);

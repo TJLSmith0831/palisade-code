@@ -76,6 +76,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import * as api from "./api";
+import { updateProjectSettings } from "./projectSettings";
 import { useAppShell } from "./hooks/useAppShell";
 import { useProjectManager } from "./hooks/useProjectManager";
 import { useExecutor } from "./hooks/useExecutor";
@@ -1320,7 +1321,7 @@ export const ChatSurface = memo(
                   margin: 0,
                   paddingLeft: 18,
                   fontSize: 12.5,
-                  lineHeight: 1.6,
+                  lineHeight: 1.5,
                   color: "var(--muted)",
                 }}
               >
@@ -2688,6 +2689,16 @@ const WorkspacePicker = memo(function WorkspacePicker({
 export const imagePathsFrom = (paths: string[]): string[] =>
   paths.filter((p) => IMAGE_PATH.test(p));
 
+export function clearRecoveredNotebook(
+  paths: Set<string>,
+  path: string
+): Set<string> {
+  if (!paths.has(path)) return paths;
+  const next = new Set(paths);
+  next.delete(path);
+  return next;
+}
+
 export default function App() {
   const pm = useProjectManager();
   const project = pm.project;
@@ -2955,25 +2966,13 @@ export default function App() {
   const addVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = JSON.parse(
-          await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE)
-        );
-      } catch {
-        // File missing or malformed — start fresh.
-      }
-      const pins = (parsed.verifyPins ?? {}) as Record<string, string[]>;
-      const current = pins[specName] ?? [];
-      if (!current.includes(commandName)) {
-        pins[specName] = [...current, commandName];
-      }
-      parsed.verifyPins = pins;
-      await api.writeFileContent(
-        project.hash,
-        PROJECT_SETTINGS_FILE,
-        JSON.stringify(parsed, null, 2) + "\n"
-      );
+      const parsed = await updateProjectSettings(project.hash, (settings) => {
+        const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
+        const current = pins[specName] ?? [];
+        if (!current.includes(commandName)) pins[specName] = [...current, commandName];
+        settings.verifyPins = pins;
+      });
+      const pins = parsed.verifyPins as Record<string, string[]>;
       setVerifyPins(pins);
     },
     [project]
@@ -2982,24 +2981,14 @@ export default function App() {
   const removeVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = JSON.parse(
-          await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE)
-        );
-      } catch {
-        return;
-      }
-      const pins = (parsed.verifyPins ?? {}) as Record<string, string[]>;
-      const current = pins[specName] ?? [];
-      pins[specName] = current.filter((c) => c !== commandName);
-      if (pins[specName].length === 0) delete pins[specName];
-      parsed.verifyPins = pins;
-      await api.writeFileContent(
-        project.hash,
-        PROJECT_SETTINGS_FILE,
-        JSON.stringify(parsed, null, 2) + "\n"
-      );
+      const parsed = await updateProjectSettings(project.hash, (settings) => {
+        const pins = (settings.verifyPins ?? {}) as Record<string, string[]>;
+        const current = pins[specName] ?? [];
+        pins[specName] = current.filter((c) => c !== commandName);
+        if (pins[specName].length === 0) delete pins[specName];
+        settings.verifyPins = pins;
+      });
+      const pins = parsed.verifyPins as Record<string, string[]>;
       setVerifyPins(pins);
     },
     [project]
@@ -3135,7 +3124,11 @@ export default function App() {
 
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
-      void edit;
+      // A repaired notebook first saves through the text fallback. Let its
+      // next render retry notebook mode instead of keeping that path stuck.
+      if (edit.path.toLowerCase().endsWith(".ipynb")) {
+        setUnopenableNotebooks((previous) => clearRecoveredNotebook(previous, edit.path));
+      }
       // Test results recorded before this write describe code that no longer
       // exists; the explorer reads this to say so.
       setLastEditAt(Date.now());

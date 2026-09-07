@@ -4372,6 +4372,7 @@ button.ds-onboarding-status {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-height: 52px;
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -4412,6 +4413,9 @@ button.ds-onboarding-status {
 .ds-onboarding-recent-path {
   font-size: 10px;
   font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-onboarding-recent-time {

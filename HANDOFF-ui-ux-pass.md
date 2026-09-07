@@ -115,37 +115,24 @@ All fixed; three tests now cover it.
 
 ---
 
-## 4. What I did NOT fix — the polish backlog
+## 4. Remaining work
 
-Ranked. Items 1–2 are the ones I'd do first.
+1. **Native New Project / Clone folder picker under Tauri MCP.** At 900×600,
+   entering a clone URL opens the native folder picker, wedges the bridge, and
+   the debug app panics with `unexpected NULL returned from +[NSOpenPanel
+   openPanel]`. The picker is not available to this automation environment, so
+   this needs a manual macOS reproduction before changing the dialog layer.
+2. **Claude Agent completion and queued-message delivery.** The UI reaches the
+   spec primer with Claude Agent + Sonnet, then the adapter reports expired
+   OAuth which cannot refresh. Re-authenticate outside this pass and rerun an
+   agent-backed turn before treating these flows as end-to-end verified.
+3. **Data-dependent panels received a shallow pass.** The disposable audit
+   project had no populated spec, review diff, database connection, graph, or
+   chain. Their empty states and entry controls were exercised at 1440×900 and
+   900×600; populated interactions still need project data.
 
-1. **Mantine's dark ramp was never repainted, so every popover surface is off
-   palette.** A `Menu` dropdown computes to `rgb(46,46,46)` with a
-   `rgb(66,66,66)` border, because in dark scheme Mantine draws popovers from
-   `--mantine-color-dark-6` (`#2e2e2e`) and `--mantine-color-dark-4`
-   (`#424242`) rather than from the `--mantine-color-default` family the
-   resolver overrides. Map the ramp's surface stops onto the shell's tokens in
-   `shellTokens` in `src/main.tsx` — dark-7 to `--bg`, dark-6 to `--surface`,
-   dark-5 to `--surface-warm`, dark-4 to `--border`. Left undone deliberately:
-   the ramp backs every Mantine surface in the app, so it needs the visual
-   sweep that is Phase 2 of this brief, not a blind remap at the end of a
-   session.
-2. **Sizes below 820px are unswept.** I covered 1600×1000, 1440×900, 1100×620,
-   1000×700 and 900×560. The `max-width: 820px` breakpoint (`.ds-side-panel`
-   hides) was never exercised.
-3. **Dead state in `useAppShell`:** `rightTab` / `setRightTab` are now written
-   nowhere and read nowhere — I removed their last real writer. Safe deletion,
-   plus the `RightTab` type's `"terminal"` member.
-4. **Onboarding recent-project rows have uneven heights** when a long path wraps
-   to two lines, so the list reads ragged. Cosmetic.
-5. **The spec primer's copy and spacing were only reviewed at 1440×900.**
-
-**Separate, not UI:**
-- `terminal::tests::terminate_kills_background_children_not_just_the_shell` is
-  **flaky** — failed once, passed on rerun and on every run since. PTY timing,
-  unrelated to this branch.
-- Issue #8 is live: I counted five orphaned `llama-server` sidecars from earlier
-  runs still resident during this session.
+**Separate, not UI:** `terminal::tests::terminate_kills_background_children_not_just_the_shell`
+remains a known PTY timing flake. Rerun it once if it fails during the final gate.
 
 ---
 
@@ -165,3 +152,43 @@ not refresh its OAuth token (another Claude Code process — this session — he
 it), so I never saw a spec interview run to completion in the real app. Every
 spec-mode change is covered by tests and by driving the UI up to the agent
 boundary; the agent's side of that conversation is unverified end-to-end.
+
+---
+
+## Terra handoff — Phase 1 backlog (uncommitted)
+
+Resolved all eight scoped items:
+
+1. Added `src/projectSettings.ts`, the single guarded read-merge-write path for
+   appearance and verify-pin changes. Missing and blank files become `{}`;
+   malformed non-empty JSON throws before writing; every write supplies the
+   content read as `expectedPrevious`.
+2. Mapped Mantine dark-7/6/5/4 to `--bg`, `--surface`, `--surface-warm`, and
+   `--border` in `src/main.tsx`.
+3. At the sub-820px scope, kept the contained fix to the recent-project rows:
+   a fixed two-line rhythm plus ellipsized path preserves the full path in the
+   row tooltip without uneven list heights. The spec primer's line height is
+   tightened slightly for the same narrow column.
+4. Removed unused `RightTab`, `rightTab`, and `setRightTab` from
+   `src/hooks/useAppShell.ts`; `rg` now finds no readers.
+5. Recent project paths no longer wrap the rows unevenly.
+6. Primer copy remains unchanged; spacing was tightened only.
+7. A successful text-editor save of a repaired `.ipynb` clears that path from
+   `unopenableNotebooks`, allowing the next render to return to notebook mode.
+8. Set the chat tool badge text floor to 10px, so `TERMINAL` is legible.
+
+Files changed: `src/projectSettings.ts`, `src/SettingsPanel.tsx`,
+`src/App.tsx`, `src/main.tsx`, `src/hooks/useAppShell.ts`,
+`src/App.css`, `src/EventView.tsx`, and focused frontend tests.
+
+Targeted validation passed: `npx vitest run src/__tests__/projectSettings.test.ts
+src/__tests__/SettingsPanel.test.tsx src/__tests__/App.test.tsx
+src/__tests__/EventView.test.tsx src/__tests__/OnboardingScreen.test.tsx`
+(237 tests) and `npx tsc --noEmit`. No full test gate, Rust tests, packaging,
+or commit was run.
+
+Visual verification still for Astra: inspect the Mantine Menu/Popover dark
+surfaces, onboarding rows with long paths, and the spec primer below 820px.
+I attempted the local Tauri launch, but the existing localhost Vite port was
+occupied and the already-running installed app displayed a blank workbench, so
+there is no fresh live screenshot from this pass. No other uncertainty found.

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { Modal, Button, NumberInput, Select, Switch, SegmentedControl, Alert } from "@mantine/core";
 import * as api from "./api";
+import { updateProjectSettings } from "./projectSettings";
 import {
   COMPLETION_ENABLED_KEY,
   COMPLETION_KEYBINDING_KEY,
@@ -290,24 +291,9 @@ async function loadProjectAppearance(projectHash: string): Promise<Appearance> {
 }
 
 async function saveAppearance(projectHash: string, appearance: Appearance) {
-  let previous: string | null = null;
-  try {
-    previous = await api.readFileContent(projectHash, PROJECT_SETTINGS_FILE);
-  } catch (error) {
-    if (!/no such file|not found|os error 2/i.test(String(error))) throw error;
-  }
-  // Preserve invalid or unreadable files so changing a color cannot erase settings.
-  const parsed = previous === null ? {} : JSON.parse(previous);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Project settings must be a JSON object");
-  }
-  parsed.appearance = appearance;
-  await api.writeFileContent(
-    projectHash,
-    PROJECT_SETTINGS_FILE,
-    JSON.stringify(parsed, null, 2) + "\n",
-    previous
-  );
+  await updateProjectSettings(projectHash, (settings) => {
+    settings.appearance = appearance;
+  });
 }
 
 /* -------------------------------------------------------------------------- */

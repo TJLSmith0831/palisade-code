@@ -9,8 +9,6 @@ export type Theme = "auto" | "light" | "dark";
 export const nextTheme = (t: Theme): Theme =>
   t === "auto" ? "light" : t === "light" ? "dark" : "auto";
 
-type RightTab = "threads" | "codemap" | "specs" | "verify" | "terminal";
-
 /// The left icon rail's panel inventory. Identical in both presets — the
 /// Governing Rule is that Vibe and Editor share one panel set and differ
 /// only in arrangement, so this list is deliberately not per-shell.
@@ -128,8 +126,6 @@ export function useAppShell(projectHash: string | undefined) {
     setOpenThreadIds((prev) => prev.filter((existing) => existing !== id));
   }, []);
 
-  const [rightTab, setRightTab] = useState<RightTab>("threads");
-
   const [theme, setThemeState] = useState<Theme>(
     () => (localStorage.getItem(THEME_KEY) as Theme) || "auto"
   );
@@ -213,8 +209,6 @@ export function useAppShell(projectHash: string | undefined) {
       openThreadIds,
       openThread,
       closeThread,
-      rightTab,
-      setRightTab,
       toggleTerminal,
       theme,
       setTheme,
@@ -240,7 +234,6 @@ export function useAppShell(projectHash: string | undefined) {
       openThreadIds,
       openThread,
       closeThread,
-      rightTab,
       theme,
       toggleTerminal,
       leftRail,

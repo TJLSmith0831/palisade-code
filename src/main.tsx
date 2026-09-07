@@ -165,6 +165,10 @@ const shellTokens = {
   "--mantine-color-disabled": "var(--surface)",
   "--mantine-color-disabled-color": "var(--muted)",
   "--mantine-color-disabled-border": "var(--border)",
+  "--mantine-color-dark-7": "var(--bg)",
+  "--mantine-color-dark-6": "var(--surface)",
+  "--mantine-color-dark-5": "var(--surface-warm)",
+  "--mantine-color-dark-4": "var(--border)",
   "--mantine-primary-color-filled": "var(--accent)",
   "--mantine-primary-color-filled-hover": "var(--accent)",
   "--mantine-primary-color-light":

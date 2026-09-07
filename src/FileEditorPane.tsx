@@ -522,6 +522,10 @@ export default function FileEditorPane({
       api
         .writeFileContent(projectHash, path, after, expectedPrevious)
         .then((format) => {
+          // A successful save can switch this pane to another editor (notebook
+          // recovery does this). Tell the tab list it is clean before that
+          // parent callback has a chance to replace this component.
+          onDirtyChange?.(path, false);
           onSaveRef.current?.({ path, before: baselineRef.current, after });
           baselineRef.current = after;
           sessions.set(sessionKey(projectHash, path), {

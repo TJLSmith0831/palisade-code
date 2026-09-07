@@ -126,7 +126,7 @@ vi.mock("../GraphPane", () => ({
   default: () => <div data-testid="graph-pane" />,
 }));
 
-import App from "../App";
+import App, { clearRecoveredNotebook } from "../App";
 import { clearDiagnostics, publishDiagnostics } from "../lspClients";
 
 // The baseline IPC responses every test starts from. Tests that need one
@@ -6080,3 +6080,13 @@ describe("Session list on a narrow window", () => {
   });
 });
 
+describe("Notebook recovery", () => {
+  it("returns a repaired notebook path to notebook mode without affecting other fallbacks", () => {
+    const remaining = clearRecoveredNotebook(
+      new Set(["broken.ipynb", "still-broken.ipynb"]),
+      "broken.ipynb"
+    );
+
+    expect(remaining).toEqual(new Set(["still-broken.ipynb"]));
+  });
+});

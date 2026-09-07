@@ -259,7 +259,7 @@ function ToolBlock({
           size="xs"
           variant="light"
           color={badgeColor}
-          style={{ flex: "0 0 auto" }}
+          style={{ flex: "0 0 auto", fontSize: 10 }}
         >
           {event.name}
         </Badge>
