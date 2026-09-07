@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tree, useTree, type RenderTreeNodePayload, type TreeNodeData } from "@mantine/core";
-import { IconChevronDown, IconChevronRight, IconFolder, IconFolderOpen } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconEye,
+  IconEyeOff,
+  IconFolder,
+  IconFolderOpen,
+} from "@tabler/icons-react";
 import * as api from "./api";
 import { describeError } from "./errors";
 import { NewFileIcon, NewFolderIcon, FileTypeIcon, RenameIcon, DeleteIcon } from "./icons";
@@ -83,7 +90,7 @@ export default function FileTree({
   const [creating, setCreating] = useState<{ parentPath: string; kind: "file" | "folder" } | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null); // "" = root/background
-  const [includeHidden, setIncludeHidden] = useState(initialIncludeHidden ?? false);
+  const [includeHidden, setIncludeHidden] = useState(initialIncludeHidden ?? true);
   const editInputRef = useRef<HTMLInputElement>(null);
 
   // Expansion lives in the tree controller; selection stays controlled off the
@@ -509,6 +516,20 @@ export default function FileTree({
             data-testid="tree-new-folder"
           >
             <NewFolderIcon />
+          </button>
+          <button
+            className="ds-tree-header-action"
+            title={includeHidden ? "Hide Gitignored/Hidden Files" : "Show Gitignored/Hidden Files"}
+            aria-label={includeHidden ? "Hide Gitignored/Hidden Files" : "Show Gitignored/Hidden Files"}
+            onClick={() =>
+              setIncludeHidden((prev) => {
+                onIncludeHiddenChange?.(!prev);
+                return !prev;
+              })
+            }
+            data-testid="tree-toggle-hidden"
+          >
+            {includeHidden ? <IconEyeOff size={16} /> : <IconEye size={16} />}
           </button>
         </div>
       </div>

@@ -45,3 +45,6 @@ src-tauri/resources
 
 # Python bytecode from running the notebook driver self-check.
 __pycache__/
+
+# Signing/notarization secrets — see .env.example
+.env
