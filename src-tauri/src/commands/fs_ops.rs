@@ -24,10 +24,17 @@ pub(crate) fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
     // the UI should react to either. Left out of this list, a pytest run
     // reported its own `.pyc` writes as source edits and flagged its own
     // results as stale the moment it finished.
+    // Palisade's own code-graph output. `list_all_files` asks git what to
+    // ignore, and `ensure_graph_ignored` adds this directory to `.gitignore`
+    // — but a project that is not a git repo has neither, and the cache's
+    // 64-character filenames then flooded the `@` mention menu and ⌘P with
+    // an artifact the app itself wrote. Palisade knows this name; it should
+    // not need git to hide it.
     name.starts_with('.')
         || name == "node_modules"
         || name == "target"
         || name == "__pycache__"
+        || name == crate::integrations::GRAPH_DIR
 }
 
 #[tauri::command]
@@ -393,7 +400,10 @@ pub(crate) const CONFLICT_PREFIX: &str = "CONFLICT:";
 /// so a save doesn't come straight back as a "changed on disk" banner. A
 /// no-op when no project is active or the watcher failed to start.
 pub(crate) fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Path) {
-    if let Some(watcher) = harness.fswatch.lock().unwrap().as_ref() {
+    // Every open project's watcher (#33). The path is absolute, so only the
+    // watcher that actually owns it can see the event this suppresses; the
+    // others are told about a path they will never report.
+    for watcher in harness.fswatch.lock().unwrap().values() {
         watcher.note_self_write(resolved);
     }
 }
@@ -538,6 +548,21 @@ pub async fn create_directory(project_hash: String, relative_path: String) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project that is not a git repo has no `.gitignore` to consult, and
+    /// the code-graph cache used to fill the file palette and the `@` mention
+    /// menu with 64-character generated filenames.
+    #[test]
+    fn generated_output_is_hidden_even_without_a_gitignore() {
+        assert!(should_skip_entry(crate::integrations::GRAPH_DIR, false));
+        assert!(should_skip_entry("node_modules", false));
+        assert!(!should_skip_entry("src", false));
+        assert!(!should_skip_entry("README.md", false));
+        // "Show hidden files" still reveals it rather than lying to the user.
+        assert!(!should_skip_entry(crate::integrations::GRAPH_DIR, true));
+        // `.git` is never browsable, hidden files shown or not.
+        assert!(should_skip_entry(".git", true));
+    }
 
     #[test]
     fn resolve_creatable_path_allows_creating_a_brand_new_file() {

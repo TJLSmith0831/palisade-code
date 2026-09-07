@@ -101,6 +101,7 @@ export default function SessionList({
   onSelect,
   onRename,
   onArchive,
+  userOpened = false,
 }: {
   threads: ThreadMeta[];
   projects: Project[];
@@ -118,6 +119,9 @@ export default function SessionList({
   onSelect: (thread: ThreadMeta) => void;
   onRename: (thread: ThreadMeta) => void;
   onArchive: (thread: ThreadMeta) => void;
+  /** The user asked for this column, rather than it merely starting open.
+   *  A narrow window folds it away by default; this exempts it from that. */
+  userOpened?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const visible = useMemo(() => filterThreads(threads, query), [threads, query]);
@@ -142,7 +146,12 @@ export default function SessionList({
   }, [visible, projects, activeProject]);
 
   return (
-    <aside className="ds-sessions" data-testid="session-list" aria-label="Threads">
+    <aside
+      className="ds-sessions"
+      data-testid="session-list"
+      data-user-opened={userOpened || undefined}
+      aria-label="Threads"
+    >
       <div className="ds-sessions-header">
         <Button
           variant="default"

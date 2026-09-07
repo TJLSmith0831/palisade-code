@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Modal, Button, NumberInput, Select, Switch } from "@mantine/core";
+import { useEffect, useState, useRef } from "react";
+import { Modal, Button, NumberInput, Select, Switch, SegmentedControl, Alert } from "@mantine/core";
 import * as api from "./api";
 import {
   COMPLETION_ENABLED_KEY,
@@ -250,7 +250,26 @@ export function applyAppearance(appearance: Appearance) {
   set("--code-text-dark-override", appearance.codeTextColor?.dark);
 }
 
+export const GLOBAL_APPEARANCE_KEY = "palisade:appearance";
+
+export function loadGlobalAppearance(): Appearance {
+  try { return JSON.parse(localStorage.getItem(GLOBAL_APPEARANCE_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+export function mergeAppearance(defaults: Appearance, overrides: Appearance): Appearance {
+  const result: Appearance = {};
+  for (const key of ["appShellColor", "shellAccentColor", "commentColor", "codeTextColor"] as const) {
+    if (defaults[key] || overrides[key]) result[key] = { ...defaults[key], ...overrides[key] } as ThemeColor;
+  }
+  return result;
+}
+
 export async function loadAppearance(projectHash: string): Promise<Appearance> {
+  return mergeAppearance(loadGlobalAppearance(), projectHash ? await loadProjectAppearance(projectHash) : {});
+}
+
+async function loadProjectAppearance(projectHash: string): Promise<Appearance> {
   try {
     const raw = JSON.parse(
       await api.readFileContent(projectHash, PROJECT_SETTINGS_FILE)
@@ -271,22 +290,23 @@ export async function loadAppearance(projectHash: string): Promise<Appearance> {
 }
 
 async function saveAppearance(projectHash: string, appearance: Appearance) {
-  let parsed: Record<string, unknown> = {};
-
+  let previous: string | null = null;
   try {
-    parsed = JSON.parse(
-      await api.readFileContent(projectHash, PROJECT_SETTINGS_FILE)
-    );
-  } catch {
-    // File missing or malformed — start fresh.
+    previous = await api.readFileContent(projectHash, PROJECT_SETTINGS_FILE);
+  } catch (error) {
+    if (!/no such file|not found|os error 2/i.test(String(error))) throw error;
   }
-
+  // Preserve invalid or unreadable files so changing a color cannot erase settings.
+  const parsed = previous === null ? {} : JSON.parse(previous);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Project settings must be a JSON object");
+  }
   parsed.appearance = appearance;
-
   await api.writeFileContent(
     projectHash,
     PROJECT_SETTINGS_FILE,
-    JSON.stringify(parsed, null, 2) + "\n"
+    JSON.stringify(parsed, null, 2) + "\n",
+    previous
   );
 }
 
@@ -385,6 +405,12 @@ export default function SettingsPanel({
     () => localStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Alt-Tab"
   );
   const [appearance, setAppearance] = useState<Appearance>({});
+  const [globalAppearance, setGlobalAppearance] = useState(loadGlobalAppearance);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const saveInFlight = useRef(false);
+  const [scope, setScope] = useState(projectHash ? "project" : "global");
+  const displayedAppearance = scope === "global" ? globalAppearance : mergeAppearance(globalAppearance, appearance);
 
   useEffect(() => {
     if (!projectHash) {
@@ -394,10 +420,10 @@ export default function SettingsPanel({
 
     let cancelled = false;
 
-    loadAppearance(projectHash).then((a) => {
+    loadProjectAppearance(projectHash).then((a) => {
       if (!cancelled) {
         setAppearance(a);
-        applyAppearance(a);
+        applyAppearance(mergeAppearance(loadGlobalAppearance(), a));
       }
     });
 
@@ -453,38 +479,35 @@ export default function SettingsPanel({
     window.dispatchEvent(new Event(EDITOR_FONT_CHANGED_EVENT));
   };
 
-  const pickColor = (
-    category: keyof Appearance,
-    theme: "light" | "dark",
-    value: string
-  ) => {
-    const current = appearance[category] ?? {};
-
-    const next: Appearance = {
-      ...appearance,
-      [category]: {
-        ...current,
-        [theme]: value,
-      },
-    };
-
-    setAppearance(next);
-    applyAppearance(next);
-
-    if (projectHash) {
-      void saveAppearance(projectHash, next);
+  const updateAppearance = async (next: Appearance) => {
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      if (scope === "global") {
+        localStorage.setItem(GLOBAL_APPEARANCE_KEY, JSON.stringify(next));
+        setGlobalAppearance(next);
+        applyAppearance(mergeAppearance(next, appearance));
+      } else {
+        await saveAppearance(projectHash, next);
+        setAppearance(next);
+        applyAppearance(mergeAppearance(globalAppearance, next));
+      }
+    } catch (error) {
+      setSaveError(`Could not save appearance. ${error instanceof Error ? error.message : String(error)}. Try again.`);
+    } finally {
+      saveInFlight.current = false;
+      setSaving(false);
     }
   };
 
-  const resetAppearance = () => {
-    const next: Appearance = {};
-    setAppearance(next);
-    applyAppearance(next);
-
-    if (projectHash) {
-      void saveAppearance(projectHash, next);
-    }
+  const pickColor = (category: keyof Appearance, theme: "light" | "dark", value: string) => {
+    const current = scope === "global" ? globalAppearance : appearance;
+    updateAppearance({ ...current, [category]: { ...current[category], [theme]: value } });
   };
+
+  const resetAppearance = () => updateAppearance({});
 
   /* ------------------------------------------------------------------------ */
   /* Design tokens                                                            */
@@ -537,7 +560,7 @@ export default function SettingsPanel({
     category: keyof Appearance;
     testId: string;
   }) => {
-    const selected = appearance[category]?.[theme];
+    const selected = displayedAppearance[category]?.[theme];
 
     return (
       <div
@@ -570,6 +593,7 @@ export default function SettingsPanel({
                 title={preset.name}
                 aria-label={`${label} ${preset.name}`}
                 aria-pressed={active}
+                disabled={saving}
                 onClick={() => pickColor(category, theme, value)}
                 data-testid={`${testId}-swatch`}
                 style={{
@@ -710,6 +734,22 @@ export default function SettingsPanel({
         {/* App shell                                                         */}
         {/* ---------------------------------------------------------------- */}
 
+        {saveError && <Alert color="red" role="alert" mb="sm">{saveError}</Alert>}
+        <SegmentedControl
+          aria-label="Appearance scope"
+          value={scope}
+          onChange={setScope}
+          disabled={saving}
+          fullWidth
+          mb="sm"
+          data={[
+            { value: "project", label: "This project", disabled: !projectHash },
+            { value: "global", label: "Global defaults" },
+          ]}
+        />
+        <p style={{ color: "var(--muted)", fontSize: 12 }}>
+          {scope === "project" ? "Project colors override your global defaults. Reset to inherit your defaults again." : "Default colors for all projects. Existing project overrides take priority."}
+        </p>
         <section
           style={{
             paddingBottom: 16,
@@ -846,10 +886,11 @@ export default function SettingsPanel({
             size="xs"
             variant="default"
             onClick={resetAppearance}
+            loading={saving}
             data-testid="reset-appearance-button"
             fullWidth
           >
-            Reset to default
+            {scope === "project" ? "Reset to global defaults" : "Reset to built-in colors"}
           </Button>
         </section>
 

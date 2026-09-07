@@ -3,9 +3,7 @@ import { useMantineColorScheme } from "@mantine/core";
 import { useResizable } from "../useResizable";
 
 export const THEME_KEY = "palisade:theme";
-export const TERMINAL_PLACEMENT_KEY = "palisade:terminalPlacement";
 
-export type TerminalPlacement = "bottom" | "sidebar";
 export type Theme = "auto" | "light" | "dark";
 
 export const nextTheme = (t: Theme): Theme =>
@@ -64,8 +62,17 @@ export function useAppShell(projectHash: string | undefined) {
   // Vibe-only browse surface (Amendment 3); Editor gets the thread-tab strip
   // alone, so this state is simply not read in that preset.
   const [sessionListOpen, setSessionListOpen] = useState(true);
+  // Whether the user has *asked* for this column, as opposed to it being open
+  // because it starts open. A narrow window folds it away on its own, and the
+  // toggle has to be able to win over that fold — otherwise the button is
+  // inert on a small laptop and there is no way back to the thread list.
+  const [sessionListUserOpened, setSessionListUserOpened] = useState(false);
   const toggleSessionList = useCallback(
-    () => setSessionListOpen((open) => !open),
+    () =>
+      setSessionListOpen((open) => {
+        setSessionListUserOpened(!open);
+        return !open;
+      }),
     []
   );
 
@@ -122,11 +129,6 @@ export function useAppShell(projectHash: string | undefined) {
   }, []);
 
   const [rightTab, setRightTab] = useState<RightTab>("threads");
-  const [terminalPlacement, setTerminalPlacement] = useState<TerminalPlacement>(
-    () =>
-      (localStorage.getItem(TERMINAL_PLACEMENT_KEY) as TerminalPlacement) ||
-      "bottom"
-  );
 
   const [theme, setThemeState] = useState<Theme>(
     () => (localStorage.getItem(THEME_KEY) as Theme) || "auto"
@@ -183,33 +185,12 @@ export function useAppShell(projectHash: string | undefined) {
     axis: "horizontal",
   });
 
-  const toggleTerminalPlacement = useCallback(() => {
-    setTerminalPlacement((prev) => {
-      const next = prev === "bottom" ? "sidebar" : "bottom";
-      localStorage.setItem(TERMINAL_PLACEMENT_KEY, next);
-      if (next === "sidebar") {
-        setRightTab("terminal");
-        rightPanel.setCollapsed(false);
-      } else {
-        setRightTab((tab) => (tab === "terminal" ? "threads" : tab));
-        terminalPanel.setCollapsed(false);
-      }
-      return next;
-    });
-  }, [rightPanel.setCollapsed, terminalPanel.setCollapsed]);
-
-  const toggleTerminal = useCallback(() => {
-    if (terminalPlacement === "sidebar") {
-      setRightTab("terminal");
-      rightPanel.setCollapsed(false);
-    } else {
-      terminalPanel.toggleCollapsed();
-    }
-  }, [
-    terminalPlacement,
-    rightPanel.setCollapsed,
-    terminalPanel.toggleCollapsed,
-  ]);
+  // The terminal lives in the bottom panel, full stop. It used to be movable
+  // into a right-panel tab, but the right panel stopped rendering a terminal
+  // tab (Amendment 3) — so "move to sidebar" collapsed the terminal into
+  // nowhere, and the only control that undid it lived inside the panel it
+  // had just hidden.
+  const toggleTerminal = terminalPanel.toggleCollapsed;
 
   return useMemo(
     () => ({
@@ -221,6 +202,7 @@ export function useAppShell(projectHash: string | undefined) {
       activePanel,
       selectPanel,
       sessionListOpen,
+      sessionListUserOpened,
       toggleSessionList,
       chatCollapsed,
       toggleChat,
@@ -233,9 +215,6 @@ export function useAppShell(projectHash: string | undefined) {
       closeThread,
       rightTab,
       setRightTab,
-      terminalPlacement,
-      setTerminalPlacement,
-      toggleTerminalPlacement,
       toggleTerminal,
       theme,
       setTheme,
@@ -251,6 +230,7 @@ export function useAppShell(projectHash: string | undefined) {
       activePanel,
       selectPanel,
       sessionListOpen,
+      sessionListUserOpened,
       toggleSessionList,
       chatCollapsed,
       toggleChat,
@@ -261,9 +241,7 @@ export function useAppShell(projectHash: string | undefined) {
       openThread,
       closeThread,
       rightTab,
-      terminalPlacement,
       theme,
-      toggleTerminalPlacement,
       toggleTerminal,
       leftRail,
       rightPanel,

@@ -24,6 +24,7 @@ mod session_log_writer;
 mod openspec_cache;
 mod settings;
 mod store;
+mod project_windows;
 mod dap;
 mod terminal;
 mod test_parse;
@@ -74,29 +75,70 @@ async fn list_projects() -> Res<Vec<Project>> {
 }
 
 #[tauri::command]
-async fn add_project(path: String) -> Res<Project> {
-    tokio::task::spawn_blocking(move || store::add_project(&palisade_home(), Path::new(&path)))
+async fn add_project(app: tauri::AppHandle, path: String) -> Res<Project> {
+    tokio::task::spawn_blocking(move || {
+        let project = store::add_project(&palisade_home(), Path::new(&path))?;
+        let _ = app.emit("projects-changed", &project.hash);
+        Ok(project)
+    })
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Open a separate native window with its own frontend project state.
+///
+/// A project already on screen focuses its window instead of opening a second
+/// copy of itself — the rule VS Code follows for the same action (#33).
+#[tauri::command]
+async fn open_project_window(app: tauri::AppHandle, hash: String) -> Res<String> {
+    if let Some(label) = project_windows::window_showing(&app.state::<Harness>(), &hash) {
+        if let Some(existing) = app.get_webview_window(&label) {
+            // Focus can fail on a window mid-teardown; falling through to open
+            // a fresh one is better than reporting an error for "show me this".
+            if existing.set_focus().is_ok() {
+                return Ok(label);
+            }
+        }
+    }
+    let config = project_windows::window_config(&palisade_home(), &hash)?;
+    let label = config.label.clone();
+    tauri::WebviewWindowBuilder::from_config(&app, &config)
+        .map_err(|e| format!("configure project window: {e}"))?
+        .build().map_err(|e| format!("open project window: {e}"))?;
+    Ok(label)
+}
+
+#[tauri::command]
+async fn remove_project(app: tauri::AppHandle, hash: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        project_windows::remove_saved_project(&palisade_home(), &app.state::<Harness>(), &hash)?;
+        let _ = app.emit("projects-changed", &hash);
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Amendment 8's Clone Repository card: clone, then register the result as
 /// a project in one step.
 #[tauri::command]
-async fn clone_repository(url: String, parent: String) -> Res<Project> {
+async fn clone_repository(app: tauri::AppHandle, url: String, parent: String) -> Res<Project> {
     tokio::task::spawn_blocking(move || {
         let target = git::clone(&git_bin()?, &url, Path::new(&parent))?;
-        store::add_project(&palisade_home(), &target)
+        let project = store::add_project(&palisade_home(), &target)?;
+        let _ = app.emit("projects-changed", &project.hash);
+        Ok(project)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn switch_project(app: tauri::AppHandle, hash: String) -> Res<Project> {
+async fn switch_project(window: tauri::Window, app: tauri::AppHandle, hash: String) -> Res<Project> {
+    let label = window.label().to_string();
     tokio::task::spawn_blocking(move || {
         let project = store::touch_project(&palisade_home(), &hash)?;
         let harness: tauri::State<'_, Harness> = app.state();
+        // Which window is showing what decides which watchers stay alive (#33).
+        project_windows::track(&harness, &label, &project.hash);
         start_watcher(&app, &harness, &project);
         start_fs_watcher(&app, &harness, &project);
         ensure_graphify_mcp(&app, &harness, &project);
@@ -167,8 +209,14 @@ fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harnes
 /// fails to spawn for some other reason, or crashes later, surfaces once
 /// through the `harness-warning` event instead.
 fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
-    let mut slot = harness.watch.lock().unwrap();
-    *slot = None;
+    // Keyed by project, not a single slot: a second project window used to
+    // stop the first window's watcher (#33). Retire first, so switching away
+    // from a project no window still shows also stops its graphify process.
+    project_windows::retire_unwatched(harness);
+    let mut watchers = harness.watch.lock().unwrap();
+    if watchers.contains_key(&project.hash) {
+        return;
+    }
 
     let Some(bin) = executor::find_on_path("graphify") else {
         return;
@@ -177,7 +225,7 @@ fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, pr
     let app_update = app.clone();
     let hash_update = project.hash.clone();
     let app_crash = app.clone();
-    *slot = Some(integrations::Watcher::spawn(
+    watchers.insert(project.hash.clone(), integrations::Watcher::spawn(
         bin,
         PathBuf::from(&project.root),
         move || {
@@ -199,20 +247,24 @@ struct FsChanged {
     paths: Vec<String>,
 }
 
-/// Replaces whatever filesystem watcher was running with one scoped to the
-/// newly active project (`FsWatcher`'s `Drop` stops the old one), so the
-/// editor and file tree find out when the agent, a `git checkout`, or
-/// another editor changes something underneath them. A watcher that can't
-/// start surfaces once through `harness-warning` and leaves the app working
-/// without reconciliation — the same degradation as a missing `graphify`.
+/// Ensures a filesystem watcher for the newly active project, so the editor
+/// and file tree find out when the agent, a `git checkout`, or another editor
+/// changes something underneath them. One watcher per project, shared by
+/// every window showing it and dropped once the last of them moves on. A
+/// watcher that can't start surfaces once through `harness-warning` and
+/// leaves the app working without reconciliation — the same degradation as a
+/// missing `graphify`.
 fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
-    let mut slot = harness.fswatch.lock().unwrap();
-    *slot = None;
+    project_windows::retire_unwatched(harness);
+    let mut watchers = harness.fswatch.lock().unwrap();
+    if watchers.contains_key(&project.hash) {
+        return;
+    }
 
     let app_change = app.clone();
     let hash_change = project.hash.clone();
     let app_crash = app.clone();
-    *slot = Some(fswatch::FsWatcher::spawn(
+    watchers.insert(project.hash.clone(), fswatch::FsWatcher::spawn(
         PathBuf::from(&project.root),
         move |paths| {
             let _ = app_change.emit(
@@ -227,8 +279,12 @@ fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>,
 }
 
 #[tauri::command]
-async fn rename_project(hash: String, display_name: String) -> Res<Project> {
-    tokio::task::spawn_blocking(move || store::rename_project(&palisade_home(), &hash, &display_name))
+async fn rename_project(app: tauri::AppHandle, hash: String, display_name: String) -> Res<Project> {
+    tokio::task::spawn_blocking(move || {
+        let project = store::rename_project(&palisade_home(), &hash, &display_name)?;
+        let _ = app.emit("projects-changed", &hash);
+        Ok(project)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1183,13 +1239,58 @@ async fn go_mode(
 
 /// Wrap the spec_type in a sentence so the agent knows it is the starting
 /// concept, not just an unexplained topic like "Feature" or "Bugfix".
-fn framed_spec_body(spec_type: &str) -> String {
-    let trimmed = spec_type.trim();
-    if trimmed.is_empty() {
-        "Start exploring.".to_string()
-    } else {
-        format!("Start exploring the following concept: {trimmed}")
+/// What the built-in framing cards are *for*: each one pre-wires the questions
+/// that kind of work always has to answer, so the agent opens on them instead
+/// of on "what would you like to build?".
+///
+/// A framing the user typed themselves gets no invented guidance — Palisade
+/// does not know what questions their framing implies, and guessing would put
+/// words in the agent's mouth.
+fn framing_guidance(spec_type: &str) -> Option<&'static str> {
+    match spec_type.trim().to_ascii_lowercase().as_str() {
+        "feature" => Some(
+            "This is a feature: something that does not exist yet. Establish \
+             the user-visible outcome, who it is for, and what is explicitly \
+             out of scope before proposing any design.",
+        ),
+        "bugfix" => Some(
+            "This is a bugfix: something already built is behaving wrongly. \
+             Establish the observed behaviour, the expected behaviour, and how \
+             to reproduce it. Trace it to a root cause before proposing a \
+             change; do not patch the symptom.",
+        ),
+        _ => None,
     }
+}
+
+/// The first user turn: the framing card's guidance, then the user's own
+/// request, verbatim and clearly marked as theirs.
+///
+/// The request used to be the framing label alone — "Start exploring the
+/// following concept: Feature" — which told the agent nothing about what the
+/// user actually wanted, and made the interview open by asking for it.
+fn framed_spec_body(spec_type: &str, description: Option<&str>) -> String {
+    let framing = spec_type.trim();
+    let request = description.map(str::trim).filter(|d| !d.is_empty());
+    let mut body = String::from("Start exploring.");
+    if !framing.is_empty() {
+        body = format!("Start exploring this {framing}.");
+    }
+    if let Some(guidance) = framing_guidance(framing) {
+        body.push('\n');
+        body.push_str(guidance);
+    }
+    match request {
+        Some(request) => {
+            body.push_str("\n\nWhat the user asked for, in their own words:\n");
+            body.push_str(request);
+        }
+        // A thread framed before descriptions were required, or a handoff
+        // re-injection, where the request is already in the transcript.
+        None if !framing.is_empty() => {}
+        None => {}
+    }
+    body
 }
 
 /// Per D12: on agent handoff (transcript rebuilt with 100k budget), re-inject
@@ -1205,7 +1306,14 @@ fn spec_type_reinjection(mode: &str, meta: &store::ThreadMeta) -> Option<String>
         return None;
     }
     match (&meta.spec_type, &meta.open_spec_change_name) {
-        (Some(spec_type), None) => Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type))),
+        // No description here: on handoff the user's own words are already in
+        // the rebuilt transcript, and repeating them would read as a second
+        // request. Only the framing guidance has to be re-established.
+        (Some(spec_type), None) => Some(grill_inject::build_prompt(
+            "spec",
+            false,
+            &framed_spec_body(spec_type, None),
+        )),
         _ => None,
     }
 }
@@ -1222,13 +1330,18 @@ fn spec_type_reinjection(mode: &str, meta: &store::ThreadMeta) -> Option<String>
 fn spec_mode_initial_prompt(
     meta: &store::ThreadMeta,
     spec_type: &str,
+    description: Option<&str>,
     start: bool,
 ) -> Option<String> {
     if !start {
         return None;
     }
     if meta.open_spec_change_name.is_none() {
-        Some(grill_inject::build_prompt("spec", false, &framed_spec_body(spec_type)))
+        Some(grill_inject::build_prompt(
+            "spec",
+            false,
+            &framed_spec_body(spec_type, description),
+        ))
     } else {
         None
     }
@@ -1251,6 +1364,7 @@ async fn spec_mode(
     project_hash: String,
     thread_id: String,
     spec_type: String,
+    description: Option<String>,
     bypass: bool,
     start: bool,
 ) -> Res<ThreadMeta> {
@@ -1265,21 +1379,39 @@ async fn spec_mode(
         } else {
             store::set_spec_type(&palisade_home(), &project_hash, &thread_id, &spec_type)?
         };
-        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, start) {
+        let request = description.as_deref().map(str::trim).filter(|d| !d.is_empty());
+        // A spec thread is named exactly the way every other thread is —
+        // agent title, else the local model, else the first line of the
+        // request — not after which card the user pressed. "Feature" is the
+        // same row for every feature they will ever spec (#30/#35).
+        if let Some(request) = request {
+            let local = model_title(&harness, request);
+            let _ = store::set_auto_title(
+                &palisade_home(),
+                &project_hash,
+                &thread_id,
+                request,
+                local.as_deref(),
+            );
+            if local.is_none() {
+                agent_title_later(&app, &project_hash, &thread_id, request);
+            }
+        }
+        if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, request, start) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
                 let id =
                     ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
-                // Persist only the spec type as the visible user message —
-                // the skill instructions are sent to the agent but not shown
-                // in the chat. The user sees "Feature" (or "Bugfix", etc.),
-                // not the entire grill-explore skill content.
+                // The visible user message is what the user actually typed —
+                // the skill instructions and the framing guidance go to the
+                // agent but are not shown in the chat. Older threads framed
+                // before a request was required fall back to the label.
                 store::append_message(
                     &palisade_home(),
                     &project_hash,
                     &thread_id,
                     "user",
                     "spec",
-                    &spec_type,
+                    request.unwrap_or(&spec_type),
                     Some(&id),
                 )?;
                 send_to(&harness, &project_hash, &id, &prompt)?;
@@ -3049,6 +3181,8 @@ pub fn run() {
             set_mcp_server_enabled,
             search_mcp_registry,
             list_projects,
+            open_project_window,
+            remove_project,
             add_project,
             clone_repository,
             switch_project,
@@ -3184,6 +3318,18 @@ pub fn run() {
         .run(|app, event| {
             // No process survives the app, so leaving records open would make
             // every clean quit look like an interrupt on next launch (D20).
+            // A closed project window releases its project's watchers, unless
+            // another window is still showing the same project (#33).
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } = &event
+            {
+                let harness = app.state::<Harness>();
+                project_windows::untrack(&harness, label);
+                project_windows::retire_unwatched(&harness);
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 release_idle_sessions(&app.state::<Harness>(), None);
                 let _ = app.state::<Harness>().session_log_writer.lock().unwrap().flush();
@@ -3421,7 +3567,7 @@ mod tests {
     #[test]
     fn spec_mode_initial_prompt_with_no_change_uses_spec_type_as_body() {
         let meta = thread_meta(None);
-        let prompt = spec_mode_initial_prompt(&meta, "Feature", true).unwrap();
+        let prompt = spec_mode_initial_prompt(&meta, "Feature", None, true).unwrap();
         // The grill-explore skill content is still prepended (it contains the
         // label "grill-explore" and a "---" separator before the body).
         assert!(prompt.contains("grill-explore"));
@@ -3434,12 +3580,54 @@ mod tests {
         );
     }
 
+    /// The framing card is pre-wired guidance, not the request. The user's
+    /// own words are what the agent is actually given — the body used to be
+    /// the bare label ("Start exploring the following concept: Feature"),
+    /// which told the agent nothing and made the interview open by asking
+    /// for the request the user had already been asked for.
+    #[test]
+    fn a_framing_card_supplies_guidance_and_the_user_supplies_the_request() {
+        let bugfix = framed_spec_body("Bugfix", Some("login loops on Safari"));
+        assert!(bugfix.contains("login loops on Safari"));
+        assert!(bugfix.contains("root cause"));
+        assert!(bugfix.contains("reproduce"));
+
+        let feature = framed_spec_body("Feature", Some("a CSV export for reports"));
+        assert!(feature.contains("a CSV export for reports"));
+        assert!(feature.contains("out of scope"));
+        // Guidance is per framing, not one blob handed to every card.
+        assert!(!feature.contains("root cause"));
+    }
+
+    /// A framing the user typed themselves gets no invented guidance —
+    /// Palisade cannot know what questions it implies.
+    #[test]
+    fn a_custom_framing_carries_the_request_without_inventing_guidance() {
+        let body = framed_spec_body("Migrate to Postgres", Some("downtime under a minute"));
+        assert!(body.contains("Migrate to Postgres"));
+        assert!(body.contains("downtime under a minute"));
+        assert!(!body.contains("root cause"));
+        assert!(!body.contains("out of scope"));
+    }
+
+    /// Handoff re-injection has no request to carry: the user's words are
+    /// already in the rebuilt transcript, so only the framing is restated.
+    #[test]
+    fn a_body_with_no_request_still_frames_the_work() {
+        let body = framed_spec_body("Bugfix", None);
+        assert!(body.contains("root cause"));
+        assert!(!body.contains("in their own words"));
+        assert_eq!(framed_spec_body("", None), "Start exploring.");
+        // Whitespace is not a request.
+        assert_eq!(framed_spec_body("", Some("   ")), "Start exploring.");
+    }
+
     /// RED→GREEN 6a.1: spec-mode with an existing change does NOT auto-inject.
     /// Amended by D10: spec_type is silently ignored when a change exists.
     #[test]
     fn spec_mode_initial_prompt_with_change_is_none() {
         let meta = thread_meta(Some("my-change"));
-        assert!(spec_mode_initial_prompt(&meta, "Feature", true).is_none());
+        assert!(spec_mode_initial_prompt(&meta, "Feature", None, true).is_none());
     }
 
     /// #17 RED: flipping the mode toggle is not a request. Nothing is typed,
@@ -3450,11 +3638,11 @@ mod tests {
         for change in [None, Some("my-change")] {
             let meta = thread_meta(change);
             assert!(
-                spec_mode_initial_prompt(&meta, "Feature", false).is_none(),
+                spec_mode_initial_prompt(&meta, "Feature", None, false).is_none(),
                 "the toggle must stay inert"
             );
             assert!(
-                spec_mode_initial_prompt(&meta, "", false).is_none(),
+                spec_mode_initial_prompt(&meta, "", None, false).is_none(),
                 "even with no spec type to frame"
             );
         }
@@ -3465,7 +3653,7 @@ mod tests {
     #[test]
     fn an_explicit_start_with_no_open_change_still_fires_grill_explore() {
         let meta = thread_meta(None);
-        assert!(spec_mode_initial_prompt(&meta, "Bugfix", true).is_some());
+        assert!(spec_mode_initial_prompt(&meta, "Bugfix", None, true).is_some());
     }
 
     // ----------------------------------------------- D12: handoff re-injection

@@ -477,13 +477,20 @@ pub struct Harness {
     /// a prompt (`/go`) would otherwise drop it and lose the conversation.
     pub pending_prefix: Mutex<HashMap<String, String>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
-    pub watch: Mutex<Option<crate::integrations::Watcher>>,
+    /// Graphify watchers, keyed by project hash. A map, not a slot: every
+    /// project window shares this process (#33), and a single slot meant
+    /// opening a second window silently stopped watching the first project.
+    pub watch: Mutex<HashMap<String, crate::integrations::Watcher>>,
+    /// Which project each window is showing, keyed by window label. The
+    /// watchers above live exactly as long as some window still needs them.
+    pub window_projects: Mutex<HashMap<String, String>>,
     /// The one live debug session, if any. Single by design: two debuggers
     /// attached to one project fight over breakpoints and the debuggee.
     pub debug_session: Mutex<Option<std::sync::Arc<crate::dap::DebugSession>>>,
     /// Every live terminal tab, keyed by tab id (several per project).
     pub terminals: crate::terminal::TerminalRegistry,
-    pub fswatch: Mutex<Option<crate::fswatch::FsWatcher>>,
+    /// Filesystem watchers, keyed by project hash — see `watch`.
+    pub fswatch: Mutex<HashMap<String, crate::fswatch::FsWatcher>>,
     /// Buffered JSONL writer for session and thread logs; flushed on turn-done
     /// and app-quit (D9).
     pub session_log_writer: crate::session_log_writer::SharedSessionLogWriter,
@@ -560,6 +567,7 @@ impl Default for Harness {
             pending_prefix: Default::default(),
             pending_propose: Default::default(),
             watch: Default::default(),
+            window_projects: Default::default(),
             debug_session: Default::default(),
             terminals: Default::default(),
             fswatch: Default::default(),

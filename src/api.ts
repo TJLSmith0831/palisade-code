@@ -56,6 +56,10 @@ export type Message = {
   sessionId?: string | null;
 };
 
+/** Open an independent native window, initialized to this project. */
+export const openProjectWindow = (hash: string) => invoke<string>("open_project_window", { hash });
+/** Remove only the saved entry; source files and session history are retained. */
+export const removeProject = (hash: string) => invoke<void>("remove_project", { hash });
 export const listProjects = () => invoke<Project[]>("list_projects");
 export const addProject = (path: string) =>
   invoke<Project>("add_project", { path });
@@ -298,6 +302,10 @@ export const specMode = (
   projectHash: string,
   threadId: string,
   specType: string,
+  /** What the user actually asked for. The framing card supplies the
+   *  questions that kind of work always has to answer; this supplies the
+   *  work. Null only for older threads framed before it was required. */
+  description: string | null,
   bypass: boolean,
   start: boolean
 ) =>
@@ -305,6 +313,7 @@ export const specMode = (
     projectHash,
     threadId,
     specType,
+    description,
     bypass,
     start,
   });

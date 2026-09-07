@@ -11,6 +11,7 @@ import { MantineProvider } from "@mantine/core";
 
 import SettingsPanel, {
   ACCENT_HUE_KEY,
+  loadAppearance,
   COMPLETION_ENABLED_KEY,
   COMPLETION_KEYBINDING_KEY,
   COMPLETION_SETTINGS_CHANGED_EVENT,
@@ -460,4 +461,53 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       expect(written.appearance).toEqual({});
     });
   });
+});
+
+
+describe("appearance defaults and reliable saves", () => {
+  beforeEach(() => invokeMock.mockReset().mockImplementation((cmd: string) =>
+    cmd === "read_file_content" ? Promise.resolve("{}") : Promise.resolve()));
+
+  it("saves global defaults without writing project files, then restores built-in colors", async () => {
+    render(<SettingsPanel projectHash="" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+    fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("palisade:appearance") || "{}").appShellColor?.light).toBe("#eceff4"));
+    expect(invokeMock).not.toHaveBeenCalledWith("write_file_content", expect.anything());
+    fireEvent.click(screen.getByTestId("reset-appearance-button"));
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe(""));
+    expect(JSON.parse(localStorage.getItem("palisade:appearance") || "{}")).toEqual({});
+  });
+});
+
+it("project overrides inherit global colors per light/dark value and reset back to them", async () => {
+  localStorage.setItem("palisade:appearance", JSON.stringify({appShellColor: {light: "#eceff4", dark: "#2e3440"}}));
+  invokeMock.mockImplementation((cmd: string) => cmd === "read_file_content"
+    ? Promise.resolve(JSON.stringify({appearance: {appShellColor: {dark: "#282c34"}}})) : Promise.resolve());
+  expect(await loadAppearance("proj1")).toMatchObject({appShellColor: {light: "#eceff4", dark: "#282c34"}});
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-shell-dark-override")).toBe("#282c34"));
+  fireEvent.click(screen.getByTestId("reset-appearance-button"));
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-shell-dark-override")).toBe("#2e3440"));
+  fireEvent.click(screen.getByRole("radio", {name: "Global defaults"}));
+  fireEvent.click(screen.getByTestId("reset-appearance-button"));
+  await waitFor(() => expect(localStorage.getItem("palisade:appearance")).toBe("{}"));
+});
+
+it("reports a failed project save and restores the persisted appearance", async () => {
+  invokeMock.mockReset().mockImplementation((cmd: string) => cmd === "read_file_content"
+    ? Promise.resolve("{}") : Promise.reject(new Error("disk full")));
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
+  expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe("");
+});
+
+it("does not overwrite other settings when the project settings file is malformed", async () => {
+  invokeMock.mockReset().mockImplementation(() => Promise.resolve('{"formatOnSave":'));
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
+  expect(invokeMock).not.toHaveBeenCalledWith("write_file_content", expect.anything());
 });

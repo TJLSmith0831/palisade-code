@@ -90,16 +90,50 @@ fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Res<T> {
     }
 }
 
+/// Write-then-rename, not write-in-place: `fs::write` truncates first, so a
+/// concurrent reader — another project window (#33), or the file watcher — can
+/// observe an empty or half-written file and report the store as corrupt.
+/// `rename` is atomic within a filesystem, so a reader sees either the old
+/// file or the new one.
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Res<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| e("create dir", err))?;
     }
     let body = serde_json::to_string_pretty(value).map_err(|err| e("serialize", err))?;
-    fs::write(path, body).map_err(|err| e(&format!("write {}", path.display()), err))
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = path.with_file_name(name);
+    fs::write(&tmp, body).map_err(|err| e(&format!("write {}", tmp.display()), err))?;
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        e(&format!("write {}", path.display()), err)
+    })
+}
+
+/// Serializes read-modify-write of the shared project index. Every project
+/// window runs in this process (#33), so two windows registering or removing
+/// projects at the same moment would otherwise each read the same list and
+/// save theirs over the other's.
+// ponytail: process-global lock — an advisory file lock only if two app
+// instances ever share one home directory.
+static INDEX_LOCK: Mutex<()> = Mutex::new(());
+
+/// Held for the whole read-modify-write of `projects.json`. Not reentrant:
+/// only the public mutators below take it, and nothing they call takes it again.
+fn lock_index() -> std::sync::MutexGuard<'static, ()> {
+    INDEX_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub fn list_projects(home: &Path) -> Res<Vec<Project>> {
     let mut projects: Vec<Project> = read_json(&index_path(home))?;
+    projects.retain(|p| !project_dir(home, &p.hash).join("removed").exists());
     if adopt_orphan_projects(home, &mut projects) {
         save_projects(home, &projects)?;
     }
@@ -120,7 +154,7 @@ fn adopt_orphan_projects(home: &Path, projects: &mut Vec<Project>) -> bool {
     let mut adopted = false;
     for entry in entries.flatten() {
         let hash = entry.file_name().to_string_lossy().to_string();
-        if projects.iter().any(|p| p.hash == hash) {
+        if entry.path().join("removed").exists() || projects.iter().any(|p| p.hash == hash) {
             continue;
         }
         let body = match fs::read_to_string(entry.path().join("project.json")) {
@@ -147,6 +181,7 @@ fn save_projects(home: &Path, projects: &[Project]) -> Res<()> {
 
 /// Register `dir` (or refresh it if already registered) and return its entry.
 pub fn add_project(home: &Path, dir: &Path) -> Res<Project> {
+    let _guard = lock_index();
     let canonical = fs::canonicalize(dir)
         .map_err(|err| e(&format!("resolve {}", dir.display()), err))?;
     if !canonical.is_dir() {
@@ -178,10 +213,29 @@ pub fn add_project(home: &Path, dir: &Path) -> Res<Project> {
     write_json(&project_dir(home, &hash).join("project.json"), &project)?;
     projects.push(project.clone());
     save_projects(home, &projects)?;
+    let removed = project_dir(home, &hash).join("removed");
+    if removed.exists() {
+        fs::remove_file(removed).map_err(|err| e("restore saved project", err))?;
+    }
     Ok(project)
 }
 
+/// Forget a saved project without deleting source files, worktrees or history.
+/// The marker distinguishes intentional removal from a lost project index.
+pub fn remove_project(home: &Path, hash: &str) -> Res<()> {
+    let _guard = lock_index();
+    let mut projects = list_projects(home)?;
+    if !projects.iter().any(|p| p.hash == hash) {
+        return Err(format!("unknown project: {hash}"));
+    }
+    fs::write(project_dir(home, hash).join("removed"), b"")
+        .map_err(|err| e("remove saved project", err))?;
+    projects.retain(|p| p.hash != hash);
+    save_projects(home, &projects)
+}
+
 fn update_project(home: &Path, hash: &str, f: impl FnOnce(&mut Project)) -> Res<Project> {
+    let _guard = lock_index();
     let mut projects = list_projects(home)?;
     let project = projects
         .iter_mut()
@@ -385,6 +439,12 @@ pub fn rename_thread(home: &Path, hash: &str, id: &str, title: &str) -> Res<Thre
 /// a title still sitting at one of these is Palisade's to replace.
 const PLACEHOLDER_TITLES: [&str; 2] = ["New thread", "Untitled thread"];
 
+/// Whether Palisade, rather than the user, chose the name a thread currently
+/// carries. A name the user typed is never overwritten.
+fn palisade_owns_title(m: &ThreadMeta) -> bool {
+    m.title_source == "auto"
+}
+
 /// Name a thread after the turn that opened it, so the user never has to.
 ///
 /// Fires once, on the first turn: a thread already named — by an earlier turn
@@ -403,7 +463,7 @@ pub fn set_auto_title(
         return Ok(());
     };
     update_thread(home, hash, id, |m| {
-        if m.title_source == "auto" && PLACEHOLDER_TITLES.contains(&m.title.as_str()) {
+        if palisade_owns_title(m) && PLACEHOLDER_TITLES.contains(&m.title.as_str()) {
             m.title = title;
         }
     })?;
@@ -418,8 +478,9 @@ pub fn set_auto_title(
 /// overwritten, however late a better suggestion turns up.
 pub fn upgrade_auto_title(home: &Path, hash: &str, id: &str, title: &str) -> Res<()> {
     update_thread(home, hash, id, |m| {
-        if m.title_source == "auto" {
+        if palisade_owns_title(m) {
             m.title = title.to_string();
+            m.title_source = "auto".into();
         }
     })?;
     Ok(())
@@ -525,6 +586,11 @@ pub fn set_thread_executor(
 /// agent handoff (D12). Called by `spec_mode` when the user commits to a
 /// spec type.
 pub fn set_spec_type(home: &Path, hash: &str, id: &str, spec_type: &str) -> Res<ThreadMeta> {
+    // Naming is deliberately not done here. A spec thread is named the same
+    // way every other thread is — agent title, else the local model, else the
+    // first line of what the user asked for — because "Feature" is the same
+    // row for every feature the user ever specs (#30/#35). `spec_mode` runs
+    // that chain over the user's request.
     update_thread(home, hash, id, |m| {
         m.spec_type = Some(spec_type.to_string());
     })
@@ -1227,6 +1293,76 @@ mod tests {
         assert_eq!(stored.spec_type.as_deref(), Some("Bugfix"));
     }
 
+    /// #30/#35: the framing card is not the thread's name. A spec thread is
+    /// named the way every other thread is — from what the user actually
+    /// asked for — so "Feature" is never the row for every feature.
+    #[test]
+    fn framing_a_thread_stores_the_type_without_naming_the_thread() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+
+        let framed = set_spec_type(home.path(), &project.hash, &thread.id, "Bugfix").unwrap();
+        assert_eq!(framed.spec_type.as_deref(), Some("Bugfix"));
+        assert_eq!(framed.title, "New thread", "the card is not the name");
+
+        // The request names it, through the same chain a go-mode turn uses.
+        set_auto_title(
+            home.path(),
+            &project.hash,
+            &thread.id,
+            "login redirect loops on Safari",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            list_threads(home.path(), &project.hash).unwrap()[0].title,
+            "Login redirect loops on Safari"
+        );
+
+        // A better title from the agent still wins, exactly as elsewhere.
+        upgrade_auto_title(home.path(), &project.hash, &thread.id, "Fix Safari redirect loop")
+            .unwrap();
+        assert_eq!(
+            list_threads(home.path(), &project.hash).unwrap()[0].title,
+            "Fix Safari redirect loop"
+        );
+    }
+
+    /// A long request is cut to something a sidebar row can show, the same
+    /// way a long go-mode prompt is.
+    #[test]
+    fn a_long_spec_request_becomes_a_readable_thread_title() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+        set_spec_type(home.path(), &project.hash, &thread.id, "Bugfix").unwrap();
+        let request = "figure out why the login redirect loops forever on Safari \
+                       when a session cookie has already expired and the user retries";
+        set_auto_title(home.path(), &project.hash, &thread.id, request, None).unwrap();
+
+        let named = list_threads(home.path(), &project.hash).unwrap().remove(0);
+        assert!(named.title.chars().count() <= 50, "got {:?}", named.title);
+        assert!(named.title.starts_with("Figure out why the login redirect"));
+        assert!(named.title.ends_with('…'));
+        // The framing is still on the thread for the agent's benefit.
+        assert_eq!(named.spec_type.as_deref(), Some("Bugfix"));
+    }
+
+    /// A late agent title must never overwrite a name the user typed, even
+    /// when the thread was framed from the spec menu first.
+    #[test]
+    fn a_manual_rename_survives_a_late_agent_title_on_a_spec_thread() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+        set_spec_type(home.path(), &project.hash, &thread.id, "Feature").unwrap();
+        rename_thread(home.path(), &project.hash, &thread.id, "Mine").unwrap();
+        upgrade_auto_title(home.path(), &project.hash, &thread.id, "Agent's idea").unwrap();
+        set_auto_title(home.path(), &project.hash, &thread.id, "another prompt", None).unwrap();
+        assert_eq!(list_threads(home.path(), &project.hash).unwrap()[0].title, "Mine");
+    }
+
     #[test]
     fn reading_a_thread_with_stored_spec_type_returns_the_value() {
         let home = home();
@@ -1238,6 +1374,39 @@ mod tests {
         let loaded = list_threads(home.path(), &project.hash).unwrap();
         let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
         assert_eq!(found.spec_type.as_deref(), Some("Feature"));
+    }
+
+    #[test]
+    fn simultaneous_project_windows_do_not_lose_saved_projects() {
+        let home = home();
+        let repos: Vec<_> = (0..12).map(|_| tempfile::tempdir().unwrap()).collect();
+        let barrier = std::sync::Barrier::new(repos.len());
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = repos.iter().map(|repo| scope.spawn(|| {
+                barrier.wait();
+                add_project(home.path(), repo.path())
+            })).collect();
+            for handle in handles { handle.join().unwrap().unwrap(); }
+        });
+        assert_eq!(list_projects(home.path()).unwrap().len(), repos.len());
+    }
+
+    #[test]
+    fn removing_a_saved_project_preserves_files_and_history_without_readopting_it() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        fs::write(repo.path().join("keep.txt"), "precious work").unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "Keep history").unwrap();
+        remove_project(home.path(), &project.hash).unwrap();
+        assert!(list_projects(home.path()).unwrap().is_empty());
+        assert!(list_projects(home.path()).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(repo.path().join("keep.txt")).unwrap(), "precious work");
+        assert_eq!(list_threads(home.path(), &project.hash).unwrap()[0].id, thread.id);
+        let restored = add_project(home.path(), repo.path()).unwrap();
+        assert_eq!(restored.hash, project.hash);
+        assert_eq!(list_projects(home.path()).unwrap().len(), 1);
+        assert_eq!(list_threads(home.path(), &project.hash).unwrap()[0].id, thread.id);
     }
 
     #[test]
