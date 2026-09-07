@@ -119,11 +119,17 @@ All fixed; three tests now cover it.
 
 Ranked. Items 1–2 are the ones I'd do first.
 
-1. **Mantine dropdown surfaces don't match the app's palette.** Every `Menu` /
-   `Popover` dropdown computes to `rgb(46,46,46)` while the app's `--surface` is
-   `oklch(22% 0.006 250)`. They read as lighter, greyer panels floating over a
-   darker app. Pre-existing and app-wide (the agent picker on onboarding has it
-   too) — one fix in `createTheme` in `main.tsx`, not per call site.
+1. **Mantine's dark ramp was never repainted, so every popover surface is off
+   palette.** A `Menu` dropdown computes to `rgb(46,46,46)` with a
+   `rgb(66,66,66)` border, because in dark scheme Mantine draws popovers from
+   `--mantine-color-dark-6` (`#2e2e2e`) and `--mantine-color-dark-4`
+   (`#424242`) rather than from the `--mantine-color-default` family the
+   resolver overrides. Map the ramp's surface stops onto the shell's tokens in
+   `shellTokens` in `src/main.tsx` — dark-7 to `--bg`, dark-6 to `--surface`,
+   dark-5 to `--surface-warm`, dark-4 to `--border`. Left undone deliberately:
+   the ramp backs every Mantine surface in the app, so it needs the visual
+   sweep that is Phase 2 of this brief, not a blind remap at the end of a
+   session.
 2. **Sizes below 820px are unswept.** I covered 1600×1000, 1440×900, 1100×620,
    1000×700 and 900×560. The `max-width: 820px` breakpoint (`.ds-side-panel`
    hides) was never exercised.
