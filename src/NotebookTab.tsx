@@ -404,6 +404,7 @@ export default function NotebookTab({
                     loading={isRunning}
                     disabled={runningCellId !== null && !isRunning}
                     onClick={() => run(cell)}
+                    aria-label={`Run cell ${index + 1}`}
                     data-testid={`run-cell-${index}`}
                   >
                     <IconPlayerPlay size={14} />
@@ -414,15 +415,15 @@ export default function NotebookTab({
                 </Text>
               </Group>
               <Group gap={2}>
-                <ActionIcon size="sm" variant="subtle" onClick={() => markDirty(moveCell(doc, cell.id, "up"))}>
+                <ActionIcon size="sm" variant="subtle" aria-label={`Move cell ${index + 1} up`} onClick={() => markDirty(moveCell(doc, cell.id, "up"))}>
                   <IconArrowUp size={14} />
                 </ActionIcon>
-                <ActionIcon size="sm" variant="subtle" onClick={() => markDirty(moveCell(doc, cell.id, "down"))}>
+                <ActionIcon size="sm" variant="subtle" aria-label={`Move cell ${index + 1} down`} onClick={() => markDirty(moveCell(doc, cell.id, "down"))}>
                   <IconArrowDown size={14} />
                 </ActionIcon>
                 <Menu>
                   <Menu.Target>
-                    <ActionIcon size="sm" variant="subtle">
+                    <ActionIcon size="sm" variant="subtle" aria-label={`Change cell ${index + 1} type`}>
                       <IconMarkdown size={14} />
                     </ActionIcon>
                   </Menu.Target>
@@ -431,7 +432,7 @@ export default function NotebookTab({
                     <Menu.Item onClick={() => markDirty(setCellType(doc, cell.id, "markdown"))}>Markdown</Menu.Item>
                   </Menu.Dropdown>
                 </Menu>
-                <ActionIcon size="sm" variant="subtle" color="red" onClick={() => markDirty(deleteCell(doc, cell.id))}>
+                <ActionIcon size="sm" variant="subtle" color="red" aria-label={`Delete cell ${index + 1}`} onClick={() => markDirty(deleteCell(doc, cell.id))}>
                   <IconTrash size={14} />
                 </ActionIcon>
               </Group>

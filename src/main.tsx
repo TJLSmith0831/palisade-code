@@ -3,8 +3,10 @@ import ReactDOM from "react-dom/client";
 import {
   MantineProvider,
   createTheme,
+  defaultVariantColorsResolver,
   localStorageColorSchemeManager,
   type CSSVariablesResolver,
+  type VariantColorsResolver,
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import App from "./App";
@@ -26,7 +28,35 @@ const statusTuple = (token: string) =>
   ];
 
 // Radius/font tokens mirror DESIGN.md's documented scale (rounded, typography).
+/**
+ * Ink for every solid fill painted in the app's accent.
+ *
+ * Mantine decides a filled control's text color while it builds the element,
+ * and writes the answer as an inline `--button-color` (or the ActionIcon /
+ * Badge equivalent) that no stylesheet can outrank. It computes that answer
+ * from the fill's luminance — which it cannot measure here, because the fill
+ * is `var(--accent)` and the accent hue is chosen by the user at runtime. So
+ * it fell back to white, and every filled primary control drew white text on
+ * a light green fill at roughly 1.4:1.
+ *
+ * Answering here is the one place that reaches all of them at once: Button,
+ * ActionIcon, Badge and ThemeIcon share this resolver.
+ */
+const variantColorResolver: VariantColorsResolver = (input) => {
+  const resolved = defaultVariantColorsResolver(input);
+  const isAccent = !input.color || input.color === input.theme.primaryColor;
+  if (input.variant === "filled" && isAccent) {
+    return {
+      ...resolved,
+      color: "var(--accent-on)",
+      hoverColor: "var(--accent-on)",
+    };
+  }
+  return resolved;
+};
+
 const theme = createTheme({
+  variantColorResolver,
   radius: { xs: "4px", sm: "6px", md: "8px", lg: "12px", xl: "9999px" },
   // Without these two, every `gap="xs"`/`p="md"`/`size="sm"` in the app
   // resolved against Mantine's stock rem scale (10/12/16/20/32px spacing,
@@ -104,41 +134,63 @@ const statusRamps = {
   ...statusRamp("neutral", "--muted"),
 };
 
+/**
+ * Every Mantine token the shell repaints in its own palette.
+ *
+ * These belong in the resolver's `light`/`dark` buckets, never in `variables`.
+ * Mantine emits `variables` into a plain `:root` rule and then injects its own
+ * `:root` defaults at runtime, which land later in the cascade and win at
+ * equal specificity — so a token declared only in `variables` silently keeps
+ * Mantine's stock value. Every one of these did: menus and popovers drew
+ * `#2e2e2e` instead of `--surface`, disabled text drew `#696969` (2.5:1
+ * against the shell) instead of `--muted`, and links drew Mantine's stock
+ * blue instead of the accent. The scheme buckets are emitted under a
+ * scheme-scoped selector, which outranks the injected rule.
+ *
+ * Both buckets get the same map because each value points at an app token
+ * that already flips with the color scheme.
+ */
+const shellTokens = {
+  "--mantine-color-body": "var(--bg)",
+  "--mantine-color-text": "var(--fg)",
+  "--mantine-color-error": "var(--danger)",
+  "--mantine-color-success": "var(--success)",
+  "--mantine-color-placeholder": "var(--muted)",
+  "--mantine-color-dimmed": "var(--muted)",
+  "--mantine-color-anchor": "var(--accent)",
+  "--mantine-color-default": "var(--surface)",
+  "--mantine-color-default-hover": "var(--surface-warm)",
+  "--mantine-color-default-color": "var(--fg)",
+  "--mantine-color-default-border": "var(--border)",
+  "--mantine-color-disabled": "var(--surface)",
+  "--mantine-color-disabled-color": "var(--muted)",
+  "--mantine-color-disabled-border": "var(--border)",
+  "--mantine-color-dark-7": "var(--bg)",
+  "--mantine-color-dark-6": "var(--surface)",
+  "--mantine-color-dark-5": "var(--surface-warm)",
+  "--mantine-color-dark-4": "var(--border)",
+  "--mantine-primary-color-filled": "var(--accent)",
+  "--mantine-primary-color-filled-hover": "var(--accent)",
+  "--mantine-primary-color-light":
+    "color-mix(in oklab, var(--accent), transparent 80%)",
+  "--mantine-primary-color-light-hover":
+    "color-mix(in oklab, var(--accent), transparent 65%)",
+  "--mantine-primary-color-light-color": "var(--accent)",
+  "--mantine-primary-color-contrast": "var(--accent-on)",
+  // Table reads its own vars rather than the default-border/hover ones, so
+  // without these the DB grid was the one surface in the shell drawing
+  // Mantine's stock gray borders and stripes instead of --border.
+  "--table-border-color": "var(--border)",
+  "--table-striped-color": "color-mix(in oklab, var(--surface), transparent 55%)",
+  "--table-highlight-on-hover-color": "var(--surface-warm)",
+  ...accentPrimaryRamp,
+  ...statusRamps,
+};
+
 const cssVariablesResolver: CSSVariablesResolver = () => ({
-  variables: {
-    "--mantine-color-body": "var(--bg)",
-    "--mantine-color-text": "var(--fg)",
-    "--mantine-color-error": "var(--danger)",
-    "--mantine-color-success": "var(--success)",
-    "--mantine-color-placeholder": "var(--muted)",
-    "--mantine-color-dimmed": "var(--muted)",
-    "--mantine-color-anchor": "var(--accent)",
-    "--mantine-color-default": "var(--surface)",
-    "--mantine-color-default-hover": "var(--surface-warm)",
-    "--mantine-color-default-color": "var(--fg)",
-    "--mantine-color-default-border": "var(--border)",
-    "--mantine-color-disabled": "var(--surface)",
-    "--mantine-color-disabled-color": "var(--muted)",
-    "--mantine-color-disabled-border": "var(--border)",
-    "--mantine-primary-color-filled": "var(--accent)",
-    "--mantine-primary-color-filled-hover": "var(--accent)",
-    "--mantine-primary-color-light":
-      "color-mix(in oklab, var(--accent), transparent 80%)",
-    "--mantine-primary-color-light-hover":
-      "color-mix(in oklab, var(--accent), transparent 65%)",
-    "--mantine-primary-color-light-color": "var(--accent)",
-    "--mantine-primary-color-contrast": "var(--accent-on)",
-    // Table reads its own vars rather than the default-border/hover ones, so
-    // without these the DB grid was the one surface in the shell drawing
-    // Mantine's stock gray borders and stripes instead of --border.
-    "--table-border-color": "var(--border)",
-    "--table-striped-color": "color-mix(in oklab, var(--surface), transparent 55%)",
-    "--table-highlight-on-hover-color": "var(--surface-warm)",
-    ...accentPrimaryRamp,
-    ...statusRamps,
-  },
-  light: { ...accentPrimaryRamp, ...statusRamps },
-  dark: { ...accentPrimaryRamp, ...statusRamps },
+  variables: shellTokens,
+  light: shellTokens,
+  dark: shellTokens,
 });
 
 // Reuses the app's own theme key/values ("auto" | "light" | "dark") so Mantine's color

@@ -63,6 +63,13 @@ function nextCellId(): string {
  *  fall back to opening the file in FileEditorPane instead (design.md
  *  Migration Plan), same as any other unopenable file. */
 export function parseNotebook(json: string): NotebookDoc {
+  // A newly created `.ipynb` is a zero-byte file. That is a notebook nobody
+  // has typed into yet, not a malformed one — treating it as malformed sent
+  // the tab to the plain text editor, so creating a notebook and opening it
+  // showed an empty text buffer with no cells and no explanation.
+  if (json.trim() === "") {
+    return { cells: [newCell("code")], metadata: {}, nbformat: 4, nbformat_minor: 5 };
+  }
   const raw = JSON.parse(json);
   if (!raw || typeof raw !== "object" || !Array.isArray(raw.cells)) {
     throw new Error("not a notebook: missing cells array");

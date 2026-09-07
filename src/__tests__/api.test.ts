@@ -18,12 +18,15 @@ describe("api.specMode", () => {
       currentMode: "spec",
       openSpecChangeName: null,
     });
-    await api.specMode("p1", "t1", "Feature", false);
+    // The card frames the work; the description is the work (#35).
+    await api.specMode("p1", "t1", "Feature", "a CSV export", false, true);
     expect(invokeMock).toHaveBeenCalledWith("spec_mode", {
       projectHash: "p1",
       threadId: "t1",
       specType: "Feature",
+      description: "a CSV export",
       bypass: false,
+      start: true,
     });
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Palette from "./Palette";
 import { describeError } from "./errors";
-import { fuzzyMatch } from "./fuzzyMatch";
+import { scorePath } from "./fuzzyMatch";
 import { RenameIcon, DeleteIcon } from "./icons";
 
 const MAX_RESULTS = 50;
@@ -42,7 +42,7 @@ export default function FilePalette({
     if (!query) return files.slice(0, MAX_RESULTS);
     const scored: { path: string; score: number }[] = [];
     for (const path of files) {
-      const score = fuzzyMatch(query, path);
+      const score = scorePath(query, path);
       if (score !== null) scored.push({ path, score });
     }
     scored.sort((a, b) => b.score - a.score);

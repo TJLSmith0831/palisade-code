@@ -1702,7 +1702,7 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  overflow-y: auto;
   gap: 14px;
   padding: 24px;
   position: relative;
@@ -1716,6 +1716,20 @@ input[type="checkbox"] {
     var(--twilight-glow),
     transparent 70%
   );
+}
+
+/* Centred while the content fits, scrolled from the top once it doesn't.
+   `justify-content: center` cannot do this: an overflowing flex column is
+   clipped at BOTH ends and its end padding is dropped, which cut the heading
+   off the top and sliced the Back button in half at the bottom the moment
+   the custom-framing field opened (#35). Auto margins centre the same way
+   and collapse to zero when there is no room, so nothing is ever unreachable. */
+.ds-new-thread-picker > *:first-child {
+  margin-top: auto;
+}
+
+.ds-new-thread-picker > *:last-child {
+  margin-bottom: auto;
 }
 
 .ds-vibe-empty-picker {
@@ -2612,6 +2626,10 @@ details.graph-report-wrap > summary {
 
 .ds-mode-picker {
   display: flex;
+  /* Wraps rather than squeezing: in a narrow chat column three cards side by
+     side shrank below their own words and clipped them mid-letter
+     ("Featur", "Diagnos"). Below ~150px each they stack instead. */
+  flex-wrap: wrap;
   gap: 10px;
   width: 100%;
   max-width: 560px;
@@ -2620,7 +2638,12 @@ details.graph-report-wrap > summary {
 }
 
 .ds-mode-card {
-  flex: 1;
+  /* Basis, not 0: a card never shrinks below the width its own text needs.
+     130 so three fit at the chat column's usual width (three at 150 needed
+     470px and the column is 467 — the cards wrapped over three pixels). */
+  flex: 1 1 130px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2672,8 +2695,17 @@ details.graph-report-wrap > summary {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+/* The card whose expanded input is showing below (#35): it stays visibly
+   chosen while the user types, so the field underneath has something to
+   belong to. No lift — it is a current state, not a pointer response. */
+.ds-mode-card[data-active] {
+  border-color: var(--accent);
+  background: var(--surface-warm);
+}
+
 .ds-mode-card:hover svg,
-.ds-mode-card:focus-visible svg {
+.ds-mode-card:focus-visible svg,
+.ds-mode-card[data-active] svg {
   color: var(--accent);
 }
 
@@ -4340,6 +4372,7 @@ button.ds-onboarding-status {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-height: 52px;
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -4380,6 +4413,9 @@ button.ds-onboarding-status {
 .ds-onboarding-recent-path {
   font-size: 10px;
   font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-onboarding-recent-time {
@@ -4399,7 +4435,11 @@ button.ds-onboarding-status {
    the column rather than overlaying it (DESIGN.md's slide-fully-out rule). */
 
 @media (max-width: 1180px) {
-  [data-preset="vibe"] .ds-sessions { display: none; }
+  /* Folded by default at this width — but not when the user has asked for it.
+     An unconditional hide made the "Toggle session list" button inert on a
+     small laptop: it flipped state this rule then overrode, leaving no way
+     back to the thread list at all. */
+  [data-preset="vibe"] .ds-sessions:not([data-user-opened]) { display: none; }
 }
 
 @media (max-width: 980px) {

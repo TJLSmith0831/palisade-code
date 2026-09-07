@@ -39,12 +39,16 @@ import {
   IconArchive,
   IconBolt,
   IconBox,
+  IconAppWindow,
   IconChevronDown,
+  IconClockPause,
+  IconDots,
+  IconTrash,
   IconBrandTelegram,
   IconListCheck,
   IconCode,
   IconCommand,
-  IconLayoutSidebarRight,
+  IconFile,
   IconMessageDots,
   IconPlayerPlay,
   IconFolder,
@@ -86,6 +90,8 @@ import type {
 import { onActivateKey } from "./a11y";
 import { describeError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
+import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
+import { applyMention, mentionAt, rankMentions } from "./mentions";
 import {
   commandTrigger,
   matchCommands,
@@ -153,6 +159,7 @@ import SettingsPanel, {
   loadAccentHue,
   applyAppearance,
   loadAppearance,
+  loadGlobalAppearance,
   PROJECT_SETTINGS_FILE,
 } from "./SettingsPanel";
 import TerminalTabs from "./TerminalTabs";
@@ -215,6 +222,16 @@ type ChatSurfaceProps = {
   draft: string;
   setDraft: (value: string) => void;
   onSend: () => void;
+  /** #32: every file in the project, for the `@` mention menu. */
+  mentionFiles?: string[];
+  /** #32: the mention menu opened — load the file list if it isn't cached. */
+  onOpenMentions?: () => void;
+  /** #26: messages typed during a turn, waiting for it to end. */
+  queued?: QueuedMessage[];
+  /** Drop a queued message without ever sending it. */
+  onRemoveQueued?: (id: string) => void;
+  /** Send a queued message again after it failed. */
+  onRetryQueued?: (id: string) => void;
   /** Stop the live session for this thread. */
   onStop: () => void;
   onRenameThread: (target: ThreadMeta) => void;
@@ -235,8 +252,9 @@ type ChatSurfaceProps = {
   specTypePicker?: boolean;
   /** D13: Back button on the framing menu returns to the Vibe/Spec picker. */
   onSpecTypeBack?: () => void;
-  /** D5: spec-type selection starts grill-explore with the spec type as body. */
-  onPickSpecType?: (specType: string) => void;
+  /** D5: spec-type selection starts grill-explore. The card is the framing;
+   *  `description` is what the user actually asked for (Kiro's model). */
+  onPickSpecType?: (specType: string, description: string) => void;
   /** D9: composer-toggle framing menu — shown when toggling an existing thread to spec mode. */
   composerSpecTypePicker?: boolean;
   /** D19/D20: true during async thread creation — prevents mode picker flash. */
@@ -250,7 +268,7 @@ type ChatSurfaceProps = {
   /** D21: set the framing-menu model (stored locally, persisted on thread creation). */
   onPickFramingModel?: (modelId: string) => void;
   /** D9: spec-type selection from the composer-toggle framing menu. */
-  onPickComposerSpecType?: (specType: string) => void;
+  onPickComposerSpecType?: (specType: string, description: string) => void;
   /** D13: Back button on the composer-toggle framing menu returns to the chat. */
   onComposerSpecTypeBack?: () => void;
   onPickMode: (mode: api.Mode) => void;
@@ -287,6 +305,41 @@ const MODE_LIVE_PREVIEWS: Record<
   go: [{ text: "> editing " }, { text: "src/api.ts", cls: "diff-add" }],
   spec: [{ text: '> "What are we building?"' }],
 };
+
+/**
+ * The three ways a spec conversation can be framed (#35).
+ *
+ * A card is a framing, not the request: it pre-wires the questions that kind
+ * of work always has to answer, and the user still says what they want. This
+ * is Kiro's model — pick Spec, then describe the work — and it is why picking
+ * a card no longer starts an agent turn on its own.
+ */
+const SPEC_FRAMINGS = [
+  {
+    id: "Feature",
+    blurb:
+      "Build something new — a capability, screen, or integration that doesn't exist yet.",
+    label: "What do you want to build?",
+    placeholder:
+      "e.g. a CSV export on the reports page, so finance can hand numbers to their auditor",
+  },
+  {
+    id: "Bugfix",
+    blurb:
+      "Diagnose and fix — trace a broken behavior to its root cause before changing code.",
+    label: "What's going wrong?",
+    placeholder:
+      "e.g. the login redirect loops on Safari once a session cookie has expired",
+  },
+  {
+    id: "Other",
+    blurb:
+      "Open-ended — describe your own framing and the agent will explore from there.",
+    label: "What should this spec cover?",
+    placeholder:
+      "e.g. whether to move the job queue off Postgres before the next launch",
+  },
+] as const;
 
 function ModeCard({
   mode,
@@ -445,6 +498,11 @@ export const ChatSurface = memo(
     draft,
     setDraft,
     onSend,
+    mentionFiles = [],
+    onOpenMentions,
+    queued = [],
+    onRemoveQueued,
+    onRetryQueued,
     onStop,
     onRenameThread,
     onSpec,
@@ -490,8 +548,17 @@ export const ChatSurface = memo(
     const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
     const [worktreeOffConfirmOpen, setWorktreeOffConfirmOpen] = useState(false);
     // D6/D15: "Other" spec-type text input state — local to the framing menu.
+    // What the user typed, and which card frames it (#35).
     const [otherSpecText, setOtherSpecText] = useState("");
-    const [showOtherInput, setShowOtherInput] = useState(false);
+    const [specFraming, setSpecFraming] = useState<string | null>(null);
+    const specRequestRef = useRef<HTMLDivElement | null>(null);
+    // The field opens below the fold on a short window, and `autoFocus`
+    // alone does not scroll a flex scroll container — the user was left
+    // looking at three cards with the Start button off screen.
+    useEffect(() => {
+      if (specFraming)
+        specRequestRef.current?.scrollIntoView({ block: "nearest" });
+    }, [specFraming]);
     // Auto-scroll: stick to the bottom as messages stream in, but yield if the
     // user scrolls up to read. Sending a new message re-arms it. ChatSurface
     // isn't remounted on thread switch, so scrolling up in one thread would
@@ -545,6 +612,21 @@ export const ChatSurface = memo(
         ),
       [messages, live]
     );
+    // #35: the gap between picking a framing card and the agent's first
+    // question is a cold agent spawn — seconds, sometimes tens of them —
+    // and all it used to show was one italic line over an empty transcript.
+    // A first-time user had nothing telling them what spec mode was about to
+    // do to them, or that answering was their next move.
+    // Anything the agent has produced ends it: a streamed event, a tool call,
+    // or a persisted assistant message. A `plain` item with a `tool` role is
+    // Palisade's own marker ("Switched to spec mode"), not the agent talking.
+    const specStarting =
+      thread?.currentMode === "spec" &&
+      busy &&
+      !items.some(
+        (item) => item.kind !== "plain" || item.role === "assistant"
+      );
+
     // The `/` menu. Opens on a leading slash and closes on the first space —
     // ACP takes the whole line as the prompt, so the rest is the command's
     // own input and there is nothing left to complete.
@@ -581,6 +663,50 @@ export const ChatSurface = memo(
     useEffect(() => {
       setCommandIndex(0);
     }, [commandQuery]);
+
+    // The `@` mention menu (#32). Unlike `/`, a mention is a reference inside
+    // a sentence — "compare @src/api.ts with @src/App.tsx" — so it opens
+    // wherever the caret is rather than only at the start of the draft, and
+    // the caret position is what decides which mention is being typed.
+    const [caret, setCaret] = useState(0);
+    const [mentionIndex, setMentionIndex] = useState(0);
+    const mention = useMemo(
+      () => (commandMenuOpen ? null : mentionAt(draft, caret)),
+      [draft, caret, commandMenuOpen]
+    );
+    const mentionMatches = useMemo(
+      () => (mention ? rankMentions(mentionFiles, mention.query) : []),
+      [mention?.query, mentionFiles]
+    );
+    const mentionMenuOpen = mention !== null;
+    const activeMention = mentionMatches[mentionIndex] ?? mentionMatches[0];
+    useEffect(() => {
+      setMentionIndex(0);
+    }, [mention?.query]);
+    // Walking the project tree costs a round trip, so it happens when the
+    // menu first opens rather than on every keystroke or on mount.
+    useEffect(() => {
+      if (mentionMenuOpen) onOpenMentions?.();
+    }, [mentionMenuOpen, onOpenMentions]);
+
+    /** Swap the typed fragment for the real path and put the caret after it. */
+    const pickMention = (path: string) => {
+      if (!mention) return;
+      const next = applyMention(draft, mention, path);
+      setDraft(next.text);
+      setCaret(next.caret);
+      const input = composerInputRef.current;
+      // After React has written the new value, or the browser puts the caret
+      // back at the end of the old one.
+      requestAnimationFrame(() => {
+        input?.focus();
+        input?.setSelectionRange(next.caret, next.caret);
+      });
+    };
+    /** Keep `caret` honest for arrow keys, clicks and selections alike. */
+    const trackCaret = (
+      event: React.SyntheticEvent<HTMLTextAreaElement>
+    ) => setCaret(event.currentTarget.selectionStart ?? 0);
 
     // Completing a command just rewrites the draft — ACP invokes one by
     // sending its name as the prompt. The sigil is the agent's, not ours.
@@ -869,27 +995,34 @@ export const ChatSurface = memo(
     // D1: spec-type framing menu — shown after picking "Spec" from the
     // Vibe/Spec picker. Three Mantine cards (Feature/Bugfix/Other) with a
     // Back button (D13). The agent does NOT run until a spec type is picked.
-    if (specTypePicker) {
-      return (
-        <>
-          <div className="pane-head">
-            <strong>New thread</strong>
-          </div>
+    // One framing menu, two entry points: the new-thread flow and the
+    // composer's Spec toggle. It lived as two copies of the same ~90 lines,
+    // so every fix had to be made twice — and the second copy kept drifting
+    // (#35 was reported against one of them and was present in both).
+    const activeFraming =
+      SPEC_FRAMINGS.find((f) => f.id === specFraming) ?? null;
+
+    const specTypeMenu = (
+      onPick: (specType: string, description: string) => void,
+      onBack?: () => void
+    ) => (
           <div className="ds-new-thread-picker" data-testid="spec-type-picker">
-            {/* Picking a card starts the interview immediately (D1). Said
-                out loud, because a card that looks like navigation and
-                actually spends an agent turn is the kind of surprise that
-                costs trust — a first-run reviewer flagged exactly this. */}
-            <p className="hint" style={{ marginBottom: 4 }}>
+            <p className="ds-mode-picker-prompt">
               What would you like to spec out today?
             </p>
+            {/* The card is the framing, not the request. Each one pre-wires
+                the questions that kind of work always has to answer; the
+                field below is what the user actually wants. Picking a card
+                used to fire an agent turn on its own, which meant the
+                interview opened by asking for a request the user had already
+                been asked for. */}
             <p
               className="hint"
               style={{ marginBottom: 12, fontSize: 11.5 }}
               data-testid="spec-type-note"
             >
-              Picking one starts the interview — the agent asks its first
-              question straight away.
+              Pick how to frame it, say what you want, and the agent opens the
+              interview from there.
             </p>
             {framingPickerRow}
             {!providerSelected && (
@@ -900,51 +1033,36 @@ export const ChatSurface = memo(
                 Select a provider to continue.
               </p>
             )}
-            {!showOtherInput && (
-              <div className="ds-mode-picker">
+            <div className="ds-mode-picker">
+              {SPEC_FRAMINGS.map((framing) => (
                 <UnstyledButton
+                  key={framing.id}
                   className="ds-mode-card"
-                  data-testid="spec-type-feature"
+                  data-testid={`spec-type-${framing.id.toLowerCase()}`}
                   disabled={!providerSelected}
+                  aria-pressed={specFraming === framing.id}
+                  data-active={specFraming === framing.id || undefined}
                   onClick={() =>
-                    providerSelected && onPickSpecType?.("Feature")
+                    providerSelected && setSpecFraming(framing.id)
                   }
                 >
-                  <strong>Feature</strong>
-                  <span>
-                    Build something new — a capability, screen, or integration
-                    that doesn't exist yet.
-                  </span>
+                  <strong>{framing.id}</strong>
+                  <span>{framing.blurb}</span>
                 </UnstyledButton>
-                <UnstyledButton
-                  className="ds-mode-card"
-                  data-testid="spec-type-bugfix"
-                  disabled={!providerSelected}
-                  onClick={() => providerSelected && onPickSpecType?.("Bugfix")}
-                >
-                  <strong>Bugfix</strong>
-                  <span>
-                    Diagnose and fix — trace a broken behavior to its root cause
-                    before changing code.
-                  </span>
-                </UnstyledButton>
-                <UnstyledButton
-                  className="ds-mode-card"
-                  data-testid="spec-type-other"
-                  disabled={!providerSelected}
-                  onClick={() => providerSelected && setShowOtherInput(true)}
-                >
-                  <strong>Other</strong>
-                  <span>
-                    Open-ended — describe your own framing and the agent will
-                    explore from there.
-                  </span>
-                </UnstyledButton>
-              </div>
-            )}
-            {showOtherInput && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <TextInput
+              ))}
+            </div>
+            {activeFraming && (
+              <div
+                ref={specRequestRef}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  width: "100%",
+                  marginTop: 12,
+                }}
+              >
+                <Textarea
                   value={otherSpecText}
                   onChange={(event) =>
                     setOtherSpecText(event.currentTarget.value)
@@ -952,40 +1070,53 @@ export const ChatSurface = memo(
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
-                      // D17: empty/whitespace submission is disabled.
                       const trimmed = otherSpecText.trim();
-                      if (trimmed) {
-                        onPickSpecType?.(trimmed);
-                      }
+                      if (trimmed && providerSelected)
+                        onPick(activeFraming.id, trimmed);
                     }
                   }}
-                  placeholder="Describe what you'd like to spec out..."
-                  aria-label="Custom spec type"
+                  label={activeFraming.label}
+                  description="Enter to start · Shift+Enter for a new line"
+                  placeholder={activeFraming.placeholder}
                   data-testid="other-spec-input"
+                  minRows={2}
+                  maxRows={6}
                   autoFocus
+                  styles={{ root: { width: "100%" } }}
                 />
-                <button
-                  className="ds-icon-btn"
-                  data-testid="other-spec-escape"
-                  onClick={() => {
-                    setShowOtherInput(false);
-                    setOtherSpecText("");
-                  }}
-                  style={{ fontSize: 12, alignSelf: "flex-start" }}
+                <Button
+                  size="sm"
+                  data-testid="other-spec-submit"
+                  disabled={!otherSpecText.trim() || !providerSelected}
+                  onClick={() => onPick(activeFraming.id, otherSpecText.trim())}
+                  leftSection={<IconListCheck size={14} />}
+                  style={{ alignSelf: "flex-start" }}
                 >
-                  ← or pick a different type
-                </button>
+                  Start spec
+                </Button>
               </div>
             )}
             <button
               className="ds-icon-btn"
               data-testid="spec-type-back"
-              onClick={onSpecTypeBack}
+              onClick={onBack}
               style={{ marginTop: 8, fontSize: 12 }}
             >
               ← Back
             </button>
           </div>
+    );
+
+    if (specTypePicker) {
+      return (
+        <>
+          <div className="pane-head">
+            <strong>New thread</strong>
+          </div>
+          {specTypeMenu(
+            (specType, description) => onPickSpecType?.(specType, description),
+            onSpecTypeBack
+          )}
         </>
       );
     }
@@ -999,118 +1130,11 @@ export const ChatSurface = memo(
           <div className="pane-head">
             <strong data-testid="thread-title">{thread.title}</strong>
           </div>
-          <div className="ds-new-thread-picker" data-testid="spec-type-picker">
-            {/* Picking a card starts the interview immediately (D1). Said
-                out loud, because a card that looks like navigation and
-                actually spends an agent turn is the kind of surprise that
-                costs trust — a first-run reviewer flagged exactly this. */}
-            <p className="hint" style={{ marginBottom: 4 }}>
-              What would you like to spec out today?
-            </p>
-            <p
-              className="hint"
-              style={{ marginBottom: 12, fontSize: 11.5 }}
-              data-testid="spec-type-note"
-            >
-              Picking one starts the interview — the agent asks its first
-              question straight away.
-            </p>
-            {framingPickerRow}
-            {!providerSelected && (
-              <p
-                className="hint"
-                style={{ marginBottom: 12, fontSize: 12, color: "var(--warn)" }}
-              >
-                Select a provider to continue.
-              </p>
-            )}
-            {!showOtherInput && (
-              <div className="ds-mode-picker">
-                <UnstyledButton
-                  className="ds-mode-card"
-                  data-testid="spec-type-feature"
-                  disabled={!providerSelected}
-                  onClick={() =>
-                    providerSelected && onPickComposerSpecType?.("Feature")
-                  }
-                >
-                  <strong>Feature</strong>
-                  <span>
-                    Build something new — a capability, screen, or integration
-                    that doesn't exist yet.
-                  </span>
-                </UnstyledButton>
-                <UnstyledButton
-                  className="ds-mode-card"
-                  data-testid="spec-type-bugfix"
-                  disabled={!providerSelected}
-                  onClick={() =>
-                    providerSelected && onPickComposerSpecType?.("Bugfix")
-                  }
-                >
-                  <strong>Bugfix</strong>
-                  <span>
-                    Diagnose and fix — trace a broken behavior to its root cause
-                    before changing code.
-                  </span>
-                </UnstyledButton>
-                <UnstyledButton
-                  className="ds-mode-card"
-                  data-testid="spec-type-other"
-                  disabled={!providerSelected}
-                  onClick={() => providerSelected && setShowOtherInput(true)}
-                >
-                  <strong>Other</strong>
-                  <span>
-                    Open-ended — describe your own framing and the agent will
-                    explore from there.
-                  </span>
-                </UnstyledButton>
-              </div>
-            )}
-            {showOtherInput && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <TextInput
-                  value={otherSpecText}
-                  onChange={(event) =>
-                    setOtherSpecText(event.currentTarget.value)
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      const trimmed = otherSpecText.trim();
-                      if (trimmed) {
-                        onPickComposerSpecType?.(trimmed);
-                      }
-                    }
-                  }}
-                  placeholder="Describe what you'd like to spec out..."
-                  aria-label="Custom spec type"
-                  data-testid="other-spec-input"
-                  autoFocus
-                />
-                <button
-                  className="ds-icon-btn"
-                  data-testid="other-spec-escape"
-                  onClick={() => {
-                    setShowOtherInput(false);
-                    setOtherSpecText("");
-                  }}
-                  style={{ fontSize: 12, alignSelf: "flex-start" }}
-                >
-                  ← or pick a different type
-                </button>
-              </div>
-            )}
-            <button
-              className="ds-icon-btn"
-              data-testid="spec-type-back"
-              onClick={onComposerSpecTypeBack}
-              style={{ marginTop: 8, fontSize: 12 }}
-            >
-              ← Back
-            </button>
-          </div>
+          {specTypeMenu(
+            (specType, description) =>
+              onPickComposerSpecType?.(specType, description),
+            onComposerSpecTypeBack
+          )}
         </>
       );
     }
@@ -1120,6 +1144,9 @@ export const ChatSurface = memo(
     // type their first message (which creates the thread on send).
     // Entice the user to create a new thread only if threads are focused
     // and no mode is pending.
+    if (transitioning) {
+      return <div className="empty" role="status"><Loader size="sm" /> Preparing your Spec conversation…</div>;
+    }
     if (!thread && pendingMode !== "go") {
       return (
         <p className="empty">
@@ -1273,9 +1300,47 @@ export const ChatSurface = memo(
               onAgentLogin={onAgentLogin}
             />
           </>
-          {busy && (
+          {busy && specStarting && (
+            <Paper
+              withBorder
+              radius="md"
+              p="sm"
+              data-testid="spec-primer"
+              role="status"
+              style={{ background: "var(--surface)", marginTop: 8 }}
+            >
+              <Group gap={8} wrap="nowrap" mb={6}>
+                <Loader type="dots" size={14} color="neutral" />
+                <strong style={{ fontSize: 13 }}>
+                  Starting {executorLabel ?? "the agent"}…
+                </strong>
+              </Group>
+              <ol
+                style={{
+                  margin: 0,
+                  paddingLeft: 18,
+                  fontSize: 12.5,
+                  lineHeight: 1.5,
+                  color: "var(--muted)",
+                }}
+              >
+                <li>
+                  It asks one question at a time. Answer in the composer below.
+                </li>
+                <li>
+                  When the picture is clear, it writes a proposal for you to
+                  read.
+                </li>
+                <li>Nothing in your code changes until you approve it.</li>
+              </ol>
+              <span className="hint" style={{ display: "block", marginTop: 6 }}>
+                The first question usually takes a few seconds.
+              </span>
+            </Paper>
+          )}
+          {busy && !specStarting && (
             <div className="working" data-testid="working">
-              executor working
+              Agent working…
               <Loader type="dots" size={16} color="neutral" />
             </div>
           )}
@@ -1317,6 +1382,75 @@ export const ChatSurface = memo(
               onError={onError}
             />
           )}
+
+        {/* #26: messages typed while the agent was mid-turn. They sit here,
+            visible and removable, and go out in order the moment the turn
+            ends — an agent takes one prompt per turn, so sending them now
+            would either drop them or interleave them at random. */}
+        {queued.length > 0 && (
+          <Stack gap={4} px={8} pb={6} data-testid="queued-messages">
+            <Group gap={6} c="dimmed">
+              <IconClockPause size={12} />
+              <span style={{ fontSize: 11 }}>
+                {queued.length === 1
+                  ? "1 message queued — sends when this turn ends"
+                  : `${queued.length} messages queued — sent in order when this turn ends`}
+              </span>
+            </Group>
+            {queued.map((message) => (
+              <Paper
+                key={message.id}
+                withBorder
+                radius="md"
+                p={8}
+                data-testid="queued-message"
+                style={{ background: "var(--surface)" }}
+              >
+                <Group gap={8} wrap="nowrap" align="flex-start">
+                  <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {message.text}
+                    </span>
+                    {message.error && (
+                      <span
+                        role="alert"
+                        style={{ fontSize: 11, color: "var(--danger)" }}
+                      >
+                        Not sent. {message.error}
+                      </span>
+                    )}
+                  </Stack>
+                  {message.error && (
+                    <Button
+                      size="compact-xs"
+                      variant="default"
+                      data-testid="queued-retry"
+                      onClick={() => onRetryQueued?.(message.id)}
+                    >
+                      Retry
+                    </Button>
+                  )}
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    color="gray"
+                    data-testid="queued-remove"
+                    aria-label={`Remove queued message: ${message.text}`}
+                    onClick={() => onRemoveQueued?.(message.id)}
+                  >
+                    <IconX size={12} />
+                  </ActionIcon>
+                </Group>
+              </Paper>
+            ))}
+          </Stack>
+        )}
 
         <form
           className={`composer ${dragActive ? "drag-active" : ""}`}
@@ -1403,6 +1537,52 @@ export const ChatSurface = memo(
                       {command.description}
                     </span>
                   </UnstyledButton>
+                  ))
+                )}
+              </div>
+            </Paper>
+          )}
+
+          {/* The `@` file mention menu (#32), sharing the `/` menu's shape so
+              the two read as one control with two grammars. */}
+          {mentionMenuOpen && (
+            <Paper
+              withBorder
+              shadow="md"
+              radius="md"
+              className="ds-command-menu"
+              data-testid="mention-menu"
+              role="listbox"
+              aria-label="Project files"
+            >
+              <div className="ds-command-menu-header">
+                <IconFile size={12} />
+                Files
+              </div>
+              <div className="ds-command-menu-scroll">
+                {mentionMatches.length === 0 ? (
+                  <p className="ds-command-menu-empty">
+                    {mentionFiles.length === 0
+                      ? "Reading the project's files…"
+                      : `No files match “${mention.query}”.`}
+                  </p>
+                ) : (
+                  mentionMatches.map((path, index) => (
+                    <UnstyledButton
+                      key={path}
+                      role="option"
+                      aria-selected={path === activeMention}
+                      data-active={path === activeMention || undefined}
+                      className="ds-command-menu-row"
+                      data-testid="mention-row"
+                      onMouseEnter={() => setMentionIndex(index)}
+                      onClick={() => pickMention(path)}
+                    >
+                      <span className="ds-command-menu-name">
+                        {path.split("/").pop()}
+                      </span>
+                      <span className="ds-command-menu-desc">{path}</span>
+                    </UnstyledButton>
                   ))
                 )}
               </div>
@@ -1612,7 +1792,8 @@ export const ChatSurface = memo(
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
-                    if (!busy && draft.trim()) {
+                    // Mid-turn Enter queues rather than doing nothing (#26).
+                    if (draft.trim()) {
                       event.currentTarget.form?.requestSubmit();
                     }
                   }
@@ -1645,8 +1826,50 @@ export const ChatSurface = memo(
             <Textarea
               ref={composerInputRef}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setCaret(event.target.selectionStart ?? event.target.value.length);
+              }}
+              onSelect={trackCaret}
+              onClick={trackCaret}
               onKeyDown={(event) => {
+                // The mention menu owns the same keys the `/` menu does, and
+                // the two are never open at once.
+                if (mentionMenuOpen) {
+                  if (
+                    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                    mentionMatches.length > 0
+                  ) {
+                    event.preventDefault();
+                    const step = event.key === "ArrowDown" ? 1 : -1;
+                    setMentionIndex(
+                      (i) =>
+                        (i + step + mentionMatches.length) %
+                        mentionMatches.length
+                    );
+                    return;
+                  }
+                  if (
+                    (event.key === "Tab" ||
+                      (event.key === "Enter" && !event.shiftKey)) &&
+                    activeMention
+                  ) {
+                    event.preventDefault();
+                    pickMention(activeMention);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    // Keep the text, drop the `@`, so Escape never destroys
+                    // what the user typed — same contract as the `/` menu.
+                    const end = mention.start + 1 + mention.query.length;
+                    setDraft(
+                      draft.slice(0, mention.start) + draft.slice(mention.start + 1)
+                    );
+                    setCaret(end - 1);
+                    return;
+                  }
+                }
                 // The menu owns the arrows, Tab, Enter and Escape while it is
                 // open — otherwise Enter would send a half-typed command name.
                 if (commandMenuOpen) {
@@ -1677,16 +1900,18 @@ export const ChatSurface = memo(
                 }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-
-                  if (!busy && draft.trim()) {
+                  // Mid-turn Enter queues rather than doing nothing (#26).
+                  if (draft.trim()) {
                     event.currentTarget.form?.requestSubmit();
                   }
                 }
               }}
               placeholder={
-                flightSelected
-                  ? "Message, or / for commands"
-                  : "Chat-only — no executor on PATH"
+                !flightSelected
+                  ? "Chat-only — no executor on PATH"
+                  : busy
+                    ? "Message — queued until this turn ends"
+                    : "Message, or / for commands"
               }
               aria-label="Message"
               data-testid="composer-input"
@@ -1974,6 +2199,21 @@ export const ChatSurface = memo(
               />
 
               {busy ? (
+                <Group gap={6} wrap="nowrap">
+                  {draft.trim() && (
+                    <ActionIcon
+                      type="submit"
+                      data-testid="composer-queue"
+                      aria-label="Queue message"
+                      title="Queue — sends when this turn ends"
+                      size={30}
+                      radius="md"
+                      variant="default"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <IconClockPause size={14} />
+                    </ActionIcon>
+                  )}
                 <ActionIcon
                   data-testid="composer-stop"
                   onClick={onStop}
@@ -2002,6 +2242,7 @@ export const ChatSurface = memo(
                 >
                   <IconPlayerStopFilled size={14} />
                 </ActionIcon>
+                </Group>
               ) : (
                 <ActionIcon
                   type="submit"
@@ -2292,6 +2533,10 @@ type WorkspacePickerProps = {
   onAddProject: () => void;
   onRenameProject: () => void;
   onOpenBranchPicker: () => void;
+  /** #33: open a project in its own window, leaving this one alone. */
+  onOpenProjectWindow: (project: Project) => void;
+  /** #28: forget a saved project. Source files and history are kept. */
+  onRemoveProject: (project: Project) => void;
 };
 
 const WorkspacePicker = memo(function WorkspacePicker({
@@ -2303,6 +2548,8 @@ const WorkspacePicker = memo(function WorkspacePicker({
   onAddProject,
   onRenameProject,
   onOpenBranchPicker,
+  onOpenProjectWindow,
+  onRemoveProject,
 }: WorkspacePickerProps) {
   void variant;
   const otherProjects = projects.filter((p) => p.hash !== project?.hash);
@@ -2338,6 +2585,16 @@ const WorkspacePicker = memo(function WorkspacePicker({
               Rename
             </button>
           )}
+          {project && (
+            <button
+              className="ds-rail-action-subtle"
+              onClick={() => onOpenProjectWindow(project)}
+              data-testid="open-project-window"
+              title="Open this project in a second window"
+            >
+              New window
+            </button>
+          )}
         </div>
         {project && branches.length > 0 && (
           <button
@@ -2355,7 +2612,17 @@ const WorkspacePicker = memo(function WorkspacePicker({
           <h2 className="ds-section-heading">Recent Projects</h2>
           <ul className="ds-recent-projects">
             {otherProjects.map((p) => {
-              const select = () => onSelectProject(p);
+              // ⌘/Ctrl-click opens a second window instead of switching this
+              // one, the way VS Code's recent list behaves.
+              const select = (
+                event?: React.MouseEvent | React.KeyboardEvent
+              ) => {
+                if (event?.metaKey || event?.ctrlKey) {
+                  onOpenProjectWindow(p);
+                  return;
+                }
+                onSelectProject(p);
+              };
               return (
                 <li
                   key={p.hash}
@@ -2364,10 +2631,48 @@ const WorkspacePicker = memo(function WorkspacePicker({
                   tabIndex={0}
                   onClick={select}
                   onKeyDown={onActivateKey(select)}
+                  title={`${p.root}\n⌘-click to open in a new window`}
                   data-testid="recent-project"
                 >
                   <IconFolder size={14} className="ds-chevron" />
                   <span className="ds-tree-label">{p.displayName}</span>
+                  <Menu position="bottom-end" withinPortal>
+                    <Menu.Target>
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="sm"
+                        aria-label={`Actions for ${p.displayName}`}
+                        data-testid="recent-project-menu"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <IconDots size={13} />
+                      </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item
+                        leftSection={<IconAppWindow size={14} />}
+                        data-testid="recent-project-new-window"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenProjectWindow(p);
+                        }}
+                      >
+                        Open in new window
+                      </Menu.Item>
+                      <Menu.Item
+                        color="red"
+                        leftSection={<IconTrash size={14} />}
+                        data-testid="recent-project-remove"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRemoveProject(p);
+                        }}
+                      >
+                        Remove from Recent Projects
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
                 </li>
               );
             })}
@@ -2382,6 +2687,16 @@ const WorkspacePicker = memo(function WorkspacePicker({
 // hand it a path rather than threading image bytes through the IPC channel.
 export const imagePathsFrom = (paths: string[]): string[] =>
   paths.filter((p) => IMAGE_PATH.test(p));
+
+export function clearRecoveredNotebook(
+  paths: Set<string>,
+  path: string
+): Set<string> {
+  if (!paths.has(path)) return paths;
+  const next = new Set(paths);
+  next.delete(path);
+  return next;
+}
 
 export default function App() {
   const pm = useProjectManager();
@@ -2620,7 +2935,7 @@ export default function App() {
   // Which terminal tab a "Run" click should type into. Several shells can be
   // open at once, so "the terminal" is no longer a single implicit target.
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
-  if (shell.terminalPlacement === "bottom" && !shell.terminalPanel.collapsed) {
+  if (!shell.terminalPanel.collapsed) {
     terminalEverOpened.current = true;
   }
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
@@ -2650,54 +2965,37 @@ export default function App() {
   const addVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
-      let parsed: Record<string, unknown> = {};
+      const current = verifyPins[specName] ?? [];
+      if (current.includes(commandName)) return;
+      const next = { ...verifyPins, [specName]: [...current, commandName] };
       try {
-        parsed = JSON.parse(
-          await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE)
-        );
+        await api.saveVerifyPins(project.hash, next);
+        setVerifyPins(next);
       } catch {
-        // File missing or malformed — start fresh.
+        // The write failed (or a concurrent writer's version won). Resync
+        // from disk so the pin buttons reflect reality, not a stale guess.
+        reloadVerifyPins(project.hash);
       }
-      const pins = (parsed.verifyPins ?? {}) as Record<string, string[]>;
-      const current = pins[specName] ?? [];
-      if (!current.includes(commandName)) {
-        pins[specName] = [...current, commandName];
-      }
-      parsed.verifyPins = pins;
-      await api.writeFileContent(
-        project.hash,
-        PROJECT_SETTINGS_FILE,
-        JSON.stringify(parsed, null, 2) + "\n"
-      );
-      setVerifyPins(pins);
     },
-    [project]
+    [project, verifyPins, reloadVerifyPins]
   );
 
   const removeVerifyPin = useCallback(
     async (specName: string, commandName: string) => {
       if (!project) return;
-      let parsed: Record<string, unknown> = {};
+      const current = verifyPins[specName] ?? [];
+      const filtered = current.filter((c) => c !== commandName);
+      const next = { ...verifyPins };
+      if (filtered.length === 0) delete next[specName];
+      else next[specName] = filtered;
       try {
-        parsed = JSON.parse(
-          await api.readFileContent(project.hash, PROJECT_SETTINGS_FILE)
-        );
+        await api.saveVerifyPins(project.hash, next);
+        setVerifyPins(next);
       } catch {
-        return;
+        reloadVerifyPins(project.hash);
       }
-      const pins = (parsed.verifyPins ?? {}) as Record<string, string[]>;
-      const current = pins[specName] ?? [];
-      pins[specName] = current.filter((c) => c !== commandName);
-      if (pins[specName].length === 0) delete pins[specName];
-      parsed.verifyPins = pins;
-      await api.writeFileContent(
-        project.hash,
-        PROJECT_SETTINGS_FILE,
-        JSON.stringify(parsed, null, 2) + "\n"
-      );
-      setVerifyPins(pins);
     },
-    [project]
+    [project, verifyPins, reloadVerifyPins]
   );
   // Bumped when the working tree changes under the diff — an agent turn
   // ending, or a save. The pane used to fetch once on mount and then show
@@ -2830,7 +3128,11 @@ export default function App() {
 
   const handleFileSave = useCallback(
     (edit: { path: string; before: string; after: string }) => {
-      void edit;
+      // A repaired notebook first saves through the text fallback. Let its
+      // next render retry notebook mode instead of keeping that path stuck.
+      if (edit.path.toLowerCase().endsWith(".ipynb")) {
+        setUnopenableNotebooks((previous) => clearRecoveredNotebook(previous, edit.path));
+      }
       // Test results recorded before this write describe code that no longer
       // exists; the explorer reads this to say so.
       setLastEditAt(Date.now());
@@ -2856,7 +3158,7 @@ export default function App() {
   // effect keeps the CSS overrides in sync when the panel is closed.
   useEffect(() => {
     if (!project) {
-      applyAppearance({});
+      applyAppearance(loadGlobalAppearance());
       return;
     }
     let cancelled = false;
@@ -3066,9 +3368,79 @@ export default function App() {
   // other IDE starts — opening a project is the user's explicit act, not
   // something restored behind their back. The recent list is loaded so that
   // screen can offer it; nothing is selected from it.
+  //
+  // The exception is a window opened *for* a project (#33): `?project=<hash>`
+  // is the user's explicit act, made in the window that spawned this one, so
+  // this window opens straight into it rather than asking again.
   useEffect(() => {
-    api.listProjects().then(setProjects, fail);
+    const requested = new URLSearchParams(window.location.search).get("project");
+    api.listProjects().then((found) => {
+      setProjects(found);
+      const target = requested
+        ? found.find((p) => p.hash === requested)
+        : undefined;
+      if (target) void selectProjectNow(target);
+      else if (requested)
+        warn("That project is no longer saved in Palisade.");
+    }, fail);
   }, []);
+
+  // Projects are shared state across every window (#33): one window adding,
+  // renaming or removing a project must not leave the others showing a list
+  // that no longer exists.
+  useEffect(() => {
+    const stop = listen("projects-changed", () => {
+      api.listProjects().then(setProjects, () => {});
+    });
+    return () => {
+      void stop.then((off) => off());
+    };
+  }, []);
+
+  // #33: a second window on the same or another project. Sessions, watchers
+  // and threads are keyed per project in the backend, so the two windows are
+  // independent — this only asks for the window.
+  const onOpenProjectWindow = useCallback(
+    async (target: Project) => {
+      try {
+        await api.openProjectWindow(target.hash);
+      } catch (err) {
+        fail(err);
+      }
+    },
+    []
+  );
+
+  // #28: forget a saved project. Nothing on disk is deleted — not the repo,
+  // not its worktrees, not its thread history — so the confirmation says so
+  // rather than implying a destructive delete the backend never performs.
+  const onRemoveProject = useCallback(
+    (target: Project) => {
+      setBar({
+        kind: "confirm",
+        label: `Remove "${target.displayName}" from Recent Projects? Files and chat history stay on disk.`,
+        confirmLabel: "Remove",
+        onConfirm: async () => {
+          setBar(null);
+          try {
+            await api.removeProject(target.hash);
+            const remaining = await api.listProjects();
+            setProjects(remaining);
+            // The project the user was in just left the list; there is
+            // nothing to show, so fall back to the onboarding screen.
+            if (current.current.project?.hash === target.hash) {
+              setThread(null);
+              setThreads([]);
+              setProject(null);
+            }
+          } catch (err) {
+            fail(err);
+          }
+        },
+      });
+    },
+    []
+  );
 
   // -------------------------------------------------------------- projects
 
@@ -3424,15 +3796,17 @@ export default function App() {
   // D5/D19: spec-type selection creates the thread + fires grill-explore with
   // the spec type as the user turn body. "Other" is handled separately (D6,
   // Group 9) — this handler covers Feature and Bugfix.
-  const onPickSpecType = async (specType: string) => {
+  const onPickSpecType = async (specType: string, description: string) => {
     if (!project) return;
     // Optimistic: create the thread, swap to chat immediately, then fire
     // specMode in the background. The agent's response streams in via events.
     setSpecTypePicker(false);
     setTransitioning(true);
-    setBusy(true);
+    let createdId: string | undefined;
     try {
       const created = await createThreadWithPrefs(project.hash);
+      createdId = created.id;
+      setBusyFor(created.id, true);
       // Persist the framing-menu executor/model on the thread before
       // specMode fires — ensure_session reads the thread's stored executor
       // to decide which agent to start. Without this, it falls back to
@@ -3443,20 +3817,31 @@ export default function App() {
       const updated = threads.find((t) => t.id === created.id) ?? created;
       await selectThread(project.hash, updated);
       setThreads(threads);
+      // The echo is what the user typed, not which card they pressed.
+      setMessages([
+        {
+          seq: OPTIMISTIC_SEQ,
+          ts: new Date().toISOString(),
+          role: "user",
+          mode: "spec",
+          content: description,
+        },
+      ]);
       // Fire specMode without awaiting — don't block the UI. The busy state
       // stays true until the agent's turn ends (ExecutorEvent::Done clears it).
       api
-        .specMode(project.hash, updated.id, specType, false, true)
+        .specMode(project.hash, updated.id, specType, description, false, true)
         .then((meta) => {
           setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
-          setThread(meta);
+          if (current.current.thread?.id === meta.id) setThread(meta);
+          if (!flight?.selected) setBusyFor(meta.id, false);
         })
         .catch((err) => {
-          setBusy(false);
+          if (createdId) setBusyFor(createdId, false);
           fail(err);
         });
     } catch (err) {
-      setBusy(false);
+      if (createdId) setBusyFor(createdId, false);
       fail(err);
     } finally {
       setTransitioning(false);
@@ -3661,23 +4046,6 @@ export default function App() {
     }, 4000);
     return () => clearInterval(timer);
   }, [loadWorktrees, project?.hash, threads, busyThreads]);
-
-  // Show the code as the agent changes it, the way Cursor and Windsurf both
-  // do: the moment a turn starts, the editor column switches to the diff, so
-  // a user reading the chat is also watching the edits land.
-  //
-  // Rising edge only. Closing the diff mid-turn is a decision the user made
-  // about *this* turn, and re-opening it under them on the next poll would
-  // be the app arguing with them; the next turn starts the cycle over.
-  const wasBusy = useRef(false);
-  useEffect(() => {
-    const busyNow = thread ? busyThreads.has(thread.id) : false;
-    if (busyNow && !wasBusy.current && shell.centerShell === "vibe") {
-      setDiffFocusPath(null);
-      shell.setDiffOpen(true);
-    }
-    wasBusy.current = busyNow;
-  }, [busyThreads, thread?.id, shell.centerShell, shell.setDiffOpen]);
 
   const refresh = useCallback(async () => {
     const { project, thread } = current.current;
@@ -4134,14 +4502,17 @@ export default function App() {
     // turn, so nothing to be busy for. The framing menu below is the one
     // path that starts anything.
     api
-      .specMode(project.hash, thread.id, specType, prefs.bypass, false)
+      .specMode(project.hash, thread.id, specType, null, prefs.bypass, false)
       .then(() => refresh())
       .catch(fail);
   };
 
   // D9: spec-type selection from the composer-toggle framing menu — the
   // thread already exists, so this calls specMode directly (no createThread).
-  const onPickComposerSpecType = async (specType: string) => {
+  const onPickComposerSpecType = async (
+    specType: string,
+    description: string
+  ) => {
     const { project, thread } = current.current;
     if (!project || !thread) return;
     setComposerSpecTypePicker(false);
@@ -4150,7 +4521,7 @@ export default function App() {
     // Fire specMode without awaiting — busy stays true until the agent's
     // turn ends (ExecutorEvent::Done clears it).
     api
-      .specMode(project.hash, thread.id, specType, prefs.bypass, true)
+      .specMode(project.hash, thread.id, specType, description, prefs.bypass, true)
       .then(() => refresh())
       .catch((err) => {
         setBusy(false);
@@ -4191,6 +4562,42 @@ export default function App() {
     }
   };
 
+  // #26: an agent takes one prompt per turn, so a message typed mid-turn used
+  // to have nowhere to go — the Send button became Stop and the text sat in
+  // the box. The queue holds it, shows it, and sends it the moment the turn
+  // ends. Delivery is the same `sendMessage` path an ordinary send takes.
+  const sendQueued = useCallback(
+    async (queued: QueuedMessage) => {
+      const target = threads.find((t) => t.id === queued.threadId);
+      const mode: api.Mode = target?.currentMode ?? "go";
+      const prefs = resolvePrefs(queued.projectHash, queued.threadId);
+      setBusyFor(queued.threadId, true);
+      try {
+        const sent = await api.sendMessage(
+          queued.projectHash,
+          queued.threadId,
+          queued.text,
+          mode,
+          prefs.bypass
+        );
+        // Only the thread the user is actually looking at gets its transcript
+        // patched; a background thread's history is re-read when it is opened.
+        if (current.current.thread?.id === queued.threadId)
+          setMessages((prev) =>
+            prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
+          );
+        if (!flight?.selected) setBusyFor(queued.threadId, false);
+      } catch (err) {
+        // The message stays in the queue with this error attached rather than
+        // vanishing; `useMessageQueue` stops draining until the user retries.
+        setBusyFor(queued.threadId, false);
+        throw err;
+      }
+    },
+    [threads, flight?.selected, setBusyFor]
+  );
+  const queue = useMessageQueue(busyThreads, sendQueued);
+
   const onSend = async () => {
     if (!project || !draft.trim()) return;
     const text = draft.trim();
@@ -4199,6 +4606,11 @@ export default function App() {
     if (text === "/go") return onGo();
     if (text === "/spec") return onSpec();
     if (text === "/propose") return onPropose();
+    // Mid-turn: queue instead of dropping the text on the floor (#26).
+    if (thread && busyThreads.has(thread.id)) {
+      queue.enqueue(project.hash, thread.id, text);
+      return;
+    }
     // `|=<chain> <seed>` runs a saved chain instead of prompting the agent
     // (D6/D13). A name that isn't a saved chain falls through as an ordinary
     // message rather than failing — the user may just be typing.
@@ -4866,6 +5278,11 @@ export default function App() {
     draft,
     setDraft,
     onSend,
+    mentionFiles: paletteFiles,
+    onOpenMentions: ensurePaletteFiles,
+    queued: queue.items.filter((m) => m.threadId === thread?.id),
+    onRemoveQueued: queue.remove,
+    onRetryQueued: queue.retry,
     onStop,
     onRenameThread,
     onSpec,
@@ -4986,9 +5403,15 @@ export default function App() {
             projectHash={project.hash}
             path={selectedFile}
             onDirtyChange={tabs.setDirty}
-            onUnopenable={() =>
-              setUnopenableNotebooks((prev) => new Set(prev).add(selectedFile))
-            }
+            onUnopenable={() => {
+              // Falling back to the text editor with no explanation left the
+              // user looking at a .ipynb that simply refused to render as a
+              // notebook. Say why, then let them fix the JSON by hand.
+              warn(
+                `${selectedFile} isn't valid notebook JSON — opening it as text so you can repair it.`
+              );
+              setUnopenableNotebooks((prev) => new Set(prev).add(selectedFile));
+            }}
           />
         </Suspense>
       );
@@ -5201,6 +5624,8 @@ export default function App() {
                 onAddProject={onAddProject}
                 onRenameProject={onRenameProject}
                 onOpenBranchPicker={onOpenBranchPicker}
+                onOpenProjectWindow={onOpenProjectWindow}
+                onRemoveProject={onRemoveProject}
               />
             </div>
           </>
@@ -5532,6 +5957,8 @@ export default function App() {
               onCloneRepository={onCloneRepository}
               onComposerSend={onOnboardingComposerSend}
               onSelectProject={selectProject}
+              onOpenProjectWindow={onOpenProjectWindow}
+              onRemoveProject={onRemoveProject}
               openingHash={openingProject}
             />
           ) : (
@@ -5566,6 +5993,7 @@ export default function App() {
                 onSelect={onSelectVibeThread}
                 onRename={onRenameThread}
                 onArchive={onArchiveThread}
+                userOpened={shell.sessionListUserOpened}
               />
             )}
 
@@ -5760,19 +6188,6 @@ export default function App() {
                       </Tabs.Tab>
                     </Tabs.List>
                     <div className="ds-bp-spacer" />
-                    {shell.bottomTab === "terminal" && (
-                      <Tooltip label="Move terminal to the sidebar" withinPortal>
-                        <ActionIcon
-                          variant="subtle"
-                          size="sm"
-                          aria-label="Move terminal to the sidebar"
-                          onClick={shell.toggleTerminalPlacement}
-                          data-testid="terminal-placement-toggle"
-                        >
-                          <IconLayoutSidebarRight size={14} />
-                        </ActionIcon>
-                      </Tooltip>
-                    )}
                     <Tooltip label="Collapse panel" withinPortal>
                       <ActionIcon
                         variant="subtle"

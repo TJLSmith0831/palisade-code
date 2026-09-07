@@ -6,7 +6,10 @@ import {
   IconBrandTelegram,
   IconChevronDown,
   IconCircleCheck,
+  IconDots,
   IconFolder,
+  IconAppWindow,
+  IconTrash,
   IconGitFork,
   IconLoader2,
   IconMessage,
@@ -47,6 +50,8 @@ export default function OnboardingScreen({
   onCloneRepository,
   onComposerSend,
   onSelectProject,
+  onOpenProjectWindow,
+  onRemoveProject,
   openingHash = null,
 }: {
   projects: Project[];
@@ -74,6 +79,10 @@ export default function OnboardingScreen({
    *  text on it — unlike `onOpenProject`, the request isn't dropped. */
   onComposerSend: (text: string) => void;
   onSelectProject: (project: Project) => void;
+  /** #33: open this project in its own window, leaving this one where it is. */
+  onOpenProjectWindow?: (project: Project) => void;
+  /** #28: forget a saved project. Source files and history are kept. */
+  onRemoveProject?: (project: Project) => void;
   /** Hash of the project currently being opened, if any. Switching a project
    *  is several round-trips; without this the row looked dead on click. */
   openingHash?: string | null;
@@ -496,7 +505,15 @@ export default function OnboardingScreen({
               const opening = openingHash === p.hash;
               // One at a time: a second switch mid-flight would race the
               // first one's tab restore.
-              const pick = () => {
+              const pick = (
+                event?: React.MouseEvent | React.KeyboardEvent
+              ) => {
+                // VS Code's convention: ⌘/Ctrl-click a recent project opens
+                // it in a second window instead of taking over this one.
+                if (event?.metaKey || event?.ctrlKey) {
+                  onOpenProjectWindow?.(p);
+                  return;
+                }
                 if (!openingHash) onSelectProject(p);
               };
               return (
@@ -513,9 +530,14 @@ export default function OnboardingScreen({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      pick();
+                      pick(e);
                     }
                   }}
+                  title={
+                    onOpenProjectWindow
+                      ? `${p.root}\n⌘-click to open in a new window`
+                      : p.root
+                  }
                   data-testid="recent-project"
                 >
                   <IconFolder size={15} />
@@ -530,6 +552,49 @@ export default function OnboardingScreen({
                   <span className="ds-onboarding-recent-time">
                     {opening ? "…" : relativeTime(p.lastAccessedAt)}
                   </span>
+                  {(onOpenProjectWindow || onRemoveProject) && (
+                    <Menu position="bottom-end" withinPortal>
+                      <Menu.Target>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          size="sm"
+                          aria-label={`Actions for ${p.displayName}`}
+                          data-testid="recent-project-menu"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <IconDots size={14} />
+                        </ActionIcon>
+                      </Menu.Target>
+                      <Menu.Dropdown>
+                        {onOpenProjectWindow && (
+                          <Menu.Item
+                            leftSection={<IconAppWindow size={14} />}
+                            data-testid="recent-project-new-window"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onOpenProjectWindow(p);
+                            }}
+                          >
+                            Open in new window
+                          </Menu.Item>
+                        )}
+                        {onRemoveProject && (
+                          <Menu.Item
+                            color="red"
+                            leftSection={<IconTrash size={14} />}
+                            data-testid="recent-project-remove"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onRemoveProject(p);
+                            }}
+                          >
+                            Remove from Recent Projects
+                          </Menu.Item>
+                        )}
+                      </Menu.Dropdown>
+                    </Menu>
+                  )}
                 </div>
               );
             })}

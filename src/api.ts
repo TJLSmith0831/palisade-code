@@ -56,6 +56,10 @@ export type Message = {
   sessionId?: string | null;
 };
 
+/** Open an independent native window, initialized to this project. */
+export const openProjectWindow = (hash: string) => invoke<string>("open_project_window", { hash });
+/** Remove only the saved entry; source files and session history are retained. */
+export const removeProject = (hash: string) => invoke<void>("remove_project", { hash });
 export const listProjects = () => invoke<Project[]>("list_projects");
 export const addProject = (path: string) =>
   invoke<Project>("add_project", { path });
@@ -298,6 +302,10 @@ export const specMode = (
   projectHash: string,
   threadId: string,
   specType: string,
+  /** What the user actually asked for. The framing card supplies the
+   *  questions that kind of work always has to answer; this supplies the
+   *  work. Null only for older threads framed before it was required. */
+  description: string | null,
   bypass: boolean,
   start: boolean
 ) =>
@@ -305,6 +313,7 @@ export const specMode = (
     projectHash,
     threadId,
     specType,
+    description,
     bypass,
     start,
   });
@@ -790,6 +799,14 @@ export const saveRunCommands = (
 /** What the project root suggests. A proposal: it writes nothing. */
 export const detectRunCommands = (projectHash: string) =>
   invoke<[string, string][]>("detect_run_commands", { projectHash });
+/** Replaces the whole `verifyPins` map — the single writer for this field. */
+export const saveVerifyPins = (
+  projectHash: string,
+  pins: Record<string, string[]>
+) => invoke<void>("save_verify_pins", { projectHash, pins });
+/** Replaces the whole `appearance` object — opaque to the backend. */
+export const saveAppearance = (projectHash: string, appearance: unknown) =>
+  invoke<void>("save_appearance", { projectHash, appearance });
 export const sessionAttribution = (
   projectHash: string,
   threadId: string,

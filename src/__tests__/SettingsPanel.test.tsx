@@ -11,6 +11,7 @@ import { MantineProvider } from "@mantine/core";
 
 import SettingsPanel, {
   ACCENT_HUE_KEY,
+  loadAppearance,
   COMPLETION_ENABLED_KEY,
   COMPLETION_KEYBINDING_KEY,
   COMPLETION_SETTINGS_CHANGED_EVENT,
@@ -260,9 +261,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     });
   });
 
-  it("clicking an app-shell swatch sets only the outer-shell overrides and persists the merged appearance alongside existing settings", async () => {
-    // The file already has formatOnSave + executorOverride; the appearance
-    // key must be merged in without clobbering them.
+  it("clicking an app-shell swatch sets only the outer-shell overrides and persists the appearance via save_appearance", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args: Record<string, unknown>) => {
         if (
@@ -276,7 +275,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
             })
           );
         }
-        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "save_appearance") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
@@ -313,20 +312,22 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
       ).toBe("");
     });
 
-    // The persisted JSON should contain both the original keys and the new appearance.
+    // The backend owns merging this into the rest of the settings file now
+    // (settings.rs's save_appearance) — the frontend only has to send the
+    // new appearance object.
     await waitFor(() => {
-      const writeCall = invokeMock.mock.calls.find(
-        (c) => c[0] === "write_file_content"
+      const saveCall = invokeMock.mock.calls.find(
+        (c) => c[0] === "save_appearance"
       );
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1].content as string);
-      expect(written.formatOnSave).toEqual({ "\\.rs$": "cargo fmt" });
-      expect(written.executorOverride).toBe("codex");
-      expect(written.appearance.appShellColor.light).toBe("#eceff4");
+      expect(saveCall).toBeDefined();
+      const appearance = saveCall![1].appearance as {
+        appShellColor: { light: string };
+      };
+      expect(appearance.appShellColor.light).toBe("#eceff4");
     });
   });
 
-  it("clicking a shell-accent swatch sets only the raised-surface overrides and persists shellAccentColor", async () => {
+  it("clicking a shell-accent swatch sets only the raised-surface overrides and persists shellAccentColor via save_appearance", async () => {
     invokeMock.mockImplementation(
       (cmd: string, args: Record<string, unknown>) => {
         if (
@@ -340,7 +341,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
             })
           );
         }
-        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "save_appearance") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
@@ -377,12 +378,14 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
     });
 
     await waitFor(() => {
-      const writeCall = invokeMock.mock.calls.find(
-        (c) => c[0] === "write_file_content"
+      const saveCall = invokeMock.mock.calls.find(
+        (c) => c[0] === "save_appearance"
       );
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1].content as string);
-      expect(written.appearance.shellAccentColor.light).toBe("#eceff4");
+      expect(saveCall).toBeDefined();
+      const appearance = saveCall![1].appearance as {
+        shellAccentColor: { light: string };
+      };
+      expect(appearance.shellAccentColor.light).toBe("#eceff4");
     });
   });
 
@@ -404,7 +407,7 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
             })
           );
         }
-        if (cmd === "write_file_content") return Promise.resolve();
+        if (cmd === "save_appearance") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
@@ -451,13 +454,75 @@ describe("SettingsPanel appearance pickers (project-scoped)", () => {
 
     // The persisted appearance should be empty.
     await waitFor(() => {
-      const writeCall = invokeMock.mock.calls
+      const saveCall = invokeMock.mock.calls
         .slice()
         .reverse()
-        .find((c) => c[0] === "write_file_content");
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1].content as string);
-      expect(written.appearance).toEqual({});
+        .find((c) => c[0] === "save_appearance");
+      expect(saveCall).toBeDefined();
+      expect(saveCall![1].appearance).toEqual({});
     });
   });
+});
+
+
+describe("appearance defaults and reliable saves", () => {
+  beforeEach(() => invokeMock.mockReset().mockImplementation((cmd: string) =>
+    cmd === "read_file_content" ? Promise.resolve("{}") : Promise.resolve()));
+
+  it("saves global defaults without writing project files, then restores built-in colors", async () => {
+    render(<SettingsPanel projectHash="" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+    fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("palisade:appearance") || "{}").appShellColor?.light).toBe("#eceff4"));
+    expect(invokeMock).not.toHaveBeenCalledWith("write_file_content", expect.anything());
+    fireEvent.click(screen.getByTestId("reset-appearance-button"));
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe(""));
+    expect(JSON.parse(localStorage.getItem("palisade:appearance") || "{}")).toEqual({});
+  });
+});
+
+it("project overrides inherit global colors per light/dark value and reset back to them", async () => {
+  localStorage.setItem("palisade:appearance", JSON.stringify({appShellColor: {light: "#eceff4", dark: "#2e3440"}}));
+  invokeMock.mockImplementation((cmd: string) => cmd === "read_file_content"
+    ? Promise.resolve(JSON.stringify({appearance: {appShellColor: {dark: "#282c34"}}})) : Promise.resolve());
+  expect(await loadAppearance("proj1")).toMatchObject({appShellColor: {light: "#eceff4", dark: "#282c34"}});
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-shell-dark-override")).toBe("#282c34"));
+  fireEvent.click(screen.getByTestId("reset-appearance-button"));
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-shell-dark-override")).toBe("#2e3440"));
+  fireEvent.click(screen.getByRole("radio", {name: "Global defaults"}));
+  fireEvent.click(screen.getByTestId("reset-appearance-button"));
+  await waitFor(() => expect(localStorage.getItem("palisade:appearance")).toBe("{}"));
+});
+
+it("reports a failed project save and restores the persisted appearance", async () => {
+  invokeMock.mockReset().mockImplementation((cmd: string) => cmd === "read_file_content"
+    ? Promise.resolve("{}") : Promise.reject(new Error("disk full")));
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
+  expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe("");
+});
+
+it("saving appearance no longer depends on the project settings file parsing cleanly", async () => {
+  // The guarded read-merge-write moved to the backend (settings.rs's
+  // save_appearance), which defaults to {} on malformed content instead of
+  // failing the save — so a broken settings file only affects what's
+  // *displayed* on load (loadProjectAppearance), not whether a new
+  // appearance can be saved.
+  invokeMock.mockReset().mockImplementation((cmd: string) =>
+    cmd === "read_file_content"
+      ? Promise.resolve('{"formatOnSave":')
+      : Promise.resolve()
+  );
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
+  await waitFor(() =>
+    expect(invokeMock).toHaveBeenCalledWith(
+      "save_appearance",
+      expect.objectContaining({ projectHash: "proj1" })
+    )
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
 });

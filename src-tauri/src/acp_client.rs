@@ -1679,7 +1679,11 @@ pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Result<(), String
     }
     let tx = session.cmd_tx.as_ref().ok_or("session is shut down")?;
     session.busy.store(true, Ordering::SeqCst);
-    tx.send(BridgeCommand::Prompt(message.to_string()))
+    // Shared by all registry agents, including resumed and handoff sessions.
+    // Bundled prompt instructions need no agent-specific installation or writes
+    // into the user's project. One-shot metadata requests bypass this path.
+    let preview = include_str!("../skills/palisade-preview.md");
+    tx.send(BridgeCommand::Prompt(format!("{preview}\n\n{message}")))
         .map_err(|_| "agent connection is closed".to_string())
 }
 
@@ -2392,8 +2396,25 @@ mod tests {
         send_acp_prompt(&session, "hello").unwrap();
         assert!(session.is_busy());
         match cmd_rx.try_recv() {
-            Ok(BridgeCommand::Prompt(text)) => assert_eq!(text, "hello"),
+            Ok(BridgeCommand::Prompt(text)) => assert!(text.ends_with("\n\nhello")),
             _ => panic!("expected a Prompt command"),
+        }
+    }
+
+    #[test]
+    fn every_interactive_agent_receives_preview_activation_instructions() {
+        for mode in ["spec", "go"] {
+            let (mut session, mut cmd_rx) = stub_session(false);
+            session.mode = mode.into();
+            session.agent_id = "any-registry-agent".into();
+            send_acp_prompt(&session, "Show my app").unwrap();
+            let BridgeCommand::Prompt(text) = cmd_rx.try_recv().unwrap() else {
+                panic!("expected a prompt");
+            };
+            assert!(text.contains("palisade-preview"));
+            assert!(text.contains("http://localhost:"));
+            assert!(text.contains("tool output"));
+            assert!(text.ends_with("Show my app"));
         }
     }
 

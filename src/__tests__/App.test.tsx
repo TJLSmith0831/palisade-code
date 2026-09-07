@@ -126,7 +126,7 @@ vi.mock("../GraphPane", () => ({
   default: () => <div data-testid="graph-pane" />,
 }));
 
-import App from "../App";
+import App, { clearRecoveredNotebook } from "../App";
 import { clearDiagnostics, publishDiagnostics } from "../lspClients";
 
 // The baseline IPC responses every test starts from. Tests that need one
@@ -3363,9 +3363,14 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
       expect(screen.getByTestId("spec-type-picker")).toBeDefined()
     );
 
-    // Pick Feature — this triggers async createThread + specMode + selectThread.
-    // The mode picker must NOT flash back during the async gap.
+    // Pick Feature — the card is the framing, so nothing starts until the
+    // user says what they want (#35).
     fireEvent.click(screen.getByTestId("spec-type-feature"));
+    expect(specModeCalls).toEqual([]);
+    fireEvent.change(screen.getByTestId("other-spec-input"), {
+      target: { value: "a CSV export on the reports page" },
+    });
+    fireEvent.click(screen.getByTestId("other-spec-submit"));
 
     await waitFor(() => expect(createCalls.length).toBe(1));
     expect(specModeCalls).toEqual([
@@ -3373,6 +3378,7 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
         projectHash: "proj-1",
         threadId: "thread-new",
         specType: "Feature",
+        description: "a CSV export on the reports page",
         bypass: false,
         // The framing menu is the deliberate "start" act — this is the one
         // path that may fire grill-explore (#17).
@@ -3382,6 +3388,14 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     // The thread title appears — the transition completed.
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("New thread")
+    );
+    // The wait is explained rather than just labelled "working" (#35).
+    expect(screen.getByTestId("spec-primer")).toHaveTextContent(
+      /one question at a time/i
+    );
+    // The echo is what the user typed, not the card they pressed.
+    expect(screen.getByTestId("messages")).toHaveTextContent(
+      "a CSV export on the reports page"
     );
     // The mode picker never reappeared at any point.
     expect(screen.queryByTestId("mode-picker")).toBeNull();
@@ -5622,11 +5636,457 @@ describe("Mode toggle (#17)", () => {
     expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(false);
 
     fireEvent.click(screen.getByTestId("spec-type-feature"));
+    // Still nothing: the card frames the work, the field below is the work.
+    expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(false);
+    fireEvent.change(screen.getByTestId("other-spec-input"), {
+      target: { value: "add a CSV export" },
+    });
+    fireEvent.click(screen.getByTestId("other-spec-submit"));
 
     await waitFor(() => expect(calls.some(([cmd]) => cmd === "spec_mode")).toBe(true));
     const specMode = calls.find(([cmd]) => cmd === "spec_mode")![1];
     expect(specMode.start).toBe(true);
     expect(specMode.specType).toBe("Feature");
+    expect(specMode.description).toBe("add a CSV export");
     unmount();
+  });
+});
+
+
+describe("Beta feedback #31", () => {
+  it("keeps the Vibe editor collapsed when a turn starts", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads") return Promise.resolve([{ id: "t1", projectHash: "proj-1", title: "Test thread", currentMode: "go", createdAt: "", updatedAt: "", openSpecChangeName: null }]);
+      if (cmd === "send_message") return new Promise(() => {});
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    fireEvent.click(screen.getByTestId("toggle-editor"));
+    expect(screen.queryByTestId("editor-col")).toBeNull();
+    fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByTestId("composer-send"));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("send_message", expect.anything()));
+    expect(screen.queryByTestId("editor-col")).toBeNull();
+  });
+});
+
+
+describe("Beta feedback #26 — message queue", () => {
+  it("queues a message typed mid-turn instead of dropping it, and lets it be removed", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Test thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      // The turn never ends, so the composer stays in its busy state.
+      if (cmd === "send_message") return new Promise(() => {});
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "First" },
+    });
+    fireEvent.click(screen.getByTestId("composer-send"));
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-stop")).toBeInTheDocument()
+    );
+    const sends = () =>
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "send_message").length;
+    expect(sends()).toBe(1);
+
+    // Mid-turn: the send control is Stop, so this used to have nowhere to go.
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "Second" },
+    });
+    fireEvent.click(screen.getByTestId("composer-queue"));
+    await waitFor(() =>
+      expect(screen.getByTestId("queued-messages")).toHaveTextContent("Second")
+    );
+    // Held, not sent: the agent is still on the first prompt.
+    expect(sends()).toBe(1);
+    expect(screen.getByTestId("composer-input")).toHaveValue("");
+
+    fireEvent.click(screen.getByTestId("queued-remove"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("queued-messages")).toBeNull()
+    );
+    expect(sends()).toBe(1);
+  });
+});
+
+
+describe("Beta feedback #28/#33 — project window and removal", () => {
+  const twoProjects = [
+    {
+      hash: "proj-1",
+      root: "/tmp/palisade-code",
+      displayName: "palisade-code",
+      createdAt: "2026-08-06T00:00:00Z",
+      lastAccessedAt: "2026-08-06T00:00:00Z",
+    },
+    {
+      hash: "proj-2",
+      root: "/tmp/other",
+      displayName: "other",
+      createdAt: "2026-08-06T00:00:00Z",
+      lastAccessedAt: "2026-08-05T00:00:00Z",
+    },
+  ];
+
+  it("opens a saved project in its own window without leaving this one", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_projects") return Promise.resolve(twoProjects);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    const menus = await screen.findAllByTestId("recent-project-menu");
+    fireEvent.click(menus[1]);
+    fireEvent.click(await screen.findByTestId("recent-project-new-window"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("open_project_window", {
+        hash: "proj-2",
+      })
+    );
+    // Still on onboarding: opening a second window must not switch this one.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "switch_project",
+      expect.anything()
+    );
+  });
+
+  it("opens a recent project in a new window on cmd-click, like VS Code", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_projects") return Promise.resolve(twoProjects);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    const rows = await screen.findAllByTestId("recent-project");
+    fireEvent.click(rows[1], { metaKey: true });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("open_project_window", {
+        hash: "proj-2",
+      })
+    );
+    // A modifier-click must not also switch the window the user is in.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "switch_project",
+      expect.anything()
+    );
+  });
+
+  it("removes a saved project only after confirming, and keeps files on disk", async () => {
+    let listed = twoProjects;
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_projects") return Promise.resolve(listed);
+      if (cmd === "remove_project") {
+        listed = twoProjects.slice(0, 1);
+        return Promise.resolve();
+      }
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    const menus = await screen.findAllByTestId("recent-project-menu");
+    fireEvent.click(menus[1]);
+    fireEvent.click(await screen.findByTestId("recent-project-remove"));
+
+    // Nothing happens until the user confirms.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "remove_project",
+      expect.anything()
+    );
+    const confirm = await screen.findByTestId("confirm-delete");
+    // The confirmation has to say what removal does and does not do.
+    expect(document.body.textContent).toMatch(/files and chat history stay/i);
+    fireEvent.click(confirm);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("remove_project", {
+        hash: "proj-2",
+      })
+    );
+    await waitFor(() =>
+      expect(screen.queryAllByTestId("recent-project")).toHaveLength(1)
+    );
+  });
+});
+
+
+describe("Beta feedback #32 — @ mentions", () => {
+  it("completes a project file from an `@` typed mid-sentence", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Test thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "list_all_files")
+        return Promise.resolve(["src/App.tsx", "src/api.ts", "README.md"]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "look at @app" } });
+    fireEvent.select(input, { target: { selectionStart: 12 } });
+
+    const rows = await screen.findAllByTestId("mention-row");
+    expect(rows[0]).toHaveTextContent("src/App.tsx");
+    fireEvent.click(rows[0]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-input")).toHaveValue(
+        "look at @src/App.tsx "
+      )
+    );
+    // Picking closes the menu; the trailing space is what closes it.
+    expect(screen.queryByTestId("mention-menu")).toBeNull();
+  });
+
+  it("does not mistake an email address for a file mention", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Test thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "list_all_files") return Promise.resolve(["src/App.tsx"]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "email me@example.com" } });
+    fireEvent.select(input, { target: { selectionStart: 20 } });
+    expect(screen.queryByTestId("mention-menu")).toBeNull();
+  });
+});
+
+
+describe("Beta feedback #35 — custom spec framing (Other)", () => {
+  beforeEach(() => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "preflight")
+        return defaultInvoke(cmd, args).then((flight: unknown) => ({
+          ...(flight as object),
+          selected: "claude",
+          ready: true,
+        }));
+      return defaultInvoke(cmd, args);
+    });
+  });
+
+  const openOther = async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() => expect(screen.getByTestId("mode-picker")).toBeDefined());
+    fireEvent.click(screen.getByTestId("pick-spec"));
+    fireEvent.click(await screen.findByTestId("spec-type-other"));
+    return screen.findByTestId("other-spec-input");
+  };
+
+  it("offers a labelled field and an explicit Start control, not just Enter", async () => {
+    const input = await openOther();
+    // The field has to read as a field: named, and wide enough for a sentence.
+    expect(input).toHaveAccessibleName(/spec/i);
+    // Enter was the only way to submit — undiscoverable, and the placeholder
+    // never said so.
+    const start = screen.getByTestId("other-spec-submit");
+    expect(start).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "  " } });
+    expect(screen.getByTestId("other-spec-submit")).toBeDisabled();
+
+    fireEvent.change(input, {
+      target: { value: "why the login redirect loops on Safari" },
+    });
+    expect(screen.getByTestId("other-spec-submit")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("other-spec-submit"));
+
+    // The card is the framing; the typed text is the request (Kiro's model).
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "spec_mode",
+        expect.objectContaining({
+          specType: "Other",
+          description: "why the login redirect loops on Safari",
+        })
+      )
+    );
+  });
+
+  it("keeps the framing choices in view, with one way back rather than two", async () => {
+    await openOther();
+    // Picking Other used to blank the three cards, so the screen lost every
+    // trace of what the user was choosing among.
+    expect(screen.getByTestId("spec-type-feature")).toBeInTheDocument();
+    expect(screen.getByTestId("spec-type-bugfix")).toBeInTheDocument();
+    expect(screen.queryByTestId("other-spec-escape")).toBeNull();
+    expect(screen.getByTestId("spec-type-back")).toBeInTheDocument();
+  });
+
+  it("starts on Enter and keeps Shift+Enter for a second line", async () => {
+    const input = await openOther();
+    fireEvent.change(input, { target: { value: "a custom framing" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(invokeMock).not.toHaveBeenCalledWith("spec_mode", expect.anything());
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "spec_mode",
+        expect.objectContaining({ description: "a custom framing" })
+      )
+    );
+  });
+});
+
+
+describe("Beta feedback #35 — the wait before the agent's first question", () => {
+  const startSpec = async (specType: "feature" | "bugfix" = "feature") => {
+    let created = false;
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "preflight")
+        return defaultInvoke(cmd, args).then((flight: unknown) => ({
+          ...(flight as object),
+          selected: "claude",
+          ready: true,
+        }));
+      const specThread = {
+        id: "t-spec",
+        projectHash: "proj-1",
+        title: "Feature",
+        createdAt: "2026-08-06T00:00:00Z",
+        updatedAt: "2026-08-06T00:00:00Z",
+        currentMode: "spec",
+        specType: "Feature",
+        openSpecChangeName: null,
+      };
+      if (
+        cmd === "create_thread" ||
+        cmd === "set_thread_mode" ||
+        cmd === "set_thread_executor"
+      ) {
+        created = true;
+        return Promise.resolve(specThread);
+      }
+      if (cmd === "list_threads")
+        return Promise.resolve(created ? [specThread] : []);
+      // The agent never answers, so the thread stays in the starting state
+      // a cold spawn puts a real user in for several seconds.
+      if (cmd === "spec_mode") return new Promise(() => {});
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+    await waitFor(() => expect(screen.getByTestId("mode-picker")).toBeDefined());
+    fireEvent.click(screen.getByTestId("pick-spec"));
+    fireEvent.click(await screen.findByTestId(`spec-type-${specType}`));
+    fireEvent.change(await screen.findByTestId("other-spec-input"), {
+      target: { value: "a CSV export on the reports page" },
+    });
+    fireEvent.click(screen.getByTestId("other-spec-submit"));
+  };
+
+  it("says what is happening and what the user should do, not just 'working'", async () => {
+    await startSpec();
+    // The whole wait used to be one italic line over an empty transcript —
+    // a new user had nothing telling them what spec mode was about to do.
+    const primer = await screen.findByTestId("spec-primer");
+    expect(primer).toHaveTextContent(/one question at a time/i);
+    expect(primer).toHaveTextContent(/approve/i);
+    // And it names what is being waited on, rather than "executor working".
+    expect(primer).toHaveTextContent(/claude/i);
+  });
+
+  it("gets out of the way as soon as the agent actually says something", async () => {
+    await startSpec();
+    await screen.findByTestId("spec-primer");
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t-spec",
+        event: { kind: "text", text: "What problem are you solving?" },
+      });
+    });
+    await waitFor(() => expect(screen.queryByTestId("spec-primer")).toBeNull());
+  });
+});
+
+
+describe("Dead terminal-placement control", () => {
+  it("is gone: it hid the terminal in a sidebar tab nothing renders", async () => {
+    invokeMock.mockImplementation(defaultInvoke);
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("toggle-terminal"));
+    await screen.findByTestId("bp-tab-terminal");
+    // The control set a right-panel tab no version of the shell renders any
+    // more, so pressing it collapsed the terminal with no way back — the
+    // button that would undo it only existed inside the panel it hid.
+    expect(screen.queryByTestId("terminal-placement-toggle")).toBeNull();
+    // Collapsing still works, and it is the only thing the strip offers.
+    expect(screen.getByTestId("bp-collapse")).toBeInTheDocument();
+  });
+});
+
+
+describe("Session list on a narrow window", () => {
+  it("can be reopened after the shell folds it away", async () => {
+    invokeMock.mockImplementation(defaultInvoke);
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+
+    // Below 1180px the shell folds this column away to make room. The toggle
+    // was inert there: it flipped React state a stylesheet then overrode, so
+    // a user on a small laptop had no way back to their threads.
+    const toggle = screen.getByTestId("toggle-session-list");
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("session-list")).toBeNull();
+
+    fireEvent.click(toggle);
+    const list = await screen.findByTestId("session-list");
+    // The attribute the narrow-width rule exempts: asking for it wins over
+    // the automatic fold.
+    expect(list).toHaveAttribute("data-user-opened");
+  });
+});
+
+describe("Notebook recovery", () => {
+  it("returns a repaired notebook path to notebook mode without affecting other fallbacks", () => {
+    const remaining = clearRecoveredNotebook(
+      new Set(["broken.ipynb", "still-broken.ipynb"]),
+      "broken.ipynb"
+    );
+
+    expect(remaining).toEqual(new Set(["still-broken.ipynb"]));
   });
 });

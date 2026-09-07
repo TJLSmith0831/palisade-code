@@ -18,3 +18,24 @@ export function fuzzyMatch(query: string, target: string): number | null {
   if (qi < q.length) return null;
   return score - target.length * 0.01;
 }
+
+/**
+ * How much a hit inside the file's own name is worth over one scattered
+ * through its directories. Large enough that no path match can outrank a
+ * name match: without it, typing `rea` offers
+ * `graphify-out/cache/ast/5bb3c671….json` before `README.md`, because a long
+ * path simply gives a short query more places to land.
+ */
+const NAME_BONUS = 1000;
+
+/**
+ * Score `path` for a file picker — the `@` mention menu and ⌘P alike.
+ *
+ * `null` when the query doesn't match the path at all.
+ */
+export function scorePath(query: string, path: string): number | null {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const inName = fuzzyMatch(query, name);
+  if (inName !== null) return inName + NAME_BONUS;
+  return fuzzyMatch(query, path);
+}
