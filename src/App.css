@@ -4670,6 +4670,13 @@ button.ds-onboarding-status {
   min-height: 34px;
 }
 
+/* The worktree and permission controls are pinned to the composer's top
+   edge. Reserve one rhythm step below them before editable text begins, so
+   a first line never visually crowds either control in Vibe or Editor. */
+.ds-composer-message-input {
+  margin-top: 8px;
+}
+
 /* Mode + send: the action pair, always last, never shrinks. A truncated
    model name still reads; a clipped Go button does not. */
 .ds-composer-controls > :last-child {

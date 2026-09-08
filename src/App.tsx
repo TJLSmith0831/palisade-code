@@ -1762,7 +1762,7 @@ export const ChatSurface = memo(
               user to hand-edit `/adversarial-persona-testing` as raw text
               again once they've picked it from the menu. */}
           {chipCommand ? (
-            <div className="ds-composer-chip-row">
+            <div className="ds-composer-chip-row ds-composer-message-input">
               <span
                 className="ds-composer-chip"
                 data-kind={isChainCommand(chipCommand) ? "chain" : "skill"}
@@ -1829,6 +1829,7 @@ export const ChatSurface = memo(
             </div>
           ) : (
             <Textarea
+              className="ds-composer-message-input"
               ref={composerInputRef}
               value={draft}
               onChange={(event) => {
