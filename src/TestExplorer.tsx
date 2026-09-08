@@ -81,6 +81,15 @@ export default function TestExplorer({ projectHash, threadId, onOpen, lastEditAt
       if (payload.projectHash !== projectHash) return;
       setRuns((previous) => [...previous, payload]);
       setRunning(false);
+      // A run just happened, so a verify command definitely exists. The list
+      // is read once on mount, and this panel stays mounted across tab
+      // switches — so a command added to project-settings.json after that
+      // read left the body claiming "No verify commands configured" while
+      // the tab badge counted its failures. Re-read it here.
+      api
+        .verifyCommands(projectHash)
+        .then((configured) => setCommands(configured))
+        .catch(() => {});
     });
     return () => {
       finished.then((un) => un());

@@ -59,7 +59,8 @@ describe("FileTree", () => {
     fireEvent.contextMenu(screen.getByTestId("file-tree").querySelector(".ds-tree-body")!);
 
     const items = screen.getAllByTestId("tree-context-menu-item").map((el) => el.textContent);
-    expect(items).toEqual(["New File", "New Folder", "Show Gitignored/Hidden Files"]);
+    // Dotfiles are visible by default (f3b44ce), so the toggle offers to hide.
+    expect(items).toEqual(["New File", "New Folder", "Hide Gitignored/Hidden Files"]);
   });
 
   it("row right-click offers the full set: New File, New Folder, Rename, Delete", async () => {

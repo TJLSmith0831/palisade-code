@@ -81,3 +81,26 @@ describe("editor session", () => {
     expect(loadSession("proj").openPaths).toEqual([]);
   });
 });
+
+describe("hidden-file default", () => {
+  it("shows dotfiles for a project with no saved session", () => {
+    localStorage.clear();
+    expect(loadSession("never-opened").includeHidden).toBe(true);
+  });
+
+  it("keeps dotfiles visible for a session written before the field existed", () => {
+    localStorage.setItem(
+      sessionKey("legacy"),
+      JSON.stringify({ openPaths: [], activePath: null })
+    );
+    expect(loadSession("legacy").includeHidden).toBe(true);
+  });
+
+  it("honours an explicit off", () => {
+    localStorage.setItem(
+      sessionKey("off"),
+      JSON.stringify({ openPaths: [], includeHidden: false })
+    );
+    expect(loadSession("off").includeHidden).toBe(false);
+  });
+});

@@ -630,6 +630,11 @@ export const ChatSurface = memo(
     // The `/` menu. Opens on a leading slash and closes on the first space —
     // ACP takes the whole line as the prompt, so the rest is the command's
     // own input and there is nothing left to complete.
+    // Chat-only: preflight ran and found no ACP agent at all. Keyed on the
+    // agent list rather than `flightSelected`, which is also null in the
+    // moment before an agent resolves — this must only fire when nothing
+    // could ever answer a turn.
+    const noAgentsInstalled = !!flight && flight.agents.length === 0;
     const commandQuery = slashQuery(draft);
     // Which of the two menus is open — skills (`/`, `$`) or chains (`|=`).
     // The sigils never overlap in one draft, so this is never ambiguous, and
@@ -2247,9 +2252,19 @@ export const ChatSurface = memo(
                 <ActionIcon
                   type="submit"
                   data-testid="composer-send"
-                  disabled={busy || !draft.trim()}
+                  // With no ACP agent detected there is nothing to answer a
+                  // turn: `onSend` recorded the message, cleared busy, and
+                  // left it sitting in the thread with no reply and no error,
+                  // so the user could not tell the turn would never run.
+                  // Preflight already says "chat-only mode, /go unavailable" —
+                  // make the composer agree with that sentence.
+                  disabled={busy || !draft.trim() || noAgentsInstalled}
                   aria-label="Send message"
-                  title="Send message"
+                  title={
+                    noAgentsInstalled
+                      ? "No coding agent detected — install Claude Code or Codex, then reopen Palisade"
+                      : "Send message"
+                  }
                   size={30}
                   radius="md"
                   variant="filled"
@@ -3176,11 +3191,19 @@ export default function App() {
     enableModernWindowStyle({ offsetY: -3 });
   }, []);
 
+  // Warnings are deduped by text; errors are not. One settings mistake
+  // reaches `selected_executor` from every call site that resolves an agent,
+  // so a single unknown `executorOverride` stacked four identical banners on
+  // one session start, and the same advisory sentence four times tells the
+  // user nothing the first one didn't. An error, by contrast, is about a
+  // specific action the user just took — two failed branch switches are two
+  // events worth seeing, even when they failed for the same reason.
   const banner = (message: string, tone: "error" | "warn") =>
-    setErrors((prev) => [
-      ...prev,
-      { id: `${Date.now()}-${Math.random()}`, message, tone },
-    ]);
+    setErrors((prev) =>
+      tone === "warn" && prev.some((e) => e.message === message && e.tone === tone)
+        ? prev
+        : [...prev, { id: `${Date.now()}-${Math.random()}`, message, tone }]
+    );
   const fail = (err: unknown) => banner(describeError(err), "error");
   // Advisory, not a failure: another thread is running here, an executor id
   // in settings is unknown and Palisade fell back. Routing these through `fail`
@@ -3959,10 +3982,12 @@ export default function App() {
   }, [liveBySession, thread?.id]);
 
   const onStop = useCallback(() => {
-    // Stop the live session for this thread, or all sessions if we can't
-    // identify the specific one (e.g. events haven't started streaming yet).
-    void api.stopExecutor(liveSessionId ?? undefined);
-  }, [liveSessionId]);
+    // Stop the live session for this thread. When we can't identify the
+    // specific one (e.g. events haven't started streaming yet), fall back to
+    // this thread's sessions — never every session in the app, which used to
+    // cancel a concurrently running turn in an unrelated thread.
+    void api.stopExecutor(liveSessionId ?? undefined, thread?.id);
+  }, [liveSessionId, thread?.id]);
 
   // A thread's live buffer is dropped once its history is re-read from disk —
   // every event was already persisted as it arrived, so keeping it would
@@ -4618,7 +4643,10 @@ export default function App() {
     // needs a thread to run on, and go-mode's composer is exactly where none
     // exists yet, so bailing here made the first `|=` typed into a fresh
     // composer do nothing at all.
-    const invocation = parseChainInvocation(text);
+    const invocation = parseChainInvocation(
+      text,
+      chains.map((c) => c.name)
+    );
     const chainToRun =
       invocation && chains.some((c) => c.name === invocation.name)
         ? invocation

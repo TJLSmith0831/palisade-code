@@ -258,7 +258,17 @@ impl ChainRun {
                 Ok(Approval::Approve) if is_loop => Crossing::ExitLoop,
                 Ok(Approval::Approve) => Crossing::Advance,
                 Ok(Approval::Reject) => Crossing::Stop(Outcome::Rejected { at: edge.from.clone() }),
-                Ok(Approval::SendBack(note)) => Crossing::SendBack(edge.to.clone(), note),
+                // Send back re-runs the node the human just judged, which is
+                // `edge.from` on a forward edge. On a loop edge the judged
+                // node is the loop's tail and `edge.to` is the body it goes
+                // back to, same target `Repeat` uses. Using `edge.to`
+                // unconditionally made "send back" on a forward edge advance
+                // to the *next* node with the note attached — the opposite of
+                // sending the work back.
+                Ok(Approval::SendBack(note)) => Crossing::SendBack(
+                    if is_loop { edge.to.clone() } else { edge.from.clone() },
+                    note,
+                ),
                 Err(err) => Crossing::Stop(Outcome::Blocked { reason: err }),
             },
         }
@@ -631,6 +641,31 @@ mod tests {
         // The note applies to that one turn only.
         let (_, next_instruction, _) = &r.calls[3];
         assert!(!next_instruction.contains("Human note"), "{next_instruction}");
+    }
+
+    #[test]
+    fn sending_back_on_a_forward_edge_re_runs_the_gated_node_not_the_next_one() {
+        // The approval bar names `edge.from` as the node waiting on a human,
+        // so "send back" has to re-run that node. It used to jump to
+        // `edge.to`, i.e. straight on to the downstream node.
+        let mut chain = two_node_chain(vec![ChainEdge {
+            from: "designer".into(),
+            to: "programmer".into(),
+            gate: Some(Gate::Approval),
+            max_iterations: Some(5),
+        }]);
+        chain.entry = "designer".into();
+        let mut r = FakeRunner::echoing();
+        let mut g = FakeGates::approving(vec![
+            Ok(Approval::SendBack("make the type bigger".into())),
+            Ok(Approval::Approve),
+        ]);
+        let outcome = run(chain).walk(&mut r, &mut g);
+        assert_eq!(outcome, Outcome::Completed { output: "programmer output".into() });
+        let roles: Vec<&str> = r.calls.iter().map(|(role, _, _)| role.as_str()).collect();
+        assert_eq!(roles, ["designer", "designer", "programmer"]);
+        let (_, instruction, _) = &r.calls[1];
+        assert!(instruction.contains("Human note: make the type bigger"), "{instruction}");
     }
 
     #[test]

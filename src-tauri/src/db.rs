@@ -1294,8 +1294,14 @@ async fn fetch_page_inner(
         if !known(&s.column) {
             return Err(format!("no column {} on {table}", s.column));
         }
+        // Qualified with the table, not bare: the projection above aliases
+        // `CAST(col AS TEXT)` back to `col`, and a bare ORDER BY name binds to
+        // that output alias — so an INTEGER column sorted as text
+        // (10, 11, ... 19, 2, 20). Naming the table forces the real column and
+        // the database's own type ordering.
         sql.push_str(&format!(
-            " ORDER BY {} {}",
+            " ORDER BY {}.{} {}",
+            table_ref(schema, table),
             quote_ident(&s.column),
             if s.descending { "DESC" } else { "ASC" }
         ));
@@ -1785,6 +1791,35 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("no primary key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_numeric_column_sorts_numerically_not_as_text() {
+        // Regression: rows come back as `CAST(col AS TEXT) AS col`, so a bare
+        // `ORDER BY col` sorted the cast, giving 10, 11, ... 19, 2, 20, 3.
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = fixture(tmp.path()).await;
+        let pool = pool_for(&conn).await.unwrap();
+        for id in [10, 20, 30, 4] {
+            sqlx::query("INSERT INTO users VALUES (?, 'x', NULL)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let page = fetch_page(
+            &conn,
+            None,
+            "users",
+            0,
+            Some(&Sort { column: "id".into(), descending: false }),
+            None,
+        )
+        .await
+        .unwrap();
+        let ids: Vec<String> =
+            page.rows.iter().map(|r| r[0].clone().unwrap()).collect();
+        assert_eq!(ids, ["1", "2", "3", "4", "10", "20", "30"]);
     }
 
     #[tokio::test]

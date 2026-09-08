@@ -150,6 +150,11 @@ export default function ChainCanvas({
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // What is actually on disk for this canvas, so Run never fires a chain the
+  // user can no longer see. Renaming and saving used to leave the Run button
+  // pointing at `chainName` — the name the tab was opened under — so Save-as
+  // then Run silently ran the *old* chain.
+  const persisted = useRef<string | null>(null);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [models, setModels] = useState<api.ModelInfo[]>([]);
   const surface = useRef<HTMLDivElement>(null);
@@ -168,7 +173,10 @@ export default function ChainCanvas({
       .listChains(projectHash)
       .then((chains) => {
         const found = chains.find((c) => c.name === chainName);
-        if (live && found) setDraft(found);
+        if (live && found) {
+          setDraft(found);
+          persisted.current = found.name;
+        }
       })
       .catch((err) => live && setError(String(err)));
     return () => {
@@ -286,6 +294,7 @@ export default function ChainCanvas({
     }
     try {
       await api.saveChain(projectHash, draft);
+      persisted.current = draft.name;
       announceChainsChanged();
       setError(null);
       setSaved(true);
@@ -427,15 +436,23 @@ export default function ChainCanvas({
           {saved ? "Saved" : "Save"}
         </Button>
         {onRun && chainName && (
-          <Button
-            size="xs"
-            variant="default"
-            leftSection={<IconPlayerPlay size={14} />}
-            onClick={() => onRun(chainName)}
-            disabled={watching}
+          <Tooltip
+            label={
+              persisted.current === draft.name
+                ? `Run ${draft.name}`
+                : "Save this chain under its new name before running it"
+            }
           >
-            Run
-          </Button>
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<IconPlayerPlay size={14} />}
+              onClick={() => onRun(draft.name)}
+              disabled={watching || persisted.current !== draft.name}
+            >
+              Run
+            </Button>
+          </Tooltip>
         )}
         <Tooltip label="Zoom out">
           <ActionIcon

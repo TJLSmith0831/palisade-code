@@ -1868,9 +1868,17 @@ async fn change_status(
     .map_err(|e| e.to_string())?
 }
 
-/// Stop one session by id, or every live session when none is named.
+/// Stop one session by id. With no id, stop the named thread's sessions —
+/// the Stop button's fallback for a turn whose events haven't started
+/// streaming yet, so it has no session id to aim at. Without `thread_id`
+/// too, this stops everything, which is only ever what app teardown wants:
+/// one thread's Stop must not cancel another thread's live session.
 #[tauri::command]
-async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res<()> {
+async fn stop_executor(
+    app: tauri::AppHandle,
+    session_id: Option<String>,
+    thread_id: Option<String>,
+) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let targets: Vec<(String, String)> = harness
@@ -1879,6 +1887,10 @@ async fn stop_executor(app: tauri::AppHandle, session_id: Option<String>) -> Res
             .unwrap()
             .values()
             .filter(|s| session_id.as_ref().is_none_or(|wanted| *wanted == s.id))
+            .filter(|s| {
+                session_id.is_some()
+                    || thread_id.as_ref().is_none_or(|wanted| *wanted == s.thread_id)
+            })
             .map(|s| (s.id.clone(), s.thread_id.clone()))
             .collect();
         for (id, thread_id) in targets {

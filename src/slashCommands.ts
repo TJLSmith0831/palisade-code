@@ -117,19 +117,40 @@ export const isChainCommand = (command: MenuCommand) =>
 
 /**
  * The chain a draft invokes, if it invokes one (D13): `|=<chain-name> <seed>`
- * — the name is the first whitespace-delimited token, everything after it is
- * the seed input the first node receives. A bare `|=<name>` is valid and runs
- * with an empty seed.
+ * — everything after the name is the seed input the first node receives. A
+ * bare `|=<name>` is valid and runs with an empty seed.
+ *
+ * `known` is the project's saved chain names. The canvas lets you name a
+ * chain "QA basic chain", so splitting on the first space made every
+ * multi-word chain unreachable from chat: the parser read the name as "QA",
+ * matched nothing, and the text went to the agent as an ordinary message
+ * with no hint that the invocation was dropped. Longest known name wins, so
+ * "release" and "release notes" can coexist; with no list (or no match) the
+ * old first-token behaviour still applies.
  *
  * Returns `null` for anything else, including a bare `|=`, so an unfinished
  * draft is still an ordinary message.
  */
 export function parseChainInvocation(
-  draft: string
+  draft: string,
+  known: readonly string[] = []
 ): { name: string; seed: string } | null {
   const text = draft.trimStart();
   if (!text.startsWith(CHAIN_SIGIL)) return null;
   const rest = text.slice(CHAIN_SIGIL.length);
+
+  const matched = [...known]
+    .filter(
+      (name) =>
+        name.length > 0 &&
+        rest.startsWith(name) &&
+        (rest.length === name.length || /\s/.test(rest[name.length]))
+    )
+    .sort((a, b) => b.length - a.length)[0];
+  if (matched) {
+    return { name: matched, seed: rest.slice(matched.length).trim() };
+  }
+
   const firstSpace = rest.search(/\s/);
   const name = firstSpace === -1 ? rest : rest.slice(0, firstSpace);
   if (!name) return null;

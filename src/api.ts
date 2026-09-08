@@ -333,9 +333,14 @@ export const applySkill = (
 /** Whether a change's planning artifacts are all complete (openspec status). */
 export const changeStatus = (projectHash: string, changeName: string) =>
   invoke<boolean | null>("change_status", { projectHash, changeName });
-/** Stop one session, or every live session when no id is given. */
-export const stopExecutor = (sessionId?: string) =>
-  invoke<void>("stop_executor", { sessionId: sessionId ?? null });
+/** Stop one session. With no id, stop `threadId`'s sessions — the Stop
+ *  button's fallback before a turn has streamed anything to aim at. With
+ *  neither, stop every live session. */
+export const stopExecutor = (sessionId?: string, threadId?: string) =>
+  invoke<void>("stop_executor", {
+    sessionId: sessionId ?? null,
+    threadId: threadId ?? null,
+  });
 
 /** Resolve a pending `permissionRequest` event: "allow" (once), "deny", or
  *  "allow_session" (auto-allow that tool kind for the rest of the session). */

@@ -28,7 +28,10 @@ const EMPTY: EditorSession = {
   expandedDirs: [],
   centerShell: "editor",
   diffOpen: false,
-  includeHidden: false,
+  // Dotfiles visible by default (f3b44ce). FileTree's own `?? true` fallback
+  // never fired for a new project, because App always passes this field —
+  // `false` here, not `undefined` — so the default has to live here.
+  includeHidden: true,
 };
 
 /** Narrow an unknown parse result to the shape we expect, field by field.
@@ -64,7 +67,9 @@ function coerce(raw: unknown): EditorSession {
       : [],
     centerShell: value.centerShell === "vibe" ? "vibe" : "editor",
     diffOpen: value.diffOpen === true,
-    includeHidden: value.includeHidden === true,
+    // Only an explicit `false` hides them; a session written before this
+    // field existed keeps the visible default rather than inheriting "off".
+    includeHidden: value.includeHidden !== false,
   };
 }
 

@@ -229,3 +229,41 @@ describe("parsing a chain invocation", () => {
     expect(parseChainInvocation("|= design-loop")).toBeNull();
   });
 });
+
+describe("parseChainInvocation with known chain names", () => {
+  const known = ["QA basic chain", "QA basic chain extra", "solo"];
+
+  it("matches a multi-word chain name instead of splitting on the first space", () => {
+    expect(
+      parseChainInvocation("|=QA basic chain summarize the diff", known)
+    ).toEqual({ name: "QA basic chain", seed: "summarize the diff" });
+  });
+
+  it("prefers the longest matching name", () => {
+    expect(parseChainInvocation("|=QA basic chain extra go", known)).toEqual({
+      name: "QA basic chain extra",
+      seed: "go",
+    });
+  });
+
+  it("runs a bare multi-word invocation with an empty seed", () => {
+    expect(parseChainInvocation("|=QA basic chain", known)).toEqual({
+      name: "QA basic chain",
+      seed: "",
+    });
+  });
+
+  it("does not match a name that is only a prefix of the typed word", () => {
+    expect(parseChainInvocation("|=soloist go", known)).toEqual({
+      name: "soloist",
+      seed: "go",
+    });
+  });
+
+  it("falls back to the first token when nothing is known", () => {
+    expect(parseChainInvocation("|=QA basic chain go", [])).toEqual({
+      name: "QA",
+      seed: "basic chain go",
+    });
+  });
+});

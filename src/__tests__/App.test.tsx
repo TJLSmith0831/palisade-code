@@ -4768,8 +4768,12 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     expect(stopBtn).toBeDefined();
     fireEvent.click(stopBtn);
     await waitFor(() =>
+      // No session id yet (no events streamed), so the stop falls back to
+      // this thread — never to every session in the app, which would cancel
+      // another thread's live turn.
       expect(invokeMock).toHaveBeenCalledWith("stop_executor", {
         sessionId: null,
+        threadId: "t1",
       })
     );
   });
@@ -6088,5 +6092,40 @@ describe("Notebook recovery", () => {
     );
 
     expect(remaining).toEqual(new Set(["still-broken.ipynb"]));
+  });
+});
+
+describe("Chat-only mode when no agent is installed", () => {
+  it("disables send and says why, instead of swallowing the turn", async () => {
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([]);
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [],
+            selected: null,
+            openspec: false,
+            grillApply: false,
+            ponytail: false,
+            graphify: false,
+            ready: false,
+            warnings: ["No ACP agents found on PATH — chat-only mode, /go unavailable."],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    const input = await screen.findByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "hello, are you there?" } });
+
+    const send = screen.getByTestId("composer-send");
+    // Typed text alone used to enable Send; the turn then recorded the
+    // message and no agent ever answered it.
+    expect(send).toBeDisabled();
+    expect(send.getAttribute("title")).toMatch(/No coding agent detected/i);
   });
 });

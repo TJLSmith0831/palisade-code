@@ -447,7 +447,8 @@ export default function DebugPanel({
         <h2 className="ds-section-heading">Breakpoints</h2>
         {breakpointEntries.length === 0 ? (
           <Text size="xs" c="dimmed" data-testid="debug-breakpoints-empty">
-            No breakpoints set. Click a line number in the gutter to add one.
+            No breakpoints set. Click the narrow column to the right of the
+            line numbers to add one.
           </Text>
         ) : (
           <Stack gap={0}>
