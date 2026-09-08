@@ -244,6 +244,42 @@ describe("Window shell (merged-design v2)", () => {
   });
 });
 
+describe("Source Control working tree", () => {
+  it("always names the project root as a commit target", async () => {
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+
+    expect(await screen.findByLabelText("Source control working tree")).toHaveValue(
+      "project-root"
+    );
+    expect(screen.getByRole("option", { name: /Project root/i })).toBeDefined();
+  });
+
+  it("offers a thread worktree alongside the project root without selecting it", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([{
+        id: "t1", projectHash: "proj-1", title: "Documentation", createdAt: "2026-08-06T00:00:00Z",
+        updatedAt: "2026-08-06T00:00:00Z", currentMode: "go", openSpecChangeName: null,
+        worktreePath: "/tmp/palisade-worktree", worktreeBranch: "palisade/docs",
+      }]);
+      if (cmd === "thread_worktrees") return Promise.resolve([{
+        threadId: "t1", branch: "palisade/docs", baseBranch: "main", added: 0, removed: 0,
+        ahead: 0, clean: true, mergeable: true, state: "clean", head: "abc123",
+      }]);
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+
+    expect(await screen.findByRole("option", { name: /Documentation · palisade\/docs/i })).toBeDefined();
+    expect(screen.getByLabelText("Source control working tree")).toHaveValue("project-root");
+  });
+
+});
+
 describe("Top chrome (merged-design v2)", () => {
   it("renders at 36px height", async () => {
     render(<App />);

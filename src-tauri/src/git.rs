@@ -555,6 +555,41 @@ pub struct LogEntry {
     pub date: String,
 }
 
+/// Repository-wide topology. Keeping parents and decorations makes branch
+/// relationships available without coupling the view to any one worktree.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphCommit {
+    pub hash: String,
+    pub parents: Vec<String>,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+    pub refs: Vec<String>,
+}
+
+pub fn graph(bin: &Path, root: &Path, limit: u32) -> Res<Vec<GraphCommit>> {
+    if rev_parse_head(bin, root).is_none() { return Ok(vec![]); }
+    let count = format!("-{limit}");
+    // `--exclude` must precede the ref-selecting flag it filters — here
+    // `--all`. A stash entry is a real commit with 2-3 parents (the base
+    // commit, plus a hidden index-tree commit and sometimes an
+    // untracked-tree commit): internal plumbing, not branch topology. Left
+    // in, every stash renders as a 3-way tangle at the top of the graph
+    // that has nothing to do with the repo's actual branches.
+    let raw = run(bin, root, &["log", "--exclude=refs/stash", "--all", "--topo-order", &count, "--no-color", "--decorate=short", "--pretty=format:%H\x1f%P\x1f%s\x1f%an\x1f%aI\x1f%D\x1e"])?;
+    Ok(raw.split('\x1e').map(str::trim_start).filter(|row| !row.is_empty()).filter_map(|row| {
+        let mut fields = row.split('\x1f');
+        let hash = fields.next()?;
+        let parents = fields.next()?.split_whitespace().map(str::to_owned).collect();
+        let subject = fields.next()?;
+        let author = fields.next()?;
+        let date = fields.next()?;
+        let refs = fields.next().unwrap_or_default().split(", ").filter(|reference| !reference.is_empty()).map(str::to_owned).collect();
+        Some(GraphCommit { hash: hash.into(), parents, subject: subject.into(), author: author.into(), date: date.into(), refs })
+    }).collect())
+}
+
 /// The newest `limit` commits on HEAD, newest first.
 ///
 /// Fields are separated by US (0x1f) and records by RS (0x1e) rather than a
@@ -591,6 +626,18 @@ pub fn log(bin: &Path, root: &Path, limit: u32) -> Res<Vec<LogEntry>> {
             })
         })
         .collect())
+}
+
+/// The diff introduced by one commit — `git show` handles a root commit
+/// (diff against the empty tree) the same as any other, so unlike `diff
+/// <hash>^ <hash>` this never fails on the first commit in a repo. Runs
+/// against the project root like `graph` above: the diff is a property of
+/// the commit object, not of any one worktree, so there is nothing to scope
+/// per-thread here.
+/// `--format=` drops the commit-message header; the frontend already has
+/// that from the `GraphCommit` it clicked.
+pub fn commit_diff(bin: &Path, root: &Path, hash: &str) -> Res<String> {
+    run(bin, root, &["show", "--format=", "--no-color", hash])
 }
 
 pub fn is_git_repo(_bin: &Path, root: &Path) -> bool {
@@ -1131,6 +1178,66 @@ world
             "{}",
             entries[0].date
         );
+    }
+
+    #[test]
+    fn repository_graph_includes_a_non_head_branch_and_its_ref() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        run(git(), root, &["checkout", "-q", "-b", "feature/docs"]).unwrap();
+        fs::write(root.join(tracked), "feature work\n").unwrap();
+        run(git(), root, &["commit", "-qam", "feature commit"]).unwrap();
+        run(git(), root, &["checkout", "-q", "main"]).unwrap();
+
+        let commits = graph(git(), root, 20).unwrap();
+
+        assert!(commits.iter().any(|commit| {
+            commit.subject == "feature commit"
+                && commit.refs.iter().any(|reference| reference == "feature/docs")
+        }));
+    }
+
+    /// A stash entry is a real commit — with 2-3 parents (base commit, a
+    /// hidden index-tree commit, sometimes an untracked-tree commit) that
+    /// have nothing to do with branch topology. `--all` picks up
+    /// `refs/stash` unless excluded, and rendering that plumbing produces a
+    /// tangled cluster with no relation to the repo's real history.
+    #[test]
+    fn repository_graph_excludes_stash_entries() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "uncommitted edit\n").unwrap();
+        run(git(), root, &["stash", "push", "-q", "-m", "wip work"]).unwrap();
+
+        let commits = graph(git(), root, 20).unwrap();
+
+        assert!(!commits.iter().any(|commit| commit.subject.contains("wip work")));
+    }
+
+    #[test]
+    fn commit_diff_shows_what_the_commit_changed() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "line one\nline two\nline three\nline four\n").unwrap();
+        run(git(), root, &["commit", "-qam", "add line four"]).unwrap();
+        let hash = rev_parse_head(git(), root).unwrap();
+
+        let diff = commit_diff(git(), root, &hash).unwrap();
+
+        assert!(diff.contains("+line four"), "diff did not show the added line:\n{diff}");
+    }
+
+    /// `diff <hash>^ <hash>` fails on the first commit (no parent); `git show`
+    /// diffs against the empty tree instead and must not error here.
+    #[test]
+    fn commit_diff_handles_the_root_commit() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let hash = rev_parse_head(git(), root).unwrap();
+
+        let diff = commit_diff(git(), root, &hash).unwrap();
+
+        assert!(diff.contains(&tracked), "diff did not name the root commit's file:\n{diff}");
     }
 
     /// A subject containing the field separator must not split into extra

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActionIcon, Button, Loader, Menu, Stack, Text, Textarea, Tooltip } from "@mantine/core";
+import { ActionIcon, Button, Loader, Menu, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
 import {
   IconCheck,
   IconChevronDown,
@@ -13,7 +13,6 @@ import {
 } from "@tabler/icons-react";
 import * as api from "./api";
 import type { FileStatus, LogEntry } from "./api";
-import { relativeTime } from "./SessionList";
 
 // Amendment 7's Source Control panel: the primary git surface, behind the
 // left rail's Source Control icon. Built from mockup.html's #panel-git.
@@ -51,6 +50,147 @@ export function splitPath(path: string): { name: string; dir: string } {
     : { name: path.slice(cut + 1), dir: path.slice(0, cut) };
 }
 
+export type GraphRow = {
+  commit: api.GraphCommit;
+  lane: number;
+  laneColor: number;
+  beforeLanes: string[];
+  nextLanes: string[];
+  /** Every visible segment entering the next row. The current commit maps to
+   * its parent(s); passive lanes keep their own identity. */
+  edges: { from: number; to: number; lane: number; color: number }[];
+};
+
+/**
+ * Assign each commit a stable lane from its parent relationships.  Git's
+ * graph output is intentionally compact: a branch is a lane, and a merge is
+ * a lane that joins another one. Keeping this as data (rather than CSS's old
+ * single vertical rule) makes those relationships visible in the panel.
+ */
+export function layoutGraph(commits: api.GraphCommit[]): GraphRow[] {
+  type Lane = { hash: string; color: number };
+  const lanes: Lane[] = [];
+  let nextColor = 0;
+  return commits.map((commit) => {
+    let lane = lanes.findIndex(({ hash }) => hash === commit.hash);
+    if (lane === -1) {
+      lane = lanes.length;
+      lanes.push({ hash: commit.hash, color: nextColor++ });
+    }
+    const before = [...lanes];
+    const beforeLanes = before.map(({ hash }) => hash);
+    const laneColor = before[lane].color;
+    const primaryParent = commit.parents[0];
+    if (primaryParent) {
+      lanes[lane] = { hash: primaryParent, color: laneColor };
+      for (const parent of commit.parents.slice(1)) {
+        if (!lanes.some(({ hash }) => hash === parent)) {
+          lanes.splice(lane + 1, 0, { hash: parent, color: nextColor++ });
+        }
+      }
+    } else {
+      lanes.splice(lane, 1);
+    }
+    const next = [...lanes];
+    const nextLanes = next.map(({ hash }) => hash);
+    const edges = before.flatMap(({ hash, color }, from) => {
+      if (hash === commit.hash) {
+        return commit.parents.flatMap((parent) => {
+          const to = next.findIndex(({ hash }) => hash === parent);
+          return to === -1 ? [] : [{ from, to, lane, color: next[to].color }];
+        });
+      }
+      const to = next.findIndex((candidate) => candidate.hash === hash);
+      return to === -1 ? [] : [{ from, to, lane: from, color }];
+    });
+    return { commit, lane, laneColor, beforeLanes, nextLanes, edges };
+  });
+}
+
+/** A repository with many long-lived branches can have dozens of live
+ *  lanes. This panel is intentionally compact, so reserve room for the
+ *  commit subject and collapse overflow lanes into the final visible lane.
+ *  Shared by GraphLanes and the uncommitted-changes node above it so both
+ *  draw lane 0 at the same x — otherwise their lines wouldn't line up. */
+function graphLaneGeometry(laneCount: number) {
+  const visibleLanes = Math.min(laneCount, 3);
+  return {
+    visibleLanes,
+    width: Math.max(20, visibleLanes * 10 + 6),
+    x: (lane: number) => 6 + Math.min(lane, visibleLanes - 1) * 10,
+  };
+}
+
+function GraphLanes({ row, laneCount, isFirstRow }: { row: GraphRow; laneCount: number; isFirstRow: boolean }) {
+  const { visibleLanes, width, x } = graphLaneGeometry(laneCount);
+  const laneClass = (color: number) => `lane-${Math.min(color, visibleLanes - 1)}`;
+  return (
+    <svg
+      className="ds-sc-graph-lanes"
+      viewBox={`0 0 ${width} 24`}
+      width={width}
+      height="24"
+      aria-label={`Commit graph lane ${row.lane + 1}`}
+      data-testid="sc-graph-lane"
+      aria-hidden="true"
+    >
+      {row.edges.map(({ from, to, color }, index) => {
+        const isOwnEdge = from === row.lane;
+        return (
+          <g key={`${from}-${to}-${index}`}>
+            {/* This row's own commit can be where a lane changes colour —
+                a branch taking over a slot a merge just freed, say — so the
+                incoming half (this row's own established colour, coming
+                from above) and the outgoing half (the edge's colour,
+                heading to its parent) aren't always the same. One path
+                painted in only the outgoing colour left the incoming half
+                either invisible or the wrong hue right where it met the
+                node — the "doesn't quite connect" look. Splitting at the
+                node draws each half in its own colour instead. The row
+                above nothing (isFirstRow) has no incoming line to bridge to,
+                so it's skipped there rather than left as a stray stub. */}
+            {isOwnEdge && !isFirstRow && (
+              <path
+                className={`ds-sc-graph-line ${laneClass(row.laneColor)}`}
+                d={`M ${x(from)} 0 L ${x(from)} 12`}
+              />
+            )}
+            <path
+              className={`ds-sc-graph-line ${laneClass(color)}`}
+              d={
+                isOwnEdge
+                  ? `M ${x(from)} 12 C ${x(from)} 16, ${x(to)} 18, ${x(to)} 24`
+                  : `M ${x(from)} 0 C ${x(from)} 16, ${x(to)} 18, ${x(to)} 24`
+              }
+            />
+          </g>
+        );
+      })}
+      <circle className={`ds-sc-graph-node ${laneClass(row.laneColor)}`} cx={x(row.lane)} cy="12" r="3.5" />
+    </svg>
+  );
+}
+
+/** The node every other IDE draws above HEAD for a dirty working tree, so
+ *  the graph reads as the true head of history instead of stopping at the
+ *  last commit. Dashed and a distinct colour rather than a lane colour —
+ *  it isn't a commit yet, and shouldn't read as one. */
+function UncommittedLane({ laneCount }: { laneCount: number }) {
+  const { width, x } = graphLaneGeometry(laneCount);
+  return (
+    <svg
+      className="ds-sc-graph-lanes"
+      viewBox={`0 0 ${width} 24`}
+      width={width}
+      height="24"
+      aria-hidden="true"
+    >
+      <path className="ds-sc-graph-line ds-sc-uncommitted-line" d={`M ${x(0)} 12 L ${x(0)} 24`} />
+      <circle className="ds-sc-graph-node ds-sc-uncommitted-node" cx={x(0)} cy="12" r="3.5" />
+    </svg>
+  );
+}
+
 function Section({
   id,
   title,
@@ -58,6 +198,7 @@ function Section({
   open,
   onToggle,
   actions,
+  pinned,
   children,
 }: {
   id: string;
@@ -66,6 +207,10 @@ function Section({
   open: boolean;
   onToggle: () => void;
   actions?: React.ReactNode;
+  /** Stays above the scrollable body, e.g. the Graph's filter box — a
+   *  control the reader needs while scrolling shouldn't scroll away with
+   *  the list it's filtering. */
+  pinned?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -83,7 +228,19 @@ function Section({
         </button>
         {actions}
       </div>
-      {open && children}
+      {open && pinned}
+      {/* Own scroll, own cap: each section used to share one scroll area
+          with the other two, so scrolling a long Graph moved Staged/Changes
+          out of view entirely, and an unbounded list (or the Graph, which
+          can be arbitrarily tall) pushed whatever came after it off-screen.
+          Capping height and scrolling internally here means opening all
+          three at once still keeps every section's header — and enough of
+          its content — reachable without the others disappearing. */}
+      {open && (
+        <div className="ds-sc-section-body" data-testid={`sc-${id}-body`}>
+          {children}
+        </div>
+      )}
     </section>
   );
 }
@@ -157,10 +314,15 @@ function FileRow({
 export default function SourceControlPanel({
   projectHash,
   threadId,
+  workingTrees,
+  selectedTreeId,
+  onTreeChange,
   branch,
   refreshToken,
   onOpenFile,
   onReviewWorkingChanges,
+  onSelectCommit,
+  onSelectWorkingChanges,
   onChanged,
   onError,
 }: {
@@ -172,12 +334,27 @@ export default function SourceControlPanel({
    *  auto-detected. Every git call below passes it, so what gets staged and
    *  committed is always the tree whose rows are on screen. */
   threadId?: string | null;
+  /** An explicit target list turns a previously implicit focus coupling into
+   * an ordinary, inspectable user choice. Omitted temporarily by older
+   * callers while they migrate to the selector. */
+  workingTrees?: { id: string | null; label: string; branch: string }[];
+  selectedTreeId?: string | null;
+  onTreeChange?: (treeId: string | null) => void;
   branch: string;
   /** Bumped by the app whenever the working tree may have changed. */
   refreshToken?: number;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, treeId?: string) => void;
   /** Sends the working diff to the active agent as a chat turn. */
-  onReviewWorkingChanges: () => void;
+  onReviewWorkingChanges: (treeId?: string) => void;
+  /** A row in the graph was clicked — open that commit's diff. The click
+   *  already moved `selectedGraphHash`'s highlight; this is what actually
+   *  makes the click do something beyond that. */
+  onSelectCommit: (commit: api.GraphCommit) => void;
+  /** The graph's own "Uncommitted changes" node was clicked — every other
+   *  IDE puts one above HEAD when the working tree is dirty, so the graph
+   *  reads as the true head of history rather than stopping at the last
+   *  commit. Opens the same working-tree diff Review Working Changes shows. */
+  onSelectWorkingChanges: () => void;
   /** This panel wrote to the working tree. The diff pane renders the same
    *  tree from its own state, so without this it kept showing a file as
    *  unstaged that this panel had just staged — two views of one tree
@@ -186,7 +363,10 @@ export default function SourceControlPanel({
   onError: (message: unknown) => void;
 }) {
   const [files, setFiles] = useState<FileStatus[]>([]);
-  const [log, setLog] = useState<LogEntry[]>([]);
+  const [, setLog] = useState<LogEntry[]>([]);
+  const [graph, setGraph] = useState<api.GraphCommit[]>([]);
+  const [graphFilter, setGraphFilter] = useState("");
+  const [selectedGraphHash, setSelectedGraphHash] = useState<string | null>(null);
   // GIT-20/GIT-21: a non-git project made every reload reject identically
   // ("fatal: not a git repository") from both gitStatus and gitLog, each
   // separately calling onError — a burst of duplicate toasts with no way to
@@ -202,6 +382,10 @@ export default function SourceControlPanel({
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
   const [committing, setCommitting] = useState(false);
+  // Independent, not exclusive: each of Staged Changes/Changes/Graph gets
+  // its own capped, independently-scrolling body (.ds-sc-section-body), so
+  // all three can stay open together without one growing into the others —
+  // opening the Graph no longer has to close anything else.
   const [openSections, setOpenSections] = useState({
     staged: true,
     changes: true,
@@ -213,7 +397,10 @@ export default function SourceControlPanel({
 
   /** The tree every call in this panel acts on. `null` and `undefined` both
    *  mean "the project root"; the IPC layer wants the latter. */
-  const tree = threadId ?? undefined;
+  // `undefined` means an older caller has not opted into explicit targeting;
+  // `null` is the deliberate Project root choice and must not fall back to a
+  // focused thread.
+  const tree = selectedTreeId === undefined ? (threadId ?? undefined) : (selectedTreeId ?? undefined);
 
   const reload = useCallback(() => {
     api
@@ -238,6 +425,7 @@ export default function SourceControlPanel({
         if (/not a git repository/i.test(String(err))) return;
         onError(err);
       });
+    api.gitGraph(projectHash, 80).then(setGraph).catch(onError);
     // No upstream is a normal state, not an error — no counts, no banner.
     api.gitAheadBehind(projectHash, tree).then(
       (value) => {
@@ -256,6 +444,17 @@ export default function SourceControlPanel({
   const [ahead, behind] = aheadBehind ?? [0, 0];
   const staged = files.filter((f) => isStaged(f.code));
   const unstaged = files.filter((f) => !isStaged(f.code));
+  const graphRows = layoutGraph(graph).filter(({ commit }) => {
+    const needle = graphFilter.trim().toLowerCase();
+    return !needle || [commit.subject, commit.author, ...commit.refs, commit.hash]
+      .some((value) => value.toLowerCase().includes(needle));
+  });
+  const graphLaneCount = Math.max(1, ...graphRows.flatMap((row) => [row.beforeLanes.length, row.nextLanes.length]));
+  // Every other IDE puts a node for the working tree above HEAD when it's
+  // dirty, so the graph reads as the true head of history rather than
+  // stopping at the last commit. Hidden while filtering — it isn't a
+  // commit the filter's subject/author/hash/ref match can apply to.
+  const showUncommittedNode = files.length > 0 && graphFilter.trim() === "";
 
   const act = (run: Promise<unknown>) =>
     run
@@ -278,7 +477,7 @@ export default function SourceControlPanel({
   const generate = () => {
     setGenerating(true);
     api
-      .draftCommitMessage(projectHash, threadId ?? null)
+      .draftCommitMessage(projectHash, tree ?? null)
       .then(setMessage)
       .catch(onError)
       .finally(() => setGenerating(false));
@@ -365,7 +564,38 @@ export default function SourceControlPanel({
           </Stack>
         </div>
       ) : (
+      <>
+      {/* Fixed action area: the working-tree selector, composer, and the two
+          primary buttons stay reachable no matter how tall Staged
+          Changes/Changes/Graph grow below — those three share their own
+          scrollable body instead of this one. */}
       <div className="ds-panel-body">
+        {workingTrees && onTreeChange && (
+          <label className="ds-sc-target">
+            <span>Working tree</span>
+            <select
+              aria-label="Source control working tree"
+              value={selectedTreeId ?? "project-root"}
+              onChange={(event) =>
+                onTreeChange(
+                  event.currentTarget.value === "project-root"
+                    ? null
+                    : event.currentTarget.value
+                )
+              }
+            >
+              {workingTrees.map((workingTree) => (
+                <option
+                  key={workingTree.id ?? "project-root"}
+                  value={workingTree.id ?? "project-root"}
+                >
+                  {workingTree.label} · {workingTree.branch}
+                </option>
+              ))}
+            </select>
+            <small>Commits, staging, and sync apply here.</small>
+          </label>
+        )}
         <div className="ds-sc-commit-box">
           <Textarea
             value={message}
@@ -410,12 +640,14 @@ export default function SourceControlPanel({
           variant="default"
           mt={6}
           leftSection={<IconSparkles size={14} />}
-          onClick={onReviewWorkingChanges}
+          onClick={() => onReviewWorkingChanges(tree)}
           data-testid="sc-review"
         >
           Review Working Changes
         </Button>
+      </div>
 
+      <div className="ds-panel-body">
         <Section
           id="staged"
           title="Staged Changes"
@@ -450,7 +682,7 @@ export default function SourceControlPanel({
               key={file.path}
               file={file}
               action="unstage"
-              onOpen={() => onOpenFile(file.path)}
+              onOpen={() => onOpenFile(file.path, tree)}
               onAction={() => act(api.gitUnstageFile(projectHash, file.path, tree))}
             />
           ))}
@@ -503,7 +735,7 @@ export default function SourceControlPanel({
               key={file.path}
               file={file}
               action="stage"
-              onOpen={() => onOpenFile(file.path)}
+              onOpen={() => onOpenFile(file.path, tree)}
               onAction={() => act(api.gitStageFile(projectHash, file.path, tree))}
             />
           ))}
@@ -514,41 +746,74 @@ export default function SourceControlPanel({
           title="Graph"
           open={openSections.graph}
           onToggle={() => toggle("graph")}
+          pinned={
+            <TextInput
+              size="xs"
+              value={graphFilter}
+              onChange={(event) => setGraphFilter(event.currentTarget.value)}
+              placeholder="Filter commits or branches"
+              aria-label="Filter commit graph"
+              mb={4}
+            />
+          }
         >
           <div className="ds-sc-graph" data-testid="sc-graph">
-            {log.length === 0 && <p className="empty">No commits yet.</p>}
-            {log.map((entry, index) => (
-              <div
-                key={entry.hash}
-                className={`ds-sc-commit${index === 0 ? " current" : ""}`}
+            {showUncommittedNode && (
+              <UnstyledButton
+                className="ds-sc-commit ds-sc-commit-uncommitted"
+                aria-label={`Review working changes — ${files.length} file${files.length === 1 ? "" : "s"} changed`}
+                data-testid="sc-uncommitted-row"
+                onClick={onSelectWorkingChanges}
               >
-                <div className="ds-sc-commit-dot" />
+                <UncommittedLane laneCount={graphLaneCount} />
                 <div className="ds-sc-commit-text">
-                  <span className="ds-sc-commit-msg">{entry.subject}</span>
-                  {/* Two facts, not one string: in a 193px panel a single
-                      truncating line ate the date and left only the author,
-                      which is the same name on every row. The author yields
-                      its characters; "51m ago" always survives. */}
+                  <span className="ds-sc-commit-msg">Uncommitted changes</span>
                   <span className="ds-sc-commit-meta">
-                    <span className="ds-sc-commit-author">{entry.author}</span>
-                    {entry.date && (
-                      <span className="ds-sc-commit-age">
-                        {relativeTime(entry.date)}
-                      </span>
-                    )}
+                    <span className="ds-sc-commit-author">
+                      {files.length} file{files.length === 1 ? "" : "s"} changed
+                    </span>
                   </span>
                 </div>
-                {index === 0 && (
-                  <span className="ds-sc-branch-badge" title={branch}>
-                    <IconGitBranch size={11} />
-                    <span className="ds-sc-branch-badge-name">{branch}</span>
+              </UnstyledButton>
+            )}
+            {graph.length === 0 && <p className="empty">No commits yet.</p>}
+            {graph.length > 0 && graphRows.length === 0 && <p className="empty">No matching commits.</p>}
+            {graphRows.map((row, index) => {
+              const entry = row.commit;
+              const selected = selectedGraphHash === entry.hash;
+              return (
+              <UnstyledButton
+                key={entry.hash}
+                className={`ds-sc-commit${index === 0 ? " current" : ""}${selected ? " selected" : ""}`}
+                aria-label={`View commit ${entry.subject}`}
+                aria-pressed={selected}
+                data-testid="sc-commit-row"
+                onClick={() => {
+                  setSelectedGraphHash(entry.hash);
+                  onSelectCommit(entry);
+                }}
+              >
+                <GraphLanes row={row} laneCount={graphLaneCount} isFirstRow={index === 0 && !showUncommittedNode} />
+                <div className="ds-sc-commit-text">
+                  <span className="ds-sc-commit-msg">{entry.subject}</span>
+                  <span className="ds-sc-commit-meta">
+                    <span className="ds-sc-commit-author">{entry.author}</span>
+                    <span className="ds-sc-commit-hash" title={entry.hash}>{entry.hash.slice(0, 7)}</span>
                   </span>
-                )}
-              </div>
-            ))}
+                  {entry.refs.length > 0 && (
+                    <span className="ds-sc-branch-badge" title={entry.refs.join(", ")}>
+                      <IconGitBranch size={11} />
+                      <span className="ds-sc-branch-badge-name">{entry.refs.join(" · ")}</span>
+                    </span>
+                  )}
+                </div>
+              </UnstyledButton>
+              );
+            })}
           </div>
         </Section>
       </div>
+      </>
       )}
     </div>
   );

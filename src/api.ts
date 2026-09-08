@@ -998,6 +998,16 @@ export type LogEntry = {
 export const gitLog = (projectHash: string, limit = 20, threadId?: string) =>
   invoke<LogEntry[]>("git_log", { projectHash, limit, threadId });
 
+export type GraphCommit = { hash: string; parents: string[]; subject: string; author: string; date: string; refs: string[] };
+/** Repository-wide history; deliberately independent of the selected tree. */
+export const gitGraph = (projectHash: string, limit = 80) =>
+  invoke<GraphCommit[]>("git_graph", { projectHash, limit });
+
+/** The diff one commit introduced — clicking a row in the graph. Repository-
+ *  wide like `gitGraph`, not scoped to a working tree. */
+export const gitCommitDiff = (projectHash: string, hash: string) =>
+  invoke<string>("git_commit_diff", { projectHash, hash });
+
 /** Source Control panel's **Generate**: drafts a message from the staged diff.
  *  `threadId` names the thread whose provider/model to draft with — the one
  *  the user picked in the chat pane. Without it the draft ran on whatever
