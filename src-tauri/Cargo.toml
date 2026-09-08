@@ -12,7 +12,11 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "palisade_code_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# This desktop app's binary links this crate as Rust library code (see
+# `src/main.rs`). The mobile-only `staticlib` and `cdylib` outputs make every
+# debug build retain thousands of large code-generation objects; add them back
+# when an iOS or Android target is introduced.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -75,3 +79,12 @@ futures = "0.3"
 strip = true
 lto = true
 codegen-units = 1
+
+# Full DWARF is disproportionately expensive for the large desktop backend.
+# Keep file/line data so Rust panics and backtraces remain actionable, while
+# avoiding variable and type metadata in the normal dev and test loops.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
