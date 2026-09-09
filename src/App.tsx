@@ -3042,6 +3042,13 @@ export default function App() {
   /** Source Control's target is a deliberate Git choice, not a side effect
    * of selecting a thread to read its conversation. */
   const [sourceControlTreeId, setSourceControlTreeId] = useState<string | null>(null);
+  // A thread id belongs to exactly one project. Carrying it into another
+  // project leaves the selector with no matching option and makes the backend
+  // quietly fall back to that project's root, so source-control context must
+  // be reset with the project.
+  useEffect(() => {
+    setSourceControlTreeId(null);
+  }, [project?.hash]);
   const openDiffFor = useCallback(
     (path: string) => {
       setDiffFocusPath(path);
@@ -4773,9 +4780,15 @@ export default function App() {
         fail("No working changes to review.");
         return;
       }
+      // The reviewing session belongs to the active conversation, which may
+      // be different from the tree selected in Source Control. Put the exact
+      // selected diff in the turn so the agent reviews what the user chose,
+      // rather than whatever happens to be in its own working directory.
       const reviewText =
-        "Review my working changes. Point out correctness bugs, then anything " +
-        "over-built. Be specific about file and line; skip praise.";
+        "Review these working changes. Point out correctness bugs, then anything " +
+        "over-built. Be specific about file and line; skip praise.\n\n```diff\n" +
+        diff +
+        "\n```";
       setMessages((prev) => [
         ...prev,
         {

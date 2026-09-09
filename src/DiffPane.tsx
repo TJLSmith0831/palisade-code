@@ -323,6 +323,9 @@ export default function DiffPane({
   useEffect(() => {
     if (!commit) return;
     let cancelled = false;
+    // Do not render the prior commit's patches beneath this commit's header
+    // while its diff is in flight.
+    setCommitFiles([]);
     setCommitLoading(true);
     setCommitError(null);
     api

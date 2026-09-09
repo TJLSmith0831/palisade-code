@@ -13,6 +13,7 @@ import {
 } from "@tabler/icons-react";
 import * as api from "./api";
 import type { FileStatus, LogEntry } from "./api";
+import { relativeTime } from "./SessionList";
 
 // Amendment 7's Source Control panel: the primary git surface, behind the
 // left rail's Source Control icon. Built from mockup.html's #panel-git.
@@ -798,6 +799,7 @@ export default function SourceControlPanel({
                   <span className="ds-sc-commit-msg">{entry.subject}</span>
                   <span className="ds-sc-commit-meta">
                     <span className="ds-sc-commit-author">{entry.author}</span>
+                    <span className="ds-sc-commit-age">{relativeTime(entry.date)}</span>
                     <span className="ds-sc-commit-hash" title={entry.hash}>{entry.hash.slice(0, 7)}</span>
                   </span>
                   {entry.refs.length > 0 && (

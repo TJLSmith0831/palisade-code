@@ -351,6 +351,37 @@ describe("DiffPane worktree review", () => {
     expect(screen.queryByTestId("diff-rows-inline")).toBeNull();
   });
 
+  it("clears the previous commit's patches while a newly selected commit loads", async () => {
+    const secondDiff = `diff --git a/second.txt b/second.txt
+index 1234567..89abcde 100644
+--- a/second.txt
++++ b/second.txt
+@@ -1 +1 @@
+-before
++after
+`;
+    let resolveSecond: ((diff: string) => void) | undefined;
+    mockGit((cmd, args) => {
+      if (cmd !== "git_commit_diff") return undefined;
+      if (args?.hash === "first") return Promise.resolve(ONE_HUNK_DIFF);
+      return new Promise<string>((resolve) => {
+        resolveSecond = resolve;
+      });
+    });
+    const first = { hash: "first", parents: [], subject: "First", author: "T", date: "", refs: [] };
+    const second = { hash: "second", parents: [], subject: "Second", author: "T", date: "", refs: [] };
+    const { rerender } = render(<DiffPane projectHash="p1" commit={first} />);
+
+    await waitFor(() => expect(screen.getByTestId("diff-file")).toHaveTextContent("tracked.txt"));
+    rerender(<DiffPane projectHash="p1" commit={second} />);
+
+    await screen.findByText("Loading commit…");
+    expect(screen.queryByTestId("diff-file")).toBeNull();
+
+    resolveSecond?.(secondDiff);
+    await waitFor(() => expect(screen.getByTestId("diff-file")).toHaveTextContent("second.txt"));
+  });
+
   // Scan-then-edit: the list is for finding the file that matters, and the
   // file opens as the real buffer — reviewing and fixing are the same view.
   it("lists changed files with their size, and opens one as an editable buffer", async () => {

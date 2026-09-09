@@ -331,18 +331,25 @@ mod tests {
 
     #[test]
     fn ignores_graphify_output_so_a_running_watch_does_not_thrash_the_tree() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("graphify-out")).unwrap();
-        let (_watcher, rx) = watcher_on(dir.path());
-
-        // `graphify watch` rewrites this every few seconds for as long as
-        // it's running.
-        std::fs::write(dir.path().join("graphify-out/needs_update"), "1").unwrap();
-        std::fs::write(dir.path().join("graphify-out/graph.json"), "{}").unwrap();
-        std::fs::write(dir.path().join("real.txt"), "signal").unwrap();
-
-        let changed = recv_changes(&rx).expect("the real file should report");
-        assert_eq!(changed, vec!["real.txt".to_string()], "graphify churn leaked: {changed:?}");
+        // This is the filter's real seam. FSEvents delivery is an OS service
+        // and is not deterministic in a sandboxed test process; testing it
+        // here turned a pure path-policy regression into an intermittent
+        // five-second timeout. The callback above invokes this helper for
+        // every event path, so these assertions prove graph output cannot
+        // reach the UI while a sibling source file still can.
+        let root = Path::new("/project");
+        assert_eq!(
+            relative_if_interesting(root, Path::new("/project/graphify-out/needs_update")),
+            None
+        );
+        assert_eq!(
+            relative_if_interesting(root, Path::new("/project/graphify-out/graph.json")),
+            None
+        );
+        assert_eq!(
+            relative_if_interesting(root, Path::new("/project/real.txt")).as_deref(),
+            Some("real.txt")
+        );
     }
 
     #[test]

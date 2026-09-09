@@ -77,6 +77,22 @@ describe("SourceControlPanel staging", () => {
     expect(screen.getByText("document source control")).toBeDefined();
   });
 
+  it("shows a compact relative age for each commit in the graph", async () => {
+    mocked.gitGraph.mockResolvedValue([
+      {
+        hash: "recent123",
+        parents: [],
+        subject: "recent change",
+        author: "T",
+        date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        refs: [],
+      },
+    ]);
+    render(<SourceControlPanel {...props} />);
+
+    expect(await screen.findByText("2d ago")).toBeDefined();
+  });
+
   it("lets the user focus a commit row while keeping its branch ref visible", async () => {
     render(<SourceControlPanel {...props} />);
 
