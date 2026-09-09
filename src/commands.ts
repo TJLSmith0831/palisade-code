@@ -17,6 +17,8 @@ export type Command = {
   keywords?: string;
   /** Hidden from the palette when false — still bound to its chord. */
   enabled?: boolean;
+  /** Native menus use this for radio/check state; the palette ignores it. */
+  checked?: boolean;
   run: () => void;
 };
 

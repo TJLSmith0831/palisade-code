@@ -41,6 +41,8 @@ describe("matchesChord", () => {
   it("handles the punctuation chords", () => {
     expect(matchesChord(key({ key: "\\", metaKey: true }), "Mod+Backslash")).toBe(true);
     expect(matchesChord(key({ key: "`", metaKey: true }), "Mod+Backtick")).toBe(true);
+    expect(matchesChord(key({ key: "`", ctrlKey: true }), "Ctrl+Backtick")).toBe(true);
+    expect(matchesChord(key({ key: "`", metaKey: true }), "Ctrl+Backtick")).toBe(false);
   });
 
   it("ignores an unmodified keypress", () => {
@@ -53,6 +55,7 @@ describe("formatChord", () => {
     expect(formatChord("Mod+Shift+P")).toBe("⌘⇧P");
     expect(formatChord("Ctrl+Tab")).toBe("⌃⇥");
     expect(formatChord("Mod+Backtick")).toBe("⌘`");
+    expect(formatChord("Ctrl+Backtick")).toBe("⌃`");
     expect(formatChord("Mod+Backslash")).toBe("⌘\\");
   });
 });

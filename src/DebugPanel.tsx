@@ -208,6 +208,20 @@ export default function DebugPanel({
     setStopped(null);
   }, []);
 
+  // The Run menu opens this existing panel and then asks it to perform the
+  // same guarded action as its buttons. Keeping the adapter here avoids a
+  // second, menu-only debugger launch path.
+  useEffect(() => {
+    const onStart = () => start();
+    const onStop = () => stop();
+    window.addEventListener("palisade-debug-start", onStart);
+    window.addEventListener("palisade-debug-stop", onStop);
+    return () => {
+      window.removeEventListener("palisade-debug-start", onStart);
+      window.removeEventListener("palisade-debug-stop", onStop);
+    };
+  }, [start, stop]);
+
   const step = useCallback(
     (action: api.DebugAction) => {
       if (!stopped) return;
