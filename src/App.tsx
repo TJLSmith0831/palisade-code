@@ -3039,13 +3039,46 @@ export default function App() {
   // what every other IDE does, and what the old behaviour (open the file
   // itself) failed at outright for an untracked directory.
   const [diffFocusPath, setDiffFocusPath] = useState<string | null>(null);
+  /** Source Control's target is a deliberate Git choice, not a side effect
+   * of selecting a thread to read its conversation. */
+  const [sourceControlTreeId, setSourceControlTreeId] = useState<string | null>(null);
+  // A thread id belongs to exactly one project. Carrying it into another
+  // project leaves the selector with no matching option and makes the backend
+  // quietly fall back to that project's root, so source-control context must
+  // be reset with the project.
+  useEffect(() => {
+    setSourceControlTreeId(null);
+  }, [project?.hash]);
   const openDiffFor = useCallback(
     (path: string) => {
       setDiffFocusPath(path);
+      setDiffCommit(null);
       shell.setDiffOpen(true);
     },
     [shell.setDiffOpen]
   );
+
+  // Clicking a commit in the Source Control panel's graph opens that
+  // commit's diff — previously the click only moved the row highlight, with
+  // no way to see what the commit actually changed.
+  const [diffCommit, setDiffCommit] = useState<api.GraphCommit | null>(null);
+  const openCommitDiff = useCallback(
+    (commit: api.GraphCommit) => {
+      setDiffCommit(commit);
+      setDiffFocusPath(null);
+      shell.setDiffOpen(true);
+    },
+    [shell.setDiffOpen]
+  );
+
+  // The graph's "Uncommitted changes" node, above HEAD — clears any commit
+  // or file focus so the diff pane falls back to its default view: the
+  // whole working tree, same as clicking "Show working changes".
+  const openWorkingChangesDiff = useCallback(() => {
+    setDiffCommit(null);
+    setDiffFocusPath(null);
+    shell.setDiffOpen(true);
+  }, [shell.setDiffOpen]);
 
   // Amendment 1: the project's run commands, shared by the title bar's split
   // button and the rail's Run panel. `runLast` is the split button's primary
@@ -4739,17 +4772,23 @@ export default function App() {
   // Amendment 7's **Review Working Changes**. Unlike Generate — whose answer
   // is a value for the commit box — a review is prose the user reads, so it
   // goes through the ordinary send path and lands in the conversation.
-  const onReviewWorkingChanges = useCallback(async () => {
+  const onReviewWorkingChanges = useCallback(async (treeId?: string) => {
     if (!project || !thread) return;
     try {
-      const diff = await api.gitWorkingDiff(project.hash);
+      const diff = await api.gitWorkingDiff(project.hash, treeId);
       if (!diff.trim()) {
         fail("No working changes to review.");
         return;
       }
+      // The reviewing session belongs to the active conversation, which may
+      // be different from the tree selected in Source Control. Put the exact
+      // selected diff in the turn so the agent reviews what the user chose,
+      // rather than whatever happens to be in its own working directory.
       const reviewText =
-        "Review my working changes. Point out correctness bugs, then anything " +
-        "over-built. Be specific about file and line; skip praise.";
+        "Review these working changes. Point out correctness bugs, then anything " +
+        "over-built. Be specific about file and line; skip praise.\n\n```diff\n" +
+        diff +
+        "\n```";
       setMessages((prev) => [
         ...prev,
         {
@@ -5513,18 +5552,34 @@ export default function App() {
           <SourceControlPanel
             projectHash={project.hash}
             threadId={thread?.id ?? null}
-            /* The panel reads and writes the thread's worktree, so it has to
-               name that worktree's branch — the project root's current
-               branch is a different tree and would put the wrong name on the
-               commit button. */
+            workingTrees={[
+              {
+                id: null,
+                label: "Project root",
+                branch: branches.find((b) => b.isCurrent)?.name ?? "HEAD",
+              },
+              ...threads.flatMap((candidate) => {
+                const worktree = worktrees.get(candidate.id);
+                if (!worktree) return [];
+                return [{
+                  id: candidate.id,
+                  label: candidate.title,
+                  branch: worktree.branch,
+                }];
+              }),
+            ]}
+            selectedTreeId={sourceControlTreeId}
+            onTreeChange={setSourceControlTreeId}
             branch={
-              (thread ? worktrees.get(thread.id)?.branch : undefined) ??
+              (sourceControlTreeId ? worktrees.get(sourceControlTreeId)?.branch : undefined) ??
               branches.find((b) => b.isCurrent)?.name ??
               "HEAD"
             }
             refreshToken={diffRefreshToken}
-            onOpenFile={openDiffFor}
+            onOpenFile={(path) => openDiffFor(path)}
             onReviewWorkingChanges={onReviewWorkingChanges}
+            onSelectCommit={openCommitDiff}
+            onSelectWorkingChanges={openWorkingChangesDiff}
             onChanged={() => setDiffRefreshToken((t) => t + 1)}
             onError={fail}
           />
@@ -6091,13 +6146,15 @@ export default function App() {
                       {project && (
                         <DiffPane
                           projectHash={project.hash}
-                          /* The agent writes in this thread's worktree, so
-                             that is the tree to show — the project root has
-                             none of its edits. */
-                          threadId={thread?.worktreePath ? thread.id : undefined}
+                          /* Source Control's selected context is explicit:
+                             the diff must never silently snap back to the
+                             focused conversation's worktree. */
+                          threadId={sourceControlTreeId ?? undefined}
                           refreshToken={diffRefreshToken}
                           focusPath={diffFocusPath}
                           onClearFocus={() => setDiffFocusPath(null)}
+                          commit={diffCommit}
+                          onClearCommit={() => setDiffCommit(null)}
                         />
                       )}
                     </div>

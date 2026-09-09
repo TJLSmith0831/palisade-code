@@ -123,6 +123,20 @@ pub async fn git_log(project_hash: String, limit: u32, thread_id: Option<String>
 }
 
 #[tauri::command]
+pub async fn git_graph(project_hash: String, limit: u32) -> Res<Vec<git::GraphCommit>> {
+    tokio::task::spawn_blocking(move || git::graph(&git_bin()?, &project_root(&project_hash)?, limit))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_commit_diff(project_hash: String, hash: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || git::commit_diff(&git_bin()?, &project_root(&project_hash)?, &hash))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn git_branches(project_hash: String) -> Res<Vec<git::BranchInfo>> {
     tokio::task::spawn_blocking(move || {
         git::list_branches(&git_bin()?, &project_root(&project_hash)?)

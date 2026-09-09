@@ -3325,6 +3325,8 @@ pub fn run() {
             commands::git_cmds::git_unstage_file,
             commands::git_cmds::git_commit,
             commands::git_cmds::git_log,
+            commands::git_cmds::git_graph,
+            commands::git_cmds::git_commit_diff,
             commands::git_cmds::git_branches,
             commands::git_cmds::git_checkout_branch,
             commands::git_cmds::git_worktrees,

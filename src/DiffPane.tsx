@@ -25,13 +25,14 @@ import {
 import type { StructuredPatch, StructuredPatchHunk } from "diff";
 
 import * as api from "./api";
-import type { FileStatus } from "./api";
+import type { FileStatus, GraphCommit } from "./api";
 import DiffRows from "./DiffRows";
 import EditableDiffView from "./EditableDiffView";
 import type { DiffView } from "./DiffRows";
 import { describeError } from "./errors";
 import { isOneSided, rowsFromHunk } from "./diffLines";
 import { parseFilePatches, patchForHunk, pathFromPatch } from "./gitDiff";
+import { relativeTime } from "./SessionList";
 
 /** Survives remounts and app restarts: a reviewer who wants side-by-side
  *  wants it for the whole review, not for one file. */
@@ -53,6 +54,12 @@ type Props = {
    *  than on the whole working tree. */
   focusPath?: string | null;
   onClearFocus?: () => void;
+  /** Show this commit's diff instead of the working tree — set when a row
+   *  in the Source Control panel's graph is clicked. Takes priority over
+   *  `focusPath`: a commit and a working-tree file focus are two different
+   *  questions ("what changed here" vs "what's still uncommitted"). */
+  commit?: GraphCommit | null;
+  onClearCommit?: () => void;
   /** Bumped when something outside this pane changed the working tree — an
    * agent turn finishing, or a save. Without it the diff is whatever it was
    * when the pane mounted, which is stale the moment the agent writes. */
@@ -247,6 +254,8 @@ export default function DiffPane({
   refreshToken,
   focusPath,
   onClearFocus,
+  commit,
+  onClearCommit,
 }: Props) {
   /** A thread's worktree is the ordinary case now, not a special read-only
    *  one — used only to word the empty state for whose tree it is. */
@@ -307,6 +316,33 @@ export default function DiffPane({
   useEffect(() => {
     refresh();
   }, [refresh, refreshToken]);
+
+  const [commitFiles, setCommitFiles] = useState<StructuredPatch[]>([]);
+  const [commitError, setCommitError] = useState<string | null>(null);
+  const [commitLoading, setCommitLoading] = useState(false);
+  useEffect(() => {
+    if (!commit) return;
+    let cancelled = false;
+    // Do not render the prior commit's patches beneath this commit's header
+    // while its diff is in flight.
+    setCommitFiles([]);
+    setCommitLoading(true);
+    setCommitError(null);
+    api
+      .gitCommitDiff(projectHash, commit.hash)
+      .then((diff) => {
+        if (!cancelled) setCommitFiles(parseFilePatches(diff));
+      })
+      .catch((err) => {
+        if (!cancelled) setCommitError(describeError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setCommitLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [commit, projectHash]);
 
   const run = useCallback(
     async (action: () => Promise<void>) => {
@@ -370,6 +406,49 @@ export default function DiffPane({
           onBack={() => setEditing(null)}
           onSaved={refresh}
         />
+      </div>
+    );
+  }
+
+  if (commit) {
+    return (
+      <div className="diff-pane" data-testid="diff-pane">
+        <div className="diff-commit-bar" data-testid="diff-commit-bar">
+          <div className="diff-commit-bar-text">
+            <span className="diff-commit-bar-subject">{commit.subject}</span>
+            <span className="diff-commit-bar-meta">
+              <span className="diff-commit-bar-hash">{commit.hash.slice(0, 7)}</span>
+              {commit.author} · {relativeTime(commit.date)}
+            </span>
+          </div>
+          <span className="diff-spacer" />
+          <button onClick={onClearCommit} data-testid="diff-clear-commit">
+            Show working changes
+          </button>
+        </div>
+        {commitError && (
+          <Alert
+            color="danger"
+            variant="light"
+            style={{ whiteSpace: "pre-wrap" }}
+            data-testid="diff-error"
+          >
+            {commitError}
+          </Alert>
+        )}
+        {commitLoading && !commitError && <p className="empty">Loading commit…</p>}
+        {!commitLoading && !commitError && commitFiles.length === 0 && (
+          <p className="empty">This commit made no file changes.</p>
+        )}
+        {commitFiles.map((file) => (
+          <FileDiff
+            key={pathFromPatch(file)}
+            file={file}
+            actionLabel=""
+            busy={false}
+            view={view}
+          />
+        ))}
       </div>
     );
   }

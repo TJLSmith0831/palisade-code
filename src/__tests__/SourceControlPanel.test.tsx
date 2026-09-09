@@ -8,13 +8,14 @@ import {
   within,
 } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import SourceControlPanel, { isStaged, statusChip, splitPath } from "../SourceControlPanel";
+import SourceControlPanel, { isStaged, layoutGraph, statusChip, splitPath } from "../SourceControlPanel";
 import * as api from "../api";
 
 vi.mock("../api", () => ({
   gitAheadBehind: vi.fn(),
   gitStatus: vi.fn(),
   gitLog: vi.fn(),
+  gitGraph: vi.fn(),
   gitStageFile: vi.fn(),
   gitUnstageFile: vi.fn(),
   gitCommit: vi.fn(),
@@ -35,6 +36,8 @@ const props = {
   branch: "main",
   onOpenFile: vi.fn(),
   onReviewWorkingChanges: vi.fn(),
+  onSelectCommit: vi.fn(),
+  onSelectWorkingChanges: vi.fn(),
   onError: vi.fn(),
 };
 
@@ -48,6 +51,9 @@ beforeEach(() => {
   mocked.gitAheadBehind.mockResolvedValue([0, 0]);
   mocked.gitLog.mockResolvedValue([
     { hash: "abc1234", subject: "first", author: "T", date: "2026-08-14" },
+  ]);
+  mocked.gitGraph.mockResolvedValue([
+    { hash: "feature123", parents: ["abc1234"], subject: "document source control", author: "T", date: "2026-08-14", refs: ["feature/docs"] },
   ]);
 });
 
@@ -64,6 +70,157 @@ describe("isStaged", () => {
 });
 
 describe("SourceControlPanel staging", () => {
+  it("shows repository branch refs in its Graph section, not in a separate workspace", async () => {
+    render(<SourceControlPanel {...props} />);
+
+    expect(await screen.findByText("feature/docs")).toBeDefined();
+    expect(screen.getByText("document source control")).toBeDefined();
+  });
+
+  it("shows a compact relative age for each commit in the graph", async () => {
+    mocked.gitGraph.mockResolvedValue([
+      {
+        hash: "recent123",
+        parents: [],
+        subject: "recent change",
+        author: "T",
+        date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        refs: [],
+      },
+    ]);
+    render(<SourceControlPanel {...props} />);
+
+    expect(await screen.findByText("2d ago")).toBeDefined();
+  });
+
+  it("lets the user focus a commit row while keeping its branch ref visible", async () => {
+    render(<SourceControlPanel {...props} />);
+
+    const commit = await screen.findByRole("button", {
+      name: "View commit document source control",
+    });
+    expect(commit).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(commit);
+    expect(commit).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("feature/docs")).toBeDefined();
+  });
+
+  it("opens the commit's diff on click, not just the row highlight", async () => {
+    const onSelectCommit = vi.fn();
+    render(<SourceControlPanel {...props} onSelectCommit={onSelectCommit} />);
+
+    const commit = await screen.findByRole("button", {
+      name: "View commit document source control",
+    });
+    fireEvent.click(commit);
+
+    expect(onSelectCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: "feature123", subject: "document source control" })
+    );
+  });
+
+  it("draws branch lanes and filters repository history inside Source Control", async () => {
+    mocked.gitGraph.mockResolvedValue([
+      { hash: "merge", parents: ["main", "feature"], subject: "merge feature", author: "T", date: "2026-08-14", refs: ["main"] },
+      { hash: "feature", parents: ["base"], subject: "branch work", author: "T", date: "2026-08-13", refs: ["feature/docs"] },
+      { hash: "main", parents: ["base"], subject: "main work", author: "T", date: "2026-08-13", refs: [] },
+    ]);
+    render(<SourceControlPanel {...props} />);
+
+    await screen.findByText("merge feature");
+    const lane = screen.getAllByTestId("sc-graph-lane")[0];
+    expect(lane.getAttribute("width")).toBe("26");
+    // Bug #1: rows used to carry 1px of vertical padding around this 24px
+    // SVG, leaving a 2px seam between adjacent rows where the connecting
+    // lane line broke. Locking the SVG's own height to the row's exact
+    // height is what makes rows butt together with no gap.
+    expect(lane.getAttribute("height")).toBe("24");
+    // The filter box sits above the scrollable commit list, not inside it —
+    // scrolling a long history must not scroll the filter out of reach.
+    expect(screen.getByTestId("sc-graph-body").contains(screen.getByLabelText("Filter commit graph"))).toBe(false);
+    fireEvent.change(screen.getByLabelText("Filter commit graph"), {
+      target: { value: "feature/docs" },
+    });
+    expect(screen.getByText("branch work")).toBeDefined();
+    expect(screen.queryByText("main work")).toBeNull();
+  });
+
+  it("draws each row's own line the full row height, not just from the node down", async () => {
+    // Bug #1's other half: a straight run's own outgoing line used to start
+    // at the node's center (y=12), leaving y=0-12 undrawn every row — a
+    // 12px void nothing else bridged, even with the row-height fix above.
+    // A clean tree, so HEAD is genuinely the top row — no uncommitted node
+    // feeding into it from above.
+    mocked.gitStatus.mockResolvedValue([]);
+    mocked.gitGraph.mockResolvedValue([
+      { hash: "c3", parents: ["c2"], subject: "third", author: "T", date: "2026-08-15", refs: [] },
+      { hash: "c2", parents: ["c1"], subject: "second", author: "T", date: "2026-08-14", refs: [] },
+      { hash: "c1", parents: [], subject: "first", author: "T", date: "2026-08-13", refs: [] },
+    ]);
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText("third");
+
+    const lanes = screen.getAllByTestId("sc-graph-lane");
+    const pathsOf = (row: number) =>
+      Array.from(lanes[row].querySelectorAll(".ds-sc-graph-line")).map((el) => el.getAttribute("d"));
+
+    // The very top row has nothing above it to connect to — no stray stub.
+    expect(pathsOf(0)).toEqual([expect.stringMatching(/^M \d+(\.\d+)? 12 C /)]);
+    // A middle row bridges the incoming half (from the row above, y=0 to
+    // its own node at y=12) and the outgoing curve (y=12 to y=24) as two
+    // segments, so each can carry its own colour.
+    expect(pathsOf(1)).toEqual([
+      expect.stringMatching(/^M \d+(\.\d+)? 0 L \d+(\.\d+)? 12$/),
+      expect.stringMatching(/^M \d+(\.\d+)? 12 C /),
+    ]);
+  });
+
+  it("lets the user choose the project root instead of the focused thread worktree", async () => {
+    const onTreeChange = vi.fn();
+    render(
+      <SourceControlPanel
+        {...props}
+        workingTrees={[
+          { id: null, label: "Project root", branch: "main" },
+          { id: "t1", label: "Docs", branch: "palisade/docs" },
+        ]}
+        selectedTreeId="t1"
+        onTreeChange={onTreeChange}
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText("Source control working tree"), {
+      target: { value: "project-root" },
+    });
+
+    expect(onTreeChange).toHaveBeenCalledWith(null);
+  });
+
+  it("uses the selected tree for the visible branch, file diff, and review", async () => {
+    const onOpenFile = vi.fn();
+    const onReviewWorkingChanges = vi.fn();
+    render(
+      <SourceControlPanel
+        {...props}
+        branch="feature/source-control"
+        workingTrees={[
+          { id: null, label: "Project root", branch: "main" },
+          { id: "t1", label: "Source control", branch: "feature/source-control" },
+        ]}
+        selectedTreeId="t1"
+        onTreeChange={vi.fn()}
+        onOpenFile={onOpenFile}
+        onReviewWorkingChanges={onReviewWorkingChanges}
+      />
+    );
+
+    expect(await screen.findByPlaceholderText(/feature\/source-control/)).toBeDefined();
+    fireEvent.click((await screen.findAllByTestId("sc-file"))[0]);
+    expect(onOpenFile).toHaveBeenCalledWith("src/a.ts", "t1");
+    fireEvent.click(screen.getByTestId("sc-review"));
+    expect(onReviewWorkingChanges).toHaveBeenCalledWith("t1");
+  });
+
   it("separates staged changes from unstaged ones", async () => {
     render(<SourceControlPanel {...props} />);
     const staged = await screen.findByTestId("sc-staged-section");
@@ -201,11 +358,56 @@ describe("SourceControlPanel staging", () => {
     expect(screen.getByTestId("sc-pull").textContent).not.toMatch(/\d/);
   });
 
-  it("collapses the commit graph too", async () => {
+  it("opens and collapses the commit graph independently of the other sections", async () => {
     render(<SourceControlPanel {...props} />);
-    await screen.findByTestId("sc-graph");
+    expect(await screen.findByTestId("sc-graph")).toBeDefined();
+
     fireEvent.click(screen.getByTestId("sc-toggle-graph"));
     expect(screen.queryByTestId("sc-graph")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("sc-toggle-graph"));
+    expect(await screen.findByTestId("sc-graph")).toBeDefined();
+  });
+
+  it("closing the graph does not touch Staged or Changes — each has its own body", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByTestId("sc-graph");
+    expect(screen.getAllByTestId("sc-file").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId("sc-toggle-graph"));
+    expect(screen.queryByTestId("sc-graph")).toBeNull();
+    expect(screen.getAllByTestId("sc-file").length).toBeGreaterThan(0);
+  });
+
+  it("shows an uncommitted-changes node above HEAD when the tree is dirty", async () => {
+    // Every other IDE puts one here — VS Code's GitLens graph and GitKraken
+    // both show a working-tree node above HEAD when there's something
+    // uncommitted, so the graph reads as the true head of history instead
+    // of stopping at the last commit.
+    render(<SourceControlPanel {...props} />);
+    const node = await screen.findByTestId("sc-uncommitted-row");
+    expect(node).toHaveTextContent("Uncommitted changes");
+    expect(node).toHaveTextContent("3 files changed");
+
+    fireEvent.click(node);
+    expect(props.onSelectWorkingChanges).toHaveBeenCalled();
+  });
+
+  it("hides the uncommitted-changes node on a clean tree", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    render(<SourceControlPanel {...props} />);
+    await screen.findByTestId("sc-graph");
+    expect(screen.queryByTestId("sc-uncommitted-row")).toBeNull();
+  });
+
+  it("hides the uncommitted-changes node while filtering — it isn't a commit the filter can match", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByTestId("sc-uncommitted-row");
+
+    fireEvent.change(screen.getByLabelText("Filter commit graph"), {
+      target: { value: "first" },
+    });
+    expect(screen.queryByTestId("sc-uncommitted-row")).toBeNull();
   });
 
   it("only offers Commit when something is staged", async () => {
@@ -295,5 +497,52 @@ describe("splitPath", () => {
 
   it("leaves a root-level file with an empty directory line", () => {
     expect(splitPath("README.md")).toEqual({ name: "README.md", dir: "" });
+  });
+});
+
+describe("layoutGraph", () => {
+  // These three cover the fixture the row-seam fix depends on: a straight
+  // run, a branch opening a new lane, and a merge closing one — every shape
+  // .ds-sc-commit's 24px row height has to render without a gap.
+  it("keeps a straight run of commits in the same lane", () => {
+    const rows = layoutGraph([
+      { hash: "c3", parents: ["c2"], subject: "third", author: "T", date: "", refs: [] },
+      { hash: "c2", parents: ["c1"], subject: "second", author: "T", date: "", refs: [] },
+      { hash: "c1", parents: [], subject: "first", author: "T", date: "", refs: [] },
+    ]);
+    expect(rows.map((row) => row.lane)).toEqual([0, 0, 0]);
+    expect(rows.map((row) => row.edges)).toEqual([
+      [{ from: 0, to: 0, lane: 0, color: 0 }],
+      [{ from: 0, to: 0, lane: 0, color: 0 }],
+      [],
+    ]);
+  });
+
+  it("opens a new lane for a second, unrelated branch tip", () => {
+    // `git log --all --topo-order` interleaves independent histories —
+    // "feature" here shares no ancestry with "main" and is not yet in any
+    // lane when its row is reached, so it can't reuse main's (still-open)
+    // lane.
+    const rows = layoutGraph([
+      { hash: "main", parents: ["main-parent"], subject: "main tip", author: "T", date: "", refs: [] },
+      { hash: "feature", parents: ["feature-parent"], subject: "feature tip", author: "T", date: "", refs: ["feature/x"] },
+    ]);
+    expect(rows[0].lane).toBe(0);
+    expect(rows[1].lane).toBe(1);
+  });
+
+  it("keeps a merge's parents in separate lanes", () => {
+    const rows = layoutGraph([
+      { hash: "merge", parents: ["main", "feature"], subject: "merge", author: "T", date: "", refs: [] },
+    ]);
+    expect(rows[0]).toMatchObject({
+      lane: 0,
+      beforeLanes: ["merge"],
+      nextLanes: ["main", "feature"],
+      edges: [
+        { from: 0, to: 0, lane: 0, color: 0 },
+        { from: 0, to: 1, lane: 0, color: 1 },
+      ],
+    });
   });
 });
