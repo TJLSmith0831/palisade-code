@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import "../App.css";
 import { EventList, filterForTab, type Item } from "../EventView";
+
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 const chatItem: Item = {
   kind: "plain",
@@ -143,6 +146,97 @@ describe("ToolBlock rendering", () => {
     // The border color should be set (not empty/transparent) for failed blocks
     expect(border).not.toBe("");
     expect(border).not.toBe("transparent");
+  });
+
+  it("a running tool block shows output before it finishes", () => {
+    const items: Item[] = [
+      toolCallItem,
+      { kind: "toolOutputDelta", id: "t1", chunk: "Compiling...\n" },
+      { kind: "toolOutputDelta", id: "t1", chunk: "Linking...\n" },
+    ];
+    renderWithMantine(<EventList items={items} executor={null} />);
+    fireEvent.click(screen.getByTestId("tool-block-header"));
+    const out = screen.getByTestId("tool-block-output");
+    expect(out.textContent).toBe("Compiling...\nLinking...\n");
+    // Still running — the deltas are not a final result.
+    expect(screen.getByTestId("tool-status-running")).toBeDefined();
+  });
+
+  it("the final result replaces the streamed output", () => {
+    const items: Item[] = [
+      toolCallItem,
+      { kind: "toolOutputDelta", id: "t1", chunk: "Compiling...\n" },
+      toolResultItem,
+    ];
+    renderWithMantine(<EventList items={items} executor={null} />);
+    fireEvent.click(screen.getByTestId("tool-block-header"));
+    const out = screen.getByTestId("tool-block-output");
+    expect(out.textContent).toBe("hello\nworld");
+  });
+});
+
+describe("ToolBlock stop button (PLAN.md phase 4)", () => {
+  const toolCallItem: Item = {
+    kind: "toolCall",
+    id: "t1",
+    name: "Bash",
+    command: "npm install",
+  };
+  const hostedTerminalItem: Item = { kind: "hostedTerminal", id: "t1" };
+
+  it("a running tool call with a live terminal offers a stop button", () => {
+    renderWithMantine(
+      <EventList
+        items={[toolCallItem, hostedTerminalItem]}
+        executor={null}
+        sessionId="sess-1"
+      />
+    );
+    expect(screen.getByTestId("tool-stop")).toBeDefined();
+    // Still running — the button is for stopping it, not a finished result.
+    expect(screen.getByTestId("tool-status-running")).toBeDefined();
+  });
+
+  it("offers no stop button for a tool call without a live terminal", () => {
+    renderWithMantine(
+      <EventList items={[toolCallItem]} executor={null} sessionId="sess-1" />
+    );
+    expect(screen.queryByTestId("tool-stop")).toBeNull();
+  });
+
+  it("offers no stop button once the tool call has finished", () => {
+    const toolResultItem: Item = {
+      kind: "toolResult",
+      id: "t1",
+      output: "done",
+      isError: false,
+    };
+    renderWithMantine(
+      <EventList
+        items={[toolCallItem, hostedTerminalItem, toolResultItem]}
+        executor={null}
+        sessionId="sess-1"
+      />
+    );
+    expect(screen.queryByTestId("tool-stop")).toBeNull();
+  });
+
+  it("stopping a tool call does not end the session", () => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+    renderWithMantine(
+      <EventList
+        items={[toolCallItem, hostedTerminalItem]}
+        executor={null}
+        sessionId="sess-1"
+      />
+    );
+    fireEvent.click(screen.getByTestId("tool-stop"));
+    expect(invokeMock).toHaveBeenCalledWith("kill_tool_terminal", {
+      sessionId: "sess-1",
+      toolCallId: "t1",
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("stop_executor", expect.anything());
   });
 });
 

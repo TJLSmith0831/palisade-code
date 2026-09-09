@@ -316,6 +316,91 @@ describe("Source Control working tree", () => {
     });
   });
 
+  it("view diff opens the active thread's worktree, not the project root", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("worktree-view-diff"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_working_diff", {
+        projectHash: "proj-1",
+        threadId: "t1",
+      })
+    );
+  });
+
+  it("an explicit Source Control tree selection still wins over the thread", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+        { id: "t2", projectHash: "proj-1", title: "Selected tree", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+        { threadId: "t2", branch: "palisade/t2", baseBranch: "main", added: 1, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "def456" },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+    fireEvent.change(await screen.findByLabelText("Source control working tree"), {
+      target: { value: "t2" },
+    });
+
+    fireEvent.click(await screen.findByTestId("worktree-view-diff"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_working_diff", {
+        projectHash: "proj-1",
+        threadId: "t2",
+      })
+    );
+  });
+
+  it("view diff clears a pinned commit", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+      ]);
+      if (cmd === "git_graph") return Promise.resolve([
+        { hash: "abc123def", parents: [], subject: "Pinned commit", author: "TJ", date: "2026-08-06T00:00:00Z", refs: [] },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      if (cmd === "git_commit_diff") return Promise.resolve("diff --git a/y.ts b/y.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+
+    fireEvent.click(await screen.findByTestId("sc-commit-row"));
+    await screen.findByTestId("diff-commit-bar");
+
+    fireEvent.click(screen.getByTestId("worktree-view-diff"));
+
+    await waitFor(() => expect(screen.queryByTestId("diff-commit-bar")).toBeNull());
+    expect(screen.getByTestId("diff-pane")).toBeDefined();
+  });
+
 });
 
 describe("Top chrome (merged-design v2)", () => {

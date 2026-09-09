@@ -8,13 +8,14 @@ import {
   IconCircleX,
   IconGhost3Filled,
   IconLoader2,
+  IconPlayerStopFilled,
   IconRefresh,
   IconRoute,
   IconTerminal2,
 } from "@tabler/icons-react";
 
 import type { AgentLogin, ExecutorEvent, Message, Preflight } from "./api";
-import { answerPermissionPrompt } from "./api";
+import { answerPermissionPrompt, killToolTerminal } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
 import { isAuthError } from "./errors";
@@ -195,11 +196,23 @@ function ReasoningBlock({
 function ToolBlock({
   event,
   output,
+  liveOutput,
+  hasLiveTerminal,
+  onStop,
   pending,
   onAnswer,
 }: {
   event: Extract<ExecutorEvent, { kind: "toolCall" }>;
   output?: Extract<ExecutorEvent, { kind: "toolResult" }>;
+  /** Output streamed so far from `toolOutputDelta` events, concatenated —
+   *  shown only until the final `toolResult` replaces it wholesale. */
+  liveOutput?: string;
+  /** True when this tool call embeds a client-hosted ACP terminal — the
+   *  only case a stop button actually does anything (PLAN.md phase 4). An
+   *  agent that runs commands in its own process never sets this, and the
+   *  button must not show: a button that does nothing is worse than none. */
+  hasLiveTerminal?: boolean;
+  onStop?: () => void;
   /** Set when the permission policy flagged this call as needing the user's
    *  decision (D7, tool-approval-prompt spec) — the turn is paused until
    *  Allow/Deny/AllowSession is answered. */
@@ -310,6 +323,21 @@ function ToolBlock({
           </Group>
         ) : (
           <>
+            {running && hasLiveTerminal && onStop && (
+              <Button
+                size="compact-xs"
+                variant="light"
+                color="danger"
+                leftSection={<IconPlayerStopFilled size={11} />}
+                data-testid="tool-stop"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStop();
+                }}
+              >
+                Stop
+              </Button>
+            )}
             {running && (
               <IconLoader2
                 size={14}
@@ -356,7 +384,7 @@ function ToolBlock({
           >
             {event.command}
           </Code>
-          {output && (
+          {(output || liveOutput) && (
             <Code
               block
               fz="xs"
@@ -367,7 +395,7 @@ function ToolBlock({
                 color: failed ? "var(--danger)" : "var(--fg)",
               }}
             >
-              {output.output}
+              {output ? output.output : liveOutput}
             </Code>
           )}
         </Stack>
@@ -416,6 +444,35 @@ export const EventList = memo(function EventList({
     }
     return map;
   }, [items]);
+
+  // Live output streamed so far per tool call, concatenated in arrival
+  // order — the running block's body until the final `toolResult` replaces
+  // it wholesale (same shape as `results` above).
+  const liveOutput = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind === "toolOutputDelta") {
+        map.set(item.id, (map.get(item.id) ?? "") + item.chunk);
+      }
+    }
+    return map;
+  }, [items]);
+
+  // Tool calls that embed a client-hosted ACP terminal — the only ones the
+  // stop button (PLAN.md phase 4) actually does anything for.
+  const hostedTerminals = useMemo(() => {
+    const set = new Set<string>();
+    for (const item of items) {
+      if (item.kind === "hostedTerminal") set.add(item.id);
+    }
+    return set;
+  }, [items]);
+  const onStopToolCall = useCallback(
+    (toolCallId: string) => {
+      if (sessionId) void killToolTerminal(sessionId, toolCallId);
+    },
+    [sessionId]
+  );
 
   // Permission prompts still awaiting the user's decision, keyed by the
   // tool call they belong to. Answered ones are hidden locally the moment a
@@ -575,6 +632,10 @@ export const EventList = memo(function EventList({
           // every Item kind instead of relying on the implicit fallthrough.
           case "textDelta":
           case "reasoningDelta":
+          // Folded into `liveOutput`/`hostedTerminals` above, rendered on
+          // the tool block they belong to — not their own bubble.
+          case "toolOutputDelta":
+          case "hostedTerminal":
             return null;
           case "fileEdit":
             return (
@@ -589,6 +650,9 @@ export const EventList = memo(function EventList({
                 key={index}
                 event={item}
                 output={results.get(item.id)}
+                liveOutput={liveOutput.get(item.id)}
+                hasLiveTerminal={hostedTerminals.has(item.id)}
+                onStop={() => onStopToolCall(item.id)}
                 pending={pending.get(item.id)}
                 onAnswer={onAnswer}
               />

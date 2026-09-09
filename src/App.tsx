@@ -5325,6 +5325,9 @@ export default function App() {
     // Control panel, which is where committing and pushing live.
     onViewDiff: () => {
       setDiffFocusPath(null);
+      // A pinned commit from the graph must not keep hiding the working
+      // tree the user just asked to see.
+      setDiffCommit(null);
       shell.setDiffOpen(true);
     },
     executor: activeExecutor,
@@ -6148,8 +6151,12 @@ export default function App() {
                           projectHash={project.hash}
                           /* Source Control's selected context is explicit:
                              the diff must never silently snap back to the
-                             focused conversation's worktree. */
-                          threadId={sourceControlTreeId ?? undefined}
+                             focused conversation's worktree. But absent an
+                             explicit choice, "View diff" on the active
+                             thread should show that thread's own worktree,
+                             not the (clean) project root PR #37 left as the
+                             unreachable default. */
+                          threadId={sourceControlTreeId ?? thread?.id ?? undefined}
                           refreshToken={diffRefreshToken}
                           focusPath={diffFocusPath}
                           onClearFocus={() => setDiffFocusPath(null)}

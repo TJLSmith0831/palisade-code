@@ -1946,6 +1946,28 @@ async fn answer_permission_prompt(
     .map_err(|e| e.to_string())?
 }
 
+/// Kill the hosted terminal behind one running tool call — the per-command
+/// stop button (PLAN.md phase 4). Ends that process only; the session and
+/// its turn survive. A missing session, or a tool call with no live hosted
+/// terminal (an agent that ignores `terminal/*`), is a no-op — a stop
+/// button only ever shows for a tool call that actually has one to kill.
+#[tauri::command]
+async fn kill_tool_terminal(
+    app: tauri::AppHandle,
+    session_id: String,
+    tool_call_id: String,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        if let Some(session) = harness.acp_sessions.lock().unwrap().get(&session_id) {
+            session.kill_tool_terminal(&tool_call_id);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What each live session is doing.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3250,6 +3272,7 @@ pub fn run() {
             change_status,
             stop_executor,
             answer_permission_prompt,
+            kill_tool_terminal,
             executor_status,
             list_sessions,
             thread_worktrees,

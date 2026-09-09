@@ -68,6 +68,29 @@ pub fn file_edits(update: &v1::SessionUpdate) -> Vec<ExecutorEvent> {
         .collect()
 }
 
+/// A terminal a tool call embeds (`ToolCallContent::Terminal`), as
+/// `(terminal_id, tool_call_id)` — how a hosted command's live output finds
+/// the tool call it belongs to (PLAN.md phase 4). `None` when this update
+/// carries no terminal content, same shape as `file_edits`.
+pub fn embedded_terminal(update: &v1::SessionUpdate) -> Option<(String, String)> {
+    let (id, content) = match update {
+        v1::SessionUpdate::ToolCall(call) => {
+            (call.tool_call_id.to_string(), call.content.as_slice())
+        }
+        v1::SessionUpdate::ToolCallUpdate(update) => (
+            update.tool_call_id.to_string(),
+            update.fields.content.as_deref().unwrap_or(&[]),
+        ),
+        _ => return None,
+    };
+    content.iter().find_map(|c| match c {
+        v1::ToolCallContent::Terminal(terminal) => {
+            Some((terminal.terminal_id.to_string(), id.clone()))
+        }
+        _ => None,
+    })
+}
+
 /// A shell command embedded in raw tool input, if there is one.
 fn raw_command(raw_input: Option<&serde_json::Value>) -> String {
     raw_input
@@ -105,6 +128,18 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
                     output: tool_content_text(update.fields.content.as_deref().unwrap_or(&[])),
                     is_error: true,
                 }),
+                Some(v1::ToolCallStatus::InProgress) => {
+                    let chunk =
+                        tool_content_text(update.fields.content.as_deref().unwrap_or(&[]));
+                    if chunk.is_empty() {
+                        None
+                    } else {
+                        Some(AcpUpdate::ToolOutputDelta {
+                            id: update.tool_call_id.to_string(),
+                            chunk,
+                        })
+                    }
+                }
                 _ => None,
             }
         }
@@ -153,6 +188,8 @@ pub enum AcpUpdate {
     ToolCall { id: String, name: String, command: String },
     /// A tool result received.
     ToolResult { id: String, output: String, is_error: bool },
+    /// A live fragment of a running tool call's output.
+    ToolOutputDelta { id: String, chunk: String },
     /// The turn completed normally.
     Done,
     /// The turn crashed.
@@ -211,6 +248,13 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
         }
         AcpUpdate::ToolResult { id, output, is_error } => {
             vec![ExecutorEvent::ToolResult { id, output, is_error }]
+        }
+        AcpUpdate::ToolOutputDelta { id, chunk } => {
+            if chunk.is_empty() {
+                vec![]
+            } else {
+                vec![ExecutorEvent::ToolOutputDelta { id, chunk }]
+            }
         }
         AcpUpdate::Done => vec![ExecutorEvent::Done],
         // A stop reason, not a dead process: the connection is still up and
@@ -447,7 +491,7 @@ mod tests {
     /// RED→GREEN: completed tool-call updates become results; in-progress
     /// ones are ignored.
     #[test]
-    fn wire_tool_update_maps_terminal_states_only() {
+    fn a_completed_update_still_becomes_a_tool_result() {
         let mut fields = v1::ToolCallUpdateFields::new();
         fields.status = Some(v1::ToolCallStatus::Completed);
         fields.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
@@ -462,7 +506,33 @@ mod tests {
                 is_error: false,
             })
         );
+    }
 
+    /// RED→GREEN: an `InProgress` update carrying content is a live-only
+    /// rendering signal — a `ToolOutputDelta`, never persisted (that's what
+    /// the terminal `ToolResult` is for). Without this, a long-running
+    /// command shows nothing until it exits (PLAN.md phase 3).
+    #[test]
+    fn in_progress_content_becomes_a_tool_output_delta() {
+        let mut fields = v1::ToolCallUpdateFields::new();
+        fields.status = Some(v1::ToolCallStatus::InProgress);
+        fields.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
+            v1::ContentBlock::Text(v1::TextContent::new("Compiling...\n")),
+        ))]);
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
+        assert_eq!(
+            from_session_update(&update),
+            Some(AcpUpdate::ToolOutputDelta {
+                id: "tc-1".into(),
+                chunk: "Compiling...\n".into(),
+            })
+        );
+    }
+
+    /// RED→GREEN: a status-only `InProgress` update (no content) stays
+    /// ignored — an empty delta would be noise, not a rendering signal.
+    #[test]
+    fn an_in_progress_update_with_no_content_is_still_ignored() {
         let mut pending = v1::ToolCallUpdateFields::new();
         pending.status = Some(v1::ToolCallStatus::InProgress);
         let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", pending));
