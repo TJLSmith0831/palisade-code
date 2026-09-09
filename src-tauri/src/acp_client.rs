@@ -168,14 +168,6 @@ pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
     meta.insert("terminal-auth".into(), serde_json::Value::Bool(true));
     v1::ClientCapabilities::new()
         .auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
-        // Distinct from `auth.terminal` above: this is the `terminal/*`
-        // method family (create/output/wait_for_exit/kill/release), the
-        // schema-1.5.0 `ClientCapabilities.terminal` flag. Without it an
-        // agent runs commands in its own process instead of routing them
-        // through Palisade — meaning no live output until the command exits
-        // (phase 3's `ToolOutputDelta` has nothing to stream) and no way to
-        // stop just that command (PLAN.md phase 4).
-        .terminal(true)
 }
 
 /// The advertised method `authenticate` may actually be called with.
@@ -463,18 +455,6 @@ impl AcpSession {
         }
     }
 
-    /// Kills the hosted terminal behind one running tool call — the stop
-    /// button (PLAN.md phase 4). A no-op if the session is gone or the tool
-    /// call has no live hosted terminal (an agent that ignores `terminal/*`
-    /// and runs commands in its own process can't be stopped per-command;
-    /// nothing here pretends otherwise). Does not touch the session or the
-    /// turn — `terminate()` is the only thing that ends those.
-    pub fn kill_tool_terminal(&self, tool_call_id: &str) {
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(BridgeCommand::KillTerminal(tool_call_id.to_string()));
-        }
-    }
-
     /// Terminate this session: tell the bridge to shut down, which closes the
     /// connection and kills the agent process tree. Fail-safe-to-deny (D-design-4):
     /// any tool call still awaiting the user's decision resolves as denied
@@ -525,10 +505,6 @@ pub struct AcpSpawn {
 pub(crate) enum BridgeCommand {
     Prompt(String),
     Shutdown,
-    /// Kill the hosted terminal behind one running tool call (PLAN.md
-    /// phase 4's stop button) — ends that command only; the session and
-    /// the turn survive.
-    KillTerminal(String),
 }
 
 /// What the bridge reports once the session is live (or why it failed).
@@ -766,7 +742,7 @@ fn tool_call_paths(
 }
 
 /// De-duplicate a live tool-output chunk against what this tool call has
-/// already streamed (PLAN.md phase 3). Agents differ in whether an
+/// already streamed. Agents differ in whether an
 /// `InProgress` update carries the full accumulated output so far or just
 /// the new tail since the last one — emitting either raw would double-print
 /// under the cumulative shape. `seen` holds each tool call's last-emitted
@@ -1059,36 +1035,9 @@ async fn run_bridge(
     let notif_edits = Arc::new(std::sync::Mutex::new(std::collections::HashSet::<String>::new()));
     // Live tool-output text already streamed per tool call id, so a
     // cumulative-output agent doesn't double-print its own history on every
-    // `InProgress` update (`dedup_tool_output`, PLAN.md phase 3). Cleared
+    // `InProgress` update (`dedup_tool_output`). Cleared
     // when the tool call completes — nothing more to de-dup against.
     let notif_tool_output = Arc::new(std::sync::Mutex::new(HashMap::<String, String>::new()));
-    // ACP-hosted terminals (PLAN.md phase 4) — Palisade's own answer to
-    // `terminal/create` et al, keyed by the terminal id Palisade assigns.
-    // Session-local: torn down with the bridge, not the long-lived UI
-    // terminal tabs `TerminalRegistry` manages.
-    let acp_terminals: Arc<Mutex<HashMap<String, crate::terminal::CommandTerminal>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-    // Which tool call embeds which terminal id, so a hosted command's live
-    // output can be emitted as a `ToolOutputDelta` against the *tool call*
-    // id the frontend actually renders against — the raw ACP terminal id
-    // means nothing to `EventView`. Populated when a `ToolCall`/
-    // `ToolCallUpdate` notification embeds a `ToolCallContent::Terminal`.
-    //
-    // ponytail: a chunk that arrives before this mapping exists (the agent
-    // embeds the terminal in a tool call only after `terminal/create`
-    // returns) is dropped from live streaming rather than queued — it's
-    // still in the captured buffer `terminal/output` reads, and in practice
-    // the embedding notification arrives well before real output does. A
-    // backlog-until-mapped queue would close this gap if that stops holding.
-    let notif_terminal_map: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
-    // A second handle to the same map: the notification closure below moves
-    // `notif_terminal_map` in fully (it's `async move`), so the terminal
-    // handlers further down need their own clone taken before that point.
-    let acp_terminal_map = notif_terminal_map.clone();
-    let term_project_root = spawn.project_root.clone();
-    let term_sink = sink.clone();
-    let term_session = palisade_session_id.clone();
-    let term_thread = spawn.thread_id.clone();
     let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
@@ -1149,23 +1098,6 @@ async fn run_bridge(
                         }
                     }
                     emit(&notif_sink, &notif_session, &notif_thread, event);
-                }
-                // Learn which tool call a hosted terminal belongs to, so its
-                // live output (streamed from the terminal's own PTY reader
-                // thread, not through this notification loop) can be emitted
-                // under the id `EventView` actually renders against.
-                if let Some((terminal_id, tool_call_id)) =
-                    crate::acp_events::embedded_terminal(&notification.update)
-                {
-                    notif_terminal_map.lock().unwrap().insert(terminal_id, tool_call_id.clone());
-                    // The frontend's only honest signal that a stop button
-                    // does something — see the variant's doc comment.
-                    emit(
-                        &notif_sink,
-                        &notif_session,
-                        &notif_thread,
-                        ExecutorEvent::HostedTerminal { id: tool_call_id },
-                    );
                 }
                 if let Some(mut update) =
                     crate::acp_events::from_session_update(&notification.update)
@@ -1241,180 +1173,6 @@ async fn run_bridge(
                     responder.respond(response)
                 })
             },
-            acp::on_receive_request!(),
-        )
-        // ------------------------------------------- hosted terminals (phase 4)
-        //
-        // Every handler below follows phase 2's rule: nothing here awaits
-        // the outside world inline. `terminal/wait_for_exit` in particular
-        // blocks for the whole command, so it runs under `cx.spawn` like
-        // every other one — getting this wrong reintroduces the phase 2
-        // freeze in a worse place (a build, not a user's click, would hold
-        // the loop). Each handler below needs its own pre-clone of the
-        // shared state (rather than sharing one `let` across all five
-        // `.on_receive_request` calls) because each is itself a `move`
-        // closure — the builder chain would otherwise move the original out
-        // from under the next handler.
-        .on_receive_request({
-            let acp_terminals = acp_terminals.clone();
-            let acp_terminal_map = acp_terminal_map.clone();
-            let term_project_root = term_project_root.clone();
-            let term_sink = term_sink.clone();
-            let term_session = term_session.clone();
-            let term_thread = term_thread.clone();
-            async move |request: v1::CreateTerminalRequest, responder, cx| {
-                let acp_terminals = acp_terminals.clone();
-                let notif_terminal_map = acp_terminal_map.clone();
-                let term_project_root = term_project_root.clone();
-                let term_sink = term_sink.clone();
-                let term_session = term_session.clone();
-                let term_thread = term_thread.clone();
-                cx.spawn(async move {
-                    let terminal_id = ulid::Ulid::new().to_string();
-                    let cwd = request.cwd.clone().unwrap_or_else(|| term_project_root.clone());
-                    let env: Vec<(String, String)> = request
-                        .env
-                        .iter()
-                        .map(|e| (e.name.clone(), e.value.clone()))
-                        .collect();
-
-                    // Streams every chunk live, under the *tool call* id
-                    // (once known — see `notif_terminal_map`'s doc comment
-                    // above), reusing phase 3's `ToolOutputDelta` path.
-                    let out_terminal_id = terminal_id.clone();
-                    let out_map = notif_terminal_map.clone();
-                    let out_sink = term_sink.clone();
-                    let out_session = term_session.clone();
-                    let out_thread = term_thread.clone();
-                    let result = crate::terminal::CommandTerminal::spawn(
-                        &cwd,
-                        &request.command,
-                        &request.args,
-                        &env,
-                        move |bytes: &[u8]| {
-                            let Some(tool_call_id) =
-                                out_map.lock().unwrap().get(&out_terminal_id).cloned()
-                            else {
-                                return;
-                            };
-                            let chunk = String::from_utf8_lossy(bytes).into_owned();
-                            if chunk.is_empty() {
-                                return;
-                            }
-                            emit(
-                                &out_sink,
-                                &out_session,
-                                &out_thread,
-                                ExecutorEvent::ToolOutputDelta { id: tool_call_id, chunk },
-                            );
-                        },
-                    );
-
-                    match result {
-                        Ok(terminal) => {
-                            acp_terminals.lock().unwrap().insert(terminal_id.clone(), terminal);
-                            responder.respond(v1::CreateTerminalResponse::new(terminal_id))
-                        }
-                        Err(err) => responder.respond_with_internal_error(err),
-                    }
-                })
-            }
-        },
-            acp::on_receive_request!(),
-        )
-        .on_receive_request({
-            let acp_terminals = acp_terminals.clone();
-            async move |request: v1::TerminalOutputRequest, responder, cx| {
-                let acp_terminals = acp_terminals.clone();
-                cx.spawn(async move {
-                    let terminal_id = request.terminal_id.to_string();
-                    let mut terminals = acp_terminals.lock().unwrap();
-                    let Some(terminal) = terminals.get_mut(&terminal_id) else {
-                        drop(terminals);
-                        return responder
-                            .respond_with_internal_error(format!("no terminal `{terminal_id}`"));
-                    };
-                    let output = terminal.output();
-                    let truncated = output.len() >= crate::terminal::CAPTURED_OUTPUT_CAP;
-                    let exit_status = terminal
-                        .try_exit_code()
-                        .map(|code| v1::TerminalExitStatus::new().exit_code(code as u32));
-                    drop(terminals);
-                    let response =
-                        v1::TerminalOutputResponse::new(String::from_utf8_lossy(&output), truncated)
-                            .exit_status(exit_status);
-                    responder.respond(response)
-                })
-            }
-        },
-            acp::on_receive_request!(),
-        )
-        .on_receive_request({
-            let acp_terminals = acp_terminals.clone();
-            async move |request: v1::WaitForTerminalExitRequest, responder, cx| {
-                let acp_terminals = acp_terminals.clone();
-                cx.spawn(async move {
-                    let terminal_id = request.terminal_id.to_string();
-                    loop {
-                        // Locked only long enough to poll — never held
-                        // across the `sleep` below, or a concurrent
-                        // `terminal/output`/`terminal/kill` would block on
-                        // this loop for up to the whole poll interval.
-                        let code = {
-                            let mut terminals = acp_terminals.lock().unwrap();
-                            match terminals.get_mut(&terminal_id) {
-                                Some(terminal) => terminal.try_exit_code(),
-                                None => {
-                                    return responder.respond_with_internal_error(format!(
-                                        "no terminal `{terminal_id}`"
-                                    ));
-                                }
-                            }
-                        };
-                        if let Some(code) = code {
-                            let status = v1::TerminalExitStatus::new().exit_code(code as u32);
-                            return responder
-                                .respond(v1::WaitForTerminalExitResponse::new(status));
-                        }
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                })
-            }
-        },
-            acp::on_receive_request!(),
-        )
-        .on_receive_request({
-            let acp_terminals = acp_terminals.clone();
-            async move |request: v1::KillTerminalRequest, responder, cx| {
-                let acp_terminals = acp_terminals.clone();
-                cx.spawn(async move {
-                    let terminal_id = request.terminal_id.to_string();
-                    // The captured buffer and exit status stay readable
-                    // after this — `kill` ends the process, it doesn't
-                    // release the terminal (that's `terminal/release`).
-                    if let Some(terminal) = acp_terminals.lock().unwrap().get_mut(&terminal_id) {
-                        terminal.kill();
-                    }
-                    responder.respond(v1::KillTerminalResponse::new())
-                })
-            }
-        },
-            acp::on_receive_request!(),
-        )
-        .on_receive_request({
-            let acp_terminals = acp_terminals.clone();
-            let acp_terminal_map = acp_terminal_map.clone();
-            async move |request: v1::ReleaseTerminalRequest, responder, cx| {
-                let acp_terminals = acp_terminals.clone();
-                let notif_terminal_map = acp_terminal_map.clone();
-                cx.spawn(async move {
-                    let terminal_id = request.terminal_id.to_string();
-                    acp_terminals.lock().unwrap().remove(&terminal_id);
-                    notif_terminal_map.lock().unwrap().remove(&terminal_id);
-                    responder.respond(v1::ReleaseTerminalResponse::new())
-                })
-            }
-        },
             acp::on_receive_request!(),
         )
         .connect_with(transport, async move |cx| {
@@ -1634,21 +1392,6 @@ async fn run_bridge(
                                     // the connection is gone.
                                     emit(&sink, &palisade_session_id, &spawn.thread_id,
                                         ExecutorEvent::agent_died(None, format!("prompt send failed: {e}")));
-                                }
-                            }
-                            Some(BridgeCommand::KillTerminal(tool_call_id)) => {
-                                let terminal_id = acp_terminal_map
-                                    .lock()
-                                    .unwrap()
-                                    .iter()
-                                    .find(|(_, tc)| **tc == tool_call_id)
-                                    .map(|(term_id, _)| term_id.clone());
-                                if let Some(terminal_id) = terminal_id {
-                                    if let Some(terminal) =
-                                        acp_terminals.lock().unwrap().get_mut(&terminal_id)
-                                    {
-                                        terminal.kill();
-                                    }
                                 }
                             }
                             Some(BridgeCommand::Shutdown) | None => return Ok(()),
@@ -2225,7 +1968,7 @@ mod tests {
 
     /// RED→GREEN: an agent that resends the full accumulated output on every
     /// `InProgress` update must still stream just the new suffix each time —
-    /// "one" then "two", not "one" then "onetwo" (PLAN.md phase 3).
+    /// "one" then "two", not "one" then "onetwo".
     #[test]
     fn repeated_cumulative_output_is_emitted_once() {
         let mut seen = HashMap::new();
@@ -2789,33 +2532,6 @@ mod tests {
         /// user's Allow/Deny: it must still be free to stream other session
         /// updates on the same connection while that request sits pending.
         emit_permission_request_first: bool,
-        /// Runs one hosted-terminal scenario before the reply chunks — the
-        /// phase 4 tests each drive a different shape of `terminal/*` usage
-        /// through the fake agent, the same way `emit_permission_request_first`
-        /// drives phase 2's.
-        terminal_scenario: Option<TerminalScenario>,
-        /// Where the `Kill` scenario stashes its own `terminal/output`
-        /// response — the fake agent's assertions can't reach the test's
-        /// `assert!` directly, so it hands the result back through here.
-        terminal_kill_result: Arc<std::sync::Mutex<Option<v1::TerminalOutputResponse>>>,
-    }
-
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    enum TerminalScenario {
-        /// `terminal/create` a short-lived command, embed it in a tool call,
-        /// then respond — proving its output streams live as
-        /// `ToolOutputDelta` (PLAN.md phase 4).
-        Stream,
-        /// `terminal/create` a longer command, embed it, let it print once,
-        /// `terminal/kill` it, `terminal/output` to confirm the exit status
-        /// and buffer, then one more notification — proving the session
-        /// survives the kill.
-        Kill,
-        /// `terminal/create` a command, embed it, fire off
-        /// `terminal/wait_for_exit` WITHOUT awaiting it, then immediately
-        /// send another notification — proving the dispatch loop isn't
-        /// blocked behind the wait (phase 2's rule, applied to phase 4).
-        Wait,
     }
 
     impl FakeAgent {
@@ -2829,8 +2545,6 @@ mod tests {
             let set_requests = self.set_config_requests.clone();
             let emit_thoughts = self.emit_thoughts;
             let emit_permission_request_first = self.emit_permission_request_first;
-            let terminal_scenario = self.terminal_scenario;
-            let terminal_kill_result = self.terminal_kill_result.clone();
             tokio::spawn(async move {
                 let _ = acp::Agent
                     .builder()
@@ -2891,137 +2605,8 @@ mod tests {
                           // That's the phase 2 bug, reproduced on this
                           // harness's own agent side, not the client's.
                           let cx2 = cx.clone();
-                          let terminal_kill_result = terminal_kill_result.clone();
                           cx.spawn(async move {
                             let cx = cx2;
-                            if let Some(scenario) = terminal_scenario {
-                                let (command, args) = match scenario {
-                                    TerminalScenario::Stream => (
-                                        "/bin/sh",
-                                        vec![
-                                            "-c".to_string(),
-                                            "echo term-one; sleep 0.05; echo term-two".to_string(),
-                                        ],
-                                    ),
-                                    TerminalScenario::Kill => (
-                                        "/bin/sh",
-                                        vec![
-                                            "-c".to_string(),
-                                            "echo before-kill; sleep 5".to_string(),
-                                        ],
-                                    ),
-                                    TerminalScenario::Wait => (
-                                        "/bin/sh",
-                                        vec!["-c".to_string(), "sleep 6".to_string()],
-                                    ),
-                                };
-                                let create = cx
-                                    .send_request(
-                                        v1::CreateTerminalRequest::new(req.session_id.clone(), command)
-                                            .args(args)
-                                            // `test_spawn`'s project_root
-                                            // (`/tmp/proj`) doesn't exist on
-                                            // disk — an explicit `cwd` here
-                                            // is what `terminal/create`'s
-                                            // handler falls back from, and a
-                                            // real temp dir so the spawn
-                                            // actually succeeds.
-                                            .cwd(std::env::temp_dir()),
-                                    )
-                                    .block_task()
-                                    .await?;
-                                let terminal_id = create.terminal_id.clone();
-
-                                // Embed the terminal in a tool call so the
-                                // client learns which tool call it belongs
-                                // to (`notif_terminal_map` on the client
-                                // side) — without this, streamed output has
-                                // nowhere to attach.
-                                let mut fields = v1::ToolCallUpdateFields::new();
-                                fields.content = Some(vec![v1::ToolCallContent::Terminal(
-                                    v1::Terminal::new(terminal_id.clone()),
-                                )]);
-                                let _ = cx.send_notification(v1::SessionNotification::new(
-                                    req.session_id.clone(),
-                                    v1::SessionUpdate::ToolCall(v1::ToolCall::new(
-                                        "tc-term",
-                                        "Run command",
-                                    )),
-                                ));
-                                let _ = cx.send_notification(v1::SessionNotification::new(
-                                    req.session_id.clone(),
-                                    v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new(
-                                        "tc-term", fields,
-                                    )),
-                                ));
-
-                                match scenario {
-                                    TerminalScenario::Stream => {
-                                        // Give the process a moment to
-                                        // actually produce output before this
-                                        // handler responds and the turn ends.
-                                        tokio::time::sleep(std::time::Duration::from_millis(150))
-                                            .await;
-                                    }
-                                    TerminalScenario::Kill => {
-                                        tokio::time::sleep(std::time::Duration::from_millis(150))
-                                            .await;
-                                        let _ = cx
-                                            .send_request(v1::KillTerminalRequest::new(
-                                                req.session_id.clone(),
-                                                terminal_id.clone(),
-                                            ))
-                                            .block_task()
-                                            .await?;
-                                        let output = cx
-                                            .send_request(v1::TerminalOutputRequest::new(
-                                                req.session_id.clone(),
-                                                terminal_id.clone(),
-                                            ))
-                                            .block_task()
-                                            .await?;
-                                        *terminal_kill_result.lock().unwrap() = Some(output);
-                                        // Proves the bridge kept processing
-                                        // after the kill — the test looks
-                                        // for this chunk once the kill
-                                        // result above has landed.
-                                        let _ = cx.send_notification(v1::SessionNotification::new(
-                                            req.session_id.clone(),
-                                            v1::SessionUpdate::AgentMessageChunk(
-                                                v1::ContentChunk::new(v1::ContentBlock::Text(
-                                                    v1::TextContent::new("after-kill"),
-                                                )),
-                                            ),
-                                        ));
-                                    }
-                                    TerminalScenario::Wait => {
-                                        // Sent and NOT awaited — same shape
-                                        // as `emit_permission_request_first`
-                                        // below: dropping the `SentRequest`
-                                        // immediately would auto-cancel it,
-                                        // so the wait moves into its own
-                                        // spawned task while this handler
-                                        // goes on to prove the dispatch loop
-                                        // is still free.
-                                        let sent = cx.send_request(v1::WaitForTerminalExitRequest::new(
-                                            req.session_id.clone(),
-                                            terminal_id.clone(),
-                                        ));
-                                        cx.spawn(async move {
-                                            let _ = sent.block_task().await;
-                                            Ok(())
-                                        })?;
-                                        let _ = cx.send_notification(v1::SessionNotification::new(
-                                            req.session_id.clone(),
-                                            v1::SessionUpdate::AgentMessageChunk(
-                                                v1::ContentChunk::new(v1::ContentBlock::Text(
-                                                    v1::TextContent::new("still-flowing"),
-                                                )),
-                                            ),
-                                        ));
-                                    }
-                                }
-                            }
                             if emit_permission_request_first {
                                 let mut fields = v1::ToolCallUpdateFields::new();
                                 fields.kind = Some(v1::ToolKind::Execute);
@@ -3134,30 +2719,12 @@ mod tests {
         FakeAgent,
         tokio::task::JoinHandle<()>,
     ) {
-        fake_agent_pair_full(emit_thoughts, emit_permission_request_first, None)
-    }
-
-    /// A fake agent that runs one hosted-terminal scenario (PLAN.md phase 4)
-    /// before its reply chunks. Returns the agent's `terminal_kill_result`
-    /// handle too, so a `Kill`-scenario test can inspect the `terminal/output`
-    /// response the fake agent captured.
-    fn fake_agent_pair_with_terminal(
-        scenario: TerminalScenario,
-    ) -> (
-        acp::ByteStreams<
-            impl futures::AsyncWrite + Send + 'static,
-            impl futures::AsyncRead + Send + 'static,
-        >,
-        FakeAgent,
-        tokio::task::JoinHandle<()>,
-    ) {
-        fake_agent_pair_full(false, false, Some(scenario))
+        fake_agent_pair_full(emit_thoughts, emit_permission_request_first)
     }
 
     fn fake_agent_pair_full(
         emit_thoughts: bool,
         emit_permission_request_first: bool,
-        terminal_scenario: Option<TerminalScenario>,
     ) -> (
         acp::ByteStreams<
             impl futures::AsyncWrite + Send + 'static,
@@ -3177,8 +2744,6 @@ mod tests {
             set_config_requests: Arc::new(std::sync::Mutex::new(vec![])),
             emit_thoughts,
             emit_permission_request_first,
-            terminal_scenario,
-            terminal_kill_result: Arc::new(std::sync::Mutex::new(None)),
         };
         let handle = fake.spawn(acp::ByteStreams::new(
             agent_w.compat_write(),
@@ -3299,7 +2864,7 @@ mod tests {
     /// RED→GREEN: the crate's own dispatch-loop rule (`concepts::ordering`)
     /// says a request handler that awaits the user holds the loop, so no
     /// other message is processed while a permission prompt sits open. This
-    /// is the whole-session freeze from `PLAN.md` phase 2 — proven here by
+    /// is the whole-session freeze this guards against — proven here by
     /// having the agent send a `session/request_permission` and then, without
     /// waiting for its answer, a normal `session/update` text chunk. Under
     /// the bug, the client's `on_receive_request` handler for
@@ -3383,115 +2948,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    // --------------------------------------------------- phase 4: hosted terminals
-
-    /// RED→GREEN: a `terminal/create`d command streams its output live —
-    /// `ToolOutputDelta` events reach the sink under the tool call id the
-    /// terminal was embedded in, driven entirely through the real
-    /// `terminal/*` handlers (PLAN.md phase 4).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_created_terminal_streams_output_before_it_exits() {
-        let (transport, _fake, _agent) = fake_agent_pair_with_terminal(TerminalScenario::Stream);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (id, _models, cmds, busy, _acp_id, pending) =
-            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None)
-                .unwrap();
-        let session = SessionIdentity::from(&test_spawn(None))
-            .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, "hello").unwrap();
-
-        // Poll for a bounded window: a ToolOutputDelta under "tc-term"
-        // proves the hosted command's output actually streamed, not just
-        // that the terminal was created.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut saw_delta = false;
-        while std::time::Instant::now() < deadline && !saw_delta {
-            if let Ok(event) = rx.recv_timeout(Duration::from_millis(200)) {
-                if let ExecutorEvent::ToolOutputDelta { id, chunk } = event.event {
-                    if id == "tc-term" && !chunk.is_empty() {
-                        saw_delta = true;
-                    }
-                }
-            }
-        }
-        assert!(saw_delta, "expected a ToolOutputDelta for the hosted terminal's tool call");
-    }
-
-    /// RED→GREEN: `terminal/kill` ends the hosted command but leaves its
-    /// captured output readable and the session alive — the following
-    /// `session/update` still gets through (PLAN.md phase 4).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn killing_a_terminal_ends_the_command_and_leaves_the_session_alive() {
-        let (transport, fake, _agent) = fake_agent_pair_with_terminal(TerminalScenario::Kill);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (id, _models, cmds, busy, _acp_id, pending) =
-            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None)
-                .unwrap();
-        let session = SessionIdentity::from(&test_spawn(None))
-            .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, "hello").unwrap();
-
-        // The fake agent's own "after-kill" chunk proves the bridge kept
-        // processing session/updates after the kill went through.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let mut saw_after_kill = false;
-        while std::time::Instant::now() < deadline && !saw_after_kill {
-            if let Ok(event) = rx.recv_timeout(Duration::from_millis(200)) {
-                if matches!(event.event, ExecutorEvent::TextDelta { ref text } if text == "after-kill") {
-                    saw_after_kill = true;
-                }
-            }
-        }
-        assert!(saw_after_kill, "the session should still process updates after a terminal/kill");
-
-        let result = fake
-            .terminal_kill_result
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("the fake agent's terminal/output call should have completed");
-        assert!(
-            result.output.contains("before-kill"),
-            "the captured output should survive the kill: {:?}",
-            result.output
-        );
-        assert!(
-            result.exit_status.is_some(),
-            "terminal/output should report an exit status once the process is killed"
-        );
-    }
-
-    /// RED→GREEN: `terminal/wait_for_exit` does not hold the dispatch loop —
-    /// a `session/update` sent right after it (without awaiting the wait)
-    /// still gets through immediately, not after the long-running command
-    /// exits. Bounded timeout so a regression fails clean instead of
-    /// hanging (PLAN.md phase 4, phase 2's rule applied here too).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn wait_for_exit_does_not_hold_the_dispatch_loop() {
-        let (transport, _fake, _agent) = fake_agent_pair_with_terminal(TerminalScenario::Wait);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (id, _models, cmds, busy, _acp_id, pending) =
-            start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None)
-                .unwrap();
-        let session = SessionIdentity::from(&test_spawn(None))
-            .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, "hello").unwrap();
-
-        // The fake agent's hosted command sleeps 6s; "still-flowing" is
-        // sent right after the (unawaited) wait_for_exit request. A bounded
-        // window well under 6s proves the loop wasn't stuck behind the wait.
-        let deadline = std::time::Instant::now() + Duration::from_millis(3000);
-        let mut saw_it = false;
-        while std::time::Instant::now() < deadline && !saw_it {
-            if let Ok(event) = rx.recv_timeout(Duration::from_millis(100)) {
-                if matches!(event.event, ExecutorEvent::TextDelta { ref text } if text == "still-flowing") {
-                    saw_it = true;
-                }
-            }
-        }
-        assert!(saw_it, "a session/update should still flow while wait_for_exit is outstanding");
     }
 
     /// RED→GREEN: a thread-chosen model is applied via set_config_option
@@ -3764,16 +3220,6 @@ mod tests {
             Some(true),
             "and the _meta variant, for agents that resolve the command for us"
         );
-    }
-
-    /// PLAN.md phase 4: distinct from `auth.terminal` above — this is the
-    /// `terminal/*` method family. An agent only routes commands through
-    /// `terminal/create` et al (rather than running them in its own
-    /// process, invisible to Palisade) when the client declares this.
-    #[test]
-    fn palisade_advertises_that_it_can_host_terminals() {
-        let caps = client_capabilities();
-        assert!(caps.terminal, "the ClientCapabilities.terminal flag agents key off");
     }
 
     // --------------------- #19: the protocol contract, not one agent's shape

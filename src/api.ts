@@ -155,10 +155,6 @@ export type ExecutorEvent =
    *  written to the log. Without this a command's output does not appear
    *  until it exits. */
   | { kind: "toolOutputDelta"; id: string; chunk: string }
-  /** This tool call embeds a client-hosted ACP terminal — the one honest
-   *  signal that the stop button (`tool-stop`) actually does something. An
-   *  agent that runs commands in its own process never emits this. */
-  | { kind: "hostedTerminal"; id: string }
   | { kind: "toolResult"; id: string; output: string; isError: boolean }
   | {
       kind: "permissionRequest";
@@ -359,14 +355,6 @@ export const answerPermissionPrompt = (
   decision: "allow" | "deny" | "allow_session"
 ) =>
   invoke<void>("answer_permission_prompt", { sessionId, requestId, decision });
-
-/** Kill the hosted terminal behind one running tool call — the per-command
- *  stop button. Ends that process only; the session and its turn survive.
- *  A no-op if the tool call has no live hosted terminal (an agent that
- *  ignores `terminal/*` and runs commands in its own process can't be
- *  stopped per-command — `ToolBlock` doesn't offer this button for those). */
-export const killToolTerminal = (sessionId: string, toolCallId: string) =>
-  invoke<void>("kill_tool_terminal", { sessionId, toolCallId });
 
 /** One run of one agent against one thread. */
 export type SessionRecord = {

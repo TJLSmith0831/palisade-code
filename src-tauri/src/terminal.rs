@@ -30,48 +30,15 @@ impl Terminal {
     /// `project_root`. `on_output` is called from a background thread with
     /// each chunk of raw PTY bytes as they arrive.
     pub fn spawn(project_root: &Path, on_output: impl Fn(Vec<u8>) + Send + 'static) -> Res<Self> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let mut cmd = CommandBuilder::new(&shell);
-        cmd.arg("-l");
-        cmd.cwd(project_root);
-        Self::start(cmd, &[], on_output)
-    }
-
-    /// Spawns a specific command — not a login shell — rooted at
-    /// `project_root`: what an ACP `terminal/create` needs to host an
-    /// agent's named command with its own args/env (PLAN.md phase 4).
-    /// `env` is applied on top of the same `PATH`/`TERM` baseline `spawn`
-    /// uses, so a hosted command sees a real, curses-capable environment
-    /// under launchd the same way the interactive shell does — and can still
-    /// override either if the agent asked for a specific value.
-    pub fn spawn_command(
-        project_root: &Path,
-        program: &str,
-        args: &[String],
-        env: &[(String, String)],
-        on_output: impl Fn(Vec<u8>) + Send + 'static,
-    ) -> Res<Self> {
-        let mut cmd = CommandBuilder::new(program);
-        for arg in args {
-            cmd.arg(arg);
-        }
-        cmd.cwd(project_root);
-        Self::start(cmd, env, on_output)
-    }
-
-    /// Common tail of `spawn`/`spawn_command`: apply the shared `PATH`/`TERM`
-    /// baseline (overridable by `extra_env`), open the PTY, launch `cmd`,
-    /// and start the reader thread.
-    fn start(
-        mut cmd: CommandBuilder,
-        extra_env: &[(String, String)],
-        on_output: impl Fn(Vec<u8>) + Send + 'static,
-    ) -> Res<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .map_err(|err| format!("open pty: {err}"))?;
 
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.arg("-l");
+        cmd.cwd(project_root);
         // CommandBuilder inherits this process's env by default, which under
         // launchd is the same minimal PATH the executor already works around
         // (executor.rs's child_path_env doc comment) — reuse that fix here.
@@ -81,13 +48,8 @@ impl Terminal {
         // (top, vim, less) refuses to start ("TERM environment variable
         // not set"). xterm.js speaks the xterm-256color terminfo dialect.
         cmd.env("TERM", "xterm-256color");
-        // Applied last so a caller-supplied value (an ACP terminal's own
-        // env, e.g. a different PATH) wins over the baseline above.
-        for (key, value) in extra_env {
-            cmd.env(key, value);
-        }
 
-        let child = pair.slave.spawn_command(cmd).map_err(|err| format!("spawn command: {err}"))?;
+        let child = pair.slave.spawn_command(cmd).map_err(|err| format!("spawn shell: {err}"))?;
         // The child holds its own fd for the slave side; drop our copy so we
         // don't keep an extra reference alive past the child's lifetime.
         drop(pair.slave);
@@ -114,17 +76,6 @@ impl Terminal {
             reader_handle: Some(reader_handle),
             child,
         })
-    }
-
-    /// Non-blocking check for whether the process has exited, and its exit
-    /// code if so. `None` while still running, and also on a signal death
-    /// (no numeric exit code to report — the caller already learns the
-    /// terminal is dead some other way, e.g. `terminal/kill`).
-    pub fn try_exit_code(&mut self) -> Option<i32> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some(status.exit_code() as i32),
-            _ => None,
-        }
     }
 
     pub fn write(&self, bytes: &[u8]) -> Res<()> {
@@ -162,65 +113,6 @@ impl Drop for Terminal {
     }
 }
 
-// --------------------------------------------------- ACP command terminals
-
-/// Bytes an ACP-hosted terminal keeps buffered for `terminal/output` to
-/// return — capped so a chatty command (a build log, an install) can't grow
-/// this without bound (PLAN.md phase 4).
-///
-/// ponytail: a fixed head cap, not a ring buffer — if an agent needs the
-/// *tail* of a huge log rather than its head, swap this for one.
-pub const CAPTURED_OUTPUT_CAP: usize = 1_000_000; // ~1MB
-
-/// A `Terminal` running one named command (not a login shell), with its
-/// output captured up to `CAPTURED_OUTPUT_CAP` and its exit status pollable
-/// — what ACP's `terminal/create`, `terminal/output`, `terminal/wait_for_exit`
-/// and `terminal/kill` need. `on_output` still fires live for every chunk
-/// (streaming to the UI, PLAN.md phase 3's `ToolOutputDelta`); this only adds
-/// the capped copy those handlers read back.
-pub struct CommandTerminal {
-    terminal: Terminal,
-    output: Arc<Mutex<Vec<u8>>>,
-}
-
-impl CommandTerminal {
-    pub fn spawn(
-        project_root: &Path,
-        program: &str,
-        args: &[String],
-        env: &[(String, String)],
-        on_output: impl Fn(&[u8]) + Send + 'static,
-    ) -> Res<Self> {
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let captured = output.clone();
-        let terminal = Terminal::spawn_command(project_root, program, args, env, move |bytes| {
-            on_output(&bytes);
-            let mut buf = captured.lock().unwrap();
-            let room = CAPTURED_OUTPUT_CAP.saturating_sub(buf.len());
-            if room > 0 {
-                let take = room.min(bytes.len());
-                buf.extend_from_slice(&bytes[..take]);
-            }
-        })?;
-        Ok(Self { terminal, output })
-    }
-
-    /// Everything captured so far, up to the cap.
-    pub fn output(&self) -> Vec<u8> {
-        self.output.lock().unwrap().clone()
-    }
-
-    /// Non-blocking: `None` while still running.
-    pub fn try_exit_code(&mut self) -> Option<i32> {
-        self.terminal.try_exit_code()
-    }
-
-    /// Ends the process. The captured buffer stays readable afterward —
-    /// `terminal/kill` leaves the output in place, it just stops it growing.
-    pub fn kill(&mut self) {
-        self.terminal.terminate();
-    }
-}
 
 // ------------------------------------------------------- terminal registry
 
@@ -402,64 +294,6 @@ mod tests {
 
         term.terminate();
         term.terminate(); // must not panic or hang on a second call
-    }
-
-    // ------------------------------------------------- ACP command terminals
-
-    /// RED→GREEN: a command terminal (a named program, not a login shell)
-    /// captures its output and reports its exit status once the process
-    /// ends — what `terminal/output` needs (PLAN.md phase 4).
-    #[test]
-    fn a_command_terminal_captures_output_and_exit_status() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut term = CommandTerminal::spawn(
-            dir.path(),
-            "/bin/sh",
-            &["-c".to_string(), "echo hello-from-command".to_string()],
-            &[],
-            |_| {},
-        )
-        .unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut exit_code = None;
-        while Instant::now() < deadline && exit_code.is_none() {
-            exit_code = term.try_exit_code();
-            if exit_code.is_none() {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-        assert_eq!(exit_code, Some(0), "process should have exited cleanly");
-
-        let output = String::from_utf8_lossy(&term.output()).into_owned();
-        assert!(output.contains("hello-from-command"), "captured output was: {output:?}");
-    }
-
-    /// RED→GREEN: the captured buffer stops growing at the cap instead of
-    /// holding an unbounded amount of a chatty command's output.
-    #[test]
-    fn output_is_capped_rather_than_growing_without_bound() {
-        let dir = tempfile::tempdir().unwrap();
-        // Print well past the cap so the test proves truncation, not luck.
-        let script = format!(
-            "yes x | head -c {}",
-            CAPTURED_OUTPUT_CAP * 2
-        );
-        let mut term =
-            CommandTerminal::spawn(dir.path(), "/bin/sh", &["-c".to_string(), script], &[], |_| {})
-                .unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline && term.try_exit_code().is_none() {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-
-        assert!(
-            term.output().len() <= CAPTURED_OUTPUT_CAP,
-            "captured output ({} bytes) exceeded the cap ({} bytes)",
-            term.output().len(),
-            CAPTURED_OUTPUT_CAP
-        );
     }
 }
 

@@ -135,15 +135,8 @@ pub enum ExecutorEvent {
     /// A live fragment of a running tool call's output — a rendering signal
     /// only, never persisted. The `ToolResult` that follows is the thing
     /// written to the log. Without this a command's output does not appear
-    /// until it exits (PLAN.md phase 3).
+    /// until it exits.
     ToolOutputDelta { id: String, chunk: String },
-    /// This tool call embeds a client-hosted ACP terminal (PLAN.md phase 4)
-    /// — the frontend's one honest signal that a stop button actually does
-    /// something. An agent that runs commands in its own process, ignoring
-    /// `terminal/*`, never emits this, and `ToolBlock` must not show a stop
-    /// button for it: a button that does nothing is worse than none.
-    /// Live-only, like the deltas — nothing to kill once history replays.
-    HostedTerminal { id: String },
     ToolResult { id: String, output: String, is_error: bool },
     /// A tool call whose permission policy returned `Prompt` (D7, D-design-1)
     /// — the agent's turn is paused awaiting `answer_permission_prompt`.
@@ -222,7 +215,6 @@ pub fn persist(
         ExecutorEvent::TextDelta { .. }
         | ExecutorEvent::ReasoningDelta { .. }
         | ExecutorEvent::ToolOutputDelta { .. }
-        | ExecutorEvent::HostedTerminal { .. }
         | ExecutorEvent::PermissionRequest { .. }
         | ExecutorEvent::Done => return,
         ExecutorEvent::Crashed { message, .. } => ("system", message.clone()),

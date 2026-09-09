@@ -68,29 +68,6 @@ pub fn file_edits(update: &v1::SessionUpdate) -> Vec<ExecutorEvent> {
         .collect()
 }
 
-/// A terminal a tool call embeds (`ToolCallContent::Terminal`), as
-/// `(terminal_id, tool_call_id)` — how a hosted command's live output finds
-/// the tool call it belongs to (PLAN.md phase 4). `None` when this update
-/// carries no terminal content, same shape as `file_edits`.
-pub fn embedded_terminal(update: &v1::SessionUpdate) -> Option<(String, String)> {
-    let (id, content) = match update {
-        v1::SessionUpdate::ToolCall(call) => {
-            (call.tool_call_id.to_string(), call.content.as_slice())
-        }
-        v1::SessionUpdate::ToolCallUpdate(update) => (
-            update.tool_call_id.to_string(),
-            update.fields.content.as_deref().unwrap_or(&[]),
-        ),
-        _ => return None,
-    };
-    content.iter().find_map(|c| match c {
-        v1::ToolCallContent::Terminal(terminal) => {
-            Some((terminal.terminal_id.to_string(), id.clone()))
-        }
-        _ => None,
-    })
-}
-
 /// A shell command embedded in raw tool input, if there is one.
 fn raw_command(raw_input: Option<&serde_json::Value>) -> String {
     raw_input
@@ -517,7 +494,7 @@ mod tests {
     /// RED→GREEN: an `InProgress` update carrying content is a live-only
     /// rendering signal — a `ToolOutputDelta`, never persisted (that's what
     /// the terminal `ToolResult` is for). Without this, a long-running
-    /// command shows nothing until it exits (PLAN.md phase 3).
+    /// command shows nothing until it exits.
     #[test]
     fn in_progress_content_becomes_a_tool_output_delta() {
         let mut fields = v1::ToolCallUpdateFields::new();
