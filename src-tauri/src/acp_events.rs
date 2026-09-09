@@ -128,7 +128,14 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
                     output: tool_content_text(update.fields.content.as_deref().unwrap_or(&[])),
                     is_error: true,
                 }),
-                Some(v1::ToolCallStatus::InProgress) => {
+                // Anything that is not a terminal state is progress. The
+                // status is deliberately not required to be `InProgress`:
+                // ACP treats an omitted `status` as "unchanged", and the
+                // agents actually observed here stream a running command's
+                // output on updates that carry content and no status at all.
+                // Matching `InProgress` alone dropped every byte until the
+                // command exited, which is the bug this maps around.
+                _ => {
                     let chunk =
                         tool_content_text(update.fields.content.as_deref().unwrap_or(&[]));
                     if chunk.is_empty() {
@@ -140,7 +147,6 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
                         })
                     }
                 }
-                _ => None,
             }
         }
         v1::SessionUpdate::UsageUpdate(usage) => Some(AcpUpdate::UsageUpdate {
@@ -536,6 +542,37 @@ mod tests {
         let mut pending = v1::ToolCallUpdateFields::new();
         pending.status = Some(v1::ToolCallStatus::InProgress);
         let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", pending));
+        assert_eq!(from_session_update(&update), None);
+    }
+
+    /// Observed against Claude Code over ACP: the mid-run update carrying a
+    /// running command's output sets no `status` at all (ACP treats an
+    /// omitted status as "unchanged"), so keying the delta on `InProgress`
+    /// alone dropped every byte until the command exited — the bug this was
+    /// meant to fix.
+    #[test]
+    fn content_without_a_status_is_still_a_delta() {
+        let mut fields = v1::ToolCallUpdateFields::new();
+        fields.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
+            v1::ContentBlock::Text(v1::TextContent::new("tick 1\n")),
+        ))]);
+        assert_eq!(fields.status, None, "the case this test exists for");
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
+        assert_eq!(
+            from_session_update(&update),
+            Some(AcpUpdate::ToolOutputDelta {
+                id: "tc-1".into(),
+                chunk: "tick 1\n".into(),
+            })
+        );
+    }
+
+    /// A status-less update with nothing in it (a title or location change)
+    /// is not output and must stay silent.
+    #[test]
+    fn a_status_less_update_with_no_content_is_ignored() {
+        let fields = v1::ToolCallUpdateFields::new();
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
         assert_eq!(from_session_update(&update), None);
     }
 
