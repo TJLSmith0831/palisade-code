@@ -2392,6 +2392,16 @@ const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
 const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
   getThreadPrefs(hash, threadId) ?? { bypass: false };
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+/** Executor event kinds that are never persisted to the session store (same
+ *  D-design comment as ExecutorEvent::TextDelta/ToolOutputDelta): a refresh
+ *  that rebuilds `messages` from disk must keep these in the live buffer
+ *  rather than drop them, or streamed output vanishes mid-turn. */
+const LIVE_ONLY_KINDS = new Set<ExecutorEvent["kind"]>([
+  "textDelta",
+  "reasoningDelta",
+  "toolOutputDelta",
+  "permissionRequest",
+]);
 /** Placeholder `seq` for a user message rendered before the backend has
  *  assigned it a real one — real seqs are positive, persisted integers, so
  *  this can never collide with one. */
@@ -4023,21 +4033,25 @@ export default function App() {
     void api.stopExecutor(liveSessionId ?? undefined, thread?.id);
   }, [liveSessionId, thread?.id]);
 
-  // A thread's live buffer is dropped once its history is re-read from disk —
-  // every event was already persisted as it arrived, so keeping it would
-  // render each one twice. Scoped to one thread so another thread's in-flight
-  // session isn't wiped along with it. A still-unanswered permission request
-  // is the exception: it's live-only (never persisted, D-design comment on
-  // ExecutorEvent::PermissionRequest), so dropping it on entry would strand
-  // the session waiting on a prompt the UI no longer shows.
+  // A thread's live buffer is pruned to its live-only events once history is
+  // re-read from disk: everything else (toolCall, toolResult, text, ...) was
+  // already persisted as it arrived, so keeping it too would render each one
+  // twice. toolOutputDelta/textDelta/reasoningDelta and permissionRequest are
+  // never persisted (D-design comment on ExecutorEvent), so they must survive
+  // a refresh — including a mid-turn `thread-updated` refresh, where the
+  // session generating them is still running and hasn't finished streaming.
+  // Scoped to one thread so another thread's in-flight session isn't touched.
   const clearLiveFor = useCallback((threadId: string) => {
     setLiveBySession((previous) => {
       const next = new Map(previous);
       for (const [id, entry] of next) {
         if (entry.threadId !== threadId) continue;
-        const last = entry.events[entry.events.length - 1];
-        if (last?.kind === "permissionRequest") continue;
-        next.delete(id);
+        const kept = entry.events.filter((event) => LIVE_ONLY_KINDS.has(event.kind));
+        if (kept.length === 0) {
+          next.delete(id);
+        } else if (kept.length !== entry.events.length) {
+          next.set(id, { ...entry, events: kept });
+        }
       }
       return next;
     });

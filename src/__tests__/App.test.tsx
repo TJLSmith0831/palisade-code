@@ -6254,6 +6254,90 @@ describe("Notebook recovery", () => {
   });
 });
 
+describe("Streamed tool output survives a mid-turn refresh", () => {
+  it("keeps rendering toolOutputDelta chunks after a thread-updated refresh", async () => {
+    // The backend persists the toolCall itself as it happens, but never the
+    // toolOutputDelta chunks that stream its output (live-only, same as
+    // text/reasoning deltas) — so a mid-turn refresh's `read_thread` only
+    // ever returns the toolCall, never the output.
+    const persistedToolCall = {
+      seq: 1,
+      ts: "2026-09-09T00:00:00Z",
+      role: "tool" as const,
+      mode: "go" as const,
+      content: JSON.stringify({
+        kind: "toolCall",
+        id: "tc1",
+        name: "bash",
+        command: "for i in $(seq 1 60); do echo beat $i; sleep 1; done",
+      }),
+    };
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Test thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "read_thread") return Promise.resolve([persistedToolCall]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+
+    // The toolCall itself is already visible from the persisted history
+    // (`read_thread` above) — only the streamed output is live-only.
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: { kind: "toolOutputDelta", id: "tc1", chunk: "beat 1\nbeat 2\n" },
+      });
+    });
+
+    fireEvent.click(await screen.findByTestId("tool-block-header"));
+    await waitFor(() =>
+      expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
+        "beat 1"
+      )
+    );
+
+    // Mid-turn refresh: the backend tells the frontend the thread changed
+    // (e.g. a file write) while the tool call is still running.
+    await act(async () => {
+      emit("thread-updated", "t1");
+    });
+
+    // The toolCall block itself must still be there (now from persisted
+    // history) and its streamed output must have survived the refresh.
+    await waitFor(() =>
+      expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
+        "beat 1"
+      )
+    );
+
+    // More output streams in after the refresh — it must still accumulate.
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: { kind: "toolOutputDelta", id: "tc1", chunk: "beat 3\n" },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
+        "beat 3"
+      )
+    );
+  });
+});
+
 describe("Chat-only mode when no agent is installed", () => {
   it("disables send and says why, instead of swallowing the turn", async () => {
     invokeMock.mockImplementation(
