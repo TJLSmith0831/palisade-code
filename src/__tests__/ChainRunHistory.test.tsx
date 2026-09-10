@@ -276,3 +276,33 @@ describe("ChainRunHistory — empty and error states", () => {
     });
   });
 });
+
+/**
+ * The side panel is ~150px wide. Reusing the single-line `.ds-chain-row`
+ * squeezed the run's date to zero width and let an agent's failure text run
+ * 221px down the panel, overlapping itself.
+ */
+describe("run row layout in a narrow panel", () => {
+  it("clamps a long outcome and keeps the full text reachable", async () => {
+    const long =
+      "Retries exhausted at reviewer after 2 attempts: Claude Agent needs to be signed in — OAuth session expired and could not be refreshed, and this message keeps going well past any sane panel width.";
+    apiMock.listChainRuns.mockResolvedValue([
+      record({ id: "r1", outcome: { kind: "retriesExhausted", at: "reviewer", attempts: 2, message: long } }),
+    ]);
+
+    renderHistory();
+
+    const outcome = await screen.findByText(/Retries exhausted at reviewer/);
+    expect(outcome).toHaveAttribute("title", expect.stringContaining("Retries exhausted at reviewer"));
+    // Mantine sets its clamp through a CSS variable, not an inline
+    // -webkit-line-clamp, so assert on what it actually emits.
+    expect(outcome.getAttribute("style") ?? "").toContain("--text-line-clamp");
+  });
+
+  it("keeps the run's timestamp on one line", async () => {
+    apiMock.listChainRuns.mockResolvedValue([record({ id: "r1" })]);
+    renderHistory();
+    const stamp = await screen.findByText(/\d{1,2}\/\d{1,2}\/\d{4}/);
+    expect(stamp.style.whiteSpace).toBe("nowrap");
+  });
+});

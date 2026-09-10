@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActionIcon, Menu, Stack, Text } from "@mantine/core";
+import { ActionIcon, Group, Menu, Stack, Text } from "@mantine/core";
 import { IconDots, IconExternalLink, IconRefresh } from "@tabler/icons-react";
 import * as api from "./api";
 import { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
@@ -140,13 +140,61 @@ function RunRow({
     .filter((entry): entry is { role: string; cost: { amount: number; currency: string } } => entry.cost !== null);
 
   return (
-    <div className="ds-chain-row" data-testid={`chain-run-row-${run.id}`}>
-      <div className="ds-chain-row-main">
-        <span className="ds-chain-row-name">{new Date(run.startedAt).toLocaleString()}</span>
-        <Text size="xs" data-outcome-tone={outcome.tone} c={outcome.tone}>
-          {outcome.text}
+    // Not `.ds-chain-row`: that is a single-line, nowrap flex row built for a
+    // chain's name, and a multi-line run summary inside it squeezed the date
+    // to zero width while the outcome ran unbounded down the panel.
+    <Stack gap={4} p="xs" data-testid={`chain-run-row-${run.id}`}>
+      <Group justify="space-between" wrap="nowrap" gap="xs">
+        <Text size="xs" fw={500} style={{ whiteSpace: "nowrap" }}>
+          {new Date(run.startedAt).toLocaleString()}
         </Text>
-      </div>
+        <Group gap={2} wrap="nowrap">
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            color="gray"
+            aria-label={`Open run from ${run.startedAt}`}
+            onClick={() => onOpenRun?.(run.id)}
+          >
+            <IconExternalLink size={14} />
+          </ActionIcon>
+
+          <Menu position="bottom-end" withinPortal>
+            <Menu.Target>
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                color="gray"
+                aria-label={`Actions for run from ${run.startedAt}`}
+              >
+                <IconDots size={14} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item leftSection={<IconRefresh size={14} />} onClick={() => onRerun?.(run.id, undefined)}>
+                Re-run
+              </Menu.Item>
+              {roles.map((role) => (
+                <Menu.Item key={role} onClick={() => onRerun?.(run.id, role)}>
+                  Re-run from {role}
+                </Menu.Item>
+              ))}
+            </Menu.Dropdown>
+          </Menu>
+        </Group>
+      </Group>
+
+      {/* An agent's failure text can run for paragraphs; the panel shows the
+          first lines and keeps the rest reachable rather than growing. */}
+      <Text
+        size="xs"
+        data-outcome-tone={outcome.tone}
+        c={outcome.tone}
+        lineClamp={3}
+        title={outcome.text}
+      >
+        {outcome.text}
+      </Text>
 
       <Stack gap={2}>
         {roles.map((role) => {
@@ -166,38 +214,6 @@ function RunRow({
         </Text>
       )}
 
-      <ActionIcon
-        size="sm"
-        variant="subtle"
-        color="gray"
-        aria-label={`Open run from ${run.startedAt}`}
-        onClick={() => onOpenRun?.(run.id)}
-      >
-        <IconExternalLink size={14} />
-      </ActionIcon>
-
-      <Menu position="bottom-end" withinPortal>
-        <Menu.Target>
-          <ActionIcon
-            size="sm"
-            variant="subtle"
-            color="gray"
-            aria-label={`Actions for run from ${run.startedAt}`}
-          >
-            <IconDots size={14} />
-          </ActionIcon>
-        </Menu.Target>
-        <Menu.Dropdown>
-          <Menu.Item leftSection={<IconRefresh size={14} />} onClick={() => onRerun?.(run.id, undefined)}>
-            Re-run
-          </Menu.Item>
-          {roles.map((role) => (
-            <Menu.Item key={role} onClick={() => onRerun?.(run.id, role)}>
-              Re-run from {role}
-            </Menu.Item>
-          ))}
-        </Menu.Dropdown>
-      </Menu>
-    </div>
+    </Stack>
   );
 }
