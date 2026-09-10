@@ -33,7 +33,7 @@ const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 type ModelProgress = { stage: string; done: number; total: number };
 
-export default function BetaBadge() {
+export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: boolean) => void }) {
   const [version, setVersion] = useState("");
   const [update, setUpdate] = useState<Update | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -91,6 +91,25 @@ export default function BetaBadge() {
       setInstalling(false);
     }
   }, [update]);
+
+  useEffect(() => onUpdateReady?.(update !== null), [onUpdateReady, update]);
+
+  // The native application menu is an adapter over this existing tester
+  // affordance. It asks us to check when idle and to install when an update
+  // is already ready, preserving the same retry/error behavior as the button.
+  useEffect(() => {
+    const onMenuAction = () => {
+      if (update) void install();
+      else check().then(setUpdate).catch(() => {});
+    };
+    const onFeedback = () => setOpen(true);
+    window.addEventListener("palisade-update-action", onMenuAction);
+    window.addEventListener("palisade-feedback-action", onFeedback);
+    return () => {
+      window.removeEventListener("palisade-update-action", onMenuAction);
+      window.removeEventListener("palisade-feedback-action", onFeedback);
+    };
+  }, [install, update]);
 
   const submit = useCallback(async () => {
     setSending(true);

@@ -71,6 +71,23 @@ export const switchProject = (hash: string) =>
 export const renameProject = (hash: string, displayName: string) =>
   invoke<Project>("rename_project", { hash, displayName });
 
+/** Derived focused-window command state consumed by the native macOS menu. */
+export type NativeMenuCommandState = {
+  enabled: boolean;
+  checked?: boolean;
+  label?: string;
+};
+
+export const syncNativeMenu = (states: Record<string, NativeMenuCommandState>) =>
+  invoke<void>("sync_native_menu", { states });
+
+/** Reports this renderer's unsaved-buffer state to the process-wide quit guard. */
+export const syncWindowDirty = (dirty: boolean) =>
+  invoke<void>("sync_window_dirty", { dirty });
+export const requestQuit = () => invoke<void>("request_quit");
+export const confirmQuitWindow = () => invoke<void>("confirm_quit_window");
+export const cancelQuit = () => invoke<void>("cancel_quit");
+
 export const createThread = (projectHash: string, title: string) =>
   invoke<ThreadMeta>("create_thread", { projectHash, title });
 export const listThreads = (projectHash: string) =>

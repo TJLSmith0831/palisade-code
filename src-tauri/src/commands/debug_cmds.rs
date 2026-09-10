@@ -292,6 +292,10 @@ pub async fn debug_start(
         }
 
         *harness.debug_session.lock().unwrap() = Some(Arc::clone(&session));
+        // The only "a session exists now" signal. `debug-stopped` means the
+        // debuggee *paused*, so anything outside this panel that watched for
+        // that missed every program that runs straight through.
+        let _ = app.emit("debug-started", json!({ "sessionId": id }));
         Ok(DebugStatus {
             session_id: Some(id),
             language: Some(language),

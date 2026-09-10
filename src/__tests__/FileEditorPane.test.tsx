@@ -99,6 +99,15 @@ describe("FileEditorPane", () => {
     );
   });
 
+  it("routes a native Find command into the focused CodeMirror editor", async () => {
+    render(<FileEditorPane projectHash="abc" path="main.ts" />);
+    await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
+
+    window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "find" }));
+
+    expect(document.querySelector(".cm-search")).not.toBeNull();
+  });
+
   it("prompts for a file when none is selected", () => {
     render(<FileEditorPane projectHash="abc" path={null} />);
     expect(screen.getByText(/select a file/i)).toBeDefined();

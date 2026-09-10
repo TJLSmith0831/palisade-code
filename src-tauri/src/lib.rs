@@ -18,6 +18,7 @@ mod git_repo;
 mod integrations;
 mod lsp;
 mod mcp;
+mod native_menu;
 mod notebook;
 mod pidguard;
 mod session_log_writer;
@@ -33,9 +34,114 @@ mod commands;
 
 use plugins::mac_rounded_corners;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager};
+
+#[tauri::command]
+fn sync_native_menu(
+    menu: tauri::State<'_, native_menu::NativeMenu<tauri::Wry>>,
+    states: std::collections::HashMap<String, native_menu::CommandState>,
+) {
+    menu.sync(states);
+}
+
+/// Process-wide unsaved-buffer state. Each webview reports only its own state;
+/// quit collects every dirty Palisade window before allowing process exit.
+#[derive(Default)]
+struct QuitRegistry {
+    dirty_windows: Mutex<std::collections::HashMap<String, bool>>,
+    pending_confirmations: Mutex<Option<std::collections::HashSet<String>>>,
+}
+
+impl QuitRegistry {
+    /// `live` is the set of window labels that still exist. A webview that is
+    /// destroyed never runs its unmount cleanup, so its dirty flag would
+    /// otherwise linger and block every later quit on a window nobody can
+    /// answer for.
+    fn begin_quit(&self, live: &std::collections::HashSet<String>) -> std::collections::HashSet<String> {
+        let mut windows = self.dirty_windows.lock().expect("quit registry dirty lock poisoned");
+        windows.retain(|label, _| live.contains(label));
+        let dirty = windows.iter().filter_map(|(label, dirty)| dirty.then_some(label.clone())).collect::<std::collections::HashSet<_>>();
+        drop(windows);
+        *self.pending_confirmations.lock().expect("quit registry pending lock poisoned") = (!dirty.is_empty()).then_some(dirty.clone());
+        dirty
+    }
+
+    /// Returns true only when this confirmation completes every dirty window.
+    fn confirm(&self, label: &str) -> bool {
+        let mut pending = self.pending_confirmations.lock().expect("quit registry pending lock poisoned");
+        let Some(labels) = pending.as_mut() else { return false };
+        labels.remove(label);
+        if labels.is_empty() { *pending = None; true } else { false }
+    }
+
+    fn cancel(&self) {
+        *self.pending_confirmations.lock().expect("quit registry pending lock poisoned") = None;
+    }
+}
+
+#[tauri::command]
+fn sync_window_dirty(window: tauri::WebviewWindow, dirty: bool, registry: tauri::State<'_, QuitRegistry>) {
+    registry.dirty_windows.lock().expect("quit registry dirty lock poisoned")
+        .insert(window.label().to_string(), dirty);
+}
+
+#[tauri::command]
+fn request_quit(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
+    let live = app.webview_windows().into_keys().collect();
+    let dirty = registry.begin_quit(&live);
+    if dirty.is_empty() {
+        app.exit(0);
+        return;
+    }
+    for label in dirty { let _ = app.emit_to(label, "native-quit-confirm", ()); }
+}
+
+#[tauri::command]
+fn confirm_quit_window(window: tauri::WebviewWindow, app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
+    if registry.confirm(window.label()) { app.exit(0); }
+}
+
+#[tauri::command]
+fn cancel_quit(registry: tauri::State<'_, QuitRegistry>) {
+    registry.cancel();
+}
+
+#[cfg(test)]
+mod quit_registry_tests {
+    use super::*;
+
+    #[test]
+    fn quit_waits_for_every_dirty_window_before_exiting() {
+        let registry = QuitRegistry::default();
+        let mut dirty = registry.dirty_windows.lock().unwrap();
+        dirty.insert("project-alpha".into(), true);
+        dirty.insert("project-bravo".into(), true);
+        drop(dirty);
+
+        let live = ["project-alpha".to_string(), "project-bravo".to_string()].into_iter().collect();
+        assert_eq!(registry.begin_quit(&live).len(), 2);
+        assert!(!registry.confirm("project-alpha"));
+        assert!(registry.confirm("project-bravo"));
+    }
+
+    /// A destroyed webview never runs its React cleanup, so its dirty flag
+    /// outlives it. Waiting on that ghost made Quit unreachable forever.
+    #[test]
+    fn quit_ignores_dirty_windows_that_no_longer_exist() {
+        let registry = QuitRegistry::default();
+        let mut dirty = registry.dirty_windows.lock().unwrap();
+        dirty.insert("project-alpha".into(), true);
+        dirty.insert("project-closed".into(), true);
+        drop(dirty);
+
+        let live = ["project-alpha".to_string()].into_iter().collect();
+        assert_eq!(registry.begin_quit(&live), ["project-alpha".to_string()].into_iter().collect());
+        assert!(registry.confirm("project-alpha"), "the only live dirty window completes the quit");
+        assert!(!registry.dirty_windows.lock().unwrap().contains_key("project-closed"), "the ghost entry is dropped");
+    }
+}
 
 use acp_preflight::Preflight;
 use executor::{Envelope, ExecutorEvent, Harness, Sink};
@@ -3175,6 +3281,15 @@ pub fn run() {
     }
     builder
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                let menu = native_menu::install(&app.handle())?;
+                app.manage(menu);
+                app.on_menu_event(|handle, event| {
+                    native_menu::dispatch_to_focused_window(handle, event.id().as_ref());
+                });
+            }
+            app.manage(QuitRegistry::default());
             if let Err(err) = store::migrate_legacy_home(&palisade_home()) {
                 eprintln!("store: {err}");
                 let _ = app.emit("harness-warning", err);
@@ -3213,6 +3328,11 @@ pub fn run() {
             set_completion_enabled,
             set_completion_keybinding,
             get_completion_settings,
+            sync_native_menu,
+            sync_window_dirty,
+            request_quit,
+            confirm_quit_window,
+            cancel_quit,
             collect_diagnostics,
             flush_completion_telemetry,
             list_mcp_servers,

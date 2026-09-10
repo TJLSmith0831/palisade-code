@@ -41,7 +41,12 @@ import {
   search,
   searchKeymap,
   highlightSelectionMatches,
+  findNext,
+  findPrevious,
+  gotoLine,
+  openSearchPanel,
 } from "@codemirror/search";
+import { jumpToDefinition } from "@codemirror/lsp-client";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "./api";
 import {
@@ -964,6 +969,34 @@ export default function FileEditorPane({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [path]);
+
+  // The native Edit and Go menus cannot use WebKit's responder chain for
+  // CodeMirror-specific actions. Keep that platform adapter at the editor
+  // boundary: App only emits a stable command id, and the focused view owns
+  // the actual CodeMirror operation (including its search panel and LSP
+  // client). Ordinary inputs and terminals continue to use native roles.
+  useEffect(() => {
+    const onNativeEditorCommand = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      // Save works whatever this pane is showing — Markdown's WYSIWYG editor
+      // has no CodeMirror view, and the menu accelerator now reaches us
+      // before the window keydown handler below ever sees Cmd+S.
+      if (command === "save") return void saveRef.current();
+      const view = viewRef.current;
+      if (!view) return;
+      switch (command) {
+        case "find": openSearchPanel(view); break;
+        case "findNext": findNext(view); break;
+        case "findPrevious": findPrevious(view); break;
+        case "goToLine": gotoLine(view); break;
+        case "goToDefinition": jumpToDefinition(view); break;
+        default: return;
+      }
+      view.focus();
+    };
+    window.addEventListener("palisade-editor-command", onNativeEditorCommand);
+    return () => window.removeEventListener("palisade-editor-command", onNativeEditorCommand);
+  }, [path, viewSeq]);
 
   // CodeMirror owns the ordinary editor shortcut, but it is intentionally
   // hidden while Markdown's WYSIWYG editor has focus. Catch Cmd/Ctrl+S at the

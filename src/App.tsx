@@ -126,6 +126,8 @@ import { isMarkdownPath, tabKey, useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
 import { matchesChord, type Command } from "./commands";
+import { createCommandBridge, type CommandHandler } from "./nativeMenu";
+
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
@@ -176,6 +178,11 @@ import type { PanelId } from "./hooks/useAppShell";
 import { enableModernWindowStyle } from "./macRoundedCorners";
 import { type UseResizableResult } from "./useResizable";
 import "./App.css";
+
+/** Native menu events are addressed to one window's label. A listener that
+ * registers no target hears *every* emit, whichever window it was meant for,
+ * so scoping here is what keeps a menu command in the window that ran it. */
+const nativeEventTarget = () => ({ target: getCurrentWindow().label });
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
 // Editor shell's right-rail chat area (see openspec/changes/
@@ -2766,6 +2773,7 @@ export default function App() {
         label: string;
         confirmLabel?: string;
         onConfirm: () => void;
+        onCancel?: () => void;
       }
     | {
         kind: "select";
@@ -2819,6 +2827,15 @@ export default function App() {
   // Notebooks that failed to parse as nbformat JSON — falls back to
   // FileEditorPane's plain-text view instead (design.md Migration Plan).
   const [unopenableNotebooks, setUnopenableNotebooks] = useState<Set<string>>(new Set());
+
+  /** Whether a CodeMirror buffer is the thing on screen. The Edit and Go
+   * editor rows reach `FileEditorPane`'s view and nothing else, and their
+   * accelerators are held by the menu bar — so on a notebook, a spec, a
+   * table or a chain they would be enabled rows that do nothing. */
+  const codeEditorActive =
+    tabs.activeTab?.type === "file" &&
+    !(tabs.activePath?.toLowerCase().endsWith(".ipynb") &&
+      !unopenableNotebooks.has(tabs.activePath));
   // Cmd+Shift+V or the IconMarkdown button flips the active Markdown tab
   // between its CodeMirror source and the WYSIWYG editor. No-op for non-md.
   const toggleMdPreview = useCallback(() => {
@@ -2944,6 +2961,8 @@ export default function App() {
   const [textSearchOpen, setTextSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [updateReady, setUpdateReady] = useState(false);
+  const [debugLive, setDebugLive] = useState(false);
   // The terminal is spawned lazily — a shell per project on launch is not
   // what anyone wants. Once opened it stays mounted, so collapsing the
   // panel keeps the scrollback instead of disposing the instance.
@@ -3094,6 +3113,27 @@ export default function App() {
     }
     api.runCommands(project.hash).then(setRunList, () => setRunList([]));
   }, [project?.hash, runReloadToken]);
+
+  useEffect(() => {
+    if (!project) {
+      setDebugLive(false);
+      return;
+    }
+    let active = true;
+    api.debugStatus(project.hash).then((status) => {
+      if (active) setDebugLive(!!status.sessionId);
+    }).catch(() => active && setDebugLive(false));
+    const ended = listen("debug-ended", () => setDebugLive(false));
+    // `debug-started`, not `debug-stopped`: the latter means the debuggee
+    // paused at a breakpoint, so a program that runs straight through would
+    // leave Stop Debugging disabled for the whole session.
+    const started = listen("debug-started", () => setDebugLive(true));
+    return () => {
+      active = false;
+      void ended.then((off) => off());
+      void started.then((off) => off());
+    };
+  }, [project?.hash]);
 
   const runCommand = useCallback(
     (name: string, command: string) => {
@@ -3674,6 +3714,100 @@ export default function App() {
     },
     [tabs, project]
   );
+
+  // Native Close Window and Quit must take the same dirty-buffer path as tab
+  // closing. The window listener also covers traffic lights and OS Quit; menu
+  // rows below merely request those native actions rather than bypassing them.
+  const closeWindow = useCallback(() => {
+    void getCurrentWindow().close();
+  }, []);
+  const quitApplication = useCallback(() => {
+    // The native registry fans this request out to *every* dirty Palisade
+    // window. A single renderer cannot truthfully decide process exit.
+    void api.requestQuit().catch(fail);
+  }, []);
+  useEffect(() => {
+    // Keep the process-wide quit registry current. The registry is the
+    // authority for multi-window Quit.
+    void api.syncWindowDirty(tabs.anyDirty).catch(() => {});
+  }, [tabs.anyDirty]);
+  useEffect(() => {
+    // Only going away reports this window clean. Reporting it from the
+    // effect above's cleanup would fire on every flip of the flag, racing a
+    // `false` against the `true` that follows it — and a lost race means
+    // Quit discards unsaved work without asking.
+    return () => { void api.syncWindowDirty(false).catch(() => {}); };
+  }, []);
+  useEffect(() => {
+    const quitConfirmation = listen("native-quit-confirm", () => {
+      const dirty = tabsRef.current.tabs.filter((tab) => tab.dirty);
+      // The registry can be a beat behind this window — the clean report is
+      // fire-and-forget IPC. Answering anyway is what lets the quit finish;
+      // staying silent leaves it pending forever and Cmd+Q does nothing.
+      if (dirty.length === 0) {
+        void api.confirmQuitWindow().catch(fail);
+        return;
+      }
+      setBar({
+        kind: "confirm",
+        label: dirty.length === 1
+          ? `Discard unsaved changes to "${tabKey(dirty[0])}" and quit Palisade?`
+          : `Discard unsaved changes to ${dirty.length} files and quit Palisade?`,
+        confirmLabel: "Quit",
+        onConfirm: () => void api.confirmQuitWindow().catch(fail),
+        onCancel: () => void api.cancelQuit().catch(() => {}),
+      });
+    }, nativeEventTarget());
+    return () => { void quitConfirmation.then((off) => off()); };
+  }, []);
+  useEffect(() => {
+    const window = getCurrentWindow();
+    // The browser test harness supplies only the window methods its tests
+    // exercise. In a real Tauri window this is always present.
+    if (typeof window.onCloseRequested !== "function") return;
+    let destroyed = false;
+    const listenForClose = window.onCloseRequested((event) => {
+      if (destroyed || !tabsRef.current.anyDirty) return;
+      event.preventDefault();
+      const dirty = tabsRef.current.tabs.filter((tab) => tab.dirty);
+      setBar({
+        kind: "confirm",
+        label: dirty.length === 1
+          ? `Discard unsaved changes to "${tabKey(dirty[0])}" and close this window?`
+          : `Discard unsaved changes to ${dirty.length} files and close this window?`,
+        confirmLabel: "Close Window",
+        onConfirm: () => {
+          destroyed = true;
+          void window.destroy();
+        },
+      });
+    });
+    return () => { void listenForClose.then((off) => off()); };
+  }, []);
+
+  // "Clear Menu" has only one meaning here: Palisade's recent list *is* its
+  // registered-project list, so clearing it unregisters those projects. That
+  // is the same act the per-project Remove makes you confirm (`onRemoveProject`
+  // above), so it asks in the same words rather than emptying the list on one
+  // unprompted click. The focused project stays: it is still open.
+  const clearRecentProjects = useCallback(() => {
+    const recent = projects.filter((entry) => entry.hash !== project?.hash);
+    if (recent.length === 0) return;
+    setBar({
+      kind: "confirm",
+      label: `Remove ${recent.length === 1 ? `"${recent[0].displayName}"` : `${recent.length} projects`} from Recent Projects? Files and chat history stay on disk.`,
+      confirmLabel: "Clear Menu",
+      onConfirm: async () => {
+        setBar(null);
+        try {
+          for (const entry of recent) await api.removeProject(entry.hash);
+          setProjects(await api.listProjects());
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
+  }, [projects, project]);
 
   // The tab bar's "+" → New File (D14, amended). The explorer's own inline
   // create input can't serve this: FileTree only mounts while the Explorer
@@ -4930,6 +5064,74 @@ export default function App() {
       // in: this chord used to live only in the keyboard handler, which made
       // it the single shortcut the shortcut list didn't mention.
       {
+        id: "file.new",
+        group: "File",
+        label: "New file…",
+        chord: "Mod+N",
+        enabled: !!project,
+        run: newFileAtRoot,
+      },
+      {
+        id: "thread.new",
+        group: "File",
+        label: "New thread…",
+        enabled: !!project,
+        run: onNewThread,
+      },
+      {
+        id: "project.open",
+        group: "File",
+        label: "Open project…",
+        chord: "Mod+O",
+        run: () => void onAddProject(),
+      },
+      {
+        id: "project.clone",
+        group: "File",
+        label: "Clone repository…",
+        run: onCloneRepository,
+      },
+      {
+        id: "project.newWindow",
+        group: "File",
+        label: "Open current project in new window",
+        enabled: !!project,
+        run: () => { if (project) void onOpenProjectWindow(project); },
+      },
+      ...projects.slice(0, 10).map((recent, slot) => ({
+        id: `project.recent.${slot}`,
+        group: "File",
+        label: recent.displayName,
+        run: () => void selectProject(recent),
+      })),
+      {
+        id: "project.recent.clear",
+        group: "File",
+        label: "Clear Menu",
+        enabled: projects.some((entry) => entry.hash !== project?.hash),
+        run: clearRecentProjects,
+      },
+      {
+        id: "window.close",
+        group: "File",
+        label: "Close window",
+        chord: "Mod+Shift+W",
+        run: closeWindow,
+      },
+      {
+        id: "app.quit",
+        group: "App",
+        label: "Quit Palisade",
+        chord: "Mod+Q",
+        run: quitApplication,
+      },
+      {
+        id: "app.checkUpdates",
+        group: "App",
+        label: updateReady ? "Restart to Update" : "Check for Updates…",
+        run: () => window.dispatchEvent(new Event("palisade-update-action")),
+      },
+      {
         id: "help.commands",
         group: "Help",
         label: "Command palette (all shortcuts)",
@@ -4954,6 +5156,46 @@ export default function App() {
         keywords: "search grep text",
         enabled: !!project,
         run: () => void openTextSearch(),
+      },
+      {
+        id: "editor.find",
+        group: "Edit",
+        label: "Find…",
+        chord: "Mod+F",
+        enabled: codeEditorActive,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "find" })),
+      },
+      {
+        id: "editor.findNext",
+        group: "Edit",
+        label: "Find next",
+        chord: "Mod+G",
+        enabled: codeEditorActive,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "findNext" })),
+      },
+      {
+        id: "editor.findPrevious",
+        group: "Edit",
+        label: "Find previous",
+        chord: "Mod+Shift+G",
+        enabled: codeEditorActive,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "findPrevious" })),
+      },
+      {
+        id: "editor.goToLine",
+        group: "Go",
+        label: "Go to line…",
+        chord: "Ctrl+G",
+        enabled: codeEditorActive,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "goToLine" })),
+      },
+      {
+        id: "editor.goToDefinition",
+        group: "Go",
+        label: "Go to definition",
+        chord: "F12",
+        enabled: codeEditorActive,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "goToDefinition" })),
       },
       {
         id: "tab.close",
@@ -4988,6 +5230,66 @@ export default function App() {
         run: () => tabsRef.current.cycle(-1),
       },
       {
+        id: "file.save",
+        group: "File",
+        label: "Save",
+        // Honest on both counts: offered only when there is something to
+        // save, and routed through the pane that owns the buffer rather than
+        // by clicking whatever save button happens to be in the DOM (there
+        // is none on a notebook, an image, or a binary file).
+        enabled: tabs.activeIsDirty,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "save" })),
+      },
+      {
+        id: "run.last",
+        group: "Run",
+        label: "Run last configuration",
+        enabled: !!project && runList.length > 0,
+        run: () => {
+          const selected = runList.find(([name]) => name === runLast) ?? runList[0];
+          if (selected) runCommand(...selected);
+        },
+      },
+      ...runList.slice(0, 10).map(([name, command], slot) => ({
+        id: `run.config.${slot}`,
+        group: "Run",
+        label: name,
+        run: () => runCommand(name, command),
+      })),
+      {
+        id: "run.configure",
+        group: "Run",
+        label: "Configure run commands…",
+        enabled: !!project,
+        run: () => shell.selectPanel("run"),
+      },
+      {
+        id: "debug.start",
+        group: "Run",
+        label: "Start debugging",
+        enabled: !!project && !!selectedFile && runList.length > 0,
+        chord: "F5",
+        run: () => {
+          shell.selectPanel("run");
+          window.setTimeout(() => window.dispatchEvent(new Event("palisade-debug-start")), 0);
+        },
+      },
+      {
+        id: "debug.stop",
+        group: "Run",
+        label: "Stop debugging",
+        enabled: debugLive,
+        chord: "Shift+F5",
+        run: () => window.dispatchEvent(new Event("palisade-debug-stop")),
+      },
+      {
+        id: "agent.stop",
+        group: "Run",
+        label: "Stop active agent session",
+        enabled: !!liveSessionId,
+        run: onStop,
+      },
+      {
         id: "view.diff",
         group: "View",
         label: "Toggle changes view",
@@ -5003,6 +5305,41 @@ export default function App() {
           shell.setCenterShell(
             shell.centerShell === "vibe" ? "editor" : "vibe"
           ),
+      },
+      {
+        id: "view.layout.editor",
+        group: "View",
+        label: "Editor layout",
+        checked: shell.centerShell === "editor",
+        run: () => shell.setCenterShell("editor"),
+      },
+      {
+        id: "view.layout.vibe",
+        group: "View",
+        label: "Vibe layout",
+        checked: shell.centerShell === "vibe",
+        run: () => shell.setCenterShell("vibe"),
+      },
+      {
+        id: "view.theme.auto",
+        group: "View",
+        label: "System appearance",
+        checked: shell.theme === "auto",
+        run: () => shell.setTheme("auto"),
+      },
+      {
+        id: "view.theme.light",
+        group: "View",
+        label: "Light appearance",
+        checked: shell.theme === "light",
+        run: () => shell.setTheme("light"),
+      },
+      {
+        id: "view.theme.dark",
+        group: "View",
+        label: "Dark appearance",
+        checked: shell.theme === "dark",
+        run: () => shell.setTheme("dark"),
       },
       {
         id: "view.rightPanel",
@@ -5031,7 +5368,7 @@ export default function App() {
         id: "view.terminal",
         group: "View",
         label: "Toggle terminal",
-        chord: "Mod+Backtick",
+        chord: "Ctrl+Backtick",
         run: () => shell.toggleTerminal(),
       },
       {
@@ -5049,6 +5386,12 @@ export default function App() {
         enabled: !!project,
         run: () => void onOpenSettings(),
       },
+      {
+        id: "help.feedback",
+        group: "Help",
+        label: "Report a bug / request a feature…",
+        run: () => window.dispatchEvent(new Event("palisade-feedback-action")),
+      },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -5057,6 +5400,10 @@ export default function App() {
       // Recomputed as tabs come and go: "Close tab" is only offered when
       // there is one, and a stale memo would keep hiding it.
       tabs.activePath,
+      // ...and as the buffer goes dirty/clean, which is what File > Save and
+      // the native menu's enabled state hang on.
+      tabs.activeIsDirty,
+      codeEditorActive,
       openFilePalette,
       openTextSearch,
       shell.rightPanel.toggleCollapsed,
@@ -5065,10 +5412,59 @@ export default function App() {
       shell.activePanel,
       shell.toggleTerminal,
       shell.setCenterShell,
+      shell.theme,
+      shell.setTheme,
+      newFileAtRoot,
+      onNewThread,
+      onCloneRepository,
+      onOpenProjectWindow,
+      projects,
+      clearRecentProjects,
+      closeWindow,
+      quitApplication,
+      updateReady,
+      debugLive,
+      selectProject,
+      runList,
+      runLast,
+      runCommand,
+      liveSessionId,
+      onStop,
     ]
   );
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
+
+  // Native menu events cannot carry a webview target on macOS. Rust resolves
+  // the focused window and emits this event only there; this bridge is the
+  // one place that turns its stable id back into the existing command.
+  const nativeCommandHandlers = useMemo<Record<string, CommandHandler>>(
+    () => Object.fromEntries(commands.map((command) => [command.id, {
+      enabled: command.enabled !== false,
+      ...(command.checked === undefined ? {} : { checked: command.checked }),
+      ...(command.id.startsWith("project.recent.") || command.id.startsWith("run.config.")
+        || command.id === "app.checkUpdates" || command.id === "view.rightPanel"
+        ? { label: command.label }
+        : {}),
+      run: command.run,
+    }])),
+    [commands]
+  );
+  const nativeCommandBridge = useMemo(
+    () => createCommandBridge(nativeCommandHandlers),
+    [nativeCommandHandlers]
+  );
+
+  useEffect(() => {
+    void api.syncNativeMenu(nativeCommandBridge.menuState()).catch(() => {});
+  }, [nativeCommandBridge]);
+
+  useEffect(() => {
+    const unlisten = listen<string>("native-command", (event) => {
+      nativeCommandBridge.dispatchCommand(event.payload);
+    }, nativeEventTarget());
+    return () => { void unlisten.then((off) => off()); };
+  }, [nativeCommandBridge]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -5798,7 +6194,7 @@ export default function App() {
             </Tooltip>
           )}
           <div className="ds-chrome-utils">
-            <BetaBadge />
+            <BetaBadge onUpdateReady={setUpdateReady} />
             {/* Amendment 1's split button: project-scoped, not file-scoped.
                 Primary action is the last command run (first configured
                 until you run one); the chevron lists them all. Nothing
@@ -6395,7 +6791,7 @@ export default function App() {
         )}
 
         {bar && bar.kind === "confirm" && (
-          <MantineModal opened onClose={() => setBar(null)} title={bar.label}>
+          <MantineModal opened onClose={() => { bar.onCancel?.(); setBar(null); }} title={bar.label}>
             <div className="confirm-actions">
               <button
                 onClick={bar.onConfirm}
@@ -6405,7 +6801,7 @@ export default function App() {
               >
                 {bar.confirmLabel ?? "Delete"}
               </button>
-              <button onClick={() => setBar(null)}>Cancel</button>
+              <button onClick={() => { bar.onCancel?.(); setBar(null); }}>Cancel</button>
             </div>
           </MantineModal>
         )}
