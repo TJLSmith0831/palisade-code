@@ -29,6 +29,7 @@ import {
   IconSettings,
 } from "@tabler/icons-react";
 import * as api from "./api";
+import { useElapsed } from "./useElapsed";
 import { announceChainsChanged } from "./ChainsPanel";
 
 // The chain builder canvas and its live run view — one surface in two states,
@@ -318,9 +319,7 @@ export default function ChainCanvas({
     totals[cost.currency] = (totals[cost.currency] ?? 0) + cost.amount;
     return totals;
   }, {});
-  const elapsed = run?.startedAt
-    ? Math.max(0, Math.floor((Date.now() - new Date(run.startedAt).getTime()) / 1000))
-    : 0;
+  const elapsed = useElapsed(run?.startedAt, run?.endedAt);
 
   const positions = useMemo(() => {
     const out: Record<string, Point> = {};

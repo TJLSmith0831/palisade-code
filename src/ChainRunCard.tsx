@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, Badge, Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import { IconAlertTriangle, IconPlayerStop } from "@tabler/icons-react";
 import * as api from "./api";
+import { useElapsed } from "./useElapsed";
 import { outcomeText, type RunView } from "./ChainCanvas";
 
 /**
@@ -131,9 +132,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     }
   };
 
-  const elapsed = run.startedAt
-    ? Math.max(0, Math.floor((Date.now() - new Date(run.startedAt).getTime()) / 1000))
-    : 0;
+  const elapsed = useElapsed(run.startedAt, run.endedAt);
   const roles = Array.from(new Set([...Object.keys(run.states ?? {}), ...Object.keys(run.nodes ?? {})]));
   const gate = run.awaiting;
   const stopRole = run.outcome ? stoppedAt(run.outcome) : undefined;
