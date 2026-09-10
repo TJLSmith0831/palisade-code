@@ -978,6 +978,10 @@ export default function FileEditorPane({
   useEffect(() => {
     const onNativeEditorCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
+      // Save works whatever this pane is showing — Markdown's WYSIWYG editor
+      // has no CodeMirror view, and the menu accelerator now reaches us
+      // before the window keydown handler below ever sees Cmd+S.
+      if (command === "save") return void saveRef.current();
       const view = viewRef.current;
       if (!view) return;
       switch (command) {

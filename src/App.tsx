@@ -127,6 +127,7 @@ import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
 import { matchesChord, type Command } from "./commands";
 import { createCommandBridge, type CommandHandler } from "./nativeMenu";
+
 import FilePalette from "./FilePalette";
 import TextSearchPalette from "./TextSearchPalette";
 import FileTree from "./FileTree";
@@ -177,6 +178,11 @@ import type { PanelId } from "./hooks/useAppShell";
 import { enableModernWindowStyle } from "./macRoundedCorners";
 import { type UseResizableResult } from "./useResizable";
 import "./App.css";
+
+/** Native menu events are addressed to one window's label. A listener that
+ * registers no target hears *every* emit, whichever window it was meant for,
+ * so scoping here is what keeps a menu command in the window that ran it. */
+const nativeEventTarget = () => ({ target: getCurrentWindow().label });
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
 // Editor shell's right-rail chat area (see openspec/changes/
@@ -2821,6 +2827,15 @@ export default function App() {
   // Notebooks that failed to parse as nbformat JSON — falls back to
   // FileEditorPane's plain-text view instead (design.md Migration Plan).
   const [unopenableNotebooks, setUnopenableNotebooks] = useState<Set<string>>(new Set());
+
+  /** Whether a CodeMirror buffer is the thing on screen. The Edit and Go
+   * editor rows reach `FileEditorPane`'s view and nothing else, and their
+   * accelerators are held by the menu bar — so on a notebook, a spec, a
+   * table or a chain they would be enabled rows that do nothing. */
+  const codeEditorActive =
+    tabs.activeTab?.type === "file" &&
+    !(tabs.activePath?.toLowerCase().endsWith(".ipynb") &&
+      !unopenableNotebooks.has(tabs.activePath));
   // Cmd+Shift+V or the IconMarkdown button flips the active Markdown tab
   // between its CodeMirror source and the WYSIWYG editor. No-op for non-md.
   const toggleMdPreview = useCallback(() => {
@@ -3106,10 +3121,13 @@ export default function App() {
     }
     let active = true;
     api.debugStatus(project.hash).then((status) => {
-      if (active) setDebugLive(status.sessionId !== null);
+      if (active) setDebugLive(!!status.sessionId);
     }).catch(() => active && setDebugLive(false));
     const ended = listen("debug-ended", () => setDebugLive(false));
-    const started = listen("debug-stopped", () => setDebugLive(true));
+    // `debug-started`, not `debug-stopped`: the latter means the debuggee
+    // paused at a breakpoint, so a program that runs straight through would
+    // leave Stop Debugging disabled for the whole session.
+    const started = listen("debug-started", () => setDebugLive(true));
     return () => {
       active = false;
       void ended.then((off) => off());
@@ -3709,15 +3727,27 @@ export default function App() {
     void api.requestQuit().catch(fail);
   }, []);
   useEffect(() => {
-    // Keep the process-wide quit registry current, including cleanup when a
-    // renderer unmounts. The registry is the authority for multi-window Quit.
+    // Keep the process-wide quit registry current. The registry is the
+    // authority for multi-window Quit.
     void api.syncWindowDirty(tabs.anyDirty).catch(() => {});
-    return () => { void api.syncWindowDirty(false).catch(() => {}); };
   }, [tabs.anyDirty]);
+  useEffect(() => {
+    // Only going away reports this window clean. Reporting it from the
+    // effect above's cleanup would fire on every flip of the flag, racing a
+    // `false` against the `true` that follows it — and a lost race means
+    // Quit discards unsaved work without asking.
+    return () => { void api.syncWindowDirty(false).catch(() => {}); };
+  }, []);
   useEffect(() => {
     const quitConfirmation = listen("native-quit-confirm", () => {
       const dirty = tabsRef.current.tabs.filter((tab) => tab.dirty);
-      if (dirty.length === 0) return;
+      // The registry can be a beat behind this window — the clean report is
+      // fire-and-forget IPC. Answering anyway is what lets the quit finish;
+      // staying silent leaves it pending forever and Cmd+Q does nothing.
+      if (dirty.length === 0) {
+        void api.confirmQuitWindow().catch(fail);
+        return;
+      }
       setBar({
         kind: "confirm",
         label: dirty.length === 1
@@ -3727,7 +3757,7 @@ export default function App() {
         onConfirm: () => void api.confirmQuitWindow().catch(fail),
         onCancel: () => void api.cancelQuit().catch(() => {}),
       });
-    });
+    }, nativeEventTarget());
     return () => { void quitConfirmation.then((off) => off()); };
   }, []);
   useEffect(() => {
@@ -3755,16 +3785,28 @@ export default function App() {
     return () => { void listenForClose.then((off) => off()); };
   }, []);
 
-  const clearRecentProjects = useCallback(async () => {
-    // "Clear Menu" trims history, not saved projects. The focused project is
-    // still open and must stay registered and visible in Open Recent.
+  // "Clear Menu" has only one meaning here: Palisade's recent list *is* its
+  // registered-project list, so clearing it unregisters those projects. That
+  // is the same act the per-project Remove makes you confirm (`onRemoveProject`
+  // above), so it asks in the same words rather than emptying the list on one
+  // unprompted click. The focused project stays: it is still open.
+  const clearRecentProjects = useCallback(() => {
     const recent = projects.filter((entry) => entry.hash !== project?.hash);
-    try {
-      await Promise.all(recent.map((entry) => api.removeProject(entry.hash)));
-      setProjects(project ? [project] : []);
-    } catch (err) {
-      fail(err);
-    }
+    if (recent.length === 0) return;
+    setBar({
+      kind: "confirm",
+      label: `Remove ${recent.length === 1 ? `"${recent[0].displayName}"` : `${recent.length} projects`} from Recent Projects? Files and chat history stay on disk.`,
+      confirmLabel: "Clear Menu",
+      onConfirm: async () => {
+        setBar(null);
+        try {
+          for (const entry of recent) await api.removeProject(entry.hash);
+          setProjects(await api.listProjects());
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
   }, [projects, project]);
 
   // The tab bar's "+" → New File (D14, amended). The explorer's own inline
@@ -5067,7 +5109,7 @@ export default function App() {
         group: "File",
         label: "Clear Menu",
         enabled: projects.some((entry) => entry.hash !== project?.hash),
-        run: () => void clearRecentProjects(),
+        run: clearRecentProjects,
       },
       {
         id: "window.close",
@@ -5120,7 +5162,7 @@ export default function App() {
         group: "Edit",
         label: "Find…",
         chord: "Mod+F",
-        enabled: !!activePathRef.current,
+        enabled: codeEditorActive,
         run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "find" })),
       },
       {
@@ -5128,7 +5170,7 @@ export default function App() {
         group: "Edit",
         label: "Find next",
         chord: "Mod+G",
-        enabled: !!activePathRef.current,
+        enabled: codeEditorActive,
         run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "findNext" })),
       },
       {
@@ -5136,7 +5178,7 @@ export default function App() {
         group: "Edit",
         label: "Find previous",
         chord: "Mod+Shift+G",
-        enabled: !!activePathRef.current,
+        enabled: codeEditorActive,
         run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "findPrevious" })),
       },
       {
@@ -5144,7 +5186,7 @@ export default function App() {
         group: "Go",
         label: "Go to line…",
         chord: "Ctrl+G",
-        enabled: !!activePathRef.current,
+        enabled: codeEditorActive,
         run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "goToLine" })),
       },
       {
@@ -5152,7 +5194,7 @@ export default function App() {
         group: "Go",
         label: "Go to definition",
         chord: "F12",
-        enabled: !!activePathRef.current,
+        enabled: codeEditorActive,
         run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "goToDefinition" })),
       },
       {
@@ -5191,8 +5233,12 @@ export default function App() {
         id: "file.save",
         group: "File",
         label: "Save",
-        enabled: !!activePathRef.current,
-        run: () => document.querySelector<HTMLButtonElement>(".ds-editor-save-btn")?.click(),
+        // Honest on both counts: offered only when there is something to
+        // save, and routed through the pane that owns the buffer rather than
+        // by clicking whatever save button happens to be in the DOM (there
+        // is none on a notebook, an image, or a binary file).
+        enabled: tabs.activeIsDirty,
+        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "save" })),
       },
       {
         id: "run.last",
@@ -5354,6 +5400,10 @@ export default function App() {
       // Recomputed as tabs come and go: "Close tab" is only offered when
       // there is one, and a stale memo would keep hiding it.
       tabs.activePath,
+      // ...and as the buffer goes dirty/clean, which is what File > Save and
+      // the native menu's enabled state hang on.
+      tabs.activeIsDirty,
+      codeEditorActive,
       openFilePalette,
       openTextSearch,
       shell.rightPanel.toggleCollapsed,
@@ -5412,7 +5462,7 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen<string>("native-command", (event) => {
       nativeCommandBridge.dispatchCommand(event.payload);
-    });
+    }, nativeEventTarget());
     return () => { void unlisten.then((off) => off()); };
   }, [nativeCommandBridge]);
 

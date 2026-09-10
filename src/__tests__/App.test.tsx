@@ -57,12 +57,20 @@ const openWorkspacePanel = () => {
 
 // Mock Tauri APIs before importing App. Handlers are recorded so a test can
 // deliver a backend event (`emit` below) rather than only assert on IPC calls.
-const { listeners } = vi.hoisted(() => ({
+const { listeners, listenTargets } = vi.hoisted(() => ({
   listeners: new Map<string, ((event: { payload: unknown }) => void)[]>(),
+  // Which window a listener asked to hear from. A listener registered with no
+  // target hears *every* emit, including one addressed to another window.
+  listenTargets: new Map<string, unknown[]>(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+  listen: vi.fn((
+    name: string,
+    handler: (event: { payload: unknown }) => void,
+    options?: { target?: unknown }
+  ) => {
     listeners.set(name, [...(listeners.get(name) ?? []), handler]);
+    listenTargets.set(name, [...(listenTargets.get(name) ?? []), options?.target]);
     return Promise.resolve(() => {
       listeners.set(
         name,
@@ -84,7 +92,11 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 const { getCurrentWindowMock, mockWindow } = vi.hoisted(() => {
-  const mockWindow = { startDragging: vi.fn(), toggleMaximize: vi.fn() };
+  const mockWindow = {
+    label: "main",
+    startDragging: vi.fn(),
+    toggleMaximize: vi.fn(),
+  };
   return { getCurrentWindowMock: vi.fn(() => mockWindow), mockWindow };
 });
 
@@ -209,6 +221,7 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
 
 beforeEach(() => {
   listeners.clear();
+  listenTargets.clear();
   invokeMock.mockReset();
   invokeMock.mockImplementation(defaultInvoke);
 });
@@ -6201,5 +6214,252 @@ describe("Chat-only mode when no agent is installed", () => {
     // message and no agent ever answered it.
     expect(send).toBeDisabled();
     expect(send.getAttribute("title")).toMatch(/No coding agent detected/i);
+  });
+});
+
+
+const NOTEBOOK_JSON = "{\"cells\": [{\"cell_type\": \"code\", \"source\": [\"print(1)\\n\"], \"metadata\": {}, \"outputs\": [], \"execution_count\": null}], \"metadata\": {\"kernelspec\": {\"name\": \"python3\", \"language\": \"python\", \"display_name\": \"Python 3\"}}, \"nbformat\": 4, \"nbformat_minor\": 5}";
+
+describe("Native macOS menu", () => {
+  // FileEditorPane keeps its CodeMirror sessions in a module-level cache
+  // keyed by project + path, so these tests use file names no other test in
+  // this file touches — a buffer another test left edited reads as dirty.
+  /** The last command state this window published to the native menu. */
+  const publishedMenuState = () => {
+    const calls = invokeMock.mock.calls.filter(([cmd]) => cmd === "sync_native_menu");
+    return (calls.at(-1)?.[1] as { states: Record<string, { enabled: boolean }> } | undefined)
+      ?.states;
+  };
+
+  /** Every `dirty` value this window reported to the quit registry, in order. */
+  const reportedDirty = () =>
+    invokeMock.mock.calls
+      .filter(([cmd]) => cmd === "sync_window_dirty")
+      .map(([, args]) => (args as { dirty: boolean }).dirty);
+
+  it("hears native events addressed to this window only", async () => {
+    render(<App />);
+    await openProject();
+
+    // A listener registered with no target receives every emit, whichever
+    // window it was addressed to — which would run one window's menu command
+    // in all of them.
+    await waitFor(() => expect(listenTargets.get("native-command")).toBeDefined());
+    for (const event of ["native-command", "native-quit-confirm"]) {
+      const targets = listenTargets.get(event) ?? [];
+      expect(targets.length).toBeGreaterThan(0);
+      expect(targets.every((target) => target === "main")).toBe(true);
+    }
+  });
+
+  it("answers a quit request even when this window has nothing unsaved", async () => {
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(listeners.get("native-quit-confirm")).toBeDefined());
+
+    // The registry can still believe this window is dirty: the clean report
+    // is a fire-and-forget IPC that may not have landed yet. Staying silent
+    // leaves Quit pending forever, so Cmd+Q simply does nothing.
+    act(() => emit("native-quit-confirm", null));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("confirm_quit_window")
+    );
+    expect(screen.queryByTestId("confirm-delete")).toBeNull();
+  });
+
+  it("keeps Stop Debugging live for a session that never hits a breakpoint", async () => {
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(publishedMenuState()).toBeDefined());
+    expect(publishedMenuState()?.["debug.stop"].enabled).toBe(false);
+
+    // `debug-stopped` means the debuggee *paused*. A program that runs
+    // straight through emits nothing of the sort, and Stop Debugging used to
+    // stay disabled for exactly the session you most need to stop.
+    act(() => emit("debug-started", { sessionId: "dbg-1" }));
+    await waitFor(() =>
+      expect(publishedMenuState()?.["debug.stop"].enabled).toBe(true)
+    );
+
+    act(() => emit("debug-ended", {}));
+    await waitFor(() =>
+      expect(publishedMenuState()?.["debug.stop"].enabled).toBe(false)
+    );
+  });
+
+  it("clears the recent list only after confirming, and keeps the open project", async () => {
+    const twoProjects = [
+      {
+        hash: "proj-1",
+        root: "/tmp/palisade-code",
+        displayName: "palisade-code",
+        createdAt: "2026-08-06T00:00:00Z",
+        lastAccessedAt: "2026-08-06T00:00:00Z",
+      },
+      {
+        hash: "proj-2",
+        root: "/tmp/other",
+        displayName: "other",
+        createdAt: "2026-08-06T00:00:00Z",
+        lastAccessedAt: "2026-08-05T00:00:00Z",
+      },
+    ];
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_projects") return Promise.resolve(twoProjects);
+      if (cmd === "remove_project") return Promise.resolve(null);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(listeners.get("native-command")).toBeDefined());
+
+    act(() => emit("native-command", "project.recent.clear"));
+
+    // "Clear Menu" unregisters projects — the same act the per-project Remove
+    // makes you confirm. It must not happen on one unprompted click.
+    expect(invokeMock).not.toHaveBeenCalledWith("remove_project", expect.anything());
+    const confirm = await screen.findByTestId("confirm-delete");
+    expect(document.body.textContent).toMatch(/files and chat history stay/i);
+    fireEvent.click(confirm);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("remove_project", { hash: "proj-2" })
+    );
+    // The project you are looking at stays registered.
+    expect(invokeMock).not.toHaveBeenCalledWith("remove_project", { hash: "proj-1" });
+  });
+
+  it("offers Save only when there is unsaved work, and saves through the editor", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_directory") {
+        return Promise.resolve([{ name: "menu-save.ts", is_dir: false, path: "menu-save.ts" }]);
+      }
+      if (cmd === "read_file_content") return Promise.resolve("content\n");
+      if (cmd === "write_file_content") return Promise.resolve(null);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+    fireEvent.click(await screen.findByText("menu-save.ts"));
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("content")
+    );
+    // Nothing to save yet, so the row must not claim otherwise.
+    await waitFor(() =>
+      expect(publishedMenuState()?.["file.save"].enabled).toBe(false)
+    );
+
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "x");
+    await waitFor(() =>
+      expect(publishedMenuState()?.["file.save"].enabled).toBe(true)
+    );
+
+    act(() => emit("native-command", "file.save"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "write_file_content",
+        expect.objectContaining({ relativePath: "menu-save.ts", content: expect.stringContaining("x") })
+      )
+    );
+  });
+
+  it("offers the Edit and Go editor rows only where a code editor is open", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_directory") {
+        return Promise.resolve([
+          { name: "menu-save.ts", is_dir: false, path: "menu-save.ts" },
+          { name: "nb.ipynb", is_dir: false, path: "nb.ipynb" },
+        ]);
+      }
+      if (cmd === "read_file_content") {
+        return Promise.resolve(
+          String(args?.relativePath).endsWith(".ipynb") ? NOTEBOOK_JSON : "content\n"
+        );
+      }
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+    fireEvent.click(await screen.findByText("menu-save.ts"));
+    await waitFor(() =>
+      expect(publishedMenuState()?.["editor.find"].enabled).toBe(true)
+    );
+
+    // A notebook is not a CodeMirror buffer: Find, Go to Line and Go to
+    // Definition have nothing to act on, and their accelerators are held by
+    // the menu bar, so an enabled row is a row that silently does nothing.
+    fireEvent.click(screen.getByText("nb.ipynb"));
+    await waitFor(() =>
+      expect(publishedMenuState()?.["editor.find"].enabled).toBe(false)
+    );
+    for (const id of ["editor.findNext", "editor.findPrevious", "editor.goToLine", "editor.goToDefinition"]) {
+      expect(publishedMenuState()?.[id].enabled).toBe(false);
+    }
+  });
+
+  it("saves a notebook through the same command as a code buffer", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_directory") {
+        return Promise.resolve([{ name: "nb.ipynb", is_dir: false, path: "nb.ipynb" }]);
+      }
+      if (cmd === "read_file_content") return Promise.resolve(NOTEBOOK_JSON);
+      if (cmd === "write_file_content") return Promise.resolve(null);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+    fireEvent.click(await screen.findByText("nb.ipynb"));
+    await waitFor(() => expect(document.body.textContent).toMatch(/print/));
+
+    // A notebook has no `.ds-editor-save-btn` and no window-level Cmd+S
+    // handler, so the menu row reaches it only if this pane answers the
+    // command itself.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("palisade-editor-command", { detail: "save" })
+      );
+    });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "write_file_content",
+        expect.objectContaining({ relativePath: "nb.ipynb" })
+      )
+    );
+  });
+
+  it("never reports itself clean while it still has unsaved work", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_directory") {
+        return Promise.resolve([{ name: "menu-save.ts", is_dir: false, path: "menu-save.ts" }]);
+      }
+      if (cmd === "read_file_content") return Promise.resolve("content\n");
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    openExplorerPanel();
+    fireEvent.click(await screen.findByText("menu-save.ts"));
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("content")
+    );
+
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    content.focus();
+    await user.type(content, "x");
+    await waitFor(() => expect(reportedDirty()).toContain(true));
+
+    // Effect cleanup runs on every change of the flag, so a cleanup that
+    // reports `false` sends one on the way *into* the dirty state. Those two
+    // IPCs race, and if the `false` lands last Quit discards the edit without
+    // asking. Only the unmount is allowed to report this window clean.
+    expect(reportedDirty()).toEqual([false, true]);
   });
 });

@@ -214,6 +214,21 @@ export default function NotebookTab({
     [onDirtyChange, path, projectHash]
   );
 
+  // File > Save reaches every editable pane through the same command, so the
+  // native row is honest here too: a notebook is not a CodeMirror buffer and
+  // has no window-level Cmd+S handler the menu accelerator could fall back on.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    const onNativeEditorCommand = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== "save") return;
+      const current = docRef.current;
+      if (current) void saveRef.current(current);
+    };
+    window.addEventListener("palisade-editor-command", onNativeEditorCommand);
+    return () => window.removeEventListener("palisade-editor-command", onNativeEditorCommand);
+  }, []);
+
   // The live output map, held in a ref as well as state: the event listener
   // below closes over stale state otherwise, and adding the map to its deps
   // would re-subscribe the listener on every streamed chunk. Every writer

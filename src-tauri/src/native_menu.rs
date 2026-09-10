@@ -226,7 +226,13 @@ pub fn dispatch_to_focused_window<R: Runtime>(app: &AppHandle<R>, id: &str) {
         return;
     }
     if let Some(window) = app.webview_windows().into_values().find(|window| window.is_focused().unwrap_or(false)) {
-        let _ = window.emit("native-command", command);
+        // Addressed, never broadcast: `emit` fans out to every webview no
+        // matter which one it is called on, which would run the command in
+        // every open project window instead of the focused one. Both halves
+        // matter — a JS `listen` with no `target` option registers as
+        // `EventTarget::Any` and receives everything regardless of this
+        // filter, so App.tsx scopes its listener to the window label too.
+        let _ = window.emit_to(window.label(), "native-command", command);
     }
 }
 
@@ -247,6 +253,24 @@ mod tests {
         assert_eq!(adjacent_window_label(&windows, "project-alpha", -1), Some("main"));
         assert_eq!(adjacent_window_label(&windows, "project-bravo", 1), Some("main"));
         assert_eq!(adjacent_window_label(&windows, "main", -1), Some("project-bravo"));
+    }
+
+    /// `Emitter::emit` is a default trait method that always fans out to
+    /// every target, whatever the receiver — so emitting from the focused
+    /// window still ran the command in every other window. Only `emit_to`
+    /// is scoped, and nothing here can observe that at runtime without a
+    /// live webview, so guard the call shape itself.
+    #[test]
+    fn native_commands_are_addressed_to_one_window_never_broadcast() {
+        let source = include_str!("native_menu.rs");
+        let dispatch = source
+            .split_once("pub fn dispatch_to_focused_window")
+            .expect("dispatcher exists").1
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(body, _)| body);
+
+        assert!(!dispatch.contains(".emit(\"native-command\""), "native-command must not be broadcast to every window");
+        assert!(dispatch.contains("emit_to("), "native-command must be addressed to the focused window's label");
     }
 
     #[test]

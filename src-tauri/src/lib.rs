@@ -55,9 +55,15 @@ struct QuitRegistry {
 }
 
 impl QuitRegistry {
-    fn begin_quit(&self) -> std::collections::HashSet<String> {
-        let dirty = self.dirty_windows.lock().expect("quit registry dirty lock poisoned")
-            .iter().filter_map(|(label, dirty)| dirty.then_some(label.clone())).collect::<std::collections::HashSet<_>>();
+    /// `live` is the set of window labels that still exist. A webview that is
+    /// destroyed never runs its unmount cleanup, so its dirty flag would
+    /// otherwise linger and block every later quit on a window nobody can
+    /// answer for.
+    fn begin_quit(&self, live: &std::collections::HashSet<String>) -> std::collections::HashSet<String> {
+        let mut windows = self.dirty_windows.lock().expect("quit registry dirty lock poisoned");
+        windows.retain(|label, _| live.contains(label));
+        let dirty = windows.iter().filter_map(|(label, dirty)| dirty.then_some(label.clone())).collect::<std::collections::HashSet<_>>();
+        drop(windows);
         *self.pending_confirmations.lock().expect("quit registry pending lock poisoned") = (!dirty.is_empty()).then_some(dirty.clone());
         dirty
     }
@@ -83,7 +89,8 @@ fn sync_window_dirty(window: tauri::WebviewWindow, dirty: bool, registry: tauri:
 
 #[tauri::command]
 fn request_quit(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
-    let dirty = registry.begin_quit();
+    let live = app.webview_windows().into_keys().collect();
+    let dirty = registry.begin_quit(&live);
     if dirty.is_empty() {
         app.exit(0);
         return;
@@ -113,9 +120,26 @@ mod quit_registry_tests {
         dirty.insert("project-bravo".into(), true);
         drop(dirty);
 
-        assert_eq!(registry.begin_quit().len(), 2);
+        let live = ["project-alpha".to_string(), "project-bravo".to_string()].into_iter().collect();
+        assert_eq!(registry.begin_quit(&live).len(), 2);
         assert!(!registry.confirm("project-alpha"));
         assert!(registry.confirm("project-bravo"));
+    }
+
+    /// A destroyed webview never runs its React cleanup, so its dirty flag
+    /// outlives it. Waiting on that ghost made Quit unreachable forever.
+    #[test]
+    fn quit_ignores_dirty_windows_that_no_longer_exist() {
+        let registry = QuitRegistry::default();
+        let mut dirty = registry.dirty_windows.lock().unwrap();
+        dirty.insert("project-alpha".into(), true);
+        dirty.insert("project-closed".into(), true);
+        drop(dirty);
+
+        let live = ["project-alpha".to_string()].into_iter().collect();
+        assert_eq!(registry.begin_quit(&live), ["project-alpha".to_string()].into_iter().collect());
+        assert!(registry.confirm("project-alpha"), "the only live dirty window completes the quit");
+        assert!(!registry.dirty_windows.lock().unwrap().contains_key("project-closed"), "the ghost entry is dropped");
     }
 }
 
