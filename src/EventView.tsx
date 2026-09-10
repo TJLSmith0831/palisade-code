@@ -41,7 +41,27 @@ function ChatAvatar({ executor }: { executor: Preflight["selected"] }) {
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
   | { kind: "plain"; role: Message["role"]; mode: string; text: string }
+  /** A zero-height marker at the first turn of a session, so a chain node can
+   *  scroll the transcript to what it actually did. Lives on `Item` and not on
+   *  `ExecutorEvent`, which D13 caps at nine variants. */
+  | { kind: "sessionAnchor"; sessionId: string }
   | ExecutorEvent;
+
+/** DOM id of a session's anchor. Prefixed so a raw session id can never
+ *  collide with another element's id or start with a digit. */
+export const sessionAnchorId = (sessionId: string) => `ds-session-${sessionId}`;
+
+/**
+ * Scrolls the transcript to where `sessionId` began. Returns whether an anchor
+ * was actually found, so a caller can tell "scrolled" from "that session isn't
+ * on screen" instead of silently doing nothing.
+ */
+export function scrollToSession(sessionId: string): boolean {
+  const anchor = document.getElementById(sessionAnchorId(sessionId));
+  if (!anchor) return false;
+  anchor.scrollIntoView({ behavior: "smooth", block: "start" });
+  return true;
+}
 
 /**
  * Folds live `textDelta`/`reasoningDelta` events onto the in-progress
@@ -99,7 +119,23 @@ export function mergeDeltas(events: ExecutorEvent[]): ExecutorEvent[] {
  * doesn't parse (a mode-switch marker, say) falls back to plain text.
  */
 export function itemsFromMessages(messages: Message[]): Item[] {
-  return messages.map((message) => {
+  const items: Item[] = [];
+  let openSession: string | null = null;
+  for (const message of messages) {
+    // A session's turns are contiguous in a thread, but a second concurrent
+    // session can interleave — so anchor on *change*, not on first sight, and
+    // let a resumed session anchor again at the point it resumes.
+    if (message.sessionId && message.sessionId !== openSession) {
+      items.push({ kind: "sessionAnchor", sessionId: message.sessionId });
+    }
+    openSession = message.sessionId ?? openSession;
+    items.push(itemFromMessage(message));
+  }
+  return items;
+}
+
+function itemFromMessage(message: Message): Item {
+  return ((message: Message): Item => {
     if (message.role === "tool") {
       try {
         const parsed = JSON.parse(message.content) as ExecutorEvent;
@@ -114,7 +150,7 @@ export function itemsFromMessages(messages: Message[]): Item[] {
       mode: message.mode,
       text: message.content,
     };
-  });
+  })(message);
 }
 
 /** Per-turn reasoning disclosure, default collapsed (reasoning-collapse-ux).
@@ -471,6 +507,18 @@ export const EventList = memo(function EventList({
     <>
       {items.map((item, index) => {
         switch (item.kind) {
+          // Laid out but zero-height: `scrollIntoView` is a no-op on a
+          // `display: none` element, so this cannot use `hidden`.
+          case "sessionAnchor":
+            return (
+              <span
+                key={index}
+                id={sessionAnchorId(item.sessionId)}
+                data-session-anchor={item.sessionId}
+                aria-hidden="true"
+                style={{ display: "block", height: 0 }}
+              />
+            );
           case "plain":
             // A chain run's own commentary (D7): what the run did, or that
             // it is waiting at a gate. Neutral, not danger — the text states

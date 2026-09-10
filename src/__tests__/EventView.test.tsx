@@ -2,7 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import "../App.css";
-import { EventList, filterForTab, type Item } from "../EventView";
+import {
+  EventList,
+  filterForTab,
+  itemsFromMessages,
+  scrollToSession,
+  sessionAnchorId,
+  type Item,
+} from "../EventView";
+import type { Message } from "../api";
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
@@ -506,5 +514,88 @@ describe("EventList agent sign-in", () => {
     const summary = screen.getByTestId("crash-banner-auth-summary");
     expect(summary.textContent).not.toMatch(/outside Palisade/);
     expect(summary.textContent).toMatch(/terminal/i);
+  });
+});
+
+/**
+ * Node click-through (critique P1, acceptance step 7). A chain node's session
+ * IS a thread session, so its turns already live in the thread transcript —
+ * what was missing was any way to *reach* them. `itemsFromMessages` dropped
+ * `Message.sessionId` on the floor, leaving the rendered list with no session
+ * identity to scroll to.
+ */
+describe("session anchors", () => {
+  const msg = (seq: number, sessionId: string | null, text: string): Message => ({
+    seq,
+    ts: `2026-09-10T00:00:0${seq}Z`,
+    role: "assistant",
+    mode: "go",
+    content: text,
+    sessionId,
+  });
+
+  it("emits one anchor at the first message of each session", () => {
+    const items = itemsFromMessages([
+      msg(1, "s-a", "first"),
+      msg(2, "s-a", "still a"),
+      msg(3, "s-b", "now b"),
+    ]);
+    const anchors = items.filter((i) => i.kind === "sessionAnchor");
+    expect(anchors).toEqual([
+      { kind: "sessionAnchor", sessionId: "s-a" },
+      { kind: "sessionAnchor", sessionId: "s-b" },
+    ]);
+  });
+
+  it("keeps every original message item, in order, around the anchors", () => {
+    const items = itemsFromMessages([msg(1, "s-a", "first"), msg(2, "s-b", "second")]);
+    expect(items.map((i) => (i.kind === "sessionAnchor" ? `@${i.sessionId}` : "msg"))).toEqual([
+      "@s-a",
+      "msg",
+      "@s-b",
+      "msg",
+    ]);
+  });
+
+  it("emits no anchor for messages written before sessions had identities", () => {
+    const items = itemsFromMessages([msg(1, null, "old"), msg(2, undefined as never, "older")]);
+    expect(items.some((i) => i.kind === "sessionAnchor")).toBe(false);
+  });
+
+  it("re-anchors when a session resumes after another one interleaves", () => {
+    const items = itemsFromMessages([msg(1, "s-a", "a"), msg(2, "s-b", "b"), msg(3, "s-a", "a again")]);
+    expect(
+      items.filter((i) => i.kind === "sessionAnchor").map((i) => (i as { sessionId: string }).sessionId)
+    ).toEqual(["s-a", "s-b", "s-a"]);
+  });
+
+  it("renders each anchor as a reachable, non-visual element carrying its session id", () => {
+    const { container } = renderWithMantine(
+      <EventList
+        items={itemsFromMessages([msg(1, "s-a", "hello")])}
+        executor="claude"
+      />
+    );
+    const anchor = container.querySelector(`#${CSS.escape(sessionAnchorId("s-a"))}`);
+    expect(anchor).not.toBeNull();
+    // It must be laid out (scrollIntoView is a no-op on display:none) but must
+    // not add visible space to the transcript.
+    expect((anchor as HTMLElement).style.height).toBe("0px");
+    expect(screen.getByText("hello")).toBeTruthy();
+  });
+
+  it("scrollToSession scrolls the anchor for that session into view", () => {
+    renderWithMantine(
+      <EventList items={itemsFromMessages([msg(1, "s-a", "hello")])} executor="claude" />
+    );
+    const anchor = document.getElementById(sessionAnchorId("s-a"))!;
+    const spy = vi.fn();
+    anchor.scrollIntoView = spy;
+    expect(scrollToSession("s-a")).toBe(true);
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("scrollToSession reports failure for a session with nothing on screen", () => {
+    expect(scrollToSession("s-nowhere")).toBe(false);
   });
 });

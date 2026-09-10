@@ -115,6 +115,7 @@ import {
   filterForTab,
   itemsFromMessages,
   mergeDeltas,
+  scrollToSession,
 } from "./EventView";
 import FileEditorPane, {
   evictEditorSession,
@@ -4495,15 +4496,17 @@ export default function App() {
     []
   );
 
-  // No per-session transcript viewer exists anywhere in the shell today
-  // (verified: SessionsPanel only lists sessions, EventView renders a
-  // thread's whole message history with no session-scoped view/anchor) —
-  // the chat rail already *is* the thread's transcript, live or past. The
-  // honest "click-through to transcript" is making sure that rail is on
-  // screen, not inventing a viewer this change doesn't own.
+  // A chain node's session IS a thread session (chain_exec.rs), so "click a
+  // node, see what it actually did" means scrolling this thread's transcript
+  // to where that session began — no second viewer, no new storage format.
+  // The rail has to be on screen before there is an anchor to scroll to, so a
+  // collapsed rail expands first and the scroll waits one frame for layout.
   const onChainTranscript = useCallback(
-    (_sessionId: string) => {
-      if (shell.centerShell === "editor" && shell.chatCollapsed) shell.toggleChat();
+    (sessionId: string) => {
+      const collapsed = shell.centerShell === "editor" && shell.chatCollapsed;
+      if (collapsed) shell.toggleChat();
+      if (collapsed) requestAnimationFrame(() => scrollToSession(sessionId));
+      else scrollToSession(sessionId);
     },
     [shell]
   );
