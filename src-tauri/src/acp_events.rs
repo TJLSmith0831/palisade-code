@@ -105,7 +105,25 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
                     output: tool_content_text(update.fields.content.as_deref().unwrap_or(&[])),
                     is_error: true,
                 }),
-                _ => None,
+                // Anything that is not a terminal state is progress. The
+                // status is deliberately not required to be `InProgress`:
+                // ACP treats an omitted `status` as "unchanged", and the
+                // agents actually observed here stream a running command's
+                // output on updates that carry content and no status at all.
+                // Matching `InProgress` alone dropped every byte until the
+                // command exited, which is the bug this maps around.
+                _ => {
+                    let chunk =
+                        tool_content_text(update.fields.content.as_deref().unwrap_or(&[]));
+                    if chunk.is_empty() {
+                        None
+                    } else {
+                        Some(AcpUpdate::ToolOutputDelta {
+                            id: update.tool_call_id.to_string(),
+                            chunk,
+                        })
+                    }
+                }
             }
         }
         v1::SessionUpdate::UsageUpdate(usage) => Some(AcpUpdate::UsageUpdate {
@@ -153,6 +171,8 @@ pub enum AcpUpdate {
     ToolCall { id: String, name: String, command: String },
     /// A tool result received.
     ToolResult { id: String, output: String, is_error: bool },
+    /// A live fragment of a running tool call's output.
+    ToolOutputDelta { id: String, chunk: String },
     /// The turn completed normally.
     Done,
     /// The turn crashed.
@@ -211,6 +231,13 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
         }
         AcpUpdate::ToolResult { id, output, is_error } => {
             vec![ExecutorEvent::ToolResult { id, output, is_error }]
+        }
+        AcpUpdate::ToolOutputDelta { id, chunk } => {
+            if chunk.is_empty() {
+                vec![]
+            } else {
+                vec![ExecutorEvent::ToolOutputDelta { id, chunk }]
+            }
         }
         AcpUpdate::Done => vec![ExecutorEvent::Done],
         // A stop reason, not a dead process: the connection is still up and
@@ -447,7 +474,7 @@ mod tests {
     /// RED→GREEN: completed tool-call updates become results; in-progress
     /// ones are ignored.
     #[test]
-    fn wire_tool_update_maps_terminal_states_only() {
+    fn a_completed_update_still_becomes_a_tool_result() {
         let mut fields = v1::ToolCallUpdateFields::new();
         fields.status = Some(v1::ToolCallStatus::Completed);
         fields.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
@@ -462,10 +489,67 @@ mod tests {
                 is_error: false,
             })
         );
+    }
 
+    /// RED→GREEN: an `InProgress` update carrying content is a live-only
+    /// rendering signal — a `ToolOutputDelta`, never persisted (that's what
+    /// the terminal `ToolResult` is for). Without this, a long-running
+    /// command shows nothing until it exits.
+    #[test]
+    fn in_progress_content_becomes_a_tool_output_delta() {
+        let mut fields = v1::ToolCallUpdateFields::new();
+        fields.status = Some(v1::ToolCallStatus::InProgress);
+        fields.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
+            v1::ContentBlock::Text(v1::TextContent::new("Compiling...\n")),
+        ))]);
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
+        assert_eq!(
+            from_session_update(&update),
+            Some(AcpUpdate::ToolOutputDelta {
+                id: "tc-1".into(),
+                chunk: "Compiling...\n".into(),
+            })
+        );
+    }
+
+    /// RED→GREEN: a status-only `InProgress` update (no content) stays
+    /// ignored — an empty delta would be noise, not a rendering signal.
+    #[test]
+    fn an_in_progress_update_with_no_content_is_still_ignored() {
         let mut pending = v1::ToolCallUpdateFields::new();
         pending.status = Some(v1::ToolCallStatus::InProgress);
         let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", pending));
+        assert_eq!(from_session_update(&update), None);
+    }
+
+    /// Observed against Claude Code over ACP: the mid-run update carrying a
+    /// running command's output sets no `status` at all (ACP treats an
+    /// omitted status as "unchanged"), so keying the delta on `InProgress`
+    /// alone dropped every byte until the command exited — the bug this was
+    /// meant to fix.
+    #[test]
+    fn content_without_a_status_is_still_a_delta() {
+        let mut fields = v1::ToolCallUpdateFields::new();
+        fields.content = Some(vec![v1::ToolCallContent::Content(v1::Content::new(
+            v1::ContentBlock::Text(v1::TextContent::new("tick 1\n")),
+        ))]);
+        assert_eq!(fields.status, None, "the case this test exists for");
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
+        assert_eq!(
+            from_session_update(&update),
+            Some(AcpUpdate::ToolOutputDelta {
+                id: "tc-1".into(),
+                chunk: "tick 1\n".into(),
+            })
+        );
+    }
+
+    /// A status-less update with nothing in it (a title or location change)
+    /// is not output and must stay silent.
+    #[test]
+    fn a_status_less_update_with_no_content_is_ignored() {
+        let fields = v1::ToolCallUpdateFields::new();
+        let update = v1::SessionUpdate::ToolCallUpdate(v1::ToolCallUpdate::new("tc-1", fields));
         assert_eq!(from_session_update(&update), None);
     }
 

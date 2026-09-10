@@ -329,6 +329,123 @@ describe("Source Control working tree", () => {
     });
   });
 
+  it("view diff opens the active thread's worktree, not the project root", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+
+    fireEvent.click(await screen.findByTestId("worktree-view-diff"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_working_diff", {
+        projectHash: "proj-1",
+        threadId: "t1",
+      })
+    );
+  });
+
+  it("an explicit Source Control tree selection still wins over the thread", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+        { id: "t2", projectHash: "proj-1", title: "Selected tree", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+        { threadId: "t2", branch: "palisade/t2", baseBranch: "main", added: 1, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "def456" },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+    fireEvent.change(await screen.findByLabelText("Source control working tree"), {
+      target: { value: "t2" },
+    });
+
+    fireEvent.click(await screen.findByTestId("worktree-view-diff"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_working_diff", {
+        projectHash: "proj-1",
+        threadId: "t2",
+      })
+    );
+  });
+
+  it("an explicit Project root selection still wins over the active thread", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+        { id: "t2", projectHash: "proj-1", title: "Selected tree", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+        { threadId: "t2", branch: "palisade/t2", baseBranch: "main", added: 1, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "def456" },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+    const selector = await screen.findByLabelText("Source control working tree");
+    fireEvent.change(selector, { target: { value: "t2" } });
+    fireEvent.change(selector, { target: { value: "project-root" } });
+
+    invokeMock.mockClear();
+    fireEvent.click(await screen.findByTestId("worktree-view-diff"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_working_diff", {
+        projectHash: "proj-1",
+        threadId: undefined,
+      })
+    );
+  });
+
+  it("view diff clears a pinned commit", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+      ]);
+      if (cmd === "git_graph") return Promise.resolve([
+        { hash: "abc123def", parents: [], subject: "Pinned commit", author: "TJ", date: "2026-08-06T00:00:00Z", refs: [] },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      if (cmd === "git_commit_diff") return Promise.resolve("diff --git a/y.ts b/y.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+
+    fireEvent.click(await screen.findByTestId("sc-commit-row"));
+    await screen.findByTestId("diff-commit-bar");
+
+    fireEvent.click(screen.getByTestId("worktree-view-diff"));
+
+    await waitFor(() => expect(screen.queryByTestId("diff-commit-bar")).toBeNull());
+    expect(screen.getByTestId("diff-pane")).toBeDefined();
+  });
+
 });
 
 describe("Top chrome (merged-design v2)", () => {
@@ -6179,6 +6296,153 @@ describe("Notebook recovery", () => {
     );
 
     expect(remaining).toEqual(new Set(["still-broken.ipynb"]));
+  });
+});
+
+describe("Streamed tool output survives a mid-turn refresh", () => {
+  it("keeps rendering toolOutputDelta chunks after a thread-updated refresh", async () => {
+    // The backend persists the toolCall itself as it happens, but never the
+    // toolOutputDelta chunks that stream its output (live-only, same as
+    // text/reasoning deltas) — so a mid-turn refresh's `read_thread` only
+    // ever returns the toolCall, never the output.
+    const persistedToolCall = {
+      seq: 1,
+      ts: "2026-09-09T00:00:00Z",
+      role: "tool" as const,
+      mode: "go" as const,
+      content: JSON.stringify({
+        kind: "toolCall",
+        id: "tc1",
+        name: "bash",
+        command: "for i in $(seq 1 60); do echo beat $i; sleep 1; done",
+      }),
+    };
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Test thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "read_thread") return Promise.resolve([persistedToolCall]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+
+    // The toolCall itself is already visible from the persisted history
+    // (`read_thread` above) — only the streamed output is live-only.
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: { kind: "toolOutputDelta", id: "tc1", chunk: "beat 1\nbeat 2\n" },
+      });
+    });
+
+    fireEvent.click(await screen.findByTestId("tool-block-header"));
+    await waitFor(() =>
+      expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
+        "beat 1"
+      )
+    );
+
+    // Mid-turn refresh: the backend tells the frontend the thread changed
+    // (e.g. a file write) while the tool call is still running.
+    await act(async () => {
+      emit("thread-updated", "t1");
+    });
+
+    // The toolCall block itself must still be there (now from persisted
+    // history) and its streamed output must have survived the refresh.
+    await waitFor(() =>
+      expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
+        "beat 1"
+      )
+    );
+
+    // More output streams in after the refresh — it must still accumulate.
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: { kind: "toolOutputDelta", id: "tc1", chunk: "beat 3\n" },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
+        "beat 3"
+      )
+    );
+  });
+
+  it("keeps a thread marked as waiting after later session output arrives", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Waiting thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: {
+          kind: "toolCall",
+          id: "tc1",
+          name: "Bash",
+          command: "cargo build",
+        },
+      });
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: {
+          kind: "permissionRequest",
+          id: "req1",
+          toolCallId: "tc1",
+          toolKind: "execute",
+          command: "cargo build",
+          paths: [],
+          warning: null,
+        },
+      });
+    });
+    expect(await screen.findByTestId("session-attention-count")).toHaveTextContent("1");
+
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: { kind: "textDelta", text: "Still working…" },
+      });
+    });
+
+    expect(screen.getByTestId("session-attention-count")).toHaveTextContent("1");
+
+    fireEvent.click(screen.getByTestId("permission-allow"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-attention-count")).toBeNull()
+    );
   });
 });
 

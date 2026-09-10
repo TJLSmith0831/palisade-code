@@ -2659,6 +2659,35 @@ details.graph-report-wrap > summary {
   padding-left: 1.2em;
 }
 
+/* Reasoning is a collapsed transcript, but once opened it should use the
+   same Markdown semantics as an assistant turn rather than expose source
+   punctuation such as `**bold**`. */
+.reasoning-content.wmde-markdown {
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  white-space: normal;
+}
+
+.reasoning-content.wmde-markdown > *:first-child {
+  margin-top: 0;
+}
+
+.reasoning-content.wmde-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.reasoning-content.wmde-markdown p,
+.reasoning-content.wmde-markdown ul,
+.reasoning-content.wmde-markdown ol {
+  margin: 0 0 8px;
+}
+
+.reasoning-content.wmde-markdown ul,
+.reasoning-content.wmde-markdown ol {
+  padding-left: 1.2em;
+}
+
 .hint {
   font-size: 12px;
   color: var(--muted);

@@ -132,6 +132,11 @@ pub enum ExecutorEvent {
     FileEdit { id: String, path: String, before: String, after: String },
     /// Emitted when the tool starts; `ToolResult` fills in its output later.
     ToolCall { id: String, name: String, command: String },
+    /// A live fragment of a running tool call's output — a rendering signal
+    /// only, never persisted. The `ToolResult` that follows is the thing
+    /// written to the log. Without this a command's output does not appear
+    /// until it exits.
+    ToolOutputDelta { id: String, chunk: String },
     ToolResult { id: String, output: String, is_error: bool },
     /// A tool call whose permission policy returned `Prompt` (D7, D-design-1)
     /// — the agent's turn is paused awaiting `answer_permission_prompt`.
@@ -209,6 +214,7 @@ pub fn persist(
         // persisted (below, capped like tool output).
         ExecutorEvent::TextDelta { .. }
         | ExecutorEvent::ReasoningDelta { .. }
+        | ExecutorEvent::ToolOutputDelta { .. }
         | ExecutorEvent::PermissionRequest { .. }
         | ExecutorEvent::Done => return,
         ExecutorEvent::Crashed { message, .. } => ("system", message.clone()),

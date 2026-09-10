@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import "../App.css";
 import { EventList, filterForTab, type Item } from "../EventView";
+
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 const chatItem: Item = {
   kind: "plain",
@@ -144,6 +147,32 @@ describe("ToolBlock rendering", () => {
     expect(border).not.toBe("");
     expect(border).not.toBe("transparent");
   });
+
+  it("a running tool block shows output before it finishes", () => {
+    const items: Item[] = [
+      toolCallItem,
+      { kind: "toolOutputDelta", id: "t1", chunk: "Compiling...\n" },
+      { kind: "toolOutputDelta", id: "t1", chunk: "Linking...\n" },
+    ];
+    renderWithMantine(<EventList items={items} executor={null} />);
+    fireEvent.click(screen.getByTestId("tool-block-header"));
+    const out = screen.getByTestId("tool-block-output");
+    expect(out.textContent).toBe("Compiling...\nLinking...\n");
+    // Still running — the deltas are not a final result.
+    expect(screen.getByTestId("tool-status-running")).toBeDefined();
+  });
+
+  it("the final result replaces the streamed output", () => {
+    const items: Item[] = [
+      toolCallItem,
+      { kind: "toolOutputDelta", id: "t1", chunk: "Compiling...\n" },
+      toolResultItem,
+    ];
+    renderWithMantine(<EventList items={items} executor={null} />);
+    fireEvent.click(screen.getByTestId("tool-block-header"));
+    const out = screen.getByTestId("tool-block-output");
+    expect(out.textContent).toBe("hello\nworld");
+  });
 });
 
 describe("ToolBlock pending-approval UI (tool-approval-prompt)", () => {
@@ -245,6 +274,21 @@ describe("ReasoningBlock rendering (reasoning-collapse-ux)", () => {
     expect(screen.getByTestId("reasoning-block-text").textContent).toBe(
       "step one\nstep two"
     );
+  });
+
+  it("renders reasoning content as Markdown after expanding", () => {
+    const markdownReasoning: Item = {
+      kind: "reasoning",
+      text: "**Preparing the project**",
+      elapsedSecs: 7,
+    };
+    renderWithMantine(
+      <EventList items={[markdownReasoning]} executor={null} />
+    );
+
+    fireEvent.click(screen.getByTestId("reasoning-block-header"));
+
+    expect(screen.getByText("Preparing the project").tagName).toBe("STRONG");
   });
 });
 

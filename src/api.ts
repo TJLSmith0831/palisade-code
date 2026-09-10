@@ -167,6 +167,11 @@ export type ExecutorEvent =
       after: string;
     }
   | { kind: "toolCall"; id: string; name: string; command: string }
+  /** A live fragment of a running tool call's output — a rendering signal
+   *  only, never persisted; the `toolResult` that follows is the thing
+   *  written to the log. Without this a command's output does not appear
+   *  until it exits. */
+  | { kind: "toolOutputDelta"; id: string; chunk: string }
   | { kind: "toolResult"; id: string; output: string; isError: boolean }
   | {
       kind: "permissionRequest";

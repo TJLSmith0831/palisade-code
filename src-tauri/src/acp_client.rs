@@ -166,7 +166,8 @@ fn shell_quote(word: &str) -> String {
 pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
     let mut meta = serde_json::Map::new();
     meta.insert("terminal-auth".into(), serde_json::Value::Bool(true));
-    v1::ClientCapabilities::new().auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
+    v1::ClientCapabilities::new()
+        .auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
 }
 
 /// The advertised method `authenticate` may actually be called with.
@@ -740,6 +741,88 @@ fn tool_call_paths(
     raw_paths(raw_input)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolOutputShape {
+    Unknown,
+    Cumulative,
+    Tail,
+}
+
+#[derive(Debug)]
+struct ToolOutputStream {
+    previous: String,
+    complete: String,
+    shape: ToolOutputShape,
+}
+
+/// Merge a tool-content update without dropping valid tail chunks. A strict
+/// extension proves the cumulative shape; a non-prefix or exact repeat is
+/// treated as tail output because both can contain real repeated bytes.
+fn dedup_tool_output(
+    seen: &mut HashMap<String, ToolOutputStream>,
+    id: &str,
+    chunk: &str,
+) -> String {
+    let Some(stream) = seen.get_mut(id) else {
+        seen.insert(
+            id.to_string(),
+            ToolOutputStream {
+                previous: chunk.to_string(),
+                complete: chunk.to_string(),
+                shape: ToolOutputShape::Unknown,
+            },
+        );
+        return chunk.to_string();
+    };
+
+    let emitted = match stream.shape {
+        ToolOutputShape::Tail => chunk.to_string(),
+        ToolOutputShape::Cumulative if chunk.starts_with(&stream.previous) => {
+            chunk[stream.previous.len()..].to_string()
+        }
+        ToolOutputShape::Cumulative => {
+            stream.shape = ToolOutputShape::Tail;
+            chunk.to_string()
+        }
+        ToolOutputShape::Unknown
+            if chunk.len() > stream.previous.len() && chunk.starts_with(&stream.previous) =>
+        {
+            stream.shape = ToolOutputShape::Cumulative;
+            chunk[stream.previous.len()..].to_string()
+        }
+        ToolOutputShape::Unknown => {
+            stream.shape = ToolOutputShape::Tail;
+            chunk.to_string()
+        }
+    };
+    if stream.shape == ToolOutputShape::Cumulative {
+        stream.complete = chunk.to_string();
+    } else {
+        stream.complete.push_str(chunk);
+    }
+    stream.previous = chunk.to_string();
+    emitted
+}
+
+/// Resolve a terminal update against the most recent content snapshot. ACP
+/// update fields are partial, so a status-only `Completed`/`Failed` update
+/// leaves the prior content unchanged rather than clearing it.
+fn complete_tool_output(
+    seen: &mut HashMap<String, ToolOutputStream>,
+    id: &str,
+    final_output: &str,
+) -> String {
+    let streamed = seen
+        .remove(id)
+        .map(|stream| stream.complete)
+        .unwrap_or_default();
+    if final_output.is_empty() {
+        streamed
+    } else {
+        final_output.to_string()
+    }
+}
+
 /// Answer an agent permission request according to the session's mode
 /// policy (D12, D15). `Prompt` pauses the turn on a oneshot channel until
 /// the user answers via `answer_permission_prompt` (D7, D-design-1); a kind
@@ -1011,6 +1094,12 @@ async fn run_bridge(
     // An agent that repeats a diff on every status change would otherwise
     // stack a duplicate diff block in the transcript for each repeat.
     let notif_edits = Arc::new(std::sync::Mutex::new(std::collections::HashSet::<String>::new()));
+    // Live tool-output text already streamed per tool call id, so a
+    // cumulative-output agent doesn't double-print its own history on every
+    // `InProgress` update (`dedup_tool_output`). Cleared
+    // when the tool call completes — nothing more to de-dup against.
+    let notif_tool_output =
+        Arc::new(std::sync::Mutex::new(HashMap::<String, ToolOutputStream>::new()));
     let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
@@ -1072,9 +1161,10 @@ async fn run_bridge(
                     }
                     emit(&notif_sink, &notif_session, &notif_thread, event);
                 }
-                if let Some(update) = crate::acp_events::from_session_update(&notification.update)
+                if let Some(mut update) =
+                    crate::acp_events::from_session_update(&notification.update)
                 {
-                    match &update {
+                    match &mut update {
                         crate::acp_events::AcpUpdate::TextDelta { text } => {
                             notif_text.lock().unwrap().push_str(text)
                         }
@@ -1084,6 +1174,29 @@ async fn run_bridge(
                                 *notif_think_started.lock().unwrap() = Some(std::time::Instant::now());
                             }
                             buf.push_str(text);
+                        }
+                        // Cumulative-output agents resend everything so far
+                        // on every `InProgress` update; strip what was
+                        // already streamed so the live view doesn't
+                        // double-print (`dedup_tool_output`).
+                        crate::acp_events::AcpUpdate::ToolOutputDelta { id, chunk } => {
+                            *chunk = dedup_tool_output(
+                                &mut notif_tool_output.lock().unwrap(),
+                                id,
+                                chunk,
+                            );
+                        }
+                        // A terminal status can omit unchanged content. Keep
+                        // the last streamed snapshot in that case, then clear
+                        // the call's tracking state.
+                        crate::acp_events::AcpUpdate::ToolResult {
+                            id, output, ..
+                        } => {
+                            *output = complete_tool_output(
+                                &mut notif_tool_output.lock().unwrap(),
+                                id,
+                                output,
+                            );
                         }
                         _ => {}
                     }
@@ -1099,20 +1212,36 @@ async fn run_bridge(
             acp::on_receive_notification!(),
         )
         .on_receive_request(
-            async move |request: v1::RequestPermissionRequest, responder, _cx| {
-                let response = answer_permission(
-                    &request,
-                    perm_mode,
-                    &session_allowed,
-                    &perm_pending,
-                    &perm_sink,
-                    &perm_session,
-                    &perm_thread,
-                    &perm_project,
-                    &perm_active_commands,
-                )
-                .await;
-                responder.respond(response)
+            async move |request: v1::RequestPermissionRequest, responder, cx| {
+                // Awaiting the user here would hold the dispatch loop open
+                // for the entire time the Allow/Deny prompt is on screen —
+                // the crate is explicit that "no other messages are
+                // processed while your callback runs", which froze every
+                // session behind one open prompt. `cx.spawn` moves the wait
+                // outside the loop; each capture is cloned rather than moved
+                // because this handler runs again for the next prompt.
+                let session_allowed = session_allowed.clone();
+                let perm_pending = perm_pending.clone();
+                let perm_sink = perm_sink.clone();
+                let perm_session = perm_session.clone();
+                let perm_thread = perm_thread.clone();
+                let perm_project = perm_project.clone();
+                let perm_active_commands = perm_active_commands.clone();
+                cx.spawn(async move {
+                    let response = answer_permission(
+                        &request,
+                        perm_mode,
+                        &session_allowed,
+                        &perm_pending,
+                        &perm_sink,
+                        &perm_session,
+                        &perm_thread,
+                        &perm_project,
+                        &perm_active_commands,
+                    )
+                    .await;
+                    responder.respond(response)
+                })
             },
             acp::on_receive_request!(),
         )
@@ -1905,6 +2034,58 @@ mod tests {
         .is_none());
     }
 
+    // --------------------------------------------------------- tool output dedup
+
+    /// RED→GREEN: an agent that resends the full accumulated output on every
+    /// `InProgress` update must still stream just the new suffix each time —
+    /// "one" then "two", not "one" then "onetwo".
+    #[test]
+    fn repeated_cumulative_output_is_emitted_once() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "onetwo"), "two");
+    }
+
+    /// An exact repeat is ambiguous: a tail-streaming agent may legitimately
+    /// emit the same line twice, so preserving bytes wins until the stream
+    /// has demonstrated cumulative behavior.
+    #[test]
+    fn an_exact_repeated_tail_is_not_dropped() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+    }
+
+    #[test]
+    fn a_tail_chunk_that_starts_with_the_previous_tail_is_not_truncated() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "alpha"), "alpha");
+        // This non-prefix update establishes that this agent sends tails.
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "beta"), "beta");
+        assert_eq!(
+            dedup_tool_output(&mut seen, "tc-1", "beta again"),
+            "beta again"
+        );
+    }
+
+    /// A different tool call id has its own independent tracking.
+    #[test]
+    fn different_tool_calls_track_independently() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+        assert_eq!(dedup_tool_output(&mut seen, "tc-2", "one"), "one");
+    }
+
+    #[test]
+    fn a_status_only_completion_keeps_the_output_already_streamed() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "onetwo"), "two");
+
+        assert_eq!(complete_tool_output(&mut seen, "tc-1", ""), "onetwo");
+        assert!(!seen.contains_key("tc-1"));
+    }
+
     // --------------------------------------------------------- permissions
 
     fn permission_request(
@@ -2438,6 +2619,12 @@ mod tests {
         /// opt-in so `bridge_prompt_round_trips`' text-only event sequence
         /// stays exact for every other test using this fake.
         emit_thoughts: bool,
+        /// Send a `session/request_permission` request before the reply
+        /// chunks, and — critically — without awaiting its response. This is
+        /// what a real agent does while its own tool call is blocked on the
+        /// user's Allow/Deny: it must still be free to stream other session
+        /// updates on the same connection while that request sits pending.
+        emit_permission_request_first: bool,
     }
 
     impl FakeAgent {
@@ -2450,6 +2637,7 @@ mod tests {
         ) -> tokio::task::JoinHandle<()> {
             let set_requests = self.set_config_requests.clone();
             let emit_thoughts = self.emit_thoughts;
+            let emit_permission_request_first = self.emit_permission_request_first;
             tokio::spawn(async move {
                 let _ = acp::Agent
                     .builder()
@@ -2501,6 +2689,49 @@ mod tests {
                     )
                     .on_receive_request(
                         async move |req: v1::PromptRequest, responder, cx| {
+                          // The whole body runs in its own spawned task —
+                          // calling `.block_task().await` on a request this
+                          // same handler sends (the terminal scenarios do,
+                          // sequentially) would otherwise block the fake
+                          // agent's *own* dispatch loop, which is exactly
+                          // what stops it from ever seeing the response.
+                          // That's the phase 2 bug, reproduced on this
+                          // harness's own agent side, not the client's.
+                          let cx2 = cx.clone();
+                          cx.spawn(async move {
+                            let cx = cx2;
+                            if emit_permission_request_first {
+                                let mut fields = v1::ToolCallUpdateFields::new();
+                                fields.kind = Some(v1::ToolKind::Execute);
+                                fields.raw_input =
+                                    Some(serde_json::json!({"command": "cargo build"}));
+                                let perm_req = v1::RequestPermissionRequest::new(
+                                    req.session_id.clone(),
+                                    v1::ToolCallUpdate::new("tc-perm", fields),
+                                    vec![
+                                        v1::PermissionOption::new(
+                                            "allow",
+                                            "Allow once",
+                                            v1::PermissionOptionKind::AllowOnce,
+                                        ),
+                                        v1::PermissionOption::new(
+                                            "deny",
+                                            "Deny",
+                                            v1::PermissionOptionKind::RejectOnce,
+                                        ),
+                                    ],
+                                );
+                                // Sent and NOT awaited here — dropping the
+                                // `SentRequest` immediately would auto-cancel
+                                // it, so the wait moves into its own spawned
+                                // task while this handler goes on to stream
+                                // the notification below on the same turn.
+                                let sent = cx.send_request(perm_req);
+                                cx.spawn(async move {
+                                    let _ = sent.block_task().await;
+                                    Ok(())
+                                })?;
+                            }
                             if emit_thoughts {
                                 for piece in ["hmm ", "thinking"] {
                                     let _ = cx.send_notification(v1::SessionNotification::new(
@@ -2521,6 +2752,7 @@ mod tests {
                             }
                             responder
                                 .respond(v1::PromptResponse::new(v1::StopReason::EndTurn))
+                          })
                         },
                         acp::on_receive_request!(),
                     )
@@ -2552,6 +2784,48 @@ mod tests {
         FakeAgent,
         tokio::task::JoinHandle<()>,
     ) {
+        fake_agent_pair_with_permission(emit_thoughts, false)
+    }
+
+    /// A fake agent that sends a `session/request_permission` request before
+    /// its reply chunks, without awaiting the answer — the shape a permission
+    /// prompt takes on a live connection.
+    fn fake_agent_pair_with_permission_first() -> (
+        acp::ByteStreams<
+            impl futures::AsyncWrite + Send + 'static,
+            impl futures::AsyncRead + Send + 'static,
+        >,
+        FakeAgent,
+        tokio::task::JoinHandle<()>,
+    ) {
+        fake_agent_pair_with_permission(false, true)
+    }
+
+    fn fake_agent_pair_with_permission(
+        emit_thoughts: bool,
+        emit_permission_request_first: bool,
+    ) -> (
+        acp::ByteStreams<
+            impl futures::AsyncWrite + Send + 'static,
+            impl futures::AsyncRead + Send + 'static,
+        >,
+        FakeAgent,
+        tokio::task::JoinHandle<()>,
+    ) {
+        fake_agent_pair_full(emit_thoughts, emit_permission_request_first)
+    }
+
+    fn fake_agent_pair_full(
+        emit_thoughts: bool,
+        emit_permission_request_first: bool,
+    ) -> (
+        acp::ByteStreams<
+            impl futures::AsyncWrite + Send + 'static,
+            impl futures::AsyncRead + Send + 'static,
+        >,
+        FakeAgent,
+        tokio::task::JoinHandle<()>,
+    ) {
         use tokio_util::compat::TokioAsyncReadCompatExt;
         use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -2562,6 +2836,7 @@ mod tests {
         let fake = FakeAgent {
             set_config_requests: Arc::new(std::sync::Mutex::new(vec![])),
             emit_thoughts,
+            emit_permission_request_first,
         };
         let handle = fake.spawn(acp::ByteStreams::new(
             agent_w.compat_write(),
@@ -2675,6 +2950,95 @@ mod tests {
                 // just proves it's a real (small) duration, not garbage.
                 assert!(elapsed_secs < 5, "elapsed_secs should be a small real duration, got {elapsed_secs}");
                 break;
+            }
+        }
+    }
+
+    /// RED→GREEN: the crate's own dispatch-loop rule (`concepts::ordering`)
+    /// says a request handler that awaits the user holds the loop, so no
+    /// other message is processed while a permission prompt sits open. This
+    /// is the whole-session freeze this guards against — proven here by
+    /// having the agent send a `session/request_permission` and then, without
+    /// waiting for its answer, a normal `session/update` text chunk. Under
+    /// the bug, the client's `on_receive_request` handler for
+    /// `RequestPermissionRequest` awaits `answer_permission` inline and never
+    /// returns to the dispatch loop, so the text chunk is never processed
+    /// until the prompt is answered. Bounded timeouts throughout so a
+    /// regression fails clean instead of hanging the suite.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn session_updates_keep_flowing_while_a_permission_prompt_is_open() {
+        // Go mode, not the other tests' Spec: an Execute request is
+        // Prompt-tier in Go mode (permissions::decide_permission), so the
+        // fake agent's permission request actually reaches the pending path
+        // this test is exercising, rather than auto-allowing silently.
+        let mut spawn_for_start = test_spawn(None);
+        spawn_for_start.mode = "go".into();
+        let mut spawn_for_identity = test_spawn(None);
+        spawn_for_identity.mode = "go".into();
+
+        let (transport, _fake, _agent) = fake_agent_pair_with_permission_first();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (id, _models, cmds, busy, _acp_id, pending) = start_with_transport(
+            transport,
+            spawn_for_start,
+            Arc::new(ChannelSink(tx)),
+            false,
+            None,
+        )
+        .unwrap();
+        let session = SessionIdentity::from(&spawn_for_identity)
+            .into_session(id, ModelState::default(), cmds, busy, pending);
+        send_acp_prompt(&session, "hello").unwrap();
+
+        // Both the permission prompt and the turn's own text chunk must
+        // reach the sink before either is answered — the dispatch loop must
+        // not be stuck behind the open prompt. `cx.spawn` makes the two
+        // handlers run concurrently, so their relative order is no longer
+        // guaranteed (unlike under the bug, where the request handler held
+        // the loop and nothing else could be processed at all); this only
+        // asserts that both arrive, unblocked, within a bounded window.
+        // Nothing gates the fake agent's own turn completion on the
+        // permission answer, so a `Done` may legitimately show up in this
+        // window too — tracked so the final wait below doesn't block on an
+        // event that already went by.
+        let mut request_id: Option<String> = None;
+        let mut saw_text_delta = false;
+        let mut saw_done = false;
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while std::time::Instant::now() < deadline && !(request_id.is_some() && saw_text_delta) {
+            let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) else {
+                break;
+            };
+            match event.event {
+                ExecutorEvent::PermissionRequest { id, .. } => request_id = Some(id),
+                ExecutorEvent::TextDelta { ref text } if text == "agent " => saw_text_delta = true,
+                ExecutorEvent::Done => saw_done = true,
+                // The second "reply" chunk (or anything else the fake agent
+                // streams) may legitimately arrive in this window too — only
+                // the events above are what this test is checking for.
+                _ => {}
+            }
+        }
+        let request_id = request_id.expect(
+            "PermissionRequest should have arrived, unblocked, before the prompt was answered",
+        );
+        assert!(
+            saw_text_delta,
+            "the streamed text delta should have arrived, unblocked, before the prompt was answered"
+        );
+
+        // Answering the prompt lets its own turn (the fake agent's spawned
+        // `block_task` wait) resolve too — nothing is left dangling.
+        session.answer_permission_prompt(&request_id, PermissionAnswer::Allow);
+
+        // The prompt's own turn still completes normally (unless it already
+        // did, above).
+        if !saw_done {
+            loop {
+                let event = recv_event(&rx);
+                if matches!(event.event, ExecutorEvent::Done) {
+                    break;
+                }
             }
         }
     }

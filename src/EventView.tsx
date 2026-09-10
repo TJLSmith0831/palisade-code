@@ -178,14 +178,16 @@ function ReasoningBlock({
           data-testid="reasoning-block-text"
           style={{
             borderTop: "1px solid var(--border)",
-            whiteSpace: "pre-wrap",
             fontSize: 13,
             color: "var(--muted)",
             maxHeight: 320,
             overflow: "auto",
           }}
         >
-          {event.text}
+          <MDEditor.Markdown
+            source={event.text}
+            className="content reasoning-content"
+          />
         </Box>
       )}
     </Paper>
@@ -195,11 +197,15 @@ function ReasoningBlock({
 function ToolBlock({
   event,
   output,
+  liveOutput,
   pending,
   onAnswer,
 }: {
   event: Extract<ExecutorEvent, { kind: "toolCall" }>;
   output?: Extract<ExecutorEvent, { kind: "toolResult" }>;
+  /** Output streamed so far from `toolOutputDelta` events, concatenated —
+   *  shown only until the final `toolResult` replaces it wholesale. */
+  liveOutput?: string;
   /** Set when the permission policy flagged this call as needing the user's
    *  decision (D7, tool-approval-prompt spec) — the turn is paused until
    *  Allow/Deny/AllowSession is answered. */
@@ -356,7 +362,7 @@ function ToolBlock({
           >
             {event.command}
           </Code>
-          {output && (
+          {(output || liveOutput) && (
             <Code
               block
               fz="xs"
@@ -367,7 +373,7 @@ function ToolBlock({
                 color: failed ? "var(--danger)" : "var(--fg)",
               }}
             >
-              {output.output}
+              {output ? output.output : liveOutput}
             </Code>
           )}
         </Stack>
@@ -380,6 +386,7 @@ export const EventList = memo(function EventList({
   items,
   executor,
   sessionId = null,
+  onPermissionAnswered,
   onRetry,
   agentLogins = [],
   onAgentLogin,
@@ -390,6 +397,9 @@ export const EventList = memo(function EventList({
    *  pending permission prompt. Absent for read-only render paths (e.g. the
    *  diff tab), which never include `toolCall`/`permissionRequest` items. */
   sessionId?: string | null;
+  /** Removes the resolved request from the owning live-session buffer so
+   *  thread-level attention indicators clear at the same time as this view. */
+  onPermissionAnswered?: (requestId: string) => void;
   /** Resends a given prompt as a new message — the crash banner's retry
    *  action for an auth-shaped failure. A crashed turn ends the session
    *  (see CLAUDE.md), so "reauth" here isn't a Palisade-side flow to run;
@@ -417,6 +427,20 @@ export const EventList = memo(function EventList({
     return map;
   }, [items]);
 
+  // Live output streamed so far per tool call, concatenated in arrival
+  // order — the running block's body until the final `toolResult` replaces
+  // it wholesale (same shape as `results` above).
+  const liveOutput = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind === "toolOutputDelta") {
+        map.set(item.id, (map.get(item.id) ?? "") + item.chunk);
+      }
+    }
+    return map;
+  }, [items]);
+
+
   // Permission prompts still awaiting the user's decision, keyed by the
   // tool call they belong to. Answered ones are hidden locally the moment a
   // decision is sent (task 5.2) — the backend has no "resolved" event, so
@@ -437,9 +461,10 @@ export const EventList = memo(function EventList({
   const onAnswer = useCallback(
     (requestId: string, decision: "allow" | "deny" | "allow_session") => {
       setAnswered((prev) => new Set(prev).add(requestId));
+      onPermissionAnswered?.(requestId);
       if (sessionId) void answerPermissionPrompt(sessionId, requestId, decision);
     },
-    [sessionId]
+    [sessionId, onPermissionAnswered]
   );
 
   return (
@@ -575,6 +600,9 @@ export const EventList = memo(function EventList({
           // every Item kind instead of relying on the implicit fallthrough.
           case "textDelta":
           case "reasoningDelta":
+          // Folded into `liveOutput` above, rendered on the tool block it
+          // belongs to — not its own bubble.
+          case "toolOutputDelta":
             return null;
           case "fileEdit":
             return (
@@ -589,6 +617,7 @@ export const EventList = memo(function EventList({
                 key={index}
                 event={item}
                 output={results.get(item.id)}
+                liveOutput={liveOutput.get(item.id)}
                 pending={pending.get(item.id)}
                 onAnswer={onAnswer}
               />
