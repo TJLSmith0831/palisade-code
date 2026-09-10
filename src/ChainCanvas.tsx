@@ -122,13 +122,33 @@ export function turnCeiling(draft: Draft): number {
   return Object.keys(draft.nodes).reduce((total, role) => total + (caps.get(role) ?? 1), 0);
 }
 
+/**
+ * Patches one field of `role`'s node. The Role field is uncontrolled and
+ * renames on blur, so moving from Role into another field retires the old key
+ * between render and event — and `{ ...d.nodes[role] }` on a key that is gone
+ * does not throw, it fabricates a role-less, agent-less ghost node. An unknown
+ * role is therefore a no-op, not a silent insert.
+ */
+export function applyNodePatch(
+  draft: Draft,
+  role: string,
+  patch: Partial<Draft["nodes"][string]>
+): Draft {
+  const node = draft.nodes[role];
+  if (!node) return draft;
+  return { ...draft, nodes: { ...draft.nodes, [role]: { ...node, ...patch } } };
+}
+
 /** The first thing wrong with this draft, or null. Mirrors `Chain::validate`. */
 export function draftProblem(draft: Draft): string | null {
   if (!draft.name.trim()) return "Give the chain a name before saving.";
   if (Object.keys(draft.nodes).length === 0) return "Add at least one node.";
   if (!draft.nodes[draft.entry]) return "Pick which node the chain starts at.";
-  const missingAgent = Object.values(draft.nodes).find((n) => !n.agent);
-  if (missingAgent) return `${missingAgent.role} has no agent bound to it.`;
+  // Keyed, not `n.role`: the map key *is* the role, and a node whose `role`
+  // field went missing is precisely the case that used to report itself as
+  // "undefined has no agent bound to it".
+  const missingAgent = Object.entries(draft.nodes).find(([, n]) => !n.agent);
+  if (missingAgent) return `${missingAgent[0]} has no agent bound to it.`;
   const loops = loopEdgeIndices(draft);
   for (const index of loops) {
     const edge = draft.edges[index];
@@ -894,11 +914,7 @@ export default function ChainCanvas({
               data={agents.map((a) => ({ value: a.id, label: a.name }))}
               value={node.agent || null}
               onChange={(value) =>
-                value &&
-                setDraft((d) => ({
-                  ...d,
-                  nodes: { ...d.nodes, [editing]: { ...d.nodes[editing], agent: value } },
-                }))
+                value && setDraft((d) => applyNodePatch(d, editing, { agent: value }))
               }
               data-testid="node-agent"
             />
@@ -916,13 +932,7 @@ export default function ChainCanvas({
               data={models.map((m) => ({ value: m.id, label: m.name }))}
               value={node.model ?? null}
               onChange={(value) =>
-                setDraft((d) => ({
-                  ...d,
-                  nodes: {
-                    ...d.nodes,
-                    [editing]: { ...d.nodes[editing], model: value },
-                  },
-                }))
+                setDraft((d) => applyNodePatch(d, editing, { model: value }))
               }
               data-testid="node-model"
             />
@@ -933,25 +943,27 @@ export default function ChainCanvas({
               minRows={3}
               value={node.guideline}
               onChange={(e) =>
-                setDraft((d) => ({
-                  ...d,
-                  nodes: {
-                    ...d.nodes,
-                    [editing]: { ...d.nodes[editing], guideline: e.target.value },
-                  },
-                }))
+                setDraft((d) => applyNodePatch(d, editing, { guideline: e.target.value }))
               }
               data-testid="node-guideline"
             />
             <Group justify="space-between">
-              <Button
-                size="xs"
-                variant="subtle"
-                disabled={draft.entry === editing}
-                onClick={() => setDraft((d) => ({ ...d, entry: editing }))}
-              >
-                Start here
-              </Button>
+              {/* A node that already is the entry says so. Disabling the
+                  button instead read as broken next to a live Delete — the
+                  state was communicated only by the control being dead. */}
+              {draft.entry === editing ? (
+                <Badge size="sm" variant="light" data-testid="node-is-entry">
+                  Start of chain
+                </Badge>
+              ) : (
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  onClick={() => setDraft((d) => ({ ...d, entry: editing }))}
+                >
+                  Start here
+                </Button>
+              )}
               <Button
                 size="xs"
                 color="red"

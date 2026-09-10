@@ -6,7 +6,12 @@ import { act } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
-import ChainCanvas, { turnCeiling, type RunView } from "../ChainCanvas";
+import ChainCanvas, {
+  applyNodePatch,
+  draftProblem,
+  turnCeiling,
+  type RunView,
+} from "../ChainCanvas";
 
 const appCssPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../App.css");
 
@@ -448,5 +453,159 @@ describe("ChainCanvas — dirty indicator", () => {
     expect(await screen.findByTestId("chain-dirty")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByTestId("chain-dirty")).not.toBeInTheDocument());
+  });
+});
+
+/**
+ * A disabled "Start here" was the only signal that a node already *was* the
+ * entry — the control looked broken rather than satisfied, next to a Delete
+ * that stayed live. State a user needs is stated, never implied by deadness.
+ */
+describe("entry node affordance", () => {
+  const mount = () =>
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+
+  /** Adding a node auto-opens its editor, so the second add lands on step-2. */
+  const addSecondNode = () => {
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+  };
+
+  it("says the node is the start instead of showing a dead 'Start here'", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+
+    expect(await screen.findByTestId("node-is-entry")).toHaveTextContent(/start of chain/i);
+    expect(screen.queryByRole("button", { name: "Start here" })).toBeNull();
+  });
+
+  it("offers a live 'Start here' on a node that is not the entry", async () => {
+    mount();
+    addSecondNode();
+
+    const button = await screen.findByRole("button", { name: "Start here" });
+    expect(button).toBeEnabled();
+    expect(screen.queryByTestId("node-is-entry")).toBeNull();
+  });
+
+  it("promotes that node to the entry when clicked, and says so", async () => {
+    mount();
+    addSecondNode();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start here" }));
+
+    expect(await screen.findByTestId("node-is-entry")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start here" })).toBeNull();
+  });
+});
+
+/**
+ * The Role field is uncontrolled and renames on blur, so moving from Role
+ * straight into another field retires the old key mid-edit. Writing a field
+ * with `{ ...d.nodes[editing] }` then spread `undefined` — which does not
+ * throw, it fabricates a role-less, agent-less ghost node, and the validator
+ * reported it as "undefined has no agent bound to it".
+ */
+describe("renaming a node while editing it", () => {
+  const mount = () =>
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+
+  it("leaves no ghost node when a rename is followed by a guideline edit", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+
+    const role = await screen.findByTestId("node-role");
+    fireEvent.blur(role, { target: { value: "reviewer" } });
+    fireEvent.change(screen.getByTestId("node-guideline"), {
+      target: { value: "Name the biggest correctness risk." },
+    });
+
+    const nodes = screen.queryAllByTestId(/^chain-node-/);
+    expect(nodes.map((n) => n.getAttribute("data-testid"))).toEqual(["chain-node-reviewer"]);
+    expect(screen.queryByTestId("chain-node-step")).toBeNull();
+  });
+
+  it("keeps the guideline on the renamed node rather than dropping it", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+
+    fireEvent.blur(await screen.findByTestId("node-role"), { target: { value: "reviewer" } });
+    fireEvent.change(screen.getByTestId("node-guideline"), {
+      target: { value: "Name the biggest correctness risk." },
+    });
+
+    expect(screen.getByTestId("chain-node-reviewer")).toHaveTextContent(
+      "Name the biggest correctness risk."
+    );
+  });
+});
+
+describe("draftProblem", () => {
+  it("names the node by its role key, never 'undefined'", () => {
+    const problem = draftProblem({
+      name: "c",
+      entry: "scout",
+      nodes: {
+        scout: { role: "scout", guideline: "", agent: "claude" },
+        // A node that lost its `role` field is exactly what the ghost bug
+        // produced; the message must still name it.
+        auditor: { guideline: "", agent: "" } as never,
+      },
+      edges: [],
+      layout: {},
+      timeoutSeconds: 600,
+      retry: { maxAttempts: 1 },
+    });
+    expect(problem).toBe("auditor has no agent bound to it.");
+    expect(problem).not.toContain("undefined");
+  });
+});
+
+describe("applyNodePatch", () => {
+  const base = {
+    name: "c",
+    entry: "scout",
+    nodes: { scout: { role: "scout", guideline: "", agent: "claude" } },
+    edges: [],
+    layout: {},
+    timeoutSeconds: 600,
+    retry: { maxAttempts: 1 },
+  };
+
+  it("patches the named node", () => {
+    const next = applyNodePatch(base, "scout", { guideline: "look around" });
+    expect(next.nodes.scout.guideline).toBe("look around");
+    expect(next.nodes.scout.agent).toBe("claude");
+  });
+
+  it("is a no-op for a role a rename already retired — never inserts a ghost", () => {
+    const next = applyNodePatch(base, "step", { guideline: "orphaned write" });
+    expect(next).toBe(base);
+    expect(Object.keys(next.nodes)).toEqual(["scout"]);
+    expect(next.nodes.step).toBeUndefined();
+  });
+
+  it("does not mutate the draft it was given", () => {
+    applyNodePatch(base, "scout", { agent: "codex" });
+    expect(base.nodes.scout.agent).toBe("claude");
   });
 });
