@@ -599,3 +599,75 @@ describe("session anchors", () => {
     expect(scrollToSession("s-nowhere")).toBe(false);
   });
 });
+
+/**
+ * A chain node runs whatever agent it is bound to, which is routinely not the
+ * thread's agent. The banner used one thread-scoped login list for every crash,
+ * so a Claude Agent auth failure offered "Sign in with ChatGPT" — an action
+ * that signs in a different agent and fixes nothing.
+ */
+describe("sign-in buttons follow the agent that actually failed", () => {
+  const crashFor = (agentName: string): Item[] => [
+    {
+      kind: "plain",
+      role: "system",
+      mode: "go",
+      text: `${agentName} needs to be signed in — Internal error: Failed to authenticate: OAuth session expired.`,
+    },
+  ];
+  const codexLogins = [
+    { methodId: "chatgpt", label: "ChatGPT", kind: "terminal" as const, shellLine: "codex login" },
+  ];
+  const claudeLogins = [
+    { methodId: "claude-ai", label: "Claude Subscription", kind: "terminal" as const, shellLine: "claude login" },
+  ];
+  /** Stands in for App.tsx matching the crash text against installed agents. */
+  const loginsFor = (text: string) =>
+    text.startsWith("Codex") ? codexLogins : text.startsWith("Claude Agent") ? claudeLogins : [];
+
+  it("offers the failing agent's own logins, not the thread agent's", () => {
+    renderWithMantine(
+      <EventList
+        items={crashFor("Claude Agent")}
+        executor={null}
+        agentLogins={codexLogins}
+        agentLoginsFor={loginsFor}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.getAllByTestId("crash-banner-signin").map((b) => b.textContent)).toEqual([
+      "Sign in with Claude Subscription",
+    ]);
+    expect(screen.queryByText("Sign in with ChatGPT")).toBeNull();
+  });
+
+  it("offers no sign-in at all rather than a wrong one for an unknown agent", () => {
+    renderWithMantine(
+      <EventList
+        items={crashFor("Some Other Agent")}
+        executor={null}
+        agentLogins={codexLogins}
+        agentLoginsFor={loginsFor}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.queryAllByTestId("crash-banner-signin")).toHaveLength(0);
+    expect(screen.getByTestId("crash-banner-auth-summary").textContent).toMatch(
+      /can't complete an interactive login on its own/i
+    );
+  });
+
+  it("falls back to the thread's list when no resolver is supplied", () => {
+    renderWithMantine(
+      <EventList
+        items={crashFor("Codex")}
+        executor={null}
+        agentLogins={codexLogins}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.getAllByTestId("crash-banner-signin").map((b) => b.textContent)).toEqual([
+      "Sign in with ChatGPT",
+    ]);
+  });
+});

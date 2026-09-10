@@ -426,6 +426,7 @@ export const EventList = memo(function EventList({
   onRetry,
   agentLogins = [],
   onAgentLogin,
+  agentLoginsFor,
 }: {
   items: Item[];
   executor: Preflight["selected"];
@@ -450,6 +451,14 @@ export const EventList = memo(function EventList({
   agentLogins?: AgentLogin[];
   /** Runs one of those logins — the app opens a terminal and executes it. */
   onAgentLogin?: (login: AgentLogin) => void;
+  /**
+   * Resolves the logins for the agent a given crash actually names. A chain
+   * node runs whatever agent it is bound to, which is routinely not the
+   * thread's — and offering the thread agent's sign-in for another agent's
+   * auth failure is a wrong action, not a near miss. Falls back to
+   * `agentLogins` when absent, for render paths with a single agent.
+   */
+  agentLoginsFor?: (crashText: string) => AgentLogin[];
 }) {
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = useMemo(() => {
@@ -545,6 +554,9 @@ export const EventList = memo(function EventList({
             // plus a one-click retry replaces "what do I even do with this".
             if (item.role === "system") {
               const authIssue = isAuthError(item.text);
+              // Whose login is broken, not whose agent the thread happens to
+              // be pointed at.
+              const logins = agentLoginsFor ? agentLoginsFor(item.text) : agentLogins;
               // The prompt that led to this crash — found by walking back to
               // the nearest preceding user turn — is what Retry resends. A
               // crashed turn can persist a partial assistant reply right
@@ -575,7 +587,7 @@ export const EventList = memo(function EventList({
                       className="ds-crash-banner-auth-summary"
                       data-testid="crash-banner-auth-summary"
                     >
-                      {agentLogins.length > 0
+                      {logins.length > 0
                         ? "This agent's login expired or failed to refresh. Sign in below — Palisade runs the agent's own login in a terminal here — then retry."
                         : "This agent's login expired or failed to refresh. Palisade can't complete an interactive login on its own — sign back in outside Palisade, then retry."}
                     </div>
@@ -583,7 +595,7 @@ export const EventList = memo(function EventList({
                   <div className="ds-crash-banner-detail">{item.text}</div>
                   {authIssue &&
                     onAgentLogin &&
-                    agentLogins.map((login) => (
+                    logins.map((login) => (
                       <button
                         key={login.methodId}
                         type="button"

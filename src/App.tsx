@@ -251,6 +251,7 @@ type ChatSurfaceProps = {
   /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
   onApply: () => void;
   agentLogins?: api.AgentLogin[];
+  agentLoginsFor?: (crashText: string) => api.AgentLogin[];
   onAgentLogin?: (login: api.AgentLogin) => void;
   /** Spec-mode stage derivation (amended D19). */
   stage: SpecStage;
@@ -527,6 +528,7 @@ export const ChatSurface = memo(
     onGo,
     onApply,
     agentLogins,
+    agentLoginsFor,
     onAgentLogin,
     stage,
     dragActive,
@@ -1324,6 +1326,7 @@ export const ChatSurface = memo(
                 handleSend();
               }}
               agentLogins={agentLogins}
+              agentLoginsFor={agentLoginsFor}
               onAgentLogin={onAgentLogin}
             />
           </>
@@ -3276,6 +3279,32 @@ export default function App() {
       live = false;
     };
   }, [project?.hash, thread?.id]);
+
+  // Logins per agent id, for crashes from an agent that is not this thread's
+  // — a chain node runs whatever agent it is bound to. Fetched on first sight
+  // of that agent's crash and cached; an agent with no advertised login stays
+  // an empty list, which renders as "no sign-in here" rather than a wrong one.
+  const [loginsByAgent, setLoginsByAgent] = useState<Record<string, api.AgentLogin[]>>({});
+  const agentLoginsFor = useCallback(
+    (crashText: string): api.AgentLogin[] => {
+      // The crash is built as `{agent_name} needs to be signed in — ...`
+      // (acp_client.rs), so the name matches an installed agent exactly.
+      const agent = (flight?.agents ?? []).find((a) => crashText.startsWith(a.name));
+      if (!agent || !project) return [];
+      const cached = loginsByAgent[agent.id];
+      if (cached) return cached;
+      void api
+        .agentLogins(project.hash, null, agent.id)
+        .then((logins) =>
+          setLoginsByAgent((prior) =>
+            prior[agent.id] ? prior : { ...prior, [agent.id]: logins }
+          )
+        )
+        .catch(() => undefined);
+      return [];
+    },
+    [flight?.agents, project, loginsByAgent]
+  );
 
   const onAgentLogin = useCallback(
     (login: api.AgentLogin) => {
@@ -5945,6 +5974,7 @@ export default function App() {
     onGo,
     onApply,
     agentLogins,
+    agentLoginsFor,
     onAgentLogin,
     stage,
     dragActive,
