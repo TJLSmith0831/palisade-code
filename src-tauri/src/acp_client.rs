@@ -1203,6 +1203,14 @@ async fn run_bridge(
                     if let Some(commands) = crate::acp_events::extract_commands(&update) {
                         notif_sink.emit_commands(&notif_session, &notif_thread, commands);
                     }
+                    // Usage is not an ExecutorEvent — the transcript event
+                    // enum is intentionally capped — but an active chain
+                    // turn needs ACP's optional billed cost. The app sink
+                    // finds the watcher for this session and keeps the most
+                    // recent cumulative amount (D-d).
+                    if let Some((_used, _size, cost)) = crate::acp_events::extract_usage(&update) {
+                        notif_sink.emit_usage(&notif_session, &notif_thread, cost);
+                    }
                     for event in crate::acp_events::map_acp_update(update) {
                         emit(&notif_sink, &notif_session, &notif_thread, event);
                     }

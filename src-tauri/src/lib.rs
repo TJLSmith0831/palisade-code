@@ -5,6 +5,7 @@ mod acp_registry;
 mod chain_exec;
 mod chain_runner;
 mod chains;
+mod chain_history;
 mod completion;
 mod db;
 mod executor;
@@ -166,6 +167,22 @@ pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
         .find(|p| p.hash == hash)
         .map(|p| PathBuf::from(p.root))
         .ok_or_else(|| format!("unknown project: {hash}"))
+}
+
+/// A fresh Palisade process owns no chain workers. Sweep every persisted
+/// project's open records before windows or IPC can surface them, closing
+/// each as `interrupted` rather than attempting auto-resume (D-c).
+fn reconcile_stale_chain_runs_on_startup(home: &Path) -> Res<()> {
+    let hashes = store::list_projects(home)?.into_iter().map(|project| project.hash).collect::<Vec<_>>();
+    reconcile_stale_chain_runs_for_hashes(home, &hashes)
+}
+
+/// Extracted so the multi-project startup rule is testable without Tauri.
+fn reconcile_stale_chain_runs_for_hashes(home: &Path, hashes: &[String]) -> Res<()> {
+    for hash in hashes {
+        chain_history::close_stale_runs(home, hash, &[])?;
+    }
+    Ok(())
 }
 
 /// Where the `git` binary lives, or a readable error if it isn't there.
@@ -566,6 +583,30 @@ impl Sink for AppSink {
                 commands: commands.to_vec(),
             },
         );
+    }
+
+    fn emit_usage(
+        &self,
+        session_id: &str,
+        _thread_id: &str,
+        cost: Option<crate::acp_events::Cost>,
+    ) {
+        let Some(cost) = cost else { return };
+        // Cost applies only to active chain turns in this wave. The watcher
+        // is deliberately the hand-off rather than a new ExecutorEvent, so
+        // normal transcript persistence and the capped event enum stay
+        // untouched (D-d).
+        if let Some(watch) = self
+            .app
+            .state::<Harness>()
+            .turn_watchers
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+        {
+            watch.record_cost(cost);
+        }
     }
 
     fn emit(&self, envelope: &Envelope) {
@@ -2761,6 +2802,47 @@ async fn delete_chain(project_hash: String, name: String) -> Res<()> {
         .map_err(|e| e.to_string())?
 }
 
+/// Past chain runs for this project. Reading is also startup reconciliation:
+/// records with no live cancellation flag belong to a previous process and
+/// are closed `interrupted`, never auto-resumed (D-c).
+#[tauri::command]
+async fn list_chain_runs(
+    app: tauri::AppHandle,
+    project_hash: String,
+    chain_name: Option<String>,
+) -> Res<Vec<chain_history::ChainRunRecord>> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let mut records = chain_history::close_stale_runs(&palisade_home(), &project_hash, &live)?;
+        if let Some(name) = chain_name {
+            records.retain(|record| record.chain_name == name);
+        }
+        Ok(records)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Retrieves one past run. Like the list endpoint it first reconciles a
+/// stale in-flight record, so opening a record directly cannot surface a run
+/// that would otherwise look live forever after restart.
+#[tauri::command]
+async fn get_chain_run(
+    app: tauri::AppHandle,
+    project_hash: String,
+    run_id: String,
+) -> Res<Option<chain_history::ChainRunRecord>> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let _ = chain_history::close_stale_runs(&palisade_home(), &project_hash, &live)?;
+        chain_history::get_run(&palisade_home(), &project_hash, &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// D17: every node's bound agent must be installed before the run starts —
 /// blocked with the specific node and agent named, never silently swapped for
 /// whatever else is on PATH. Checked up front rather than per node, so a run
@@ -2789,6 +2871,52 @@ fn unavailable_agents(chain: &chains::Chain, installed: impl Fn(&str) -> bool) -
     ))
 }
 
+/// The portion of a persisted run definition that is safe to replay. Kept
+/// independent of Tauri so it can be exercised as the same preflight the IPC
+/// command uses: an invalid replay fails before a run id, cancellation flag,
+/// or ACP turn exists.
+#[derive(Debug, Clone, PartialEq)]
+struct RerunStart {
+    chain: chains::Chain,
+    seed: String,
+    role: String,
+    inputs: Vec<(String, String)>,
+}
+
+/// Builds a replay frontier from the durable record, never from the current
+/// project definition. An interior role needs every *forward* predecessor's
+/// most recently recorded output, matching normal fan-in delivery exactly.
+fn rerun_start(record: &chain_history::ChainRunRecord, from_role: Option<&str>) -> Res<RerunStart> {
+    let chain = record.chain_snapshot.clone();
+    let role = from_role.unwrap_or(&chain.entry).to_string();
+    if !chain.nodes.contains_key(&role) {
+        return Err(format!("chain run `{}` has no role `{role}`", record.id));
+    }
+    if from_role.is_none() {
+        return Ok(RerunStart { chain, seed: record.seed.clone(), role, inputs: vec![] });
+    }
+
+    let loop_edges = chain.loop_edges();
+    let mut inputs = vec![];
+    for (index, edge) in chain.edges.iter().enumerate() {
+        if edge.to != role || loop_edges.contains(&index) {
+            continue;
+        }
+        let output = record
+            .nodes
+            .get(&edge.from)
+            .and_then(|node| node.output.clone())
+            .ok_or_else(|| {
+                format!(
+                    "chain run `{}` cannot re-run from `{role}`: required predecessor `{}` has no recorded output",
+                    record.id, edge.from
+                )
+            })?;
+        inputs.push((edge.from.clone(), output));
+    }
+    Ok(RerunStart { chain, seed: record.seed.clone(), role, inputs })
+}
+
 /// Starts a chain run and returns its id. The walk itself happens on a
 /// blocking task: a run can legitimately take its whole 30-minute budget
 /// (D19), so nothing waits on it here. Progress arrives as `chain-event`.
@@ -2800,7 +2928,6 @@ async fn run_chain(
     seed_input: String,
     thread_id: String,
 ) -> Res<String> {
-    let run_id = ulid::Ulid::new().to_string();
     let chain = {
         let hash = project_hash.clone();
         let name = chain_name.clone();
@@ -2815,8 +2942,58 @@ async fn run_chain(
         .map_err(|e| e.to_string())??
     };
 
+    launch_chain_run(app, project_hash, chain, seed_input, thread_id, None)
+}
+
+/// Launches either a fresh run or a replay from an already-validated
+/// historical frontier. Keeping persistence, cancellation, events, and the
+/// scheduler in one path makes re-runs inherit normal run semantics rather
+/// than becoming a second, subtly different executor.
+fn launch_chain_run(
+    app: tauri::AppHandle,
+    project_hash: String,
+    chain: chains::Chain,
+    seed_input: String,
+    thread_id: String,
+    replay_start: Option<(String, Vec<(String, String)>)>,
+) -> Res<String> {
+    let run_id = ulid::Ulid::new().to_string();
+
     let id = run_id.clone();
     let summary_hash = project_hash.clone();
+    // Persist before any execution begins. A record is deliberately durable
+    // even when the process exits mid-run; the read-side reconciliation then
+    // closes it `interrupted` rather than trying to resume agents (D-c).
+    let mut record = chain_history::ChainRunRecord::new(
+        run_id.clone(),
+        project_hash.clone(),
+        thread_id.clone(),
+        chain.clone(),
+        seed_input.clone(),
+    );
+    // Capture the initial state as a real transition too: the history is a
+    // complete node timeline, not merely terminal outcomes.
+    for role in chain.nodes.keys() {
+        record.nodes.entry(role.clone()).or_default();
+    }
+    chain_history::start_run(&palisade_home(), &record)?;
+    for role in chain.nodes.keys() {
+        chain_history::record_transition(
+            &palisade_home(),
+            &project_hash,
+            &run_id,
+            role,
+            chain_runner::NodeState::Queued,
+            None,
+            0,
+        )?;
+    }
+    // Shared with `Harness.chain_cancels` (§4.2): `cancel_chain_run` flips
+    // this same flag, which `ChainRun::walk` rechecks between node
+    // completions and `AcpNodeRunner` polls directly while a turn is
+    // in-flight — one flag, not two mechanisms.
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.state::<Harness>().chain_cancels.lock().unwrap().insert(id.clone(), cancel.clone());
     tokio::task::spawn_blocking(move || {
         let budget = std::time::Duration::from_secs(chain.timeout_seconds);
         let mut runner = chain_exec::AcpNodeRunner::new(
@@ -2825,6 +3002,7 @@ async fn run_chain(
             thread_id.clone(),
             id.clone(),
             chain.clone(),
+            cancel.clone(),
         );
         let mut gates = chain_exec::AcpGateEvaluator::new(
             app.clone(),
@@ -2833,10 +3011,18 @@ async fn run_chain(
             id.clone(),
             chain.name.clone(),
             budget,
+            cancel.clone(),
         );
         let mut run = chain_runner::ChainRun::new(id.clone(), chain.clone(), seed_input);
-        let outcome = run.walk(&mut runner, &mut gates);
+        let outcome = match replay_start {
+            Some((role, inputs)) => run.walk_from(&runner, &mut gates, &cancel, &role, inputs),
+            None => run.walk(&runner, &mut gates, &cancel),
+        };
         runner.release();
+        if let Err(err) = chain_history::end_run(&palisade_home(), &summary_hash, &id, outcome.clone()) {
+            eprintln!("chain run {id}: could not persist terminal outcome: {err}");
+        }
+        app.state::<Harness>().chain_cancels.lock().unwrap().remove(&id);
         chain_exec::post_thread_summary(
             &app,
             &summary_hash,
@@ -2854,10 +3040,73 @@ async fn run_chain(
                 outcome: Some(outcome),
                 awaiting_approval: None,
                 session_id: None,
+                cost: None,
             },
         );
     });
     Ok(run_id)
+}
+
+/// Replays a durable run's definition snapshot. `from_role` is optional:
+/// absent re-runs the whole saved chain, present starts at that node using
+/// the saved outputs of every required forward predecessor. The current
+/// `.palisade/chains` definition is deliberately never read here.
+#[tauri::command]
+async fn rerun_chain_run(
+    app: tauri::AppHandle,
+    project_hash: String,
+    run_id: String,
+    from_role: Option<String>,
+    thread_id: String,
+) -> Res<String> {
+    let history_app = app.clone();
+    let history_hash = project_hash.clone();
+    let requested_role = from_role.clone();
+    let start = tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = history_app.state();
+        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let _ = chain_history::close_stale_runs(&palisade_home(), &history_hash, &live)?;
+        let record = chain_history::get_run(&palisade_home(), &history_hash, &run_id)?
+            .ok_or_else(|| format!("no chain run `{run_id}` in this project"))?;
+        let start = rerun_start(&record, requested_role.as_deref())?;
+        check_agents_available(&harness, &start.chain)?;
+        Ok::<_, String>(start)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    launch_chain_run(
+        app,
+        project_hash,
+        start.chain,
+        start.seed,
+        thread_id,
+        from_role.map(|_| (start.role, start.inputs)),
+    )
+}
+
+/// Signals a chain run's cancellation flag (§4.2) — the same `Arc` its
+/// `ChainRun::walk` and `AcpNodeRunner` already hold, so this takes effect
+/// the instant either next checks it, with no second mechanism to keep in
+/// sync. Errors on an unknown or already-finished run rather than a no-op,
+/// mirroring `resolve_chain_gate`'s deliberate error just above: it means the
+/// UI is showing a run that has already moved on.
+#[tauri::command]
+async fn cancel_chain_run(app: tauri::AppHandle, run_id: String) -> Res<()> {
+    let harness: tauri::State<'_, Harness> = app.state();
+    cancel_chain_run_impl(&harness, &run_id)
+}
+
+fn cancel_chain_run_impl(harness: &Harness, run_id: &str) -> Res<()> {
+    let cancel = harness
+        .chain_cancels
+        .lock()
+        .unwrap()
+        .get(run_id)
+        .cloned()
+        .ok_or("that chain run isn't running")?;
+    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
 }
 
 /// D9: the three things a human can do at a paused approval gate. A decision
@@ -3294,6 +3543,10 @@ pub fn run() {
                 eprintln!("store: {err}");
                 let _ = app.emit("harness-warning", err);
             }
+            if let Err(err) = reconcile_stale_chain_runs_on_startup(&palisade_home()) {
+                eprintln!("chain history startup reconciliation: {err}");
+                let _ = app.emit("harness-warning", err);
+            }
             let harness: tauri::State<'_, Harness> = app.state();
             if *harness.completion_enabled.lock().unwrap() {
                 // Installing the model is a background job: copying it out of
@@ -3471,7 +3724,11 @@ pub fn run() {
             list_chains,
             save_chain,
             delete_chain,
+            list_chain_runs,
+            get_chain_run,
             run_chain,
+            rerun_chain_run,
+            cancel_chain_run,
             resolve_chain_gate,
             mac_rounded_corners::enable_rounded_corners,
             mac_rounded_corners::enable_modern_window_style,
@@ -3535,6 +3792,43 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
 
+    mod chain_startup_reconciliation {
+        use crate::chain_history::{self, ChainRunRecord, OutcomeSnapshot};
+        use crate::chains::{Chain, RetryPolicy};
+        use std::collections::HashMap;
+
+        fn chain() -> Chain {
+            Chain {
+                name: "startup-sweep".into(),
+                nodes: HashMap::new(),
+                edges: vec![],
+                entry: "none".into(),
+                timeout_seconds: 60,
+                retry: RetryPolicy::default(),
+                max_parallel: 0,
+                layout: HashMap::new(),
+            }
+        }
+
+        #[test]
+        fn startup_sweep_closes_open_runs_for_every_persisted_project() {
+            let home = tempfile::tempdir().unwrap();
+            let hashes = vec!["project-a".to_string(), "project-b".to_string()];
+            for hash in &hashes {
+                let record = ChainRunRecord::new(format!("run-{hash}"), hash, "thread-1", chain(), "seed");
+                chain_history::start_run(home.path(), &record).unwrap();
+            }
+
+            crate::reconcile_stale_chain_runs_for_hashes(home.path(), &hashes).unwrap();
+
+            for hash in &hashes {
+                let record = chain_history::list_runs(home.path(), hash).unwrap().pop().unwrap();
+                assert_eq!(record.outcome, Some(OutcomeSnapshot::Interrupted), "{hash} was not reconciled");
+                assert!(record.ended_at.is_some());
+            }
+        }
+    }
+
     /// D17: a chain whose bound agent isn't installed is blocked before it
     /// starts, naming the node and the agent — never silently substituted.
     mod chain_preflight {
@@ -3563,6 +3857,7 @@ mod tests {
                 entry: agents[0].0.to_string(),
                 timeout_seconds: 1800,
                 retry: RetryPolicy::default(),
+                max_parallel: 0,
                 layout: HashMap::new(),
             }
         }
@@ -3590,6 +3885,112 @@ mod tests {
             let designer = err.find("`designer`").unwrap();
             let programmer = err.find("`programmer`").unwrap();
             assert!(designer < programmer, "{err}");
+        }
+    }
+
+    mod chain_rerun_start {
+        use crate::chain_history::{ChainRunRecord, NodeHistory};
+        use crate::chains::{Chain, ChainEdge, ChainNode, RetryPolicy};
+        use std::collections::HashMap;
+
+        fn record() -> ChainRunRecord {
+            let mut nodes = HashMap::new();
+            for role in ["scout", "reviewer", "auditor", "judge"] {
+                nodes.insert(
+                    role.to_string(),
+                    ChainNode {
+                        role: role.into(),
+                        guideline: if role == "judge" { "snapshot judge".into() } else { String::new() },
+                        agent: "codex".into(),
+                        model: None,
+                        retry: None,
+                    },
+                );
+            }
+            let chain = Chain {
+                name: "saved-version".into(),
+                nodes,
+                edges: vec![
+                    ChainEdge { from: "scout".into(), to: "reviewer".into(), gate: None, max_iterations: None },
+                    ChainEdge { from: "scout".into(), to: "auditor".into(), gate: None, max_iterations: None },
+                    ChainEdge { from: "reviewer".into(), to: "judge".into(), gate: None, max_iterations: None },
+                    ChainEdge { from: "auditor".into(), to: "judge".into(), gate: None, max_iterations: None },
+                ],
+                entry: "scout".into(), timeout_seconds: 60, retry: RetryPolicy::default(), max_parallel: 0, layout: HashMap::new(),
+            };
+            let mut record = ChainRunRecord::new("old-run", "project", "thread", chain, "old seed");
+            record.nodes.insert("reviewer".into(), NodeHistory { output: Some("review output".into()), ..Default::default() });
+            record.nodes.insert("auditor".into(), NodeHistory { output: Some("audit output".into()), ..Default::default() });
+            record
+        }
+
+        #[test]
+        fn rerun_from_node_uses_the_record_snapshot_and_its_predecessor_outputs() {
+            let start = crate::rerun_start(&record(), Some("judge")).unwrap();
+
+            assert_eq!(start.chain.name, "saved-version");
+            assert_eq!(start.chain.nodes["judge"].guideline, "snapshot judge");
+            assert_eq!(start.seed, "old seed");
+            assert_eq!(start.role, "judge");
+            assert_eq!(start.inputs, vec![
+                ("reviewer".into(), "review output".into()),
+                ("auditor".into(), "audit output".into()),
+            ]);
+        }
+
+        #[test]
+        fn rerun_from_node_refuses_to_start_without_every_required_recorded_output() {
+            let mut record = record();
+            record.nodes.remove("auditor");
+
+            let err = crate::rerun_start(&record, Some("judge")).unwrap_err();
+
+            assert!(err.contains("auditor"), "{err}");
+            assert!(err.contains("no recorded output"), "{err}");
+        }
+
+        #[test]
+        fn rerun_from_a_missing_role_fails_before_a_run_can_start() {
+            let err = crate::rerun_start(&record(), Some("gone")).unwrap_err();
+            assert!(err.contains("no role `gone`"), "{err}");
+        }
+    }
+
+    /// §4.2: `cancel_chain_run` errors rather than no-ops for a run that
+    /// isn't tracked — mirroring `resolve_chain_gate`'s deliberate error for
+    /// the same reason, an unknown or already-finished run means the UI is
+    /// showing something that has already moved on.
+    mod chain_cancel {
+        use crate::executor::Harness;
+
+        #[test]
+        fn cancelling_an_unknown_run_errors_rather_than_no_ops() {
+            let harness = Harness::default();
+            let err = crate::cancel_chain_run_impl(&harness, "no-such-run").unwrap_err();
+            assert!(err.contains("isn't running"), "{err}");
+        }
+
+        #[test]
+        fn cancelling_a_tracked_run_flips_its_flag() {
+            let harness = Harness::default();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            harness.chain_cancels.lock().unwrap().insert("run-1".into(), cancel.clone());
+            assert!(crate::cancel_chain_run_impl(&harness, "run-1").is_ok());
+            assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+        }
+
+        /// A run that already finished removes its own entry from
+        /// `chain_cancels` (mirrors `run_chain`'s cleanup) — cancelling it
+        /// afterward must hit the same "isn't running" error as a run id
+        /// that never existed, not a stale success.
+        #[test]
+        fn cancelling_a_run_thats_already_finished_errors_the_same_as_unknown() {
+            let harness = Harness::default();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            harness.chain_cancels.lock().unwrap().insert("run-1".into(), cancel);
+            harness.chain_cancels.lock().unwrap().remove("run-1");
+            let err = crate::cancel_chain_run_impl(&harness, "run-1").unwrap_err();
+            assert!(err.contains("isn't running"), "{err}");
         }
     }
 

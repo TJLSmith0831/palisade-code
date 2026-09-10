@@ -129,6 +129,11 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
         v1::SessionUpdate::UsageUpdate(usage) => Some(AcpUpdate::UsageUpdate {
             used: usage.used,
             size: usage.size,
+            // D-d (amended): `usage.cost` is a real billed figure Palisade
+            // used to drop entirely. An agent that doesn't report it must
+            // stay `None`, never collapse to `0.0` — zero reads as free,
+            // absent reads as unknown.
+            cost: usage.cost.as_ref().map(|c| Cost { amount: c.amount, currency: c.currency.clone() }),
         }),
         v1::SessionUpdate::Plan(_) => Some(AcpUpdate::PlanUpdate),
         v1::SessionUpdate::AvailableCommandsUpdate(update) => Some(AcpUpdate::Commands {
@@ -143,6 +148,16 @@ pub fn from_session_update(update: &v1::SessionUpdate) -> Option<AcpUpdate> {
         }),
         _ => None,
     }
+}
+
+/// Real billed cost for a session, reported via ACP's `usage.cost` (D-d,
+/// amended). The schema's own field is "cumulative cost for session," not a
+/// per-turn delta — recording a fresh one replaces rather than adds.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cost {
+    pub amount: f64,
+    pub currency: String,
 }
 
 /// One slash command the agent says it can run. Skills, user commands, and
@@ -178,7 +193,9 @@ pub enum AcpUpdate {
     /// The turn crashed.
     Crashed { message: String },
     /// Context usage update (goes to status channel, not ExecutorEvent).
-    UsageUpdate { used: u64, size: u64 },
+    /// `cost` is the session's real billed figure so far, when the agent
+    /// reports one (D-d) — absent, never a coerced `0.0`.
+    UsageUpdate { used: u64, size: u64, cost: Option<Cost> },
     /// Plan update — ignored in v1.
     PlanUpdate,
     /// The agent's advertised slash commands (goes to the session-status
@@ -251,10 +268,12 @@ pub fn map_acp_update(update: AcpUpdate) -> Vec<ExecutorEvent> {
     }
 }
 
-/// Extract usage data from an update, if present.
-pub fn extract_usage(update: &AcpUpdate) -> Option<(u64, u64)> {
+/// Extract usage data from an update, if present. `cost` rides alongside
+/// `used`/`size` rather than a separate accessor — the three always arrive
+/// together on the wire (D-d).
+pub fn extract_usage(update: &AcpUpdate) -> Option<(u64, u64, Option<Cost>)> {
     match update {
-        AcpUpdate::UsageUpdate { used, size } => Some((*used, *size)),
+        AcpUpdate::UsageUpdate { used, size, cost } => Some((*used, *size, cost.clone())),
         _ => None,
     }
 }
@@ -399,17 +418,18 @@ mod tests {
     /// RED→GREEN 4.5: UsageUpdate produces no ExecutorEvent.
     #[test]
     fn usage_update_produces_no_executor_event() {
-        let events = map_acp_update(AcpUpdate::UsageUpdate { used: 1000, size: 100000 });
+        let events = map_acp_update(AcpUpdate::UsageUpdate { used: 1000, size: 100000, cost: None });
         assert!(events.is_empty());
     }
 
     /// RED→GREEN 4.5: Usage data can be extracted separately.
     #[test]
     fn usage_data_is_extractable() {
-        let update = AcpUpdate::UsageUpdate { used: 5000, size: 200000 };
-        let (used, size) = extract_usage(&update).unwrap();
+        let update = AcpUpdate::UsageUpdate { used: 5000, size: 200000, cost: None };
+        let (used, size, cost) = extract_usage(&update).unwrap();
         assert_eq!(used, 5000);
         assert_eq!(size, 200000);
+        assert_eq!(cost, None);
     }
 
     /// RED→GREEN 4.5: Non-usage updates return None from extract_usage.
@@ -417,6 +437,49 @@ mod tests {
     fn non_usage_update_returns_none() {
         assert!(extract_usage(&AcpUpdate::Done).is_none());
         assert!(extract_usage(&AcpUpdate::Text { text: "hi".into() }).is_none());
+    }
+
+    // ------------------------------------------------------- D-d: usage.cost
+
+    /// D-d: an agent that reports `usage.cost` carries it through
+    /// `from_session_update` onto `AcpUpdate::UsageUpdate`, rather than
+    /// being dropped as it was before this wave (acp_events.rs:129-132).
+    #[test]
+    fn a_reported_cost_survives_from_session_update() {
+        let usage = v1::UsageUpdate::new(100, 200_000).cost(Some(v1::Cost::new(0.0043, "USD")));
+        let update = v1::SessionUpdate::UsageUpdate(usage);
+        assert_eq!(
+            from_session_update(&update),
+            Some(AcpUpdate::UsageUpdate {
+                used: 100,
+                size: 200_000,
+                cost: Some(Cost { amount: 0.0043, currency: "USD".into() }),
+            })
+        );
+    }
+
+    /// D-d: an agent that never reports cost stays `None` — never a coerced
+    /// `0.0`, which would read as "free" instead of "unknown."
+    #[test]
+    fn an_absent_cost_stays_none_not_zero() {
+        let usage = v1::UsageUpdate::new(100, 200_000);
+        let update = v1::SessionUpdate::UsageUpdate(usage);
+        let Some(AcpUpdate::UsageUpdate { cost, .. }) = from_session_update(&update) else {
+            panic!("expected a UsageUpdate");
+        };
+        assert_eq!(cost, None, "no cost reported must read back as None, not Some(0.0)");
+    }
+
+    /// D-d: `extract_usage` hands the cost through unchanged.
+    #[test]
+    fn extract_usage_carries_the_cost_through() {
+        let update = AcpUpdate::UsageUpdate {
+            used: 100,
+            size: 200_000,
+            cost: Some(Cost { amount: 1.2, currency: "USD".into() }),
+        };
+        let (_, _, cost) = extract_usage(&update).unwrap();
+        assert_eq!(cost, Some(Cost { amount: 1.2, currency: "USD".into() }));
     }
 
     // --------------------------------------------------------- 4.6: plan_update → ignored
@@ -591,7 +654,7 @@ mod tests {
         let usage = v1::SessionUpdate::UsageUpdate(v1::UsageUpdate::new(100, 200_000));
         assert_eq!(
             from_session_update(&usage),
-            Some(AcpUpdate::UsageUpdate { used: 100, size: 200_000 })
+            Some(AcpUpdate::UsageUpdate { used: 100, size: 200_000, cost: None })
         );
         let echo = v1::SessionUpdate::UserMessageChunk(text_chunk("hi"));
         assert_eq!(from_session_update(&echo), None);

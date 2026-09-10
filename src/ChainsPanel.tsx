@@ -13,8 +13,10 @@ import {
   IconDots,
   IconTrash,
   IconPlayerPlay,
+  IconHistory,
 } from "@tabler/icons-react";
 import * as api from "./api";
+import ChainRunHistory from "./ChainRunHistory";
 
 // The Chains side panel. List-only, deliberately: the panel finds a chain,
 // the center-workspace tab is where it's built (DESIGN.md's side-panel rule,
@@ -31,12 +33,17 @@ type Props = {
   /** Opens a chain on the canvas; null builds a new one. */
   onOpen: (chainName: string | null) => void;
   /** Runs a saved chain against the active thread. Absent with no thread. */
-  onRun?: (chainName: string) => void;
+  onRun?: (chainName: string, seed: string) => void;
+  /** Opens a past run on the canvas in Review mode. */
+  onOpenRun?: (runId: string) => void;
+  /** Re-runs a past record; `fromRole` starts from that node's recorded inputs. */
+  onRerun?: (runId: string, fromRole?: string) => void;
 };
 
-export default function ChainsPanel({ projectHash, onOpen, onRun }: Props) {
+export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onRerun }: Props) {
   const [chains, setChains] = useState<api.Chain[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectHash) {
@@ -101,47 +108,71 @@ export default function ChainsPanel({ projectHash, onOpen, onRun }: Props) {
         )}
 
         {chains.map((chain) => (
-          <div key={chain.name} className="ds-chain-row">
-            <UnstyledButton
-              className="ds-chain-row-main"
-              onClick={() => onOpen(chain.name)}
-              data-testid={`chain-row-${chain.name}`}
-            >
-              <IconRoute size={14} className="ds-chain-row-icon" />
-              <span className="ds-chain-row-name">{chain.name}</span>
-              <span className="ds-chain-row-count">
-                {Object.keys(chain.nodes).length}
-              </span>
-            </UnstyledButton>
-            <Menu position="bottom-end" withinPortal>
-              <Menu.Target>
+          <div key={chain.name}>
+            <div className="ds-chain-row">
+              <UnstyledButton
+                className="ds-chain-row-main"
+                onClick={() => onOpen(chain.name)}
+                data-testid={`chain-row-${chain.name}`}
+              >
+                <IconRoute size={14} className="ds-chain-row-icon" />
+                <span className="ds-chain-row-name">{chain.name}</span>
+                <span className="ds-chain-row-count">
+                  {Object.keys(chain.nodes).length}
+                </span>
+              </UnstyledButton>
+              <Tooltip label="Run history" position="left">
                 <ActionIcon
                   size="sm"
                   variant="subtle"
                   color="gray"
-                  aria-label={`Actions for ${chain.name}`}
+                  aria-label={`Run history for ${chain.name}`}
+                  aria-pressed={historyFor === chain.name}
+                  onClick={() =>
+                    setHistoryFor((current) => (current === chain.name ? null : chain.name))
+                  }
                 >
-                  <IconDots size={14} />
+                  <IconHistory size={14} />
                 </ActionIcon>
-              </Menu.Target>
-              <Menu.Dropdown>
-                {onRun && (
-                  <Menu.Item
-                    leftSection={<IconPlayerPlay size={14} />}
-                    onClick={() => onRun(chain.name)}
+              </Tooltip>
+              <Menu position="bottom-end" withinPortal>
+                <Menu.Target>
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    color="gray"
+                    aria-label={`Actions for ${chain.name}`}
                   >
-                    Run on this thread
+                    <IconDots size={14} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  {onRun && (
+                    <Menu.Item
+                      leftSection={<IconPlayerPlay size={14} />}
+                      onClick={() => onRun(chain.name, "")}
+                    >
+                      Run on this thread
+                    </Menu.Item>
+                  )}
+                  <Menu.Item
+                    color="red"
+                    leftSection={<IconTrash size={14} />}
+                    onClick={() => void remove(chain.name)}
+                  >
+                    Delete
                   </Menu.Item>
-                )}
-                <Menu.Item
-                  color="red"
-                  leftSection={<IconTrash size={14} />}
-                  onClick={() => void remove(chain.name)}
-                >
-                  Delete
-                </Menu.Item>
-              </Menu.Dropdown>
-            </Menu>
+                </Menu.Dropdown>
+              </Menu>
+            </div>
+            {projectHash && historyFor === chain.name && (
+              <ChainRunHistory
+                projectHash={projectHash}
+                chainName={chain.name}
+                onOpenRun={onOpenRun}
+                onRerun={onRerun}
+              />
+            )}
           </div>
         ))}
       </div>

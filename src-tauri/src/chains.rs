@@ -102,6 +102,11 @@ pub struct Chain {
     pub timeout_seconds: u64,
     #[serde(default)]
     pub retry: RetryPolicy,
+    /// Caps how many nodes the frontier scheduler runs at once (D10/D-i).
+    /// Absent or `0` means unbounded — the user's prerogative (D-f), not a
+    /// harness-imposed limit. A pure number, so it stays portable (D-o).
+    #[serde(default)]
+    pub max_parallel: u32,
     /// Canvas node positions, keyed by role — presentation only, ignored by
     /// the runner.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -325,6 +330,7 @@ mod tests {
             entry: "designer".into(),
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
             retry: RetryPolicy::default(),
+            max_parallel: 0,
             layout: HashMap::new(),
         }
     }
@@ -477,6 +483,7 @@ mod tests {
         assert_eq!(parsed.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
         assert_eq!(parsed.retry.max_attempts, 2);
         assert_eq!(parsed.nodes["a"].guideline, "");
+        assert_eq!(parsed.max_parallel, 0, "absent maxParallel means unbounded (D-i)");
     }
 
     #[test]
