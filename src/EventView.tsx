@@ -178,14 +178,16 @@ function ReasoningBlock({
           data-testid="reasoning-block-text"
           style={{
             borderTop: "1px solid var(--border)",
-            whiteSpace: "pre-wrap",
             fontSize: 13,
             color: "var(--muted)",
             maxHeight: 320,
             overflow: "auto",
           }}
         >
-          {event.text}
+          <MDEditor.Markdown
+            source={event.text}
+            className="content reasoning-content"
+          />
         </Box>
       )}
     </Paper>

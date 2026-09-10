@@ -275,6 +275,21 @@ describe("ReasoningBlock rendering (reasoning-collapse-ux)", () => {
       "step one\nstep two"
     );
   });
+
+  it("renders reasoning content as Markdown after expanding", () => {
+    const markdownReasoning: Item = {
+      kind: "reasoning",
+      text: "**Preparing the project**",
+      elapsedSecs: 7,
+    };
+    renderWithMantine(
+      <EventList items={[markdownReasoning]} executor={null} />
+    );
+
+    fireEvent.click(screen.getByTestId("reasoning-block-header"));
+
+    expect(screen.getByText("Preparing the project").tagName).toBe("STRONG");
+  });
 });
 
 describe("EventList chat spacing", () => {
