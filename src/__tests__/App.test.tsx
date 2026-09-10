@@ -372,6 +372,38 @@ describe("Source Control working tree", () => {
     );
   });
 
+  it("an explicit Project root selection still wins over the active thread", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([
+        { id: "t1", projectHash: "proj-1", title: "Reviewer", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+        { id: "t2", projectHash: "proj-1", title: "Selected tree", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null },
+      ]);
+      if (cmd === "thread_worktrees") return Promise.resolve([
+        { threadId: "t1", branch: "palisade/t1", baseBranch: "main", added: 3, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "abc123" },
+        { threadId: "t2", branch: "palisade/t2", baseBranch: "main", added: 1, removed: 0, ahead: 0, clean: false, mergeable: true, state: "clean", head: "def456" },
+      ]);
+      if (cmd === "git_working_diff") return Promise.resolve("diff --git a/x.ts b/x.ts\n");
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-git"));
+    const selector = await screen.findByLabelText("Source control working tree");
+    fireEvent.change(selector, { target: { value: "t2" } });
+    fireEvent.change(selector, { target: { value: "project-root" } });
+
+    invokeMock.mockClear();
+    fireEvent.click(await screen.findByTestId("worktree-view-diff"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("git_working_diff", {
+        projectHash: "proj-1",
+        threadId: undefined,
+      })
+    );
+  });
+
   it("view diff clears a pinned commit", async () => {
     invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "list_threads") return Promise.resolve([
@@ -6334,6 +6366,69 @@ describe("Streamed tool output survives a mid-turn refresh", () => {
       expect(screen.getByTestId("tool-block-output")).toHaveTextContent(
         "beat 3"
       )
+    );
+  });
+
+  it("keeps a thread marked as waiting after later session output arrives", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Waiting thread",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("shell-vibe"));
+
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: {
+          kind: "toolCall",
+          id: "tc1",
+          name: "Bash",
+          command: "cargo build",
+        },
+      });
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: {
+          kind: "permissionRequest",
+          id: "req1",
+          toolCallId: "tc1",
+          toolKind: "execute",
+          command: "cargo build",
+          paths: [],
+          warning: null,
+        },
+      });
+    });
+    expect(await screen.findByTestId("session-attention-count")).toHaveTextContent("1");
+
+    await act(async () => {
+      emit("executor-event", {
+        sessionId: "s1",
+        threadId: "t1",
+        event: { kind: "textDelta", text: "Still working…" },
+      });
+    });
+
+    expect(screen.getByTestId("session-attention-count")).toHaveTextContent("1");
+
+    fireEvent.click(screen.getByTestId("permission-allow"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-attention-count")).toBeNull()
     );
   });
 });

@@ -384,6 +384,7 @@ export const EventList = memo(function EventList({
   items,
   executor,
   sessionId = null,
+  onPermissionAnswered,
   onRetry,
   agentLogins = [],
   onAgentLogin,
@@ -394,6 +395,9 @@ export const EventList = memo(function EventList({
    *  pending permission prompt. Absent for read-only render paths (e.g. the
    *  diff tab), which never include `toolCall`/`permissionRequest` items. */
   sessionId?: string | null;
+  /** Removes the resolved request from the owning live-session buffer so
+   *  thread-level attention indicators clear at the same time as this view. */
+  onPermissionAnswered?: (requestId: string) => void;
   /** Resends a given prompt as a new message — the crash banner's retry
    *  action for an auth-shaped failure. A crashed turn ends the session
    *  (see CLAUDE.md), so "reauth" here isn't a Palisade-side flow to run;
@@ -455,9 +459,10 @@ export const EventList = memo(function EventList({
   const onAnswer = useCallback(
     (requestId: string, decision: "allow" | "deny" | "allow_session") => {
       setAnswered((prev) => new Set(prev).add(requestId));
+      onPermissionAnswered?.(requestId);
       if (sessionId) void answerPermissionPrompt(sessionId, requestId, decision);
     },
-    [sessionId]
+    [sessionId, onPermissionAnswered]
   );
 
   return (

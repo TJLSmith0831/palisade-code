@@ -190,6 +190,8 @@ type ChatSurfaceProps = {
   /** The live session id for this thread, if any — needed to resolve a
    *  pending permission-approval prompt against the right session. */
   sessionId: string | null;
+  /** A permission prompt was answered in the chat surface. */
+  onPermissionAnswered?: (requestId: string) => void;
   busy: boolean;
   /** This thread's isolated worktree, absent until its first session runs
    *  and for every thread in a non-git project. */
@@ -480,6 +482,7 @@ export const ChatSurface = memo(
     messages,
     live,
     sessionId,
+    onPermissionAnswered,
     busy,
     worktree,
     onViewDiff,
@@ -1297,6 +1300,7 @@ export const ChatSurface = memo(
               items={items}
               executor={executor}
               sessionId={sessionId}
+              onPermissionAnswered={onPermissionAnswered}
               onRetry={(text) => {
                 setDraft(text);
                 handleSend();
@@ -3051,16 +3055,24 @@ export default function App() {
   const [diffFocusPath, setDiffFocusPath] = useState<string | null>(null);
   /** Source Control's target is a deliberate Git choice, not a side effect
    * of selecting a thread to read its conversation. */
-  const [sourceControlTreeId, setSourceControlTreeId] = useState<string | null>(null);
+  const [sourceControlTreeId, setSourceControlTreeId] =
+    useState<string | null>(null);
+  /** `null` is both the Project root value and the selector's initial value,
+   * so track separately whether Source Control has established the diff
+   * context. Otherwise an active thread incorrectly wins over an explicit
+   * Project root selection. */
+  const [sourceControlDiffContext, setSourceControlDiffContext] = useState(false);
   // A thread id belongs to exactly one project. Carrying it into another
   // project leaves the selector with no matching option and makes the backend
   // quietly fall back to that project's root, so source-control context must
   // be reset with the project.
   useEffect(() => {
     setSourceControlTreeId(null);
+    setSourceControlDiffContext(false);
   }, [project?.hash]);
   const openDiffFor = useCallback(
     (path: string) => {
+      setSourceControlDiffContext(true);
       setDiffFocusPath(path);
       setDiffCommit(null);
       shell.setDiffOpen(true);
@@ -3085,6 +3097,7 @@ export default function App() {
   // or file focus so the diff pane falls back to its default view: the
   // whole working tree, same as clicking "Show working changes".
   const openWorkingChangesDiff = useCallback(() => {
+    setSourceControlDiffContext(true);
     setDiffCommit(null);
     setDiffFocusPath(null);
     shell.setDiffOpen(true);
@@ -4064,8 +4077,9 @@ export default function App() {
   const attentionThreads = useMemo(() => {
     const set = new Set<string>();
     for (const entry of liveBySession.values()) {
-      const last = entry.events[entry.events.length - 1];
-      if (last?.kind === "permissionRequest") set.add(entry.threadId);
+      if (entry.events.some((event) => event.kind === "permissionRequest")) {
+        set.add(entry.threadId);
+      }
     }
     return set;
   }, [liveBySession]);
@@ -5330,6 +5344,23 @@ export default function App() {
     messages,
     live,
     sessionId: liveSessionId,
+    onPermissionAnswered: (requestId: string) => {
+      setLiveBySession((previous) => {
+        let changed = false;
+        const next = new Map(previous);
+        for (const [id, entry] of next) {
+          const events = entry.events.filter(
+            (event) =>
+              event.kind !== "permissionRequest" || event.id !== requestId
+          );
+          if (events.length !== entry.events.length) {
+            changed = true;
+            next.set(id, { ...entry, events });
+          }
+        }
+        return changed ? next : previous;
+      });
+    },
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
     onArchiveSelf: thread ? () => onArchiveThread(thread) : undefined,
@@ -5586,7 +5617,10 @@ export default function App() {
               }),
             ]}
             selectedTreeId={sourceControlTreeId}
-            onTreeChange={setSourceControlTreeId}
+            onTreeChange={(treeId) => {
+              setSourceControlTreeId(treeId);
+              setSourceControlDiffContext(true);
+            }}
             branch={
               (sourceControlTreeId ? worktrees.get(sourceControlTreeId)?.branch : undefined) ??
               branches.find((b) => b.isCurrent)?.name ??
@@ -6170,7 +6204,11 @@ export default function App() {
                              thread should show that thread's own worktree,
                              not the (clean) project root PR #37 left as the
                              unreachable default. */
-                          threadId={sourceControlTreeId ?? thread?.id ?? undefined}
+                          threadId={
+                            sourceControlDiffContext
+                              ? (sourceControlTreeId ?? undefined)
+                              : (thread?.id ?? undefined)
+                          }
                           refreshToken={diffRefreshToken}
                           focusPath={diffFocusPath}
                           onClearFocus={() => setDiffFocusPath(null)}

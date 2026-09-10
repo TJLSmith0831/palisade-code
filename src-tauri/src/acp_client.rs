@@ -741,25 +741,86 @@ fn tool_call_paths(
     raw_paths(raw_input)
 }
 
-/// De-duplicate a live tool-output chunk against what this tool call has
-/// already streamed. Agents differ in whether an
-/// `InProgress` update carries the full accumulated output so far or just
-/// the new tail since the last one — emitting either raw would double-print
-/// under the cumulative shape. `seen` holds each tool call's last-emitted
-/// text; when the incoming chunk starts with it, only the new suffix is
-/// returned (and the cumulative case, including an exact repeat, collapses
-/// to `""`, which the caller drops). Otherwise the whole chunk is returned,
-/// on the assumption the agent sent a fresh tail.
-///
-/// Call `clear` (or just `seen.remove(id)`) when the tool call completes —
-/// nothing here does it, since completion is a different update.
-fn dedup_tool_output(seen: &mut HashMap<String, String>, id: &str, chunk: &str) -> String {
-    let suffix = match seen.get(id) {
-        Some(already) if chunk.starts_with(already.as_str()) => &chunk[already.len()..],
-        _ => chunk,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolOutputShape {
+    Unknown,
+    Cumulative,
+    Tail,
+}
+
+#[derive(Debug)]
+struct ToolOutputStream {
+    previous: String,
+    complete: String,
+    shape: ToolOutputShape,
+}
+
+/// Merge a tool-content update without dropping valid tail chunks. A strict
+/// extension proves the cumulative shape; a non-prefix or exact repeat is
+/// treated as tail output because both can contain real repeated bytes.
+fn dedup_tool_output(
+    seen: &mut HashMap<String, ToolOutputStream>,
+    id: &str,
+    chunk: &str,
+) -> String {
+    let Some(stream) = seen.get_mut(id) else {
+        seen.insert(
+            id.to_string(),
+            ToolOutputStream {
+                previous: chunk.to_string(),
+                complete: chunk.to_string(),
+                shape: ToolOutputShape::Unknown,
+            },
+        );
+        return chunk.to_string();
     };
-    seen.insert(id.to_string(), chunk.to_string());
-    suffix.to_string()
+
+    let emitted = match stream.shape {
+        ToolOutputShape::Tail => chunk.to_string(),
+        ToolOutputShape::Cumulative if chunk.starts_with(&stream.previous) => {
+            chunk[stream.previous.len()..].to_string()
+        }
+        ToolOutputShape::Cumulative => {
+            stream.shape = ToolOutputShape::Tail;
+            chunk.to_string()
+        }
+        ToolOutputShape::Unknown
+            if chunk.len() > stream.previous.len() && chunk.starts_with(&stream.previous) =>
+        {
+            stream.shape = ToolOutputShape::Cumulative;
+            chunk[stream.previous.len()..].to_string()
+        }
+        ToolOutputShape::Unknown => {
+            stream.shape = ToolOutputShape::Tail;
+            chunk.to_string()
+        }
+    };
+    if stream.shape == ToolOutputShape::Cumulative {
+        stream.complete = chunk.to_string();
+    } else {
+        stream.complete.push_str(chunk);
+    }
+    stream.previous = chunk.to_string();
+    emitted
+}
+
+/// Resolve a terminal update against the most recent content snapshot. ACP
+/// update fields are partial, so a status-only `Completed`/`Failed` update
+/// leaves the prior content unchanged rather than clearing it.
+fn complete_tool_output(
+    seen: &mut HashMap<String, ToolOutputStream>,
+    id: &str,
+    final_output: &str,
+) -> String {
+    let streamed = seen
+        .remove(id)
+        .map(|stream| stream.complete)
+        .unwrap_or_default();
+    if final_output.is_empty() {
+        streamed
+    } else {
+        final_output.to_string()
+    }
 }
 
 /// Answer an agent permission request according to the session's mode
@@ -1037,7 +1098,8 @@ async fn run_bridge(
     // cumulative-output agent doesn't double-print its own history on every
     // `InProgress` update (`dedup_tool_output`). Cleared
     // when the tool call completes — nothing more to de-dup against.
-    let notif_tool_output = Arc::new(std::sync::Mutex::new(HashMap::<String, String>::new()));
+    let notif_tool_output =
+        Arc::new(std::sync::Mutex::new(HashMap::<String, ToolOutputStream>::new()));
     let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
@@ -1124,9 +1186,17 @@ async fn run_bridge(
                                 chunk,
                             );
                         }
-                        // Nothing left to de-dup against once the call ends.
-                        crate::acp_events::AcpUpdate::ToolResult { id, .. } => {
-                            notif_tool_output.lock().unwrap().remove(id);
+                        // A terminal status can omit unchanged content. Keep
+                        // the last streamed snapshot in that case, then clear
+                        // the call's tracking state.
+                        crate::acp_events::AcpUpdate::ToolResult {
+                            id, output, ..
+                        } => {
+                            *output = complete_tool_output(
+                                &mut notif_tool_output.lock().unwrap(),
+                                id,
+                                output,
+                            );
                         }
                         _ => {}
                     }
@@ -1976,13 +2046,26 @@ mod tests {
         assert_eq!(dedup_tool_output(&mut seen, "tc-1", "onetwo"), "two");
     }
 
-    /// An exact repeat of the same cumulative text (a status ping with no
-    /// new output) must not re-emit anything.
+    /// An exact repeat is ambiguous: a tail-streaming agent may legitimately
+    /// emit the same line twice, so preserving bytes wins until the stream
+    /// has demonstrated cumulative behavior.
     #[test]
-    fn an_exact_repeat_emits_nothing() {
+    fn an_exact_repeated_tail_is_not_dropped() {
         let mut seen = HashMap::new();
         assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
-        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "");
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+    }
+
+    #[test]
+    fn a_tail_chunk_that_starts_with_the_previous_tail_is_not_truncated() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "alpha"), "alpha");
+        // This non-prefix update establishes that this agent sends tails.
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "beta"), "beta");
+        assert_eq!(
+            dedup_tool_output(&mut seen, "tc-1", "beta again"),
+            "beta again"
+        );
     }
 
     /// A different tool call id has its own independent tracking.
@@ -1991,6 +2074,16 @@ mod tests {
         let mut seen = HashMap::new();
         assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
         assert_eq!(dedup_tool_output(&mut seen, "tc-2", "one"), "one");
+    }
+
+    #[test]
+    fn a_status_only_completion_keeps_the_output_already_streamed() {
+        let mut seen = HashMap::new();
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "one"), "one");
+        assert_eq!(dedup_tool_output(&mut seen, "tc-1", "onetwo"), "two");
+
+        assert_eq!(complete_tool_output(&mut seen, "tc-1", ""), "onetwo");
+        assert!(!seen.contains_key("tc-1"));
     }
 
     // --------------------------------------------------------- permissions
