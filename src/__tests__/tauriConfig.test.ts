@@ -16,9 +16,9 @@ const capabilities = JSON.parse(
 );
 
 describe("Tauri window config (merged-design v2)", () => {
-  it("has decorations disabled for CSS window shell", () => {
+  it("creates native decorations so macOS traffic lights are live", () => {
     const win = config.app.windows[0];
-    expect(win.decorations).toBe(false);
+    expect(win.decorations).toBe(true);
   });
 
   it("allows the close-request listener to destroy a confirmed window", () => {
