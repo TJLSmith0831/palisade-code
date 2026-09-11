@@ -473,6 +473,19 @@ pub struct ProposeWatch {
     pub before: Vec<String>,
 }
 
+/// A user turn that was written to its thread but could not be delivered
+/// because the selected executor requested authentication. The payload is
+/// deliberately non-secret and exists only for this app run; credentials stay
+/// with the ACP agent.
+#[derive(Debug, Clone)]
+pub struct PendingAuthTurn {
+    pub project_hash: String,
+    pub thread_id: String,
+    pub content: String,
+    pub mode: String,
+    pub bypass: bool,
+}
+
 pub struct Harness {
     /// Every live ACP session, keyed by its own id.
     pub acp_sessions: Mutex<HashMap<String, AcpSession>>,
@@ -482,6 +495,10 @@ pub struct Harness {
     /// handing it back, because a caller that starts a session without sending
     /// a prompt (`/go`) would otherwise drop it and lose the conversation.
     pub pending_prefix: Mutex<HashMap<String, String>>,
+    /// One blocked user turn per executor. A login is executor-scoped, so a
+    /// second blocked turn waits for the user to resolve the first rather than
+    /// triggering a competing OAuth flow.
+    pub pending_auth_turns: Mutex<HashMap<String, PendingAuthTurn>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
     /// Graphify watchers, keyed by project hash. A map, not a slot: every
     /// project window shares this process (#33), and a single slot meant
@@ -571,6 +588,7 @@ impl Default for Harness {
             acp_sessions: Default::default(),
             preflight: Default::default(),
             pending_prefix: Default::default(),
+            pending_auth_turns: Default::default(),
             pending_propose: Default::default(),
             watch: Default::default(),
             window_projects: Default::default(),
