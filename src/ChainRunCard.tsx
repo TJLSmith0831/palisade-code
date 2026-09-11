@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Badge, Button, Group, Stack, Text, TextInput } from "@mantine/core";
+import { Alert, Badge, Button, Group, Paper, Stack, Text, TextInput } from "@mantine/core";
 import { IconAlertTriangle, IconPlayerStop } from "@tabler/icons-react";
 import * as api from "./api";
 import { useElapsed } from "./useElapsed";
@@ -138,8 +138,14 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
   const stopRole = run.outcome ? stoppedAt(run.outcome) : undefined;
 
   return (
-    <div
-      className="ds-chain-run-card"
+    // `Paper withBorder radius="sm"`, matching ReasoningBlock and ToolBlock —
+    // the chat's existing block idiom. The original `ds-chain-run-card` class
+    // was never defined in App.css (Wave I did not own that file), so the card
+    // rendered as unstyled inline text in the thread.
+    <Paper
+      withBorder
+      radius="sm"
+      p="xs"
       data-testid="chain-run-card"
       // 2px accent left edge, per PLAN §4.5 — the existing active-thread
       // inset idiom ([App.css] `.ds-thread-tab.active`,
@@ -302,6 +308,6 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
           <Text size="xs">{error}</Text>
         </Alert>
       )}
-    </div>
+    </Paper>
   );
 }
