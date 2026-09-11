@@ -654,6 +654,14 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+/* A working-tree row's checked-out branch, shown the way a branch row's
+   "worktree" badge is — muted, trailing, never the thing truncated. */
+.ds-branch-secondary {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .ds-branch-list li:last-child {
   border-bottom: none;
 }
@@ -3294,6 +3302,19 @@ details.graph-report-wrap > summary {
   flex-direction: column;
 }
 
+.ds-sc-head-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ds-sc-info-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 /* When a panel stacks two bodies (Run configurations + Verification), the
    first sizes to its content and the last takes the remainder — otherwise
    they split the column evenly and each leaves half a panel of dead space. */
@@ -3731,7 +3752,11 @@ details.graph-report-wrap > summary {
   text-transform: uppercase;
 }
 
-.ds-sc-target select {
+.ds-sc-target select,
+.ds-sc-target-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border);
@@ -3740,6 +3765,21 @@ details.graph-report-wrap > summary {
   color: var(--fg);
   font: inherit;
   padding: 5px 6px;
+}
+
+.ds-sc-target-btn:hover {
+  border-color: var(--accent);
+}
+
+.ds-sc-target-btn svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.ds-sc-target-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-sc-target small {

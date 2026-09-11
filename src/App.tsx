@@ -2591,11 +2591,9 @@ type WorkspacePickerProps = {
   variant: "editor" | "vibe";
   project: Project | null;
   projects: Project[];
-  branches: api.BranchInfo[];
   onSelectProject: (project: Project) => void;
   onAddProject: () => void;
   onRenameProject: () => void;
-  onOpenBranchPicker: () => void;
   /** #33: open a project in its own window, leaving this one alone. */
   onOpenProjectWindow: (project: Project) => void;
   /** #28: forget a saved project. Source files and history are kept. */
@@ -2606,11 +2604,9 @@ const WorkspacePicker = memo(function WorkspacePicker({
   variant,
   project,
   projects,
-  branches,
   onSelectProject,
   onAddProject,
   onRenameProject,
-  onOpenBranchPicker,
   onOpenProjectWindow,
   onRemoveProject,
 }: WorkspacePickerProps) {
@@ -2659,16 +2655,6 @@ const WorkspacePicker = memo(function WorkspacePicker({
             </button>
           )}
         </div>
-        {project && branches.length > 0 && (
-          <button
-            className="ds-branch-btn"
-            onClick={onOpenBranchPicker}
-            data-testid="branch-indicator"
-          >
-            <IconGitBranch size={14} />{" "}
-            {branches.find((b) => b.isCurrent)?.name ?? "…"}
-          </button>
-        )}
       </div>
       {otherProjects.length > 0 && (
         <div className="ds-rail-section">
@@ -2864,8 +2850,13 @@ export default function App() {
     | {
         kind: "select";
         label: string;
-        options: string[];
-        submit: (choice: string) => void;
+        /** "branch" keeps the create/delete/DWIM-worktree extras that only
+         *  make sense for branches; "list" is a plain switcher (working
+         *  trees today) that just picks a row. One modal, one look, for
+         *  both — only the row extras differ. */
+        variant: "branch" | "list";
+        options: { value: string; label: string; secondary?: string }[];
+        submit: (value: string) => void;
       }
     | null
   >(null);
@@ -4015,8 +4006,9 @@ export default function App() {
     ];
     setBar({
       kind: "select",
+      variant: "branch",
       label: "Switch branch (or type a new name to create one)",
-      options,
+      options: options.map((name) => ({ value: name, label: name })),
       submit: async (choice) => {
         setBar(null);
         try {
@@ -4046,6 +4038,43 @@ export default function App() {
         } catch (err) {
           fail(err);
         }
+      },
+    });
+  };
+
+  // Same picker component as branches (Source Control's two controls read
+  // as one system, not a custom modal next to a native <select>) — just the
+  // plain "list" variant, since a working tree can't be created by typing
+  // a name the way a branch can.
+  const onOpenWorkingTreePicker = () => {
+    if (!project) return;
+    const workingTrees = [
+      {
+        value: "project-root",
+        label: "Project root",
+        secondary: branches.find((b) => b.isCurrent)?.name ?? "HEAD",
+      },
+      ...threads.flatMap((candidate) => {
+        const worktree = worktrees.get(candidate.id);
+        if (!worktree) return [];
+        return [
+          {
+            value: candidate.id,
+            label: candidate.title,
+            secondary: worktree.branch,
+          },
+        ];
+      }),
+    ];
+    setBar({
+      kind: "select",
+      variant: "list",
+      label: "Switch working tree",
+      options: workingTrees,
+      submit: (value) => {
+        setBar(null);
+        setSourceControlTreeId(value === "project-root" ? null : value);
+        setSourceControlDiffContext(true);
       },
     });
   };
@@ -6208,10 +6237,7 @@ export default function App() {
               }),
             ]}
             selectedTreeId={sourceControlTreeId}
-            onTreeChange={(treeId) => {
-              setSourceControlTreeId(treeId);
-              setSourceControlDiffContext(true);
-            }}
+            onOpenWorkingTreePicker={onOpenWorkingTreePicker}
             branch={
               (sourceControlTreeId ? worktrees.get(sourceControlTreeId)?.branch : undefined) ??
               branches.find((b) => b.isCurrent)?.name ??
@@ -6222,6 +6248,7 @@ export default function App() {
             onReviewWorkingChanges={onReviewWorkingChanges}
             onSelectCommit={openCommitDiff}
             onSelectWorkingChanges={openWorkingChangesDiff}
+            onOpenBranchPicker={onOpenBranchPicker}
             onChanged={() => setDiffRefreshToken((t) => t + 1)}
             onError={fail}
           />
@@ -6356,11 +6383,9 @@ export default function App() {
                 variant="editor"
                 project={project}
                 projects={projects}
-                branches={branches}
                 onSelectProject={selectProject}
                 onAddProject={onAddProject}
                 onRenameProject={onRenameProject}
-                onOpenBranchPicker={onOpenBranchPicker}
                 onOpenProjectWindow={onOpenProjectWindow}
                 onRemoveProject={onRemoveProject}
               />
@@ -7076,40 +7101,53 @@ export default function App() {
             <ul className="ds-branch-list" data-testid="branch-list">
               {(selectQuery.trim()
                 ? bar.options.filter(
-                    (name) => fuzzyMatch(selectQuery, name) !== null
+                    (option) => fuzzyMatch(selectQuery, option.label) !== null
                   )
                 : bar.options
-              ).map((name) => {
+              ).map((option) => {
                 // Only a real local, non-current branch can be deleted —
                 // remote-only entries here are DWIM checkout targets, not
-                // branches that exist locally to delete (GIT-14).
-                const local = branches.find(
-                  (b) => !b.isRemote && b.name === name
-                );
+                // branches that exist locally to delete (GIT-14). Working
+                // trees have neither concept, so both stay branch-only.
+                const local =
+                  bar.variant === "branch" &&
+                  branches.find(
+                    (b) => !b.isRemote && b.name === option.value
+                  );
                 // Git allows a branch in exactly one worktree, so this row
                 // cannot switch — it opens the tree the branch already lives
                 // in. Said on the row rather than after the click: an action
                 // that silently does something else is worse than one that
                 // fails. Deleting is off the table for the same reason git
                 // refuses it — the branch is in use.
-                const worktree = worktreeBranches.get(name);
+                const worktree =
+                  bar.variant === "branch"
+                    ? worktreeBranches.get(option.value)
+                    : undefined;
                 return (
                   <li
-                    key={name}
+                    key={option.value}
                     role="button"
                     tabIndex={0}
-                    onClick={() => bar.submit(name)}
-                    onKeyDown={onActivateKey(() => bar.submit(name))}
+                    onClick={() => bar.submit(option.value)}
+                    onKeyDown={onActivateKey(() => bar.submit(option.value))}
                     data-testid="branch-option"
                     aria-label={
                       worktree
-                        ? `${name} — open its worktree at ${worktree}`
-                        : name
+                        ? `${option.label} — open its worktree at ${worktree}`
+                        : option.secondary
+                          ? `${option.label} — ${option.secondary}`
+                          : option.label
                     }
                   >
-                    <span className="ds-branch-name" title={name}>
-                      {name}
+                    <span className="ds-branch-name" title={option.label}>
+                      {option.label}
                     </span>
+                    {option.secondary && !worktree && (
+                      <span className="ds-branch-secondary">
+                        {option.secondary}
+                      </span>
+                    )}
                     {worktree && (
                       <Tooltip
                         label={`Checked out in ${worktree} — opens that worktree`}
@@ -7135,12 +7173,12 @@ export default function App() {
                           event.stopPropagation();
                           setBar({
                             kind: "confirm",
-                            label: `Delete branch "${name}"? This can't be undone.`,
+                            label: `Delete branch "${option.label}"? This can't be undone.`,
                             onConfirm: async () => {
                               setBar(null);
                               if (!project) return;
                               try {
-                                await api.gitDeleteBranch(project.hash, name);
+                                await api.gitDeleteBranch(project.hash, option.value);
                                 await refreshBranches(project.hash);
                               } catch (err) {
                                 fail(err);
@@ -7149,7 +7187,7 @@ export default function App() {
                           });
                         }}
                         title="Delete branch"
-                        aria-label={`Delete branch ${name}`}
+                        aria-label={`Delete branch ${option.label}`}
                         data-testid="branch-delete"
                       >
                         <DeleteIcon />
@@ -7159,30 +7197,38 @@ export default function App() {
                 );
               })}
             </ul>
-            <input
-              id="barSelect"
-              name="barSelect"
-              autoFocus
-              autoComplete="off"
-              value={selectQuery}
-              onChange={(event) => setSelectQuery(event.target.value)}
-              placeholder="new-branch-name"
-              aria-label="New branch name"
-              data-testid="branch-new-input"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  const value = event.currentTarget.value.trim();
-                  if (!value) return;
-                  bar.submit(value);
-                }
-              }}
-            />
+            {bar.variant === "branch" && (
+              <input
+                id="barSelect"
+                name="barSelect"
+                autoFocus
+                autoComplete="off"
+                value={selectQuery}
+                onChange={(event) => setSelectQuery(event.target.value)}
+                placeholder="new-branch-name"
+                aria-label="New branch name"
+                data-testid="branch-new-input"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    const value = event.currentTarget.value.trim();
+                    if (!value) return;
+                    bar.submit(value);
+                  }
+                }}
+              />
+            )}
             <span className="hint">
-              Click a branch to switch · Enter a name to create · Esc to
-              cancel
-              {worktreeBranches.size > 0 && (
-                <> · a branch marked <b>worktree</b> opens that worktree</>
+              {bar.variant === "branch" ? (
+                <>
+                  Click a branch to switch · Enter a name to create · Esc to
+                  cancel
+                  {worktreeBranches.size > 0 && (
+                    <> · a branch marked <b>worktree</b> opens that worktree</>
+                  )}
+                </>
+              ) : (
+                <>Click a working tree to switch · Esc to cancel</>
               )}
             </span>
           </MantineModal>

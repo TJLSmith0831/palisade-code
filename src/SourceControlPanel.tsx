@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActionIcon, Button, Loader, Menu, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
+import { ActionIcon, Button, Group, HoverCard, Loader, Menu, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
 import {
   IconCheck,
   IconChevronDown,
   IconChevronRight,
-  IconDots,
+  IconEaseOutControlPoint,
+  IconFolder,
   IconGitBranch,
+  IconInfoCircle,
   IconMinus,
   IconPlus,
   IconRefresh,
@@ -317,13 +319,14 @@ export default function SourceControlPanel({
   threadId,
   workingTrees,
   selectedTreeId,
-  onTreeChange,
+  onOpenWorkingTreePicker,
   branch,
   refreshToken,
   onOpenFile,
   onReviewWorkingChanges,
   onSelectCommit,
   onSelectWorkingChanges,
+  onOpenBranchPicker,
   onChanged,
   onError,
 }: {
@@ -340,7 +343,10 @@ export default function SourceControlPanel({
    * callers while they migrate to the selector. */
   workingTrees?: { id: string | null; label: string; branch: string }[];
   selectedTreeId?: string | null;
-  onTreeChange?: (treeId: string | null) => void;
+  /** Opens the app-level "Switch working tree" list — the same picker
+   *  component the branch chip uses, so the two controls read as one
+   *  system instead of a native `<select>` next to a custom modal. */
+  onOpenWorkingTreePicker?: () => void;
   branch: string;
   /** Bumped by the app whenever the working tree may have changed. */
   refreshToken?: number;
@@ -356,6 +362,10 @@ export default function SourceControlPanel({
    *  reads as the true head of history rather than stopping at the last
    *  commit. Opens the same working-tree diff Review Working Changes shows. */
   onSelectWorkingChanges: () => void;
+  /** Opens the app-level "Switch branch" list. Optional so older callers
+   *  keep working without it — when absent, the header just omits the
+   *  branch chip rather than rendering a control that does nothing. */
+  onOpenBranchPicker?: () => void;
   /** This panel wrote to the working tree. The diff pane renders the same
    *  tree from its own state, so without this it kept showing a file as
    *  unstaged that this panel had just staged — two views of one tree
@@ -501,11 +511,48 @@ export default function SourceControlPanel({
   return (
     <div className="ds-sc" data-testid="source-control-panel">
       <div className="ds-panel-head">
-        <span>Source Control</span>
+        <div className="ds-sc-head-title">
+          <span>Source Control</span>
+          <HoverCard width={260} shadow="md" openDelay={150} withinPortal>
+            <HoverCard.Target>
+              <ActionIcon
+                variant="subtle"
+                size="sm"
+                aria-label="What's the difference between branch and working tree?"
+              >
+                <IconInfoCircle size={15} />
+              </ActionIcon>
+            </HoverCard.Target>
+            <HoverCard.Dropdown>
+              <Stack gap={10}>
+                <Group gap={8} align="flex-start" wrap="nowrap">
+                  <IconGitBranch size={14} className="ds-sc-info-icon" />
+                  <div>
+                    <Text size="xs" fw={600}>Branch</Text>
+                    <Text size="xs" c="dimmed">
+                      Which git branch is checked out. Switching it moves
+                      the branch itself, wherever it's checked out.
+                    </Text>
+                  </div>
+                </Group>
+                <Group gap={8} align="flex-start" wrap="nowrap">
+                  <IconFolder size={14} className="ds-sc-info-icon" />
+                  <div>
+                    <Text size="xs" fw={600}>Working tree</Text>
+                    <Text size="xs" c="dimmed">
+                      Which copy of the repo you're looking at — the
+                      project root, or a thread's own isolated worktree.
+                    </Text>
+                  </div>
+                </Group>
+              </Stack>
+            </HoverCard.Dropdown>
+          </HoverCard>
+        </div>
         <Menu position="bottom-end" withinPortal>
           <Menu.Target>
-            <ActionIcon variant="subtle" size="sm" aria-label="More actions">
-              <IconDots size={15} />
+            <ActionIcon variant="subtle" size="sm" aria-label="Remote actions">
+              <IconEaseOutControlPoint size={15} />
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>
@@ -571,32 +618,43 @@ export default function SourceControlPanel({
           Changes/Changes/Graph grow below — those three share their own
           scrollable body instead of this one. */}
       <div className="ds-panel-body">
-        {workingTrees && onTreeChange && (
-          <label className="ds-sc-target">
-            <span>Working tree</span>
-            <select
-              aria-label="Source control working tree"
-              value={selectedTreeId ?? "project-root"}
-              onChange={(event) =>
-                onTreeChange(
-                  event.currentTarget.value === "project-root"
-                    ? null
-                    : event.currentTarget.value
-                )
-              }
+        {onOpenBranchPicker && (
+          <div className="ds-sc-target">
+            <span>Branch</span>
+            <UnstyledButton
+              className="ds-sc-target-btn"
+              onClick={onOpenBranchPicker}
+              aria-label={`Switch branch: ${branch}`}
+              title={branch}
             >
-              {workingTrees.map((workingTree) => (
-                <option
-                  key={workingTree.id ?? "project-root"}
-                  value={workingTree.id ?? "project-root"}
-                >
-                  {workingTree.label} · {workingTree.branch}
-                </option>
-              ))}
-            </select>
-            <small>Commits, staging, and sync apply here.</small>
-          </label>
+              <IconGitBranch size={13} />
+              <span className="ds-sc-target-btn-label">{branch}</span>
+            </UnstyledButton>
+          </div>
         )}
+        {workingTrees && onOpenWorkingTreePicker && (() => {
+          const current =
+            workingTrees.find(
+              (wt) => (wt.id ?? null) === (selectedTreeId ?? null)
+            ) ?? workingTrees[0];
+          return (
+            <div className="ds-sc-target">
+              <span>Working tree</span>
+              <UnstyledButton
+                className="ds-sc-target-btn"
+                onClick={onOpenWorkingTreePicker}
+                aria-label={`Switch working tree: ${current.label}`}
+                title={`${current.label} · ${current.branch}`}
+              >
+                <IconFolder size={13} />
+                <span className="ds-sc-target-btn-label">
+                  {current.label} · {current.branch}
+                </span>
+              </UnstyledButton>
+              <small>Commits, staging, and sync apply here.</small>
+            </div>
+          );
+        })()}
         <div className="ds-sc-commit-box">
           <Textarea
             value={message}

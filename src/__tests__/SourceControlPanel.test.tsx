@@ -38,6 +38,7 @@ const props = {
   onReviewWorkingChanges: vi.fn(),
   onSelectCommit: vi.fn(),
   onSelectWorkingChanges: vi.fn(),
+  onOpenBranchPicker: vi.fn(),
   onError: vi.fn(),
 };
 
@@ -75,6 +76,22 @@ describe("SourceControlPanel staging", () => {
 
     expect(await screen.findByText("feature/docs")).toBeDefined();
     expect(screen.getByText("document source control")).toBeDefined();
+  });
+
+  it("shows the branch as a chip in the header that opens the branch picker", async () => {
+    render(<SourceControlPanel {...props} />);
+
+    const chip = await screen.findByRole("button", { name: "Switch branch: main" });
+    fireEvent.click(chip);
+    expect(props.onOpenBranchPicker).toHaveBeenCalled();
+  });
+
+  it("explains branch vs. working tree from an info control in the header", async () => {
+    render(<SourceControlPanel {...props} />);
+
+    expect(
+      await screen.findByLabelText("What's the difference between branch and working tree?")
+    ).toBeDefined();
   });
 
   it("shows a compact relative age for each commit in the graph", async () => {
@@ -175,8 +192,8 @@ describe("SourceControlPanel staging", () => {
     ]);
   });
 
-  it("lets the user choose the project root instead of the focused thread worktree", async () => {
-    const onTreeChange = vi.fn();
+  it("shows the focused thread's worktree and opens the same picker workflow as branch", async () => {
+    const onOpenWorkingTreePicker = vi.fn();
     render(
       <SourceControlPanel
         {...props}
@@ -185,15 +202,16 @@ describe("SourceControlPanel staging", () => {
           { id: "t1", label: "Docs", branch: "palisade/docs" },
         ]}
         selectedTreeId="t1"
-        onTreeChange={onTreeChange}
+        onOpenWorkingTreePicker={onOpenWorkingTreePicker}
       />
     );
 
-    fireEvent.change(await screen.findByLabelText("Source control working tree"), {
-      target: { value: "project-root" },
+    const treeButton = await screen.findByRole("button", {
+      name: "Switch working tree: Docs",
     });
-
-    expect(onTreeChange).toHaveBeenCalledWith(null);
+    expect(treeButton).toHaveTextContent("Docs · palisade/docs");
+    fireEvent.click(treeButton);
+    expect(onOpenWorkingTreePicker).toHaveBeenCalled();
   });
 
   it("uses the selected tree for the visible branch, file diff, and review", async () => {
@@ -208,7 +226,6 @@ describe("SourceControlPanel staging", () => {
           { id: "t1", label: "Source control", branch: "feature/source-control" },
         ]}
         selectedTreeId="t1"
-        onTreeChange={vi.fn()}
         onOpenFile={onOpenFile}
         onReviewWorkingChanges={onReviewWorkingChanges}
       />
@@ -333,7 +350,7 @@ describe("SourceControlPanel staging", () => {
     // disappeared with them.
     mocked.gitAheadBehind.mockResolvedValue([2, 3]);
     render(<SourceControlPanel {...props} />);
-    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(await screen.findByLabelText("Remote actions"));
     expect(await screen.findByTestId("sc-pull")).toHaveTextContent("Pull 3");
     expect(screen.getByTestId("sc-push")).toHaveTextContent("Push 2");
   });
@@ -345,7 +362,7 @@ describe("SourceControlPanel staging", () => {
     // upstream on first push.
     mocked.gitAheadBehind.mockRejectedValue(new Error("no upstream"));
     render(<SourceControlPanel {...props} />);
-    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(await screen.findByLabelText("Remote actions"));
     expect(await screen.findByTestId("sc-no-upstream")).toHaveTextContent(
       /no upstream/i
     );
@@ -353,7 +370,7 @@ describe("SourceControlPanel staging", () => {
 
   it("leaves the counts off when the branch is level", async () => {
     render(<SourceControlPanel {...props} />);
-    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(await screen.findByLabelText("Remote actions"));
     expect(await screen.findByTestId("sc-pull")).toHaveTextContent("Pull");
     expect(screen.getByTestId("sc-pull").textContent).not.toMatch(/\d/);
   });

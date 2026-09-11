@@ -263,10 +263,11 @@ describe("Source Control working tree", () => {
     await openProject();
     fireEvent.click(screen.getByTestId("rail-git"));
 
-    expect(await screen.findByLabelText("Source control working tree")).toHaveValue(
-      "project-root"
-    );
-    expect(screen.getByRole("option", { name: /Project root/i })).toBeDefined();
+    expect(
+      await screen.findByRole("button", {
+        name: /Switch working tree: Project root/i,
+      })
+    ).toHaveTextContent("Project root");
   });
 
   it("offers a thread worktree alongside the project root without selecting it", async () => {
@@ -287,8 +288,15 @@ describe("Source Control working tree", () => {
     await openProject();
     fireEvent.click(screen.getByTestId("rail-git"));
 
-    expect(await screen.findByRole("option", { name: /Documentation · palisade\/docs/i })).toBeDefined();
-    expect(screen.getByLabelText("Source control working tree")).toHaveValue("project-root");
+    // The closed control still names the project root — merely existing,
+    // a thread's worktree must not become the selection on its own.
+    const treeButton = await screen.findByRole("button", {
+      name: /Switch working tree: Project root/i,
+    });
+    fireEvent.click(treeButton);
+    const list = within(await screen.findByTestId("branch-list"));
+    expect(list.getByText("Documentation")).toBeDefined();
+    expect(list.getByText("palisade/docs")).toBeDefined();
   });
 
   it("sends the selected worktree's exact diff to the active reviewing thread", async () => {
@@ -311,9 +319,12 @@ describe("Source Control working tree", () => {
     render(<App />);
     await openProject();
     fireEvent.click(screen.getByTestId("rail-git"));
-    fireEvent.change(await screen.findByLabelText("Source control working tree"), {
-      target: { value: "t2" },
-    });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Switch working tree: Project root/i,
+      })
+    );
+    fireEvent.click(await screen.findByText("Selected tree"));
     fireEvent.click(screen.getByTestId("sc-review"));
 
     await waitFor(() =>
@@ -371,9 +382,12 @@ describe("Source Control working tree", () => {
     render(<App />);
     await openProject();
     fireEvent.click(screen.getByTestId("rail-git"));
-    fireEvent.change(await screen.findByLabelText("Source control working tree"), {
-      target: { value: "t2" },
-    });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Switch working tree: Project root/i,
+      })
+    );
+    fireEvent.click(await screen.findByText("Selected tree"));
 
     fireEvent.click(await screen.findByTestId("worktree-view-diff"));
 
@@ -402,9 +416,18 @@ describe("Source Control working tree", () => {
     render(<App />);
     await openProject();
     fireEvent.click(screen.getByTestId("rail-git"));
-    const selector = await screen.findByLabelText("Source control working tree");
-    fireEvent.change(selector, { target: { value: "t2" } });
-    fireEvent.change(selector, { target: { value: "project-root" } });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Switch working tree: Project root/i,
+      })
+    );
+    fireEvent.click(await screen.findByText("Selected tree"));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Switch working tree: Selected tree/i,
+      })
+    );
+    fireEvent.click(await screen.findByText("Project root"));
 
     invokeMock.mockClear();
     fireEvent.click(await screen.findByTestId("worktree-view-diff"));
@@ -2235,10 +2258,10 @@ describe("Keyboard navigation (accessibility)", () => {
 
     render(<App />);
     await openProject();
-    await waitFor(() =>
-      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+    fireEvent.click(screen.getByTestId("rail-git"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Switch branch: main" })
     );
-    fireEvent.click(screen.getByTestId("branch-indicator"));
 
     const row = (await screen.findByText("feature")).closest("li")!;
     expect(row).toHaveAttribute("tabIndex", "0");
@@ -2323,10 +2346,10 @@ describe("Keyboard navigation (accessibility)", () => {
 
     render(<App />);
     await openProject();
-    await waitFor(() =>
-      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+    fireEvent.click(screen.getByTestId("rail-git"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Switch branch: main" })
     );
-    fireEvent.click(screen.getByTestId("branch-indicator"));
     await waitFor(() =>
       expect(screen.getAllByTestId("branch-option")).toHaveLength(3)
     );
@@ -2397,10 +2420,10 @@ describe("Keyboard navigation (accessibility)", () => {
 
     render(<App />);
     await openProject();
-    await waitFor(() =>
-      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+    fireEvent.click(screen.getByTestId("rail-git"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Switch branch: main" })
     );
-    fireEvent.click(screen.getByTestId("branch-indicator"));
 
     const row = (await screen.findByText("stale-feature")).closest("li")!;
     fireEvent.click(within(row).getByTestId("branch-delete"));
@@ -2891,10 +2914,10 @@ describe("Labeled inputs (accessibility)", () => {
 
     render(<App />);
     await openProject();
-    await waitFor(() =>
-      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
+    fireEvent.click(screen.getByTestId("rail-git"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Switch branch: main" })
     );
-    fireEvent.click(screen.getByTestId("branch-indicator"));
 
     expect(screen.getByLabelText(/new branch name/i)).toBe(
       screen.getByTestId("branch-new-input")
@@ -2976,15 +2999,15 @@ describe("Error banner provenance", () => {
 
     render(<App />);
     await openProject();
-    await waitFor(() =>
-      expect(within(openWorkspacePanel().closest(".ds-panel-body")!).getByTestId("branch-indicator")).toBeDefined()
-    );
+    fireEvent.click(screen.getByTestId("rail-git"));
+    const branchChip = () =>
+      screen.findByRole("button", { name: "Switch branch: main" });
 
-    fireEvent.click(screen.getByTestId("branch-indicator"));
+    fireEvent.click(await branchChip());
     fireEvent.click(await screen.findByText("feature"));
     await waitFor(() => expect(screen.getAllByTestId("error")).toHaveLength(1));
 
-    fireEvent.click(screen.getByTestId("branch-indicator"));
+    fireEvent.click(await branchChip());
     fireEvent.click(await screen.findByText("bugfix"));
     await waitFor(() => expect(screen.getAllByTestId("error")).toHaveLength(2));
 
