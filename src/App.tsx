@@ -3306,6 +3306,20 @@ export default function App() {
     [flight?.agents, project, loginsByAgent]
   );
 
+  // Login methods are learned during a real ACP initialize. Refresh them only
+  // after that connection explicitly says it needs authentication; probing on
+  // mount used to create a surprise auth flow after every app restart.
+  useEffect(() => {
+    const required = listen<string>("agent-auth-required", ({ payload: threadId }) => {
+      const activeProject = current.current.project;
+      if (!activeProject || current.current.thread?.id !== threadId) return;
+      api.agentLogins(activeProject.hash, threadId).then(setAgentLogins, () => setAgentLogins([]));
+    });
+    return () => {
+      void required.then((off) => off());
+    };
+  }, []);
+
   const onAgentLogin = useCallback(
     (login: api.AgentLogin) => {
       // Two shapes, both from the agent's own manifest. A terminal login is a
@@ -3325,7 +3339,7 @@ export default function App() {
         .then(() =>
           setBar({
             kind: "confirm",
-            label: `Signed in with ${login.label}. Retry the turn?`,
+            label: `Signed in with ${login.label}. Palisade resumed the blocked message.`,
             confirmLabel: "Close",
             onConfirm: () => setBar(null),
           })

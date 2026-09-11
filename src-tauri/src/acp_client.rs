@@ -177,6 +177,7 @@ pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
 /// Calling `authenticate` with one is a protocol error the agent answers with
 /// "method not implemented" — so the client must pick a protocol-driven method
 /// or make no call at all (#19).
+#[cfg(test)]
 pub(crate) fn protocol_login_method(methods: &[v1::AuthMethod]) -> Option<v1::AuthMethodId> {
     methods
         .iter()
@@ -1270,38 +1271,10 @@ async fn run_bridge(
                 logins_from(&init_response.auth_methods, &spawn.cmd, &spawn.args),
             );
 
-            // Authenticate if the agent requires it (D15).  Agents that
-            // advertise auth methods (e.g. Devin's API-key flow) will
-            // reject session/new until the client calls authenticate first.
-            // AuthMethod::Agent means the agent handles auth itself — Palisade
-            // looks up stored credentials and passes them via _meta.
-            //
-            // ACP: `authenticate` may only be called when `initialize`
-            // advertised at least one method, so the guard is part of the
-            // contract, not an optimisation. A failure here is no longer
-            // fatal: the agent may already hold a valid login of its own, and
-            // aborting the handshake on a failed pre-emptive login is what
-            // turned "this agent is signed in already" into a dead session
-            // (#19). If it really is unauthenticated, `session/new` says so
-            // below with the protocol's own signal.
-            // Only a protocol-driven method may be handed to `authenticate`.
-            // A `terminal` method is run by the client instead (see
-            // `protocol_login_method`), so an agent that offers only those is
-            // never called here — doing so is what produced "method not
-            // implemented" against an agent that was working fine (#19).
-            let protocol_method = protocol_login_method(&init_response.auth_methods);
-            let authenticate = async || -> Result<(), acp::Error> {
-                let Some(method_id) = protocol_method.clone() else {
-                    return Err(acp::Error::auth_required()
-                        .data("this agent has no protocol-driven login; it must be signed in by running its own login command"));
-                };
-                let creds = lookup_agent_credentials(&spawn.agent_id, &method_id.to_string());
-                let mut req = v1::AuthenticateRequest::new(method_id);
-                if let Some(meta) = creds {
-                    req = req.meta(meta);
-                }
-                cx.send_request(req).block_task().await.map(|_| ())
-            };
+            // Authentication is intentionally not attempted during startup.
+            // `session/new` is the ACP authority for whether this connection
+            // needs a credential; only an explicit user choice may select an
+            // advertised protocol method. Terminal methods remain out of band.
             // An explicit sign-in: run exactly the method the user chose and
             // report how it went. No session follows — the agent keeps its own
             // credentials, and the next turn starts a fresh handshake.
@@ -1322,12 +1295,6 @@ async fn run_bridge(
                 });
                 return Ok(());
             }
-            if protocol_method.is_some() {
-                if let Err(e) = authenticate().await {
-                    eprintln!("acp: pre-emptive authenticate failed, continuing: {e}");
-                }
-            }
-
             // The project's MCP servers, handed over the protocol rather than
             // left for the agent to find. `.mcp.json` is a Claude-shaped file;
             // passing the same list here is what makes those servers reach
@@ -1343,19 +1310,12 @@ async fn run_bridge(
                 v1::NewSessionRequest::new(spawn.project_root.clone())
                     .mcp_servers(mcp_servers.clone())
             };
-            let mut started = cx.send_request(new_request()).block_task().await;
-            // ACP's authentication handshake: the agent answers `auth_required`
-            // (-32000) when the client has to log in, and the client
-            // authenticates and retries. Doing it here rather than reading any
-            // one agent's credential store is what makes this work for every
-            // compliant agent (#19).
-            if let Err(e) = &started {
-                if is_auth_required(e) && protocol_method.is_some() {
-                    if authenticate().await.is_ok() {
-                        started = cx.send_request(new_request()).block_task().await;
-                    }
-                }
-            }
+            let started = cx.send_request(new_request()).block_task().await;
+            // Authentication is demand-driven. Picking the first advertised
+            // method here was both surprising (Codex advertises API-key before
+            // ChatGPT) and could launch a sign-in while merely opening a
+            // thread. Surface `auth_required` to the UI instead; the user
+            // chooses a method and a later retry creates the session.
             let new_session = started.map_err(|e| {
                 let detail = if is_auth_required(&e) {
                     auth_help(&spawn.agent_name, &launch, &e.to_string())
@@ -2623,6 +2583,7 @@ mod tests {
     /// text chunk per prompt, and records set_config_option requests.
     struct FakeAgent {
         set_config_requests: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        authenticate_requests: Arc<std::sync::Mutex<Vec<String>>>,
         /// Also stream a couple of `AgentThoughtChunk`s before the reply —
         /// opt-in so `bridge_prompt_round_trips`' text-only event sequence
         /// stays exact for every other test using this fake.
@@ -2633,6 +2594,7 @@ mod tests {
         /// user's Allow/Deny: it must still be free to stream other session
         /// updates on the same connection while that request sits pending.
         emit_permission_request_first: bool,
+        advertise_protocol_login: bool,
     }
 
     impl FakeAgent {
@@ -2644,18 +2606,37 @@ mod tests {
             >,
         ) -> tokio::task::JoinHandle<()> {
             let set_requests = self.set_config_requests.clone();
+            let authenticate_requests = self.authenticate_requests.clone();
             let emit_thoughts = self.emit_thoughts;
             let emit_permission_request_first = self.emit_permission_request_first;
+            let advertise_protocol_login = self.advertise_protocol_login;
             tokio::spawn(async move {
                 let _ = acp::Agent
                     .builder()
                     .name("fake-agent")
                     .on_receive_request(
                         async |req: v1::InitializeRequest, responder, _cx| {
-                            responder.respond(
-                                v1::InitializeResponse::new(req.protocol_version)
-                                    .agent_capabilities(v1::AgentCapabilities::new()),
-                            )
+                            let mut response = v1::InitializeResponse::new(req.protocol_version)
+                                .agent_capabilities(v1::AgentCapabilities::new());
+                            if advertise_protocol_login {
+                                response = response.auth_methods(vec![v1::AuthMethod::Agent(
+                                    v1::AuthMethodAgent::new(
+                                        v1::AuthMethodId::new("chat-gpt"),
+                                        "ChatGPT",
+                                    ),
+                                )]);
+                            }
+                            responder.respond(response)
+                        },
+                        acp::on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |req: v1::AuthenticateRequest, responder, _cx| {
+                            authenticate_requests
+                                .lock()
+                                .unwrap()
+                                .push(req.method_id.to_string());
+                            responder.respond(v1::AuthenticateResponse::new())
                         },
                         acp::on_receive_request!(),
                     )
@@ -2820,12 +2801,24 @@ mod tests {
         FakeAgent,
         tokio::task::JoinHandle<()>,
     ) {
-        fake_agent_pair_full(emit_thoughts, emit_permission_request_first)
+        fake_agent_pair_full(emit_thoughts, emit_permission_request_first, false)
+    }
+
+    fn fake_agent_pair_with_protocol_login() -> (
+        acp::ByteStreams<
+            impl futures::AsyncWrite + Send + 'static,
+            impl futures::AsyncRead + Send + 'static,
+        >,
+        FakeAgent,
+        tokio::task::JoinHandle<()>,
+    ) {
+        fake_agent_pair_full(false, false, true)
     }
 
     fn fake_agent_pair_full(
         emit_thoughts: bool,
         emit_permission_request_first: bool,
+        advertise_protocol_login: bool,
     ) -> (
         acp::ByteStreams<
             impl futures::AsyncWrite + Send + 'static,
@@ -2843,8 +2836,10 @@ mod tests {
 
         let fake = FakeAgent {
             set_config_requests: Arc::new(std::sync::Mutex::new(vec![])),
+            authenticate_requests: Arc::new(std::sync::Mutex::new(vec![])),
             emit_thoughts,
             emit_permission_request_first,
+            advertise_protocol_login,
         };
         let handle = fake.spawn(acp::ByteStreams::new(
             agent_w.compat_write(),
@@ -2894,6 +2889,23 @@ mod tests {
         assert_eq!(models.current.as_deref(), Some("model-a"));
         assert_eq!(models.models.len(), 2);
         assert_eq!(acp_id, "acp-sess-1");
+    }
+
+    /// A connection advertising several login choices must not be prompted or
+    /// authenticated merely because Palisade opened a thread. The agent's
+    /// `session/new` response is the authority on whether auth is needed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bridge_does_not_authenticate_until_the_agent_requires_it() {
+        let (transport, fake, _agent) = fake_agent_pair_with_protocol_login();
+        let (tx, _rx) = std::sync::mpsc::channel();
+
+        start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None)
+            .expect("an already-authorized session should start");
+
+        assert!(
+            fake.authenticate_requests.lock().unwrap().is_empty(),
+            "opening a thread must not select or invoke an advertised login method"
+        );
     }
 
     /// RED→GREEN: a prompt round-trips — the agent's chunk arrives at the

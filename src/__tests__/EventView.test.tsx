@@ -385,6 +385,33 @@ describe("EventList crash banner", () => {
     expect(onRetry).toHaveBeenCalledWith("Hello?");
   });
 
+  it("does not offer a second retry while Palisade owns the queued auth recovery", () => {
+    const onRetry = vi.fn();
+    renderWithMantine(
+      <EventList
+        items={[
+          { kind: "plain", role: "user", mode: "spec", text: "Hello?" },
+          {
+            kind: "plain",
+            role: "system",
+            mode: "spec",
+            text: "Palisade is waiting for you to sign in. It will resume this message automatically once.\\n\\nAuthentication required",
+          },
+        ]}
+        executor={null}
+        agentLogins={[
+          { methodId: "chatgpt", label: "ChatGPT", kind: "protocol" },
+        ]}
+        onRetry={onRetry}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.getByTestId("crash-banner-auth-summary")).toHaveTextContent(
+      /resume your message once/i
+    );
+    expect(screen.queryByTestId("crash-banner-retry")).toBeNull();
+  });
+
   it("still finds the prompt to retry when the agent left a partial reply before crashing", () => {
     // The exact shape a live crash actually persists as: the agent's own
     // text (its last words before the RPC itself failed) sits between the

@@ -1170,14 +1170,20 @@ fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &s
     }
 }
 
-/// Release every idle session on a thread, closing each `done`.
-fn release_idle_sessions(harness: &Harness, thread_id: Option<&str>) {
+/// Release every idle session when the application is exiting.
+///
+/// An idle session is deliberately retained while the application is open.
+/// Besides preserving its ACP conversation, the subprocess owns the
+/// authentication state negotiated during `initialize`. Releasing it merely
+/// because the user looked at another thread made thread navigation look like
+/// an authentication boundary.
+fn release_idle_sessions_on_exit(harness: &Harness) {
     let idle: Vec<(String, String)> = harness
         .acp_sessions
         .lock()
         .unwrap()
         .values()
-        .filter(|s| !s.is_busy() && thread_id.is_none_or(|t| s.thread_id == t))
+        .filter(|s| !s.is_busy())
         .map(|s| (s.id.clone(), s.thread_id.clone()))
         .collect();
     for (id, thread) in idle {
@@ -1185,13 +1191,14 @@ fn release_idle_sessions(harness: &Harness, thread_id: Option<&str>) {
     }
 }
 
-/// Called when the user leaves a thread. Sessions mid-turn keep running — that
-/// is the whole point of concurrency; only idle ones are released.
+/// Called when the user leaves a thread.
+///
+/// The session stays alive, idle or busy. Thread navigation must not destroy
+/// an authenticated executor connection; explicit Stop, executor switching,
+/// archiving, and app shutdown remain the lifecycle boundaries.
 #[tauri::command]
-async fn leave_thread(app: tauri::AppHandle, thread_id: String) -> Res<()> {
+async fn leave_thread(_app: tauri::AppHandle, _thread_id: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
-        let harness: tauri::State<'_, Harness> = app.state();
-        release_idle_sessions(&harness, Some(&thread_id));
         // The other half of prune-on-archive: a thread archived while its work
         // was still unmerged becomes prunable the moment that work lands, and
         // leaving a thread is the idle moment to notice. Cheap when there is
@@ -1238,20 +1245,81 @@ async fn send_message(
         // the truncated first line only as the last resort — which is what a
         // machine with no local model was getting every time. The agent call
         // is detached: a title is cosmetic and must never delay the turn.
-        if local.is_none() {
-            agent_title_later(&app, &project_hash, &thread_id, &content);
-        }
-        if selected_executor(&app, &harness, &project_hash, Some(&thread_id)).is_err() {
+        // A title must never cause a throwaway executor process (and therefore
+        // an unexpected auth flow). The local/fallback title above is enough
+        // until an already-ready connection can provide this enhancement.
+        let agent = match selected_executor(&app, &harness, &project_hash, Some(&thread_id)) {
+            Ok((agent, _)) => agent,
+            Err(_) => {
             // Chat-only mode: the turn is still recorded, nothing answers it.
             return Ok(message);
-        }
-        let id =
-            ensure_session(&app, &harness, &project_hash, &thread_id, &mode, model, bypass)?;
+            }
+        };
+        let id = match ensure_session(
+            &app,
+            &harness,
+            &project_hash,
+            &thread_id,
+            &mode,
+            model,
+            bypass,
+        ) {
+            Ok(id) => id,
+            Err(error) if is_auth_failure(&error) => {
+                harness.queue_pending_auth_turn(
+                    &agent.id,
+                    executor::PendingAuthTurn {
+                        project_hash: project_hash.clone(),
+                        thread_id: thread_id.clone(),
+                        content: content.clone(),
+                        mode: mode.clone(),
+                        bypass,
+                    },
+                );
+                // A system row keeps the recovery action durable and gives
+                // EventView its existing sign-in controls once login methods
+                // have been learned during initialize.
+                let _ = store::append_message(
+                    &palisade_home(),
+                    &project_hash,
+                    &thread_id,
+                    "system",
+                    &mode,
+                    &format!(
+                        "Palisade is waiting for you to sign in. It will resume this message automatically once.\n\n{error}"
+                    ),
+                    None,
+                );
+                let _ = app.emit("agent-auth-required", &thread_id);
+                let _ = app.emit("thread-updated", &thread_id);
+                return Ok(message);
+            }
+            Err(error) => return Err(error),
+        };
         send_to(&harness, &project_hash, &id, &content)?;
         Ok(message)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// ACP agents use a structured `auth_required` error when they can, but a few
+/// adapters still surface only provider prose. Keep this mirror intentionally
+/// narrow and aligned with the frontend's auth error classification.
+fn is_auth_failure(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "auth_required",
+        "authentication required",
+        "failed to authenticate",
+        "not logged in",
+        "session expired",
+        "token expired",
+        "unauthorized",
+        "needs to be signed in",
+    ]
+    .iter()
+    .any(|needle| error.contains(needle))
 }
 
 /// A thread title written by the bundled local model, or `None` if it isn't
@@ -1667,20 +1735,10 @@ async fn agent_logins(
                 .ok_or_else(|| format!("unknown or unavailable agent `{id}`"))?,
             None => selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?.0,
         };
-        // Nothing cached means no session has reached this agent yet this run.
-        // A probe completes the same handshake, which is where the methods are
-        // advertised — cheap, and only on the path that needs an answer.
-        if acp_client::logins_for(&agent.id).is_empty() {
-            if let Some(path) = agent.path.clone() {
-                let _ = acp_client::probe_models(
-                    agent.id.clone(),
-                    agent.cmd.clone(),
-                    PathBuf::from(path),
-                    agent.args.clone(),
-                    project_root(&project_hash)?,
-                );
-            }
-        }
+        // Do not spawn an executor simply to decorate the UI with login
+        // methods. `initialize` may itself touch provider auth. A real session
+        // start records its advertised methods, after which this command
+        // returns them for the retry affordance.
         Ok(acp_client::logins_for(&agent.id)
             .into_iter()
             .map(|login| AgentLoginOption {
@@ -1729,7 +1787,38 @@ async fn agent_authenticate(
             agent.args.clone(),
             project_root(&project_hash)?,
             method_id,
-        )
+        )?;
+        // The user has chosen and completed a protocol login. If this agent
+        // was blocking one or more real turns, deliver every one of them, in
+        // the order they were sent, rather than asking the user to copy or
+        // retype anything (#43: a second blocked turn must not be dropped).
+        let mut queued = harness.take_pending_auth_turns(&agent.id).into_iter();
+        while let Some(pending) = queued.next() {
+            match ensure_session(
+                &app,
+                &harness,
+                &pending.project_hash,
+                &pending.thread_id,
+                &pending.mode,
+                None,
+                pending.bypass,
+            ) {
+                Ok(session_id) => send_to(
+                    &harness,
+                    &pending.project_hash,
+                    &session_id,
+                    &pending.content,
+                )?,
+                Err(error) if is_auth_failure(&error) => {
+                    let mut remaining = vec![pending];
+                    remaining.extend(queued);
+                    harness.requeue_pending_auth_turns(&agent.id, remaining);
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3752,7 +3841,7 @@ pub fn run() {
                 project_windows::retire_unwatched(&harness);
             }
             if matches!(event, tauri::RunEvent::Exit) {
-                release_idle_sessions(&app.state::<Harness>(), None);
+                release_idle_sessions_on_exit(&app.state::<Harness>());
                 let _ = app.state::<Harness>().session_log_writer.lock().unwrap().flush();
                 stop_completion_server(&app.state::<Harness>());
                 for (_, kernel) in app.state::<Harness>().notebook_kernels.lock().unwrap().drain() {
@@ -3827,6 +3916,19 @@ mod tests {
                 assert!(record.ended_at.is_some());
             }
         }
+    }
+
+    #[test]
+    fn auth_failures_include_acp_and_executor_login_messages() {
+        for error in [
+            "auth_required",
+            "Authentication required",
+            "Codex needs to be signed in",
+            "session expired",
+        ] {
+            assert!(crate::is_auth_failure(error), "should classify as auth: {error}");
+        }
+        assert!(!crate::is_auth_failure("context window exceeded"));
     }
 
     /// D17: a chain whose bound agent isn't installed is blocked before it
