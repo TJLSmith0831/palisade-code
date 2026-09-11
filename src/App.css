@@ -5565,11 +5565,28 @@ button.ds-onboarding-status {
   min-height: 0;
   overflow: hidden;
   cursor: grab;
-  outline: none;
 }
 
 .ds-chain-surface:active {
   cursor: grabbing;
+}
+
+/* The global button/input recipe (main.tsx:230) doesn't reach this — it's a
+   plain div, not one of those elements — so role="application" was drawing
+   no focus indicator at all. Inset, since a regular outline would be clipped
+   by overflow: hidden on a full-bleed surface. */
+.ds-chain-surface:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+}
+
+/* Overlaid on the surface so it never changes its measured size. */
+.ds-chain-problem-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 2;
 }
 
 .ds-chain-plane {
@@ -5634,6 +5651,19 @@ button.ds-onboarding-status {
   transition:
     border-color 180ms cubic-bezier(0.2, 0, 0, 1),
     background 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* A plain div with role="button" — same reasoning as the surface above. */
+.ds-chain-node:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-chain-node,
+  .ds-chain-node-port {
+    transition: none;
+  }
 }
 
 .ds-chain-node:hover {
@@ -5758,7 +5788,7 @@ button.ds-onboarding-status {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 16px;
   text-align: center;
   pointer-events: none;
 }
@@ -5774,4 +5804,46 @@ button.ds-onboarding-status {
   border: 1px solid var(--warn);
   border-radius: 6px;
   background: color-mix(in oklab, var(--warn), transparent 92%);
+}
+
+.ds-chain-settings {
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-chain-settings .mantine-InputWrapper-root {
+  width: 150px;
+}
+
+.ds-chain-node-meta,
+.ds-chain-cost {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-chain-cost {
+  margin: 6px 8px;
+}
+
+.ds-chain-task {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.ds-chain-approval-evidence {
+  flex-basis: 100%;
+  max-height: 9em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ds-chain-node[data-state="blocked"] {
+  border-color: var(--warn);
+}
+
+.ds-chain-node[data-state="cancelled"] {
+  border-color: var(--muted);
 }

@@ -2,7 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import "../App.css";
-import { EventList, filterForTab, type Item } from "../EventView";
+import {
+  EventList,
+  filterForTab,
+  itemsFromMessages,
+  scrollToSession,
+  sessionAnchorId,
+  type Item,
+} from "../EventView";
+import type { Message } from "../api";
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
@@ -533,5 +541,160 @@ describe("EventList agent sign-in", () => {
     const summary = screen.getByTestId("crash-banner-auth-summary");
     expect(summary.textContent).not.toMatch(/outside Palisade/);
     expect(summary.textContent).toMatch(/terminal/i);
+  });
+});
+
+/**
+ * Node click-through (critique P1, acceptance step 7). A chain node's session
+ * IS a thread session, so its turns already live in the thread transcript —
+ * what was missing was any way to *reach* them. `itemsFromMessages` dropped
+ * `Message.sessionId` on the floor, leaving the rendered list with no session
+ * identity to scroll to.
+ */
+describe("session anchors", () => {
+  const msg = (seq: number, sessionId: string | null, text: string): Message => ({
+    seq,
+    ts: `2026-09-10T00:00:0${seq}Z`,
+    role: "assistant",
+    mode: "go",
+    content: text,
+    sessionId,
+  });
+
+  it("emits one anchor at the first message of each session", () => {
+    const items = itemsFromMessages([
+      msg(1, "s-a", "first"),
+      msg(2, "s-a", "still a"),
+      msg(3, "s-b", "now b"),
+    ]);
+    const anchors = items.filter((i) => i.kind === "sessionAnchor");
+    expect(anchors).toEqual([
+      { kind: "sessionAnchor", sessionId: "s-a" },
+      { kind: "sessionAnchor", sessionId: "s-b" },
+    ]);
+  });
+
+  it("keeps every original message item, in order, around the anchors", () => {
+    const items = itemsFromMessages([msg(1, "s-a", "first"), msg(2, "s-b", "second")]);
+    expect(items.map((i) => (i.kind === "sessionAnchor" ? `@${i.sessionId}` : "msg"))).toEqual([
+      "@s-a",
+      "msg",
+      "@s-b",
+      "msg",
+    ]);
+  });
+
+  it("emits no anchor for messages written before sessions had identities", () => {
+    const items = itemsFromMessages([msg(1, null, "old"), msg(2, undefined as never, "older")]);
+    expect(items.some((i) => i.kind === "sessionAnchor")).toBe(false);
+  });
+
+  it("re-anchors when a session resumes after another one interleaves", () => {
+    const items = itemsFromMessages([msg(1, "s-a", "a"), msg(2, "s-b", "b"), msg(3, "s-a", "a again")]);
+    expect(
+      items.filter((i) => i.kind === "sessionAnchor").map((i) => (i as { sessionId: string }).sessionId)
+    ).toEqual(["s-a", "s-b", "s-a"]);
+  });
+
+  it("renders each anchor as a reachable, non-visual element carrying its session id", () => {
+    const { container } = renderWithMantine(
+      <EventList
+        items={itemsFromMessages([msg(1, "s-a", "hello")])}
+        executor="claude"
+      />
+    );
+    const anchor = container.querySelector(`#${CSS.escape(sessionAnchorId("s-a"))}`);
+    expect(anchor).not.toBeNull();
+    // It must be laid out (scrollIntoView is a no-op on display:none) but must
+    // not add visible space to the transcript.
+    expect((anchor as HTMLElement).style.height).toBe("0px");
+    expect(screen.getByText("hello")).toBeTruthy();
+  });
+
+  it("scrollToSession scrolls the anchor for that session into view", () => {
+    renderWithMantine(
+      <EventList items={itemsFromMessages([msg(1, "s-a", "hello")])} executor="claude" />
+    );
+    const anchor = document.getElementById(sessionAnchorId("s-a"))!;
+    const spy = vi.fn();
+    anchor.scrollIntoView = spy;
+    expect(scrollToSession("s-a")).toBe(true);
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("scrollToSession reports failure for a session with nothing on screen", () => {
+    expect(scrollToSession("s-nowhere")).toBe(false);
+  });
+});
+
+/**
+ * A chain node runs whatever agent it is bound to, which is routinely not the
+ * thread's agent. The banner used one thread-scoped login list for every crash,
+ * so a Claude Agent auth failure offered "Sign in with ChatGPT" — an action
+ * that signs in a different agent and fixes nothing.
+ */
+describe("sign-in buttons follow the agent that actually failed", () => {
+  const crashFor = (agentName: string): Item[] => [
+    {
+      kind: "plain",
+      role: "system",
+      mode: "go",
+      text: `${agentName} needs to be signed in — Internal error: Failed to authenticate: OAuth session expired.`,
+    },
+  ];
+  const codexLogins = [
+    { methodId: "chatgpt", label: "ChatGPT", kind: "terminal" as const, shellLine: "codex login" },
+  ];
+  const claudeLogins = [
+    { methodId: "claude-ai", label: "Claude Subscription", kind: "terminal" as const, shellLine: "claude login" },
+  ];
+  /** Stands in for App.tsx matching the crash text against installed agents. */
+  const loginsFor = (text: string) =>
+    text.startsWith("Codex") ? codexLogins : text.startsWith("Claude Agent") ? claudeLogins : [];
+
+  it("offers the failing agent's own logins, not the thread agent's", () => {
+    renderWithMantine(
+      <EventList
+        items={crashFor("Claude Agent")}
+        executor={null}
+        agentLogins={codexLogins}
+        agentLoginsFor={loginsFor}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.getAllByTestId("crash-banner-signin").map((b) => b.textContent)).toEqual([
+      "Sign in with Claude Subscription",
+    ]);
+    expect(screen.queryByText("Sign in with ChatGPT")).toBeNull();
+  });
+
+  it("offers no sign-in at all rather than a wrong one for an unknown agent", () => {
+    renderWithMantine(
+      <EventList
+        items={crashFor("Some Other Agent")}
+        executor={null}
+        agentLogins={codexLogins}
+        agentLoginsFor={loginsFor}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.queryAllByTestId("crash-banner-signin")).toHaveLength(0);
+    expect(screen.getByTestId("crash-banner-auth-summary").textContent).toMatch(
+      /can't complete an interactive login on its own/i
+    );
+  });
+
+  it("falls back to the thread's list when no resolver is supplied", () => {
+    renderWithMantine(
+      <EventList
+        items={crashFor("Codex")}
+        executor={null}
+        agentLogins={codexLogins}
+        onAgentLogin={() => {}}
+      />
+    );
+    expect(screen.getAllByTestId("crash-banner-signin").map((b) => b.textContent)).toEqual([
+      "Sign in with ChatGPT",
+    ]);
   });
 });

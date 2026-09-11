@@ -293,6 +293,17 @@ pub trait Sink: Send + Sync + 'static {
         _commands: &[crate::acp_events::AgentCommand],
     ) {
     }
+
+    /// ACP usage is transport metadata rather than a transcript event. The
+    /// app sink forwards billed cost to a chain turn watcher when one exists;
+    /// ordinary sessions intentionally ignore it for now (D-d scope).
+    fn emit_usage(
+        &self,
+        _session_id: &str,
+        _thread_id: &str,
+        _cost: Option<crate::acp_events::Cost>,
+    ) {
+    }
 }
 
 /// One change, as the `openspec` CLI reports it. Task counts are the agent's
@@ -538,6 +549,13 @@ pub struct Harness {
     pub turn_watchers: Mutex<HashMap<String, std::sync::Arc<TurnWatch>>>,
     /// Approval gates waiting on a human, keyed by run id (D9).
     pub chain_gates: Mutex<HashMap<String, std::sync::mpsc::Sender<crate::chain_runner::Approval>>>,
+    /// Cancellation flags for in-progress chain runs, keyed by run id (§4.2).
+    /// The same `Arc` is handed to `ChainRun::walk`'s `cancel` parameter and
+    /// to the run's `AcpNodeRunner`, so `cancel_chain_run` flipping it here
+    /// is immediately visible to both the scheduler and any node turn
+    /// currently polling it — one flag, not two mechanisms. Mirrors
+    /// `chain_gates`'s shape and locking discipline exactly.
+    pub chain_cancels: Mutex<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Every open notebook's kernel process (design.md D2, decisions.md
     /// D16/D18), keyed by `notebook::notebook_id`.
     pub notebook_kernels: crate::notebook::NotebookRegistry,
@@ -547,6 +565,11 @@ pub struct Harness {
 /// the runner blocks on `rx` until the turn ends.
 pub struct TurnWatch {
     text: Mutex<String>,
+    /// Latest cumulative billed cost reported by ACP for this turn's session.
+    /// `None` is meaningful: the agent did not report cost, not that it was
+    /// free. Kept out of `ExecutorEvent` so transcript events remain capped
+    /// at their existing nine variants (D-d).
+    cost: Mutex<Option<crate::acp_events::Cost>>,
     tx: Mutex<Option<std::sync::mpsc::Sender<TurnEnd>>>,
 }
 
@@ -559,7 +582,7 @@ pub enum TurnEnd {
 
 impl TurnWatch {
     pub fn new(tx: std::sync::mpsc::Sender<TurnEnd>) -> Self {
-        Self { text: Mutex::new(String::new()), tx: Mutex::new(Some(tx)) }
+        Self { text: Mutex::new(String::new()), cost: Mutex::new(None), tx: Mutex::new(Some(tx)) }
     }
 
     pub fn push_text(&self, text: &str) {
@@ -575,12 +598,48 @@ impl TurnWatch {
         std::mem::take(&mut *self.text.lock().unwrap())
     }
 
+    /// Records ACP's cumulative session cost. A later usage update replaces
+    /// the earlier total; adding them would double-count.
+    pub fn record_cost(&self, cost: crate::acp_events::Cost) {
+        *self.cost.lock().unwrap() = Some(cost);
+    }
+
+    /// Returns the latest reported cost without inventing a zero when the
+    /// agent never supplied one.
+    pub fn take_cost(&self) -> Option<crate::acp_events::Cost> {
+        self.cost.lock().unwrap().clone()
+    }
+
     /// Resolves the turn exactly once; a second `Done` (or a `Crashed` after
     /// one) is dropped rather than racing a later turn's receiver.
     pub fn finish(&self, end: TurnEnd) {
         if let Some(tx) = self.tx.lock().unwrap().take() {
             let _ = tx.send(end);
         }
+    }
+}
+
+#[cfg(test)]
+mod turn_watch_tests {
+    use super::*;
+
+    /// D-d: a chain watcher must retain an agent-reported billed cost while
+    /// preserving absence for agents that do not report one. The field is
+    /// deliberately outside `ExecutorEvent`: that enum is capped at nine
+    /// variants and transcript events must not fabricate a cost update.
+    #[test]
+    fn cost_is_optional_and_latest_report_wins() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let watch = TurnWatch::new(tx);
+
+        assert_eq!(watch.take_cost(), None);
+        watch.record_cost(crate::acp_events::Cost { amount: 0.001, currency: "USD".into() });
+        watch.record_cost(crate::acp_events::Cost { amount: 0.0043, currency: "USD".into() });
+
+        assert_eq!(
+            watch.take_cost(),
+            Some(crate::acp_events::Cost { amount: 0.0043, currency: "USD".into() })
+        );
     }
 }
 
@@ -606,6 +665,7 @@ impl Default for Harness {
             chain_sessions: Default::default(),
             turn_watchers: Default::default(),
             chain_gates: Default::default(),
+            chain_cancels: Default::default(),
             notebook_kernels: Default::default(),
         }
     }

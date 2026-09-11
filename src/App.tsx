@@ -104,9 +104,10 @@ import {
   type MenuCommand,
 } from "./slashCommands";
 import BetaBadge from "./BetaBadge";
-import ChainsPanel, { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
+import ChainsPanel, { CHAINS_CHANGED_EVENT, announceChainsChanged } from "./ChainsPanel";
 import { CHAIN_EXECUTOR_PREFIX } from "./api";
-import ChainCanvas, { type RunView } from "./ChainCanvas";
+import ChainCanvas from "./ChainCanvas";
+import ChainRunCard, { type ChainRunCardView } from "./ChainRunCard";
 import { deriveStage, type SpecStage } from "./stage";
 import { RenameIcon, DeleteIcon } from "./icons";
 import {
@@ -114,6 +115,7 @@ import {
   filterForTab,
   itemsFromMessages,
   mergeDeltas,
+  scrollToSession,
 } from "./EventView";
 import FileEditorPane, {
   evictEditorSession,
@@ -249,6 +251,7 @@ type ChatSurfaceProps = {
   /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
   onApply: () => void;
   agentLogins?: api.AgentLogin[];
+  agentLoginsFor?: (crashText: string) => api.AgentLogin[];
   onAgentLogin?: (login: api.AgentLogin) => void;
   /** Spec-mode stage derivation (amended D19). */
   stage: SpecStage;
@@ -302,6 +305,12 @@ type ChatSurfaceProps = {
    *  file. */
   onCloseThread?: (thread: ThreadMeta) => void;
   onNewThread?: () => void;
+  /** The chat live run card (D-h): set only while a chain run's invoking
+   *  thread is the one on screen, so a run started elsewhere never bleeds
+   *  into this thread's chat. */
+  chainRun?: ChainRunCardView | null;
+  onChainTranscript?: (sessionId: string) => void;
+  onChainGateResolved?: (decision: "approve" | "sendBack" | "reject") => void;
 };
 
 /** Segments typed into a mode card's live preview on hover/focus — the
@@ -519,6 +528,7 @@ export const ChatSurface = memo(
     onGo,
     onApply,
     agentLogins,
+    agentLoginsFor,
     onAgentLogin,
     stage,
     dragActive,
@@ -550,6 +560,9 @@ export const ChatSurface = memo(
     onSelectThread,
     onCloseThread,
     onNewThread,
+    chainRun,
+    onChainTranscript,
+    onChainGateResolved,
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
@@ -1313,9 +1326,22 @@ export const ChatSurface = memo(
                 handleSend();
               }}
               agentLogins={agentLogins}
+              agentLoginsFor={agentLoginsFor}
               onAgentLogin={onAgentLogin}
             />
           </>
+          {/* The chat live run card (D-h/D-j, PLAN §4.5): chat is the
+              primary run surface (D-m), so a chain run started on this
+              thread renders here — one message that mutates in place,
+              never appended. */}
+          {chainRun && project && (
+            <ChainRunCard
+              run={chainRun}
+              projectHash={project.hash}
+              onTranscript={onChainTranscript}
+              onGateResolved={onChainGateResolved}
+            />
+          )}
           {busy && specStarting && (
             <Paper
               withBorder
@@ -2735,6 +2761,52 @@ export function clearRecoveredNotebook(
   return next;
 }
 
+/** Normalizes any `ChainNodeState` wire shape to its kind string. The
+ *  chain-event reducer uses this to notice a node starting a new turn
+ *  ("executing" after anything else) so it can derive per-node
+ *  startedAt/endedAt/iterations — `ChainEvent` itself carries no timestamps. */
+function chainStateKind(state: api.ChainNodeState | undefined): string | undefined {
+  if (!state) return undefined;
+  if (typeof state === "string") return state;
+  if ("kind" in state && state.kind) return state.kind;
+  if ("blocked" in state && state.blocked) return "blocked";
+  if ("retrying" in state && state.retrying !== undefined) return "retrying";
+  return undefined;
+}
+
+/** A durable `ChainRunRecord` (from history) into the same `RunView` shape
+ *  the live card and canvas render — Review mode is the finished-run half
+ *  of "one canvas, three modes" (PLAN §4.4), reusing the live rendering
+ *  path rather than a second one. */
+function buildReviewRunView(record: api.ChainRunRecord): ChainRunCardView {
+  const states: Record<string, api.ChainNodeState> = {};
+  const nodes: NonNullable<ChainRunCardView["nodes"]> = {};
+  for (const [role, history] of Object.entries(record.nodes)) {
+    const last = history.transitions[history.transitions.length - 1]?.state;
+    const state: api.ChainNodeState = last ?? "queued";
+    states[role] = state;
+    nodes[role] = {
+      state,
+      sessionId: history.sessionId,
+      iterations: history.iterations,
+      cost: history.cost,
+    };
+  }
+  const outcome = record.outcome && record.outcome.kind !== "interrupted" ? record.outcome : null;
+  return {
+    runId: record.id,
+    chain: record.chainName,
+    threadId: record.threadId,
+    seed: record.seed,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    states,
+    nodes,
+    awaiting: null,
+    outcome,
+  };
+}
+
 export default function App() {
   const pm = useProjectManager();
   const project = pm.project;
@@ -3207,6 +3279,32 @@ export default function App() {
       live = false;
     };
   }, [project?.hash, thread?.id]);
+
+  // Logins per agent id, for crashes from an agent that is not this thread's
+  // — a chain node runs whatever agent it is bound to. Fetched on first sight
+  // of that agent's crash and cached; an agent with no advertised login stays
+  // an empty list, which renders as "no sign-in here" rather than a wrong one.
+  const [loginsByAgent, setLoginsByAgent] = useState<Record<string, api.AgentLogin[]>>({});
+  const agentLoginsFor = useCallback(
+    (crashText: string): api.AgentLogin[] => {
+      // The crash is built as `{agent_name} needs to be signed in — ...`
+      // (acp_client.rs), so the name matches an installed agent exactly.
+      const agent = (flight?.agents ?? []).find((a) => crashText.startsWith(a.name));
+      if (!agent || !project) return [];
+      const cached = loginsByAgent[agent.id];
+      if (cached) return cached;
+      void api
+        .agentLogins(project.hash, null, agent.id)
+        .then((logins) =>
+          setLoginsByAgent((prior) =>
+            prior[agent.id] ? prior : { ...prior, [agent.id]: logins }
+          )
+        )
+        .catch(() => undefined);
+      return [];
+    },
+    [flight?.agents, project, loginsByAgent]
+  );
 
   // Login methods are learned during a real ACP initialize. Refresh them only
   // after that connection explicitly says it needs authentication; probing on
@@ -4313,9 +4411,7 @@ export default function App() {
   // Saved chains, kept here rather than in the panel because the composer's
   // `|=` menu needs the same list (D14).
   const [chains, setChains] = useState<api.Chain[]>([]);
-  const [chainRun, setChainRun] = useState<
-    (RunView & { chain: string }) | null
-  >(null);
+  const [chainRun, setChainRun] = useState<ChainRunCardView | null>(null);
 
   useEffect(() => {
     if (!project) {
@@ -4352,37 +4448,111 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen<api.ChainEvent>("chain-event", ({ payload }) => {
       setChainRun((previous) => {
-        const base =
+        const base: ChainRunCardView =
           previous?.runId === payload.runId
             ? previous
             : {
                 runId: payload.runId,
                 chain: payload.chain,
+                threadId: payload.threadId,
+                startedAt: new Date().toISOString(),
                 states: {},
+                nodes: {},
                 awaiting: null,
                 outcome: null,
               };
+        // ChainEvent carries no timestamp of its own, so per-node
+        // startedAt/endedAt/iterations are derived client-side from the
+        // transition sequence: a new "executing" after anything else is a
+        // new turn, and the run card (Wave I) needs sessionId/cost/timing
+        // that the old reducer discarded entirely.
+        const nodes = { ...base.nodes };
+        if (payload.role && payload.state) {
+          const prior = nodes[payload.role];
+          const kind = chainStateKind(payload.state);
+          const wasExecuting = chainStateKind(prior?.state) === "executing";
+          const now = new Date().toISOString();
+          const startingTurn = kind === "executing" && !wasExecuting;
+          nodes[payload.role] = {
+            state: payload.state,
+            sessionId: payload.sessionId ?? prior?.sessionId ?? null,
+            startedAt: startingTurn ? now : prior?.startedAt,
+            endedAt:
+              kind === "done" || kind === "failed" || kind === "cancelled"
+                ? now
+                : prior?.endedAt,
+            iterations: startingTurn ? (prior?.iterations ?? 0) + 1 : (prior?.iterations ?? 0),
+            cost: payload.cost !== undefined ? payload.cost : prior?.cost,
+          };
+        }
         return {
           ...base,
           chain: payload.chain,
+          threadId: payload.threadId,
           states: payload.role && payload.state
             ? { ...base.states, [payload.role]: payload.state }
             : base.states,
+          nodes,
           // A gate event sets it; a node starting its turn clears it, and so
           // does the run ending — approving the last gate produces an outcome
           // and no further node event, which used to leave the approve/reject
           // bar on screen after the chain had already finished.
           awaiting: payload.outcome
             ? null
-            : (payload.awaitingApproval ?? (payload.state ? null : base.awaiting)),
+            : payload.awaitingApproval
+              ? {
+                  from: payload.awaitingApproval.from,
+                  to: payload.awaitingApproval.to,
+                  output: payload.awaitingApproval.output,
+                }
+              : payload.state
+                ? null
+                : base.awaiting,
           outcome: payload.outcome ?? base.outcome,
         };
       });
+      // A finished run is a new history record. The history list re-lists on
+      // the same event a save or delete uses (one mechanism, not two), so
+      // without this the run only appears after the user re-opens history.
+      if (payload.outcome) announceChainsChanged();
     });
     return () => {
       void unlisten.then((f) => f());
     };
   }, []);
+
+  /**
+   * Resolving a gate from either surface must disable the other immediately
+   * (PLAN §4.5's one-gate-two-surfaces invariant) — both `<ChainCanvas
+   * onGateResolved>` and `<ChainRunCard onGateResolved>` call this same
+   * function, so the shared `RunView.awaiting.resolved` is the single
+   * source of truth neither component keeps a local copy of.
+   */
+  const onChainGateResolved = useCallback(
+    (decision: "approve" | "sendBack" | "reject") => {
+      setChainRun((previous) =>
+        previous && previous.awaiting
+          ? { ...previous, awaiting: { ...previous.awaiting, resolved: decision } }
+          : previous
+      );
+    },
+    []
+  );
+
+  // A chain node's session IS a thread session (chain_exec.rs), so "click a
+  // node, see what it actually did" means scrolling this thread's transcript
+  // to where that session began — no second viewer, no new storage format.
+  // The rail has to be on screen before there is an anchor to scroll to, so a
+  // collapsed rail expands first and the scroll waits one frame for layout.
+  const onChainTranscript = useCallback(
+    (sessionId: string) => {
+      const collapsed = shell.centerShell === "editor" && shell.chatCollapsed;
+      if (collapsed) shell.toggleChat();
+      if (collapsed) requestAnimationFrame(() => scrollToSession(sessionId));
+      else scrollToSession(sessionId);
+    },
+    [shell]
+  );
 
   /** Starts a chain on the active thread, opening its canvas to watch. */
   const startChainRun = useCallback(
@@ -4396,7 +4566,10 @@ export default function App() {
         setChainRun({
           runId: "",
           chain: name,
+          threadId: target.id,
+          startedAt: new Date().toISOString(),
           states: {},
+          nodes: {},
           awaiting: null,
           outcome: null,
         });
@@ -5815,6 +5988,7 @@ export default function App() {
     onGo,
     onApply,
     agentLogins,
+    agentLoginsFor,
     onAgentLogin,
     stage,
     dragActive,
@@ -5853,6 +6027,11 @@ export default function App() {
     onSelectThread: onSelectVibeThread,
     onCloseThread: onCloseThreadTab,
     onNewThread,
+    // Only the thread that actually invoked this run gets its card — a run
+    // started on thread A must never bleed into thread B's chat.
+    chainRun: chainRun && thread && chainRun.threadId === thread.id ? chainRun : null,
+    onChainTranscript,
+    onChainGateResolved,
   };
 
   // The nine rail panels. Identical in both presets by construction — this
@@ -5911,7 +6090,9 @@ export default function App() {
           chainName={tab.chainName}
           agents={chainAgents}
           verifyCommands={chainVerifyCommands}
-          onRun={thread ? (name) => void startChainRun(name, "") : undefined}
+          onRun={thread ? (name, seed) => void startChainRun(name, seed) : undefined}
+          onTranscript={onChainTranscript}
+          onGateResolved={onChainGateResolved}
           // Only the chain that is actually running gets the watching state;
           // opening a different chain mid-run still shows a normal canvas.
           run={chainRun?.chain === tab.chainName ? chainRun : null}
@@ -6121,7 +6302,18 @@ export default function App() {
           <ChainsPanel
             projectHash={project.hash}
             onOpen={(name) => tabs.openChain(name)}
-            onRun={thread ? (name) => void startChainRun(name, "") : undefined}
+            onRun={thread ? (name, seed) => void startChainRun(name, seed) : undefined}
+            onOpenRun={(runId) => {
+              if (!project) return;
+              void api.getChainRun(project.hash, runId).then((record) => {
+                if (!record) return;
+                tabs.openChain(record.chainName);
+                setChainRun(buildReviewRunView(record));
+              });
+            }}
+            onRerun={(runId, fromRole) =>
+              thread && void api.rerunChainRun(project.hash, runId, fromRole, thread.id)
+            }
           />
         );
       case "history":

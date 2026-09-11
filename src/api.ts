@@ -706,6 +706,8 @@ export type Chain = {
   entry: string;
   timeoutSeconds: number;
   retry: { maxAttempts: number };
+  /** Optional cap for a run frontier; omitted or 0 means unbounded. */
+  maxParallel?: number;
   /** Canvas positions, keyed by role. Presentation only. */
   layout?: Record<string, { x: number; y: number }>;
 };
@@ -726,12 +728,25 @@ export const deleteChain = (projectHash: string, name: string) =>
   invoke<void>("delete_chain", { projectHash, name });
 
 /** Where one node is in its turn. Only one node is `executing` at a time. */
+/** Includes legacy compact forms while Wave E updates the canvas renderer. */
 export type ChainNodeState =
   | "queued"
   | "executing"
   | { retrying: number }
+  | { retrying?: never; blocked: { met: number; required: number } }
   | "done"
-  | "failed";
+  | "failed"
+  | "cancelled"
+  | {
+      kind: "queued" | "executing" | "retrying" | "blocked" | "done" | "failed" | "cancelled";
+      attempt?: number;
+      met?: number;
+      required?: number;
+      // Compatibility fields keep the existing canvas compiling until Wave E
+      // becomes the single owner of its state-label renderer.
+      retrying?: number;
+      blocked?: { met: number; required: number };
+    };
 
 /** Why a run stopped. Every terminal state names a reason. */
 export type ChainOutcome =
@@ -741,6 +756,7 @@ export type ChainOutcome =
   | { kind: "capReached"; at: string; maxIterations: number }
   | { kind: "timedOut"; at: string; afterSeconds: number }
   | { kind: "retriesExhausted"; at: string; attempts: number; message: string }
+  | { kind: "cancelled"; at: string[] }
   | { kind: "blocked"; reason: string };
 
 /** Payload of the `chain-event` window event the live DAG view listens on. */
@@ -752,9 +768,54 @@ export type ChainEvent = {
   role: string | null;
   state: ChainNodeState | null;
   outcome: ChainOutcome | null;
-  awaitingApproval: { from: string; to: string } | null;
+  awaitingApproval: {
+    from: string;
+    to: string;
+    /** `from`'s actual output — rendered inline; a link is not evidence. */
+    output: string;
+  } | null;
   /** The session backing this node's turn — click-through to its transcript. */
   sessionId: string | null;
+  /** ACP-billed cost when this node's agent reported it; never fabricated as 0. */
+  cost?: { amount: number; currency: string } | null;
+};
+
+/** Durable node-state form used inside a past run record. */
+export type ChainNodeStateSnapshot =
+  | { kind: "queued" }
+  | { kind: "executing" }
+  | { kind: "retrying"; attempt: number }
+  | { kind: "blocked"; met: number; required: number }
+  | { kind: "done" }
+  | { kind: "failed" }
+  | { kind: "cancelled" };
+
+export type ChainRunOutcome =
+  | ChainOutcome
+  | { kind: "interrupted" };
+
+export type ChainRunNodeHistory = {
+  transitions: Array<{ state: ChainNodeStateSnapshot; at: string }>;
+  sessionId: string | null;
+  iterations: number;
+  /** Latest completed output, retained for re-run-from-node. */
+  output: string | null;
+  /** Unknown rather than zero when an agent did not report billed cost. */
+  cost: { amount: number; currency: string } | null;
+};
+
+/** Persisted chain definition, node timeline, outputs, and terminal result. */
+export type ChainRunRecord = {
+  id: string;
+  projectHash: string;
+  threadId: string;
+  chainName: string;
+  chainSnapshot: Chain;
+  seed: string;
+  startedAt: string;
+  endedAt: string | null;
+  outcome: ChainRunOutcome | null;
+  nodes: Record<string, ChainRunNodeHistory>;
 };
 
 /**
@@ -768,6 +829,35 @@ export const runChain = (
   threadId: string
 ) =>
   invoke<string>("run_chain", { projectHash, chainName, seedInput, threadId });
+
+/**
+ * Replays a durable run's saved definition. With `fromRole`, upstream roles
+ * are not re-executed: the selected node receives their recorded outputs.
+ */
+export const rerunChainRun = (
+  projectHash: string,
+  runId: string,
+  fromRole: string | undefined,
+  threadId: string
+) =>
+  invoke<string>("rerun_chain_run", {
+    projectHash,
+    runId,
+    fromRole: fromRole ?? null,
+    threadId,
+  });
+
+/** Stops an active chain, including a turn parked at a human approval gate. */
+export const cancelChainRun = (runId: string) =>
+  invoke<void>("cancel_chain_run", { runId });
+
+/** Durable history, optionally restricted to one chain definition. */
+export const listChainRuns = (projectHash: string, chainName?: string) =>
+  invoke<ChainRunRecord[]>("list_chain_runs", { projectHash, chainName: chainName ?? null });
+
+/** One durable run by id, or null when it does not belong to this project. */
+export const getChainRun = (projectHash: string, runId: string) =>
+  invoke<ChainRunRecord | null>("get_chain_run", { projectHash, runId });
 
 /** The three things a human can do at a paused approval gate (D9). */
 export const resolveChainGate = (
