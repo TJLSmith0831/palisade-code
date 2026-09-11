@@ -5826,11 +5826,20 @@ button.ds-onboarding-status {
 .ds-chain-empty {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: auto;
+  max-width: 420px;
   padding: 16px;
   text-align: center;
   pointer-events: none;
+}
+
+.ds-chain-empty > :first-child {
+  margin-bottom: 4px;
 }
 
 /* Docked, never a modal takeover — the graph stays visible while deciding. */
