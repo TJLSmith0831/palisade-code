@@ -260,8 +260,16 @@ impl ChainRun {
                     let abort = Arc::clone(&abort);
                     let role_for_thread = role.clone();
                     scope.spawn(move || {
-                        let result =
-                            run_node_turn(runner, &role_for_thread, &instruction, max_attempts, deadline, timeout_secs, &abort);
+                        let result = run_node_turn(
+                            runner,
+                            &role_for_thread,
+                            &instruction,
+                            max_attempts,
+                            deadline,
+                            timeout_secs,
+                            &abort,
+                            cancel,
+                        );
                         let _ = tx.send((role_for_thread, result));
                     });
                 }
@@ -530,6 +538,15 @@ enum Crossing {
 /// never contaminates the retry's context. Runs on its own thread inside the
 /// scheduler's `thread::scope`, so it takes everything it needs by value or
 /// shared reference rather than touching `ChainRun`.
+///
+/// Takes both `abort` (the scheduler's own mirror, set when a sibling's
+/// failure or the caller's cancel is noticed *between* dispatch rounds) and
+/// `cancel` (the caller's flag itself). A real ACP-backed runner polls
+/// `cancel` directly and can fail a turn for that exact reason before the
+/// scheduler's main thread — which, with this node's result still pending,
+/// has no dispatch round in which to have mirrored it into `abort` — gets a
+/// chance to notice. Checking only `abort` after such an `Err` would retry a
+/// node the caller already told the run to stop.
 fn run_node_turn<R: NodeRunner>(
     runner: &R,
     role: &str,
@@ -538,10 +555,12 @@ fn run_node_turn<R: NodeRunner>(
     deadline: Instant,
     timeout_secs: u64,
     abort: &AtomicBool,
+    cancel: &AtomicBool,
 ) -> Result<String, Outcome> {
+    let is_cancelled = || abort.load(Ordering::SeqCst) || cancel.load(Ordering::SeqCst);
     let mut last = String::new();
     for attempt in 1..=max_attempts {
-        if abort.load(Ordering::SeqCst) {
+        if is_cancelled() {
             runner.on_state(role, NodeState::Cancelled);
             return Err(Outcome::Cancelled { at: vec![role.to_string()] });
         }
@@ -550,11 +569,11 @@ fn run_node_turn<R: NodeRunner>(
         match runner.run_turn(role, instruction, attempt) {
             Ok(output) => return Ok(output),
             Err(message) => {
-                // A real ACP turn may notice Stop by returning an error after
-                // the scheduler has already set `abort`. Preserve the honest
-                // cancellation state rather than falling through to the
-                // retry-exhausted `Failed` state below.
-                if abort.load(Ordering::SeqCst) {
+                // A real ACP turn may notice Stop — via either flag — after
+                // starting this attempt. Preserve the honest cancellation
+                // state rather than falling through to the retry-exhausted
+                // `Failed` state below.
+                if is_cancelled() {
                     runner.on_state(role, NodeState::Cancelled);
                     return Err(Outcome::Cancelled { at: vec![role.to_string()] });
                 }
@@ -568,7 +587,7 @@ fn run_node_turn<R: NodeRunner>(
             return Err(Outcome::TimedOut { at: role.into(), after_seconds: timeout_secs });
         }
     }
-    if abort.load(Ordering::SeqCst) {
+    if is_cancelled() {
         runner.on_state(role, NodeState::Cancelled);
         Err(Outcome::Cancelled { at: vec![role.to_string()] })
     } else {
@@ -1509,6 +1528,76 @@ mod tests {
             "a sibling stopped by another node's failure renders Cancelled: {:?}",
             runner.inner.states()
         );
+    }
+
+    /// A runner backed by a real ACP session (`chain_exec::AcpNodeRunner`)
+    /// polls the caller's own cancellation flag directly and can fail a turn
+    /// for that reason. `run_node_turn` must treat that the same as its own
+    /// `abort` — not just when the scheduler's main thread has separately
+    /// mirrored `cancel` into `abort`, which cannot have happened yet here:
+    /// with a single node in flight, that thread is still blocked waiting on
+    /// exactly this node's result.
+    struct CancelAwareRunner<'a> {
+        cancel: &'a AtomicBool,
+        started: Mutex<Option<mpsc::Sender<()>>>,
+        proceed: Mutex<Option<mpsc::Receiver<()>>>,
+        calls: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl<'a> NodeRunner for CancelAwareRunner<'a> {
+        fn run_turn(&self, role: &str, _instruction: &str, _attempt: u32) -> TurnResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(tx) = self.started.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            if let Some(rx) = self.proceed.lock().unwrap().take() {
+                rx.recv().ok();
+            }
+            if self.cancel.load(Ordering::SeqCst) {
+                return Err(format!("`{role}` cancelled"));
+            }
+            Ok(format!("{role} output"))
+        }
+    }
+
+    /// RED→GREEN (#42): the caller's Stop flips `cancel` while the node's own
+    /// turn is in flight and the scheduler thread is blocked waiting on it —
+    /// there is no scheduler wakeup available to mirror `cancel` into `abort`
+    /// first. The node must still stop rather than spend a second attempt.
+    #[test]
+    fn a_turn_that_observes_the_caller_cancel_flag_directly_does_not_retry() {
+        let mut chain = two_node_chain(vec![]);
+        chain.nodes.remove("programmer");
+        chain.retry = RetryPolicy { max_attempts: 2 };
+
+        let cancel = AtomicBool::new(false);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (proceed_tx, proceed_rx) = mpsc::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let runner = CancelAwareRunner {
+            cancel: &cancel,
+            started: Mutex::new(Some(started_tx)),
+            proceed: Mutex::new(Some(proceed_rx)),
+            calls: calls.clone(),
+        };
+        let mut chain_run = run(chain);
+
+        let outcome = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| chain_run.walk(&runner, &mut FakeGates::none(), &cancel));
+            // The node's single in-flight attempt has started; the scheduler
+            // thread is blocked on this same node's result.
+            started_rx.recv().unwrap();
+            cancel.store(true, Ordering::SeqCst);
+            proceed_tx.send(()).unwrap();
+            handle.join().unwrap()
+        });
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a node that itself observed the caller's cancellation must not spend a second attempt"
+        );
+        assert_eq!(outcome, Outcome::Cancelled { at: vec!["designer".into()] });
     }
 
     /// D-i: `maxParallel` bounds how many nodes the scheduler dispatches at
