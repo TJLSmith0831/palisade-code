@@ -12,12 +12,82 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::chains::{Chain, ChainEdge, Gate};
+use crate::chains::{Chain, ChainEdge, Gate, NodeKind};
+
+/// A run's wall clock, pause-aware (D12/design §1). `elapsed()` excludes time
+/// spent paused, so a run blocked on a human — a human-in-the-loop node or an
+/// approval gate — doesn't burn its budget waiting for them. Shared as an
+/// `Arc` because the scheduler's own timeout check and each worker thread's
+/// deadline check (`run_node_turn`) both consult the same clock; a stale
+/// absolute deadline must never be copied into a worker thread.
+#[derive(Debug)]
+pub struct Budget {
+    started: Instant,
+    inner: Mutex<BudgetInner>,
+}
+
+#[derive(Debug, Default)]
+struct BudgetInner {
+    /// Paused time accrued so far, from pauses that have already ended.
+    paused: Duration,
+    /// How many overlapping pauses are open right now. Time accrues into
+    /// `paused` only as this falls 1 -> 0, so two concurrent pauses (a human
+    /// node in one branch, an approval gate in another) count once, not
+    /// twice.
+    depth: u32,
+    /// When the current (outermost) pause began, if `depth > 0`.
+    pause_started: Option<Instant>,
+}
+
+impl Budget {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self { started: Instant::now(), inner: Mutex::new(BudgetInner::default()) })
+    }
+
+    /// `started.elapsed()` minus every pause's duration, including one
+    /// currently open.
+    pub fn elapsed(&self) -> Duration {
+        let inner = self.inner.lock().unwrap();
+        let mut paused = inner.paused;
+        if let Some(start) = inner.pause_started {
+            paused += start.elapsed();
+        }
+        self.started.elapsed().saturating_sub(paused)
+    }
+
+    /// Opens a pause, closed when the returned guard drops (including on
+    /// panic — `Drop` still runs during unwind).
+    pub fn pause(self: &Arc<Self>) -> PauseGuard {
+        let mut inner = self.inner.lock().unwrap();
+        inner.depth += 1;
+        if inner.depth == 1 {
+            inner.pause_started = Some(Instant::now());
+        }
+        drop(inner);
+        PauseGuard { budget: Arc::clone(self) }
+    }
+}
+
+pub struct PauseGuard {
+    budget: Arc<Budget>,
+}
+
+impl Drop for PauseGuard {
+    fn drop(&mut self) {
+        let mut inner = self.budget.inner.lock().unwrap();
+        inner.depth -= 1;
+        if inner.depth == 0 {
+            if let Some(start) = inner.pause_started.take() {
+                inner.paused += start.elapsed();
+            }
+        }
+    }
+}
 
 /// What one node turn produced, or why it couldn't.
 pub type TurnResult = Result<String, String>;
@@ -30,6 +100,16 @@ pub trait NodeRunner: Send + Sync {
     /// node produced. `attempt` is 1-based; a retry gets a fresh session
     /// rather than continuing the crashed one's context (D21).
     fn run_turn(&self, role: &str, instruction: &str, attempt: u32) -> TurnResult;
+
+    /// A human-in-the-loop node's turn (D9/design §2): presents `instruction`
+    /// (the same composed seed/upstream text an agent node would receive) and
+    /// returns the human's free text. Dispatched by the scheduler instead of
+    /// `run_turn`, with no retry loop — `max_attempts` is an agent-crash
+    /// concept and retrying a human's prompt is meaningless. Default falls
+    /// back to `run_turn` so existing fakes need no change.
+    fn human_turn(&self, role: &str, instruction: &str) -> TurnResult {
+        self.run_turn(role, instruction, 1)
+    }
 
     /// Called as each node changes state, so the live DAG view can highlight
     /// the executing node (D7). Default no-op keeps tests terse. May be
@@ -118,7 +198,7 @@ pub struct ChainRun {
     /// Role → how many times it has produced output. Drives the loop cap.
     pub iterations: HashMap<String, u32>,
     pub node_states: HashMap<String, NodeState>,
-    started: Instant,
+    budget: Arc<Budget>,
     timeout: Duration,
 }
 
@@ -132,9 +212,16 @@ impl ChainRun {
             seed: seed.into(),
             iterations: HashMap::new(),
             node_states,
-            started: Instant::now(),
+            budget: Budget::new(),
             timeout,
         }
+    }
+
+    /// The shared, pause-aware wall clock (D12), handed to `chain_exec.rs` so
+    /// a human wait can pause the same clock this run's own timeout check
+    /// consults.
+    pub fn budget(&self) -> Arc<Budget> {
+        Arc::clone(&self.budget)
     }
 
     /// Overrides the wall clock — tests need a run that can time out inside a
@@ -146,7 +233,7 @@ impl ChainRun {
     }
 
     fn elapsed(&self) -> Duration {
-        self.started.elapsed()
+        self.budget.elapsed()
     }
 
     /// Walks the graph until every branch drains or a terminal outcome
@@ -252,24 +339,28 @@ impl ChainRun {
                     self.set_state(&role, NodeState::Executing);
 
                     let max_attempts = self.chain.retry_for(&role).max_attempts.max(1);
-                    let deadline = self.started + self.timeout;
-                    let timeout_secs = self.timeout.as_secs();
+                    let budget = Arc::clone(&self.budget);
+                    let timeout = self.timeout;
+                    let kind = node.kind;
                     in_flight.insert(role.clone());
 
                     let tx = tx.clone();
                     let abort = Arc::clone(&abort);
                     let role_for_thread = role.clone();
                     scope.spawn(move || {
-                        let result = run_node_turn(
-                            runner,
-                            &role_for_thread,
-                            &instruction,
-                            max_attempts,
-                            deadline,
-                            timeout_secs,
-                            &abort,
-                            cancel,
-                        );
+                        let result = match kind {
+                            NodeKind::Agent => run_node_turn(
+                                runner,
+                                &role_for_thread,
+                                &instruction,
+                                max_attempts,
+                                &budget,
+                                timeout,
+                                &abort,
+                                cancel,
+                            ),
+                            NodeKind::Human => run_human_turn(runner, &role_for_thread, &instruction, &abort, cancel),
+                        };
                         let _ = tx.send((role_for_thread, result));
                     });
                 }
@@ -552,8 +643,8 @@ fn run_node_turn<R: NodeRunner>(
     role: &str,
     instruction: &str,
     max_attempts: u32,
-    deadline: Instant,
-    timeout_secs: u64,
+    budget: &Arc<Budget>,
+    timeout: Duration,
     abort: &AtomicBool,
     cancel: &AtomicBool,
 ) -> Result<String, Outcome> {
@@ -581,10 +672,12 @@ fn run_node_turn<R: NodeRunner>(
             }
         }
         // A retry that would outlive the run's budget is not worth
-        // starting — report the timeout, which is the truer reason.
-        if Instant::now() > deadline {
+        // starting — report the timeout, which is the truer reason. Consults
+        // the shared, pause-aware `Budget` rather than a copied `Instant`, so
+        // time spent paused elsewhere in the run (D12) doesn't count here.
+        if budget.elapsed() > timeout {
             runner.on_state(role, NodeState::Failed);
-            return Err(Outcome::TimedOut { at: role.into(), after_seconds: timeout_secs });
+            return Err(Outcome::TimedOut { at: role.into(), after_seconds: timeout.as_secs() });
         }
     }
     if is_cancelled() {
@@ -593,6 +686,37 @@ fn run_node_turn<R: NodeRunner>(
     } else {
         runner.on_state(role, NodeState::Failed);
         Err(Outcome::RetriesExhausted { at: role.into(), attempts: max_attempts, message: last })
+    }
+}
+
+/// A human node's turn (D9/design §2): one attempt, never retried — a human
+/// prompt has no crashed-session concept for a retry to make sense of. Stop
+/// while suspended yields `Cancelled`, matching an agent turn's own
+/// cancellation shape.
+fn run_human_turn<R: NodeRunner>(
+    runner: &R,
+    role: &str,
+    instruction: &str,
+    abort: &AtomicBool,
+    cancel: &AtomicBool,
+) -> Result<String, Outcome> {
+    let is_cancelled = || abort.load(Ordering::SeqCst) || cancel.load(Ordering::SeqCst);
+    if is_cancelled() {
+        runner.on_state(role, NodeState::Cancelled);
+        return Err(Outcome::Cancelled { at: vec![role.to_string()] });
+    }
+    runner.on_state(role, NodeState::Executing);
+    match runner.human_turn(role, instruction) {
+        Ok(output) => Ok(output),
+        Err(message) => {
+            if is_cancelled() {
+                runner.on_state(role, NodeState::Cancelled);
+                Err(Outcome::Cancelled { at: vec![role.to_string()] })
+            } else {
+                runner.on_state(role, NodeState::Failed);
+                Err(Outcome::RetriesExhausted { at: role.into(), attempts: 1, message })
+            }
+        }
     }
 }
 
@@ -865,14 +989,61 @@ mod tests {
         AtomicBool::new(false)
     }
 
+    // ------------------------------------------------------------- Budget
+
+    #[test]
+    fn elapsed_excludes_paused_time() {
+        let budget = Budget::new();
+        std::thread::sleep(Duration::from_millis(10));
+        let before = budget.elapsed();
+        let guard = budget.pause();
+        std::thread::sleep(Duration::from_millis(30));
+        drop(guard);
+        let after = budget.elapsed();
+        assert!(after < before + Duration::from_millis(10), "paused time must not count: before={before:?} after={after:?}");
+    }
+
+    #[test]
+    fn two_concurrent_pause_guards_accrue_one_pause_not_two() {
+        let budget = Budget::new();
+        let a = budget.pause();
+        std::thread::sleep(Duration::from_millis(5));
+        let b = budget.pause();
+        std::thread::sleep(Duration::from_millis(20));
+        drop(a);
+        // `b` alone must not restart accrual — the pause is still open.
+        std::thread::sleep(Duration::from_millis(20));
+        drop(b);
+        assert!(budget.elapsed() < Duration::from_millis(15), "overlapping pauses must count once: {:?}", budget.elapsed());
+    }
+
+    #[test]
+    fn a_guard_dropped_on_panic_still_closes_its_pause() {
+        let budget = Budget::new();
+        let probe = Arc::clone(&budget);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = probe.pause();
+            panic!("boom");
+        }));
+        assert!(result.is_err());
+        // The pause closed on unwind, so elapsed resumes advancing normally.
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(budget.elapsed() >= Duration::from_millis(10));
+    }
+
     fn node(role: &str) -> ChainNode {
         ChainNode {
             role: role.into(),
+            kind: NodeKind::Agent,
             guideline: format!("You are the {role}."),
             agent: "claude-code".into(),
             model: None,
             retry: None,
         }
+    }
+
+    fn human_node(role: &str) -> ChainNode {
+        ChainNode { kind: NodeKind::Human, agent: String::new(), ..node(role) }
     }
 
     fn two_node_chain(edges: Vec<ChainEdge>) -> Chain {
@@ -1597,6 +1768,94 @@ mod tests {
             1,
             "a node that itself observed the caller's cancellation must not spend a second attempt"
         );
+        assert_eq!(outcome, Outcome::Cancelled { at: vec!["designer".into()] });
+    }
+
+    // ------------------------------------------------------- human nodes
+
+    #[test]
+    fn a_human_nodes_text_reaches_its_downstream_node_as_upstream_output() {
+        let mut chain = two_node_chain(vec![forward()]);
+        chain.nodes.insert("designer".into(), human_node("designer"));
+        let r = FakeRunner::new(&[("designer", vec![Ok("go bigger".into())])]);
+        let outcome = run(chain).walk(&r, &mut FakeGates::none(), &no_cancel());
+        assert_eq!(outcome, Outcome::Completed { output: "programmer output".into() });
+        let calls = r.calls();
+        let (_, instruction, _) = &calls[1];
+        assert!(instruction.contains("Previous step output (designer): go bigger"), "{instruction}");
+    }
+
+    #[test]
+    fn a_human_node_as_entry_receives_the_seed() {
+        let mut chain = two_node_chain(vec![]);
+        chain.nodes.remove("programmer");
+        chain.nodes.insert("designer".into(), human_node("designer"));
+        let r = FakeRunner::echoing();
+        run(chain).walk(&r, &mut FakeGates::none(), &no_cancel());
+        let calls = r.calls();
+        assert!(calls[0].1.contains("Original request: build me a settings page"), "{}", calls[0].1);
+    }
+
+    #[test]
+    fn a_human_node_in_a_loop_is_still_bounded_by_the_iteration_cap() {
+        let mut chain = two_node_chain(vec![forward(), back(Gate::Verify { command: "t".into() }, 2)]);
+        chain.nodes.insert("designer".into(), human_node("designer"));
+        let r = FakeRunner::echoing();
+        let mut g = FakeGates::verifying(vec![Ok(false), Ok(false), Ok(false), Ok(false)]);
+        let outcome = run(chain).walk(&r, &mut g, &no_cancel());
+        assert_eq!(outcome, Outcome::CapReached { at: "designer".into(), max_iterations: 2 });
+    }
+
+    #[test]
+    fn a_human_node_is_never_retried() {
+        let mut chain = two_node_chain(vec![]);
+        chain.nodes.remove("programmer");
+        chain.retry = RetryPolicy { max_attempts: 3 };
+        chain.nodes.insert("designer".into(), human_node("designer"));
+        let r = FakeRunner::new(&[("designer", vec![Err("no answer".into())])]);
+        let outcome = run(chain).walk(&r, &mut FakeGates::none(), &no_cancel());
+        assert_eq!(r.calls().len(), 1, "a human node must never be retried");
+        assert!(matches!(outcome, Outcome::RetriesExhausted { attempts: 1, .. }), "{outcome:?}");
+    }
+
+    /// Stop during a human wait must yield `Cancelled`, matching an agent
+    /// turn's own cancellation shape — not `Failed`.
+    #[test]
+    fn stop_during_a_human_wait_yields_cancelled_not_failed() {
+        struct BlockingHuman {
+            release: Mutex<Option<mpsc::Receiver<()>>>,
+            started: Mutex<Option<mpsc::Sender<()>>>,
+        }
+        impl NodeRunner for BlockingHuman {
+            fn run_turn(&self, _role: &str, _instruction: &str, _attempt: u32) -> TurnResult {
+                unreachable!("this node is a human node")
+            }
+            fn human_turn(&self, role: &str, _instruction: &str) -> TurnResult {
+                if let Some(tx) = self.started.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                if let Some(rx) = self.release.lock().unwrap().take() {
+                    rx.recv().ok();
+                }
+                Err(format!("`{role}` cancelled"))
+            }
+        }
+        let mut chain = two_node_chain(vec![]);
+        chain.nodes.remove("programmer");
+        chain.nodes.insert("designer".into(), human_node("designer"));
+        let cancel = AtomicBool::new(false);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let runner = BlockingHuman { release: Mutex::new(Some(release_rx)), started: Mutex::new(Some(started_tx)) };
+        let mut chain_run = run(chain);
+
+        let outcome = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| chain_run.walk(&runner, &mut FakeGates::none(), &cancel));
+            started_rx.recv().unwrap();
+            cancel.store(true, Ordering::SeqCst);
+            release_tx.send(()).unwrap();
+            handle.join().unwrap()
+        });
         assert_eq!(outcome, Outcome::Cancelled { at: vec!["designer".into()] });
     }
 

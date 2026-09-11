@@ -2946,7 +2946,9 @@ fn unavailable_agents(chain: &chains::Chain, installed: impl Fn(&str) -> bool) -
     let mut missing: Vec<String> = chain
         .nodes
         .values()
-        .filter(|node| !installed(&node.agent))
+        // Human nodes bind no agent (D11) — otherwise this preflight would
+        // block every chain containing one.
+        .filter(|node| node.kind == chains::NodeKind::Agent && !installed(&node.agent))
         .map(|node| format!("`{}` needs {}", node.role, node.agent))
         .collect();
     if missing.is_empty() {
@@ -3084,7 +3086,10 @@ fn launch_chain_run(
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     app.state::<Harness>().chain_cancels.lock().unwrap().insert(id.clone(), cancel.clone());
     tokio::task::spawn_blocking(move || {
-        let budget = std::time::Duration::from_secs(chain.timeout_seconds);
+        let mut run = chain_runner::ChainRun::new(id.clone(), chain.clone(), seed_input);
+        // Shared with `run` (D12): a node's human turn and an approval gate
+        // both pause the same clock this run's own timeout check consults.
+        let budget = run.budget();
         let mut runner = chain_exec::AcpNodeRunner::new(
             app.clone(),
             project_hash.clone(),
@@ -3092,6 +3097,7 @@ fn launch_chain_run(
             id.clone(),
             chain.clone(),
             cancel.clone(),
+            budget.clone(),
         );
         let mut gates = chain_exec::AcpGateEvaluator::new(
             app.clone(),
@@ -3102,7 +3108,6 @@ fn launch_chain_run(
             budget,
             cancel.clone(),
         );
-        let mut run = chain_runner::ChainRun::new(id.clone(), chain.clone(), seed_input);
         let outcome = match replay_start {
             Some((role, inputs)) => run.walk_from(&runner, &mut gates, &cancel, &role, inputs),
             None => run.walk(&runner, &mut gates, &cancel),
@@ -3128,6 +3133,7 @@ fn launch_chain_run(
                 state: None,
                 outcome: Some(outcome),
                 awaiting_approval: None,
+                awaiting_human: None,
                 session_id: None,
                 cost: None,
             },
@@ -3223,6 +3229,22 @@ async fn resolve_chain_gate(
         .cloned()
         .ok_or("that chain run isn't waiting at an approval gate")?;
     sender.send(approval).map_err(|_| "that chain run is no longer listening".to_string())
+}
+
+/// D9: answers a suspended human-in-the-loop node with the user's free text.
+/// Shaped like `resolve_chain_gate` just above, including its deliberate
+/// error for a run that isn't actually waiting there.
+#[tauri::command]
+async fn resolve_chain_human(app: tauri::AppHandle, run_id: String, role: String, text: String) -> Res<()> {
+    let harness: tauri::State<'_, Harness> = app.state();
+    let sender = harness
+        .chain_humans
+        .lock()
+        .unwrap()
+        .get(&(run_id, role))
+        .cloned()
+        .ok_or("that chain run isn't waiting on a human node")?;
+    sender.send(text).map_err(|_| "that chain run is no longer listening".to_string())
 }
 
 /// What the project root suggests running. A proposal the user confirms —
@@ -3819,6 +3841,7 @@ pub fn run() {
             rerun_chain_run,
             cancel_chain_run,
             resolve_chain_gate,
+            resolve_chain_human,
             mac_rounded_corners::enable_rounded_corners,
             mac_rounded_corners::enable_modern_window_style,
             mac_rounded_corners::reposition_traffic_lights,
@@ -3947,7 +3970,8 @@ mod tests {
                             role.to_string(),
                             ChainNode {
                                 role: role.to_string(),
-                                guideline: String::new(),
+                                kind: crate::chains::NodeKind::Agent,
+                guideline: String::new(),
                                 agent: agent.to_string(),
                                 model: None,
                                 retry: None,
@@ -3988,6 +4012,15 @@ mod tests {
             let programmer = err.find("`programmer`").unwrap();
             assert!(designer < programmer, "{err}");
         }
+
+        /// D11: a human node binds no agent, so the preflight must not block
+        /// a chain made entirely of them.
+        #[test]
+        fn a_chain_of_only_human_nodes_is_not_blocked() {
+            let mut c = chain(&[("designer", "")]);
+            c.nodes.get_mut("designer").unwrap().kind = crate::chains::NodeKind::Human;
+            assert!(crate::unavailable_agents(&c, |_| false).is_ok());
+        }
     }
 
     mod chain_rerun_start {
@@ -4002,7 +4035,8 @@ mod tests {
                     role.to_string(),
                     ChainNode {
                         role: role.into(),
-                        guideline: if role == "judge" { "snapshot judge".into() } else { String::new() },
+                        kind: crate::chains::NodeKind::Agent,
+                guideline: if role == "judge" { "snapshot judge".into() } else { String::new() },
                         agent: "codex".into(),
                         model: None,
                         retry: None,

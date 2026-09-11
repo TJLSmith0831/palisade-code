@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Badge, Button, Group, Paper, Stack, Text, TextInput } from "@mantine/core";
-import { IconAlertTriangle, IconPlayerStop } from "@tabler/icons-react";
+import { IconAlertTriangle, IconChevronDown, IconChevronRight, IconPlayerStop } from "@tabler/icons-react";
 import * as api from "./api";
 import { useElapsed } from "./useElapsed";
 import { outcomeText, type RunView } from "./ChainCanvas";
+import ChainRunHistory from "./ChainRunHistory";
 
 /**
  * The chat-side run view: `RunView` plus the two fields the card needs that
@@ -28,6 +29,9 @@ type Props = {
    * component.
    */
   onGateResolved?: (decision: "approve" | "sendBack" | "reject") => void;
+  /** Opens a past run from this chain's history (D8) — reachable from chat
+   * without leaving the thread, same as it already is from the chains panel. */
+  onOpenRun?: (runId: string) => void;
 };
 
 // Duplicated (in miniature) from ChainCanvas.tsx's own stateName/stateLabel:
@@ -72,10 +76,16 @@ function stoppedAt(outcome: api.ChainOutcome): string | undefined {
  * state, transcript click-through, gate resolution, Stop, re-run — must be
  * reachable here too.
  */
-export default function ChainRunCard({ run, projectHash, onTranscript, onGateResolved }: Props) {
+export default function ChainRunCard({ run, projectHash, onTranscript, onGateResolved, onOpenRun }: Props) {
+  // Collapsed by default (D8): invoking a chain must not flood the thread
+  // with runs the user didn't ask about.
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [pending, setPending] = useState<"approve" | "sendBack" | "reject" | null>(null);
   const [sendingBack, setSendingBack] = useState(false);
   const [note, setNote] = useState("");
+  const [humanText, setHumanText] = useState("");
+  const [submittingHuman, setSubmittingHuman] = useState(false);
+  const [humanSubmitted, setHumanSubmitted] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +107,29 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     }
     lastResolved.current = resolved;
   }, [run.awaiting?.resolved, run.awaiting?.from]);
+
+  const lastHumanRole = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const role = run.awaitingHuman?.role;
+    if (role !== lastHumanRole.current) {
+      setHumanText("");
+      setHumanSubmitted(false);
+    }
+    lastHumanRole.current = role;
+  }, [run.awaitingHuman?.role]);
+
+  const submitHuman = async () => {
+    if (!run.awaitingHuman || !humanText.trim()) return;
+    setSubmittingHuman(true);
+    try {
+      await api.resolveChainHuman(run.runId, run.awaitingHuman.role, humanText);
+      setHumanSubmitted(true);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSubmittingHuman(false);
+    }
+  };
 
   const decide = async (decision: "approve" | "sendBack" | "reject") => {
     setPending(decision);
@@ -129,6 +162,18 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       setError(String(err));
     } finally {
       setRerunning(null);
+    }
+  };
+
+  // Re-running a *past* run from the history section below is the same
+  // operation as the card's own "Re-run" (D8) — just aimed at a different
+  // run id, so it goes through the same `rerunChainRun` call rather than a
+  // second path.
+  const rerunFromHistory = async (runId: string, fromRole?: string) => {
+    try {
+      await api.rerunChainRun(projectHash, runId, fromRole, run.threadId);
+    } catch (err) {
+      setError(String(err));
     }
   };
 
@@ -273,6 +318,44 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
         </Stack>
       )}
 
+      {run.awaitingHuman && (
+        <Stack gap={4} mt={4} data-testid="chain-run-card-human">
+          <Text size="xs" fw={600}>
+            {run.awaitingHuman.role} needs your input
+          </Text>
+          <Text
+            size="xs"
+            data-testid="chain-run-card-human-instruction"
+            style={{ maxHeight: "10em", overflow: "auto", whiteSpace: "pre-wrap" }}
+          >
+            {run.awaitingHuman.instruction}
+          </Text>
+          {humanSubmitted ? (
+            <Text size="xs" data-testid="chain-run-card-human-submitted">
+              Submitted
+            </Text>
+          ) : (
+            <TextInput
+              size="xs"
+              autoFocus
+              placeholder="Your response"
+              value={humanText}
+              onChange={(e) => setHumanText(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && humanText.trim()) void submitHuman();
+              }}
+              rightSection={
+                <Button size="compact-xs" disabled={!humanText.trim() || submittingHuman} onClick={() => void submitHuman()}>
+                  Send
+                </Button>
+              }
+              rightSectionWidth={50}
+              data-testid="chain-run-card-human-input"
+            />
+          )}
+        </Stack>
+      )}
+
       {run.outcome && (
         <Group gap={6} mt={4}>
           <Text size="xs" c="dimmed">
@@ -307,6 +390,30 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
         <Alert variant="light" color="red" icon={<IconAlertTriangle size={14} />} mt={4} withCloseButton onClose={() => setError(null)}>
           <Text size="xs">{error}</Text>
         </Alert>
+      )}
+
+      {/* Past runs (D8): reachable from chat, not only the chains panel —
+          collapsed by default so invoking a chain doesn't flood the thread. */}
+      <Button
+        size="compact-xs"
+        variant="subtle"
+        color="gray"
+        mt={4}
+        leftSection={historyOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+        onClick={() => setHistoryOpen((v) => !v)}
+        data-testid="chain-run-card-history-toggle"
+      >
+        Past runs
+      </Button>
+      {historyOpen && (
+        <div data-testid="chain-run-card-history-section">
+          <ChainRunHistory
+            projectHash={projectHash}
+            chainName={run.chain}
+            onOpenRun={onOpenRun}
+            onRerun={rerunFromHistory}
+          />
+        </div>
       )}
     </Paper>
   );

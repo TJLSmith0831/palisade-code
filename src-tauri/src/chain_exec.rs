@@ -16,7 +16,7 @@ use tauri::{Emitter, Manager};
 
 use crate::acp_events::Cost;
 use crate::chain_history::{self, NodeCost};
-use crate::chain_runner::{Approval, GateEvaluator, NodeRunner, NodeState, Outcome, TurnResult};
+use crate::chain_runner::{Approval, Budget, GateEvaluator, NodeRunner, NodeState, Outcome, TurnResult};
 use crate::chains::Chain;
 use crate::executor::{Envelope, ExecutorEvent, Harness, TurnEnd, TurnWatch};
 use crate::store::Res;
@@ -37,6 +37,10 @@ pub struct ChainEvent {
     pub outcome: Option<Outcome>,
     /// Set while a run is suspended at an approval gate.
     pub awaiting_approval: Option<AwaitingApproval>,
+    /// Set while a run is suspended at a human-in-the-loop node (D9),
+    /// resolved at the same `awaiting` slot as `awaiting_approval` (D17) —
+    /// one pause surface, not two.
+    pub awaiting_human: Option<AwaitingHuman>,
     /// The session backing `role`'s turn, so the view can open its transcript.
     pub session_id: Option<String>,
     /// `role`'s most recent reported cost (D-d) — absent when its agent
@@ -53,6 +57,16 @@ pub struct AwaitingApproval {
     /// `from`'s actual output. Both deciding surfaces render it inline — a
     /// link is not evidence (PLAN §4.5, the critique's P1).
     pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwaitingHuman {
+    pub role: String,
+    /// The same composed guideline/seed/upstream text an agent node in this
+    /// position would have received — the human sees exactly what an agent
+    /// would have been prompted with (D9).
+    pub instruction: String,
 }
 
 /// Every node's most recent reported cost (D-d). `usage.cost` is already
@@ -109,6 +123,9 @@ pub struct AcpNodeRunner {
     /// transition. Retries are attempts within one iteration and do not bump
     /// this number.
     iterations: Mutex<HashMap<String, u32>>,
+    /// The run's shared, pause-aware wall clock (D12) — a human turn pauses
+    /// it for the same clock the scheduler's own timeout check consults.
+    budget: Arc<Budget>,
 }
 
 impl AcpNodeRunner {
@@ -119,6 +136,7 @@ impl AcpNodeRunner {
         run_id: String,
         chain: Chain,
         cancel: Arc<AtomicBool>,
+        budget: Arc<Budget>,
     ) -> Self {
         Self {
             app,
@@ -130,6 +148,7 @@ impl AcpNodeRunner {
             cancel,
             costs: NodeCosts::default(),
             iterations: Mutex::new(HashMap::new()),
+            budget,
         }
     }
 
@@ -255,6 +274,7 @@ impl AcpNodeRunner {
             state: None,
             outcome: None,
             awaiting_approval: None,
+            awaiting_human: None,
             session_id: None,
             cost: None,
         }
@@ -355,13 +375,60 @@ impl NodeRunner for AcpNodeRunner {
         }
     }
 
+    /// A human node's turn (D9): parks on a channel `resolve_chain_human`
+    /// sends into, taking a `Budget::pause()` guard so the run's wall clock
+    /// doesn't advance while waiting, and polling the same cancellation flag
+    /// `run_turn`'s turn-wait loop does.
+    fn human_turn(&self, role: &str, instruction: &str) -> TurnResult {
+        post_thread_summary(
+            &self.app,
+            &self.project_hash,
+            &self.thread_id,
+            &format!("Chain `{}` is waiting for your input at **{role}**.", self.chain.name),
+        );
+        let (tx, rx) = mpsc::channel();
+        self.harness().chain_humans.lock().unwrap().insert((self.run_id.clone(), role.to_string()), tx);
+        self.emit(ChainEvent {
+            role: Some(role.to_string()),
+            awaiting_human: Some(AwaitingHuman { role: role.to_string(), instruction: instruction.to_string() }),
+            ..self.base_event()
+        });
+
+        let _pause = self.budget.pause();
+        let result = loop {
+            if self.cancel.load(Ordering::SeqCst) {
+                break Err(format!("`{role}` cancelled"));
+            }
+            match rx.recv_timeout(CANCEL_POLL) {
+                Ok(text) => break Ok(text),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break Err("the human node was torn down".to_string()),
+            }
+        };
+        drop(_pause);
+        self.harness().chain_humans.lock().unwrap().remove(&(self.run_id.clone(), role.to_string()));
+
+        if let Ok(output) = &result {
+            *self.iterations.lock().unwrap().entry(role.to_string()).or_insert(0) += 1;
+            if let Err(err) =
+                chain_history::record_output(&crate::palisade_home(), &self.project_hash, &self.run_id, role, output.clone())
+            {
+                eprintln!("chain run {}: could not persist {role}'s output: {err}", self.run_id);
+            }
+        }
+        result
+    }
+
     fn on_state(&self, role: &str, state: NodeState) {
         // ChainRun announces Executing/Retrying before it invokes
         // `run_turn`. Create the role session here so each persisted/live
         // attempt transition has its transcript id rather than requiring a
         // second synthetic event.
+        // A human node binds no agent (D9/D11) — never start a session for
+        // one, even on an Executing announcement.
+        let is_human = self.chain.nodes.get(role).is_some_and(|n| n.kind == crate::chains::NodeKind::Human);
         let session_id = match state {
-            NodeState::Executing | NodeState::Retrying(_) => self.session_for(role).ok(),
+            NodeState::Executing | NodeState::Retrying(_) if !is_human => self.session_for(role).ok(),
             _ => self.sessions.lock().unwrap().get(role).cloned(),
         };
         let cost = self.costs.get(role);
@@ -385,13 +452,13 @@ pub struct AcpGateEvaluator {
     thread_id: String,
     run_id: String,
     chain: String,
-    /// The run's wall clock (D18). A gate blocks on a human, so it has to
-    /// enforce the budget itself — the walk loop's own check can't run while
-    /// the gate is waiting.
-    budget: Duration,
+    /// The run's shared, pause-aware wall clock (D12) — a gate pauses it for
+    /// as long as it waits on a human, rather than enforcing its own
+    /// deadline against it (that was the D12 bug: a paused approval gate
+    /// could time out a run the user was about to approve).
+    budget: Arc<Budget>,
     /// Shared with `cancel_chain_run`; approval waiting must observe Stop as
-    /// promptly as a live ACP turn does, rather than sleeping for the full
-    /// run budget.
+    /// promptly as a live ACP turn does, rather than waiting forever.
     cancel: Arc<AtomicBool>,
 }
 
@@ -402,7 +469,7 @@ impl AcpGateEvaluator {
         thread_id: String,
         run_id: String,
         chain: String,
-        budget: Duration,
+        budget: Arc<Budget>,
         cancel: Arc<AtomicBool>,
     ) -> Self {
         Self { app, project_hash, thread_id, run_id, chain, budget, cancel }
@@ -456,14 +523,17 @@ impl GateEvaluator for AcpGateEvaluator {
                     to: to_role.to_string(),
                     output: output.to_string(),
                 }),
+                awaiting_human: None,
                 session_id: None,
                 cost: None,
             },
         );
-        // Bounded by the run's own budget: a gate nobody ever answers would
-        // otherwise hold the run's thread open forever, since the walk loop's
-        // timeout check can't run while this call is blocked.
-        let decision = wait_for_approval(&rx, &self.cancel, self.budget, from_role);
+        // Pauses the run's shared wall clock for as long as this blocks
+        // (D12) — a gate nobody ever answers can leave the run open
+        // indefinitely; Stop is still observed promptly below.
+        let _pause = self.budget.pause();
+        let decision = wait_for_approval(&rx, &self.cancel);
+        drop(_pause);
         self.app.state::<Harness>().chain_gates.lock().unwrap().remove(&self.run_id);
         decision
     }
@@ -471,26 +541,15 @@ impl GateEvaluator for AcpGateEvaluator {
 
 /// Waits for a gate decision in short slices so the shared run cancellation
 /// flag can interrupt it. Kept independent of Tauri for a fast deterministic
-/// regression test of the P0 Stop path.
-fn wait_for_approval(
-    rx: &mpsc::Receiver<Approval>,
-    cancel: &AtomicBool,
-    budget: Duration,
-    from_role: &str,
-) -> Result<Approval, String> {
-    let deadline = Instant::now() + budget;
+/// regression test of the P0 Stop path. Bounded only by cancellation, not by
+/// the run's timeout (D12) — the caller has already paused the run's budget
+/// for the duration of this wait.
+fn wait_for_approval(rx: &mpsc::Receiver<Approval>, cancel: &AtomicBool) -> Result<Approval, String> {
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Err("chain run cancelled while awaiting approval".to_string());
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(format!(
-                "nobody answered the approval gate after {from_role} within {} minutes",
-                budget.as_secs() / 60
-            ));
-        }
-        match rx.recv_timeout(remaining.min(CANCEL_POLL)) {
+        match rx.recv_timeout(CANCEL_POLL) {
             Ok(decision) => return Ok(decision),
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err("the approval gate was torn down".to_string()),
@@ -540,7 +599,7 @@ mod tests {
         });
 
         let started = Instant::now();
-        let result = wait_for_approval(&rx, &cancel, Duration::from_secs(30 * 60), "reviewer");
+        let result = wait_for_approval(&rx, &cancel);
         assert_eq!(result.unwrap_err(), "chain run cancelled while awaiting approval");
         assert!(started.elapsed() < Duration::from_secs(1), "Stop must not wait out the gate budget");
     }
@@ -548,7 +607,8 @@ mod tests {
     // ---------------------------------------------------- §4.2: cancellation
 
     fn node(role: &str) -> ChainNode {
-        ChainNode { role: role.into(), guideline: String::new(), agent: "claude-code".into(), model: None, retry: None }
+        ChainNode { role: role.into(), kind: crate::chains::NodeKind::Agent,
+                guideline: String::new(), agent: "claude-code".into(), model: None, retry: None }
     }
 
     /// entry -> leaf0, entry -> leaf1; both leaves are sinks, dispatched in

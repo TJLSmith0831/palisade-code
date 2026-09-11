@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ActionIcon,
+  Button,
   Group,
   Menu,
   Text,
@@ -38,12 +39,48 @@ type Props = {
   onOpenRun?: (runId: string) => void;
   /** Re-runs a past record; `fromRole` starts from that node's recorded inputs. */
   onRerun?: (runId: string, fromRole?: string) => void;
+  /** Installed agents (D16), used to bind the worked example's agent node —
+   *  the same list `ChainCanvas`'s own picker offers. */
+  agents?: { id: string; name: string }[];
 };
 
-export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onRerun }: Props) {
+/**
+ * The empty-state worked example (D16): a two-node chain — an agent drafts,
+ * a human reviews — small enough to read at a glance while still
+ * demonstrating the one genuinely new capability (D9). `agentId` binds the
+ * drafter to whatever is actually installed; `chains::save`'s own validation
+ * is what a schema change breaking this shape would fail against.
+ */
+export function workedExampleChain(agentId: string): api.Chain {
+  return {
+    name: "Example - draft then review",
+    nodes: {
+      drafter: {
+        role: "drafter",
+        kind: "agent",
+        guideline: "Write a short first draft answering the request.",
+        agent: agentId,
+      },
+      reviewer: {
+        role: "reviewer",
+        kind: "human",
+        guideline: "Read the draft. Type your own edit, or retype it as-is to approve it.",
+        agent: "",
+      },
+    },
+    edges: [{ from: "drafter", to: "reviewer" }],
+    entry: "drafter",
+    timeoutSeconds: 1800,
+    retry: { maxAttempts: 2 },
+    layout: { drafter: { x: 60, y: 120 }, reviewer: { x: 340, y: 120 } },
+  };
+}
+
+export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onRerun, agents }: Props) {
   const [chains, setChains] = useState<api.Chain[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [exampleBusy, setExampleBusy] = useState(false);
 
   useEffect(() => {
     if (!projectHash) {
@@ -74,6 +111,25 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
     }
   };
 
+  /** Saves the worked example (D16) if it isn't already there, then opens
+   *  it — same path as clicking any other chain row. */
+  const openExample = async () => {
+    if (!projectHash) return;
+    setExampleBusy(true);
+    try {
+      const example = workedExampleChain(agents?.[0]?.id ?? "claude-code");
+      if (!chains.some((c) => c.name === example.name)) {
+        await api.saveChain(projectHash, example);
+        announceChainsChanged();
+      }
+      onOpen(example.name);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setExampleBusy(false);
+    }
+  };
+
   return (
     <>
       <div className="ds-panel-head">
@@ -101,10 +157,26 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
         )}
 
         {chains.length === 0 && !error && (
-          <Text size="xs" c="dimmed" p="xs">
-            No chains yet. A chain wires several agents into one pipeline —
-            build one, then run it with <code>|=</code> from any thread.
-          </Text>
+          <div className="ds-chains-empty" data-testid="chains-panel-empty">
+            <Text size="xs" c="dimmed" p="xs">
+              No chains yet. Build one on the canvas — nodes bound to
+              installed agents, connected by edges — then run it with{" "}
+              <code>|=</code> from any thread, from a thread's model picker,
+              or from here. A saved run's history stays reachable from
+              wherever it was invoked.
+            </Text>
+            <Button
+              size="xs"
+              variant="default"
+              mx="xs"
+              mb="xs"
+              loading={exampleBusy}
+              onClick={() => void openExample()}
+              data-testid="chains-panel-open-example"
+            >
+              Open a worked example
+            </Button>
+          </div>
         )}
 
         {chains.map((chain) => (
@@ -152,7 +224,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
                       leftSection={<IconPlayerPlay size={14} />}
                       onClick={() => onRun(chain.name, "")}
                     >
-                      Run on this thread
+                      Run
                     </Menu.Item>
                   )}
                   <Menu.Item

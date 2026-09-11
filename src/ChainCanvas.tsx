@@ -8,6 +8,7 @@ import {
   Modal,
   NumberInput,
   Select,
+  SegmentedControl,
   Stack,
   Text,
   TextInput,
@@ -124,6 +125,42 @@ export function turnCeiling(draft: Draft): number {
 }
 
 /**
+ * The widest fan-out tier the chain can actually dispatch at once — how many
+ * nodes could be ready in the same round, ignoring `maxParallel` (D13). A
+ * layered BFS over forward (non-loop) edges only, matching the runner's own
+ * barrier rule: a loop-closing edge never counts toward its target's forward
+ * in-degree, so a loop head's width isn't held hostage by its own back edge.
+ */
+export function concurrentWidth(draft: Draft): number {
+  const loopIndices = loopEdgeIndices(draft);
+  const forwardIn = new Map<string, number>();
+  for (const role of Object.keys(draft.nodes)) forwardIn.set(role, 0);
+  draft.edges.forEach((edge, index) => {
+    if (loopIndices.has(index)) return;
+    forwardIn.set(edge.to, (forwardIn.get(edge.to) ?? 0) + 1);
+  });
+  let frontier = Object.keys(draft.nodes).filter((role) => (forwardIn.get(role) ?? 0) === 0);
+  const remaining = new Map(forwardIn);
+  const seen = new Set<string>();
+  let width = frontier.length;
+  while (frontier.length) {
+    const next: string[] = [];
+    for (const role of frontier) {
+      seen.add(role);
+      draft.edges.forEach((edge, index) => {
+        if (edge.from !== role || loopIndices.has(index)) return;
+        const left = (remaining.get(edge.to) ?? 0) - 1;
+        remaining.set(edge.to, left);
+        if (left === 0 && !seen.has(edge.to)) next.push(edge.to);
+      });
+    }
+    width = Math.max(width, next.length);
+    frontier = next;
+  }
+  return width;
+}
+
+/**
  * Patches one field of `role`'s node. The Role field is uncontrolled and
  * renames on blur, so moving from Role into another field retires the old key
  * between render and event — and `{ ...d.nodes[role] }` on a key that is gone
@@ -148,7 +185,8 @@ export function draftProblem(draft: Draft): string | null {
   // Keyed, not `n.role`: the map key *is* the role, and a node whose `role`
   // field went missing is precisely the case that used to report itself as
   // "undefined has no agent bound to it".
-  const missingAgent = Object.entries(draft.nodes).find(([, n]) => !n.agent);
+  // A human node binds no agent (D9/D11) — the check is meaningless for it.
+  const missingAgent = Object.entries(draft.nodes).find(([, n]) => n.kind !== "human" && !n.agent);
   if (missingAgent) return `${missingAgent[0]} has no agent bound to it.`;
   const loops = loopEdgeIndices(draft);
   for (const index of loops) {
@@ -173,6 +211,10 @@ type Props = {
   verifyCommands: string[];
   /** Runs this chain on the active thread; absent when there is no thread. */
   onRun?: (name: string, seed: string) => void;
+  /** Fired after a successful save, with the saved name — D15: the tab that
+   *  built this chain adopts its identity, and stops opening a second tab
+   *  beside its own "new chain" one. */
+  onSaved?: (name: string) => void;
   /** The shell owns transcript navigation; the canvas only names the session. */
   onTranscript?: (sessionId: string) => void;
   /** Live run state, when this chain is the one running. */
@@ -203,6 +245,9 @@ export type RunView = {
     taskCalls?: Array<{ title: string; status: "running" | "done" | "failed"; result?: string }>;
   }>;
   awaiting: { from: string; to: string; output?: string; resolved?: "approve" | "sendBack" | "reject" } | null;
+  /** A suspended human-in-the-loop node (D9) — resolved at the same
+   * `awaiting` slot as an approval gate (D17), not a second surface. */
+  awaitingHuman?: { role: string; instruction: string; resolved?: string } | null;
   outcome: api.ChainOutcome | null;
 };
 
@@ -212,6 +257,7 @@ export default function ChainCanvas({
   agents,
   verifyCommands,
   onRun,
+  onSaved,
   onTranscript,
   run,
   onGateResolved,
@@ -307,6 +353,7 @@ export default function ChainCanvas({
   const loops = useMemo(() => loopEdgeIndices(draft), [draft]);
   const problem = draftProblem(draft);
   const ceiling = useMemo(() => turnCeiling(draft), [draft]);
+  const width = useMemo(() => concurrentWidth(draft), [draft]);
   // Compared against a JSON snapshot rather than a boolean flag so any edit —
   // rename, drag, gate change — trips it, and a Save (or a fresh load) clears
   // it the same way.
@@ -419,6 +466,7 @@ export default function ChainCanvas({
       persisted.current = draft.name;
       savedSnapshot.current = JSON.stringify(draft);
       announceChainsChanged();
+      onSaved?.(draft.name);
       setError(null);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
@@ -518,9 +566,19 @@ export default function ChainCanvas({
    *  node editor never opens — the whole surface becomes mouse-hostile. */
   const DRAG_SLOP = 4;
 
+  /** Set on pointerup when the just-finished drag moved the node, and
+   *  read-and-cleared by the click that follows it (D14). `dragging.current`
+   *  itself can't serve this purpose: `onNodePointerUp` nulls it before the
+   *  click fires (pointerup always precedes click), so a guard reading it at
+   *  click time always saw `null`. Reset on the next pointerdown so an
+   *  interrupted gesture (pointerup with no matching click) can't leave it
+   *  stuck suppressing a later, unrelated click. */
+  const justDragged = useRef(false);
+
   const onNodePointerDown = (event: React.PointerEvent, role: string) => {
     if (watching) return;
     event.stopPropagation();
+    justDragged.current = false;
     const p = positions[role];
     dragging.current = {
       role,
@@ -546,6 +604,7 @@ export default function ChainCanvas({
     setDraft((d) => ({ ...d, layout: { ...d.layout, [drag.role]: { x, y } } }));
   };
   const onNodePointerUp = () => {
+    if (dragging.current?.moved) justDragged.current = true;
     dragging.current = null;
   };
 
@@ -588,6 +647,15 @@ export default function ChainCanvas({
         {dirty && !watching && (
           <Text size="xs" c="dimmed" data-testid="chain-dirty">
             Unsaved changes
+          </Text>
+        )}
+        {/* D13: states how wide the chain actually runs, so a user can tell
+            sequential from parallel without running it. Scoped to this one
+            line — no tier layout, no run-time grouping treatment. */}
+        {nodeCount > 0 && (
+          <Text size="xs" c="dimmed" data-testid="chain-width">
+            Runs {width === 1 ? "1 node" : `up to ${width} nodes`} at once
+            {!!draft.maxParallel && ` (capped at ${draft.maxParallel})`}
           </Text>
         )}
         {onRun && persisted.current && (
@@ -802,8 +870,11 @@ export default function ChainCanvas({
                 onPointerDown={(e) => onNodePointerDown(e, role)}
                 onClick={() => {
                   // A click that dragged the node was a move, not a request
-                  // to edit it.
-                  if (dragging.current?.moved) return;
+                  // to edit it (D14).
+                  if (justDragged.current) {
+                    justDragged.current = false;
+                    return;
+                  }
                   activate();
                 }}
                 // A double-click on a node used to bubble up to the surface's
@@ -866,10 +937,29 @@ export default function ChainCanvas({
         </div>
 
         {roles.length === 0 && (
-          <div className="ds-chain-empty">
-            <Text size="sm" c="dimmed">
-              An empty canvas. Add a node, bind it to an agent, and connect it to
-              the next one.
+          <div className="ds-chain-empty" data-testid="chain-canvas-empty">
+            <Text size="sm" fw={600}>
+              Nothing here yet
+            </Text>
+            <Text size="xs" c="dimmed">
+              A <b>node</b> is one role bound to an installed agent (or, for a
+              human-in-the-loop step, to a person — you). Click{" "}
+              <b>+ Node</b> to add one.
+            </Text>
+            <Text size="xs" c="dimmed">
+              An <b>edge</b> connects two nodes: click a node, then the one
+              it should hand its output to. A forward edge just pipes output
+              downstream.
+            </Text>
+            <Text size="xs" c="dimmed">
+              A <b>gate</b> on an edge makes the run pause there — either a
+              named <code>verify</code> command, or a human's approval —
+              before continuing.
+            </Text>
+            <Text size="xs" c="dimmed">
+              A <b>loop</b> is an edge that points back to an earlier node.
+              It needs a gate and a maximum iteration count, so it always
+              has a way to stop.
             </Text>
           </div>
         )}
@@ -907,34 +997,53 @@ export default function ChainCanvas({
               onBlur={(e) => renameNode(editing, e.target.value.trim())}
               data-testid="node-role"
             />
-            <Select
-              label="Agent"
-              description="Which installed agent runs this role."
-              data={agents.map((a) => ({ value: a.id, label: a.name }))}
-              value={node.agent || null}
+            {/* D9: a human node contributes its own free text instead of
+                running an agent — hides the agent/model pickers, which are
+                meaningless for it (D10). */}
+            <SegmentedControl
+              data-testid="node-kind"
+              fullWidth
+              value={node.kind === "human" ? "human" : "agent"}
               onChange={(value) =>
-                value && setDraft((d) => applyNodePatch(d, editing, { agent: value }))
+                setDraft((d) => applyNodePatch(d, editing, { kind: value === "human" ? "human" : "agent" }))
               }
-              data-testid="node-agent"
+              data={[
+                { label: "Agent", value: "agent" },
+                { label: "Human", value: "human" },
+              ]}
             />
-            <Select
-              label="Model"
-              description="Which model that agent runs on. Left empty, the node follows the thread's model."
-              placeholder={modelsLoading ? "Loading models…" : models.length ? "Agent default" : "No models offered"}
-              disabled={modelsLoading || !models.length}
-              clearable
-              // Agents offer well over a hundred models; an unfiltered list
-              // is unscrollable in practice, the same reason the chat's
-              // picker has a search box.
-              searchable
-              nothingFoundMessage="No model by that name"
-              data={models.map((m) => ({ value: m.id, label: m.name }))}
-              value={node.model ?? null}
-              onChange={(value) =>
-                setDraft((d) => applyNodePatch(d, editing, { model: value }))
-              }
-              data-testid="node-model"
-            />
+            {node.kind !== "human" && (
+              <>
+                <Select
+                  label="Agent"
+                  description="Which installed agent runs this role."
+                  data={agents.map((a) => ({ value: a.id, label: a.name }))}
+                  value={node.agent || null}
+                  onChange={(value) =>
+                    value && setDraft((d) => applyNodePatch(d, editing, { agent: value }))
+                  }
+                  data-testid="node-agent"
+                />
+                <Select
+                  label="Model"
+                  description="Which model that agent runs on. Left empty, the node follows the thread's model."
+                  placeholder={modelsLoading ? "Loading models…" : models.length ? "Agent default" : "No models offered"}
+                  disabled={modelsLoading || !models.length}
+                  clearable
+                  // Agents offer well over a hundred models; an unfiltered list
+                  // is unscrollable in practice, the same reason the chat's
+                  // picker has a search box.
+                  searchable
+                  nothingFoundMessage="No model by that name"
+                  data={models.map((m) => ({ value: m.id, label: m.name }))}
+                  value={node.model ?? null}
+                  onChange={(value) =>
+                    setDraft((d) => applyNodePatch(d, editing, { model: value }))
+                  }
+                  data-testid="node-model"
+                />
+              </>
+            )}
             <Textarea
               label="Guideline"
               description="How this role should act. Applied on every turn, on top of the original request and the previous step's output — retries start a fresh session but see the same upstream output."

@@ -290,6 +290,29 @@ export function useOpenTabs() {
     );
   }, []);
 
+  /**
+   * Gives a chain tab the identity of the chain it was just saved as (D15) —
+   * `from` is the tab's chain-tab key before saving (`null` for an unnamed
+   * one, so its key was `chain:new`), `to` the name it was just saved under.
+   * A no-op when `to` already matches, so saving an already-named chain
+   * repeatedly doesn't thrash `activePath`.
+   */
+  const renameChain = useCallback((from: string | null, to: string) => {
+    if (from === to) return;
+    setTabs((current) =>
+      current.map((tab) =>
+        tab.type === "chain" && tab.chainName === from
+          ? { ...tab, chainName: to }
+          : tab
+      )
+    );
+    setActivePath((active) =>
+      active === tabKey({ type: "chain", chainName: from, dirty: false, mdPreview: false })
+        ? tabKey({ type: "chain", chainName: to, dirty: false, mdPreview: false })
+        : active
+    );
+  }, []);
+
   const setDirty = useCallback((path: string, dirty: boolean) => {
     setTabs((current) => {
       const tab = current.find((t) => tabKey(t) === path);
@@ -366,6 +389,7 @@ export function useOpenTabs() {
     close,
     dropPath,
     rename,
+    renameChain,
     setDirty,
     setMdPreview,
     closeAll,

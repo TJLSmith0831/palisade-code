@@ -12,6 +12,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::Res;
 
+/// Whether a node runs an agent or pauses for a human's own text (D9/D10). A
+/// node with no `kind` on disk deserializes as `Agent`, so every chain saved
+/// before human nodes existed keeps its exact meaning — the serde default is
+/// the entire migration.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum NodeKind {
+    #[default]
+    Agent,
+    Human,
+}
+
 /// A node is a role name bound to a specific ACP agent, plus the free-text
 /// guideline that shapes how it acts on the seed input and its upstream
 /// node's output (D2/D23).
@@ -22,19 +34,26 @@ pub struct ChainNode {
     /// and the endpoint edges refer to — no separate numeric id (D10 defers
     /// fan-out, which is the only thing that would need one).
     pub role: String,
+    /// Agent (default) or human (D9). `agent`, `model`, and `retry` are
+    /// ignored on a human node rather than made optional — one node shape,
+    /// not two (D10).
+    #[serde(default)]
+    pub kind: NodeKind,
     /// Persistent behavioural guideline, applied on every turn this node
     /// takes rather than once at the start (D23).
     #[serde(default)]
     pub guideline: String,
     /// ACP agent id, resolved against the same cached registry preflight
     /// normal auto-detection uses (D16). Deliberately user-selectable, unlike
-    /// a normal thread's executor.
+    /// a normal thread's executor. Meaningless on a human node.
+    #[serde(default)]
     pub agent: String,
     /// Model this node's agent runs on. Unset follows the thread's model,
     /// which is what every node did before the picker existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Overrides the chain-level retry policy for this node alone (D21).
+    /// Meaningless on a human node — human turns are never retried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicy>,
 }
@@ -183,7 +202,7 @@ impl Chain {
             if node.role != *key {
                 return Err(format!("node `{key}` has mismatched role `{}`", node.role));
             }
-            if node.agent.trim().is_empty() {
+            if node.kind == NodeKind::Agent && node.agent.trim().is_empty() {
                 return Err(format!("node `{key}` has no agent bound to it"));
             }
         }
@@ -311,7 +330,8 @@ mod tests {
     fn node(role: &str, agent: &str) -> ChainNode {
         ChainNode {
             role: role.into(),
-            guideline: format!("You are the {role}."),
+            kind: crate::chains::NodeKind::Agent,
+                guideline: format!("You are the {role}."),
             agent: agent.into(),
             model: None,
             retry: None,
@@ -492,5 +512,38 @@ mod tests {
         c.nodes.get_mut("designer").unwrap().retry = Some(RetryPolicy { max_attempts: 5 });
         assert_eq!(c.retry_for("designer").max_attempts, 5);
         assert_eq!(c.retry_for("programmer").max_attempts, 2);
+    }
+
+    /// D16: the worked example offered from the chains-panel empty state —
+    /// mirrors `ChainsPanel.tsx`'s `workedExampleChain` (an agent drafts, a
+    /// human reviews). Kept in lockstep deliberately: a schema change that
+    /// invalidates this shape fails here rather than only surfacing when a
+    /// user clicks "Open a worked example".
+    #[test]
+    fn the_worked_example_chain_is_valid_and_saves() {
+        let raw = r#"{
+          "name": "Example - draft then review",
+          "entry": "drafter",
+          "timeoutSeconds": 1800,
+          "retry": { "maxAttempts": 2 },
+          "edges": [{ "from": "drafter", "to": "reviewer" }],
+          "nodes": {
+            "drafter": {
+              "role": "drafter", "kind": "agent", "agent": "claude-code",
+              "guideline": "Write a short first draft answering the request."
+            },
+            "reviewer": {
+              "role": "reviewer", "kind": "human", "agent": "",
+              "guideline": "Read the draft. Type your own edit, or retype it as-is to approve it."
+            }
+          }
+        }"#;
+        let example: Chain = serde_json::from_str(raw).expect("worked example must deserialize");
+        assert!(example.validate().is_ok());
+        assert_eq!(example.nodes["reviewer"].kind, NodeKind::Human);
+
+        let root = tempfile::tempdir().unwrap();
+        save(root.path(), &example).unwrap();
+        assert_eq!(load(root.path(), &example.name).unwrap(), example);
     }
 }

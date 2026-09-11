@@ -556,6 +556,12 @@ pub struct Harness {
     /// currently polling it — one flag, not two mechanisms. Mirrors
     /// `chain_gates`'s shape and locking discipline exactly.
     pub chain_cancels: Mutex<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    /// Human-in-the-loop nodes waiting on the user's free text, keyed by
+    /// `(run_id, role)` (D9/design §3) — mirrors `chain_gates`'s shape and
+    /// locking discipline exactly, kept as its own map rather than
+    /// overloading `chain_gates` so the two unrelated behaviours don't share
+    /// a type whose variant names would then lie.
+    pub chain_humans: Mutex<HashMap<(String, String), std::sync::mpsc::Sender<String>>>,
     /// Every open notebook's kernel process (design.md D2, decisions.md
     /// D16/D18), keyed by `notebook::notebook_id`.
     pub notebook_kernels: crate::notebook::NotebookRegistry,
@@ -666,6 +672,7 @@ impl Default for Harness {
             turn_watchers: Default::default(),
             chain_gates: Default::default(),
             chain_cancels: Default::default(),
+            chain_humans: Default::default(),
             notebook_kernels: Default::default(),
         }
     }

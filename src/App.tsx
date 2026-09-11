@@ -311,6 +311,7 @@ type ChatSurfaceProps = {
   chainRun?: ChainRunCardView | null;
   onChainTranscript?: (sessionId: string) => void;
   onChainGateResolved?: (decision: "approve" | "sendBack" | "reject") => void;
+  onChainOpenRun?: (runId: string) => void;
 };
 
 /** Segments typed into a mode card's live preview on hover/focus — the
@@ -563,6 +564,7 @@ export const ChatSurface = memo(
     chainRun,
     onChainTranscript,
     onChainGateResolved,
+    onChainOpenRun,
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
@@ -1340,6 +1342,7 @@ export const ChatSurface = memo(
               projectHash={project.hash}
               onTranscript={onChainTranscript}
               onGateResolved={onChainGateResolved}
+              onOpenRun={onChainOpenRun}
             />
           )}
           {busy && specStarting && (
@@ -4537,6 +4540,16 @@ export default function App() {
               : payload.state
                 ? null
                 : base.awaiting,
+          // Mirrors `awaiting`'s own clearing rules exactly (D17): a run
+          // outcome or a node starting its next turn clears a stale
+          // suspension the same way it does for an approval gate.
+          awaitingHuman: payload.outcome
+            ? null
+            : payload.awaitingHuman
+              ? { role: payload.awaitingHuman.role, instruction: payload.awaitingHuman.instruction }
+              : payload.state
+                ? null
+                : base.awaitingHuman,
           outcome: payload.outcome ?? base.outcome,
         };
       });
@@ -4583,12 +4596,29 @@ export default function App() {
     [shell]
   );
 
-  /** Starts a chain on the active thread, opening its canvas to watch. */
+  /** Opens a past run (D8) from the chat card's own history section — same
+   *  action `ChainsPanel`'s history already offers. */
+  const onChainOpenRun = useCallback(
+    (runId: string) => {
+      if (!project) return;
+      void api.getChainRun(project.hash, runId).then((record) => {
+        if (!record) return;
+        tabs.openChain(record.chainName);
+        setChainRun(buildReviewRunView(record));
+      });
+    },
+    [project, tabs]
+  );
+
+  /**
+   * Starts a chain on `onThread`, opening its canvas to watch. `onThread` is
+   * required (D7/D7a): every caller decides explicitly which thread this
+   * run belongs to, rather than falling back to whatever thread happened to
+   * be focused — that implicit fallback was the run-hijacking bug.
+   */
   const startChainRun = useCallback(
-    async (name: string, seed: string, onThread?: ThreadMeta) => {
-      // The composer's first send creates the thread it runs on, so it passes
-      // that fresh one in rather than waiting for state to catch up.
-      const target = onThread ?? thread;
+    async (name: string, seed: string, onThread: ThreadMeta) => {
+      const target = onThread;
       if (!project || !target) return;
       try {
         tabs.openChain(name);
@@ -4610,7 +4640,29 @@ export default function App() {
         fail(err);
       }
     },
-    [project, thread, tabs]
+    [project, tabs]
+  );
+
+  /**
+   * Starts a chain that was invoked with no thread of its own — the chains
+   * panel, or the canvas's own Run button while editing a chain — rather
+   * than commandeering whatever thread happened to be focused (D3/D7). Gets
+   * its own thread, named after the chain, and switches to it so the user
+   * can watch the run.
+   */
+  const runChainInNewThread = useCallback(
+    async (name: string, seed: string) => {
+      if (!project) return;
+      try {
+        const created = await createThreadWithPrefs(project.hash, name);
+        setThreads(await api.listThreads(project.hash));
+        await selectThread(project.hash, created);
+        await startChainRun(name, seed, created);
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [project, createThreadWithPrefs, selectThread, startChainRun]
   );
 
   // Executor output streams in live; once the turn ends, the persisted log
@@ -4801,7 +4853,8 @@ export default function App() {
           chain,
           meta.openSpecChangeName
             ? `Apply the OpenSpec change "${meta.openSpecChangeName}".`
-            : ""
+            : "",
+          thread
         );
         return;
       }
@@ -6061,6 +6114,7 @@ export default function App() {
     chainRun: chainRun && thread && chainRun.threadId === thread.id ? chainRun : null,
     onChainTranscript,
     onChainGateResolved,
+    onChainOpenRun,
   };
 
   // The nine rail panels. Identical in both presets by construction — this
@@ -6119,7 +6173,8 @@ export default function App() {
           chainName={tab.chainName}
           agents={chainAgents}
           verifyCommands={chainVerifyCommands}
-          onRun={thread ? (name, seed) => void startChainRun(name, seed) : undefined}
+          onRun={(name, seed) => void runChainInNewThread(name, seed)}
+          onSaved={(name) => tabs.renameChain(tab.chainName, name)}
           onTranscript={onChainTranscript}
           onGateResolved={onChainGateResolved}
           // Only the chain that is actually running gets the watching state;
@@ -6328,8 +6383,9 @@ export default function App() {
         return (
           <ChainsPanel
             projectHash={project.hash}
+            agents={chainAgents}
             onOpen={(name) => tabs.openChain(name)}
-            onRun={thread ? (name, seed) => void startChainRun(name, seed) : undefined}
+            onRun={(name, seed) => void runChainInNewThread(name, seed)}
             onOpenRun={(runId) => {
               if (!project) return;
               void api.getChainRun(project.hash, runId).then((record) => {

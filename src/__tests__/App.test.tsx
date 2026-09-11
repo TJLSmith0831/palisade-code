@@ -1210,6 +1210,104 @@ describe("Running a chain from the deferred composer", () => {
   });
 });
 
+describe("Where a chain run lives (D3/D7/D7a)", () => {
+  const goThread = (over: Record<string, unknown> = {}) => ({
+    id: "t1",
+    projectHash: "proj-1",
+    title: "Existing thread",
+    createdAt: "2026-08-06T00:00:00Z",
+    updatedAt: "2026-08-06T00:00:00Z",
+    currentMode: "spec",
+    openSpecChangeName: null,
+    executor: "chain:ship",
+    executorSessionId: null,
+    ...over,
+  });
+
+  /** D7/D7a: a thread's executor slot resolving to a saved chain must run
+   *  that chain on the same thread — the same place `|=` runs it — not
+   *  wherever `startChainRun`'s now-deleted focused-thread fallback used to
+   *  send it. */
+  it("an executor-selected chain runs on the thread whose picker selected it", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([goThread()]);
+      if (cmd === "go_mode") return Promise.resolve(goThread({ currentMode: "go" }));
+      if (cmd === "run_chain") return Promise.resolve("run-1");
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+
+    const selector = await screen.findByTestId("mode-selector");
+    fireEvent.click(within(selector).getByRole("radio", { name: /Go/ }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "run_chain",
+        expect.objectContaining({ threadId: "t1", chainName: "ship" })
+      )
+    );
+  });
+
+  /** D3/D7: a run started from the chains panel must not commandeer whatever
+   *  thread happens to be focused — it gets its own new thread, named after
+   *  the chain, and the focused thread's own transcript is left alone. */
+  it("a panel run gets its own thread instead of commandeering the focused one", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Focused thread",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "go",
+            openSpecChangeName: null,
+          },
+        ]);
+      if (cmd === "list_chains")
+        return Promise.resolve([
+          { name: "ship", nodes: { designer: { role: "designer", guideline: "", agent: "claude" } }, edges: [], entry: "designer" },
+        ]);
+      if (cmd === "create_thread")
+        return Promise.resolve({
+          id: "t-new",
+          projectHash: "proj-1",
+          title: "ship",
+          createdAt: "2026-08-06T00:00:00Z",
+          updatedAt: "2026-08-06T00:00:00Z",
+          currentMode: "go",
+          openSpecChangeName: null,
+        });
+      if (cmd === "run_chain") return Promise.resolve("run-1");
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Focused thread")
+    );
+
+    fireEvent.click(screen.getByTestId("rail-chains"));
+    fireEvent.click(await screen.findByLabelText("Actions for ship"));
+    fireEvent.click(await screen.findByText("Run"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "run_chain",
+        expect.objectContaining({ threadId: "t-new", chainName: "ship" })
+      )
+    );
+    // The run gets its own thread, named after the chain — the previously
+    // focused thread's transcript is never touched by the run.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "run_chain",
+      expect.objectContaining({ threadId: "t1" })
+    );
+  });
+});
+
 describe("Collapsing chat (Cmd+J)", () => {
   it("leaves Vibe's chat alone — it is the primary surface there", async () => {
     render(<App />);

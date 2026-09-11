@@ -352,6 +352,39 @@ describe("useOpenTabs", () => {
     });
   });
 
+  describe("chain tabs — save renames the tab (D15)", () => {
+    it("saving a new chain renames its tab from chain:new to chain:<name>", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => view.result.current.openChain(null));
+      expect(keys(view)).toEqual(["chain:new"]);
+      expect(view.result.current.activePath).toBe("chain:new");
+
+      act(() => view.result.current.renameChain(null, "Design Loop"));
+
+      expect(keys(view)).toEqual(["chain:Design Loop"]);
+      expect(view.result.current.activePath).toBe("chain:Design Loop");
+    });
+
+    it("opening the just-saved chain from the sidebar surfaces the existing tab, not a duplicate", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => view.result.current.openChain(null));
+      act(() => view.result.current.renameChain(null, "Design Loop"));
+      act(() => view.result.current.open("src/a.ts"));
+
+      act(() => view.result.current.openChain("Design Loop"));
+
+      expect(keys(view)).toEqual(["chain:Design Loop", "src/a.ts"]);
+      expect(view.result.current.activePath).toBe("chain:Design Loop");
+    });
+
+    it("is a no-op when the saved name already matches the tab", () => {
+      const view = renderHook(() => useOpenTabs());
+      act(() => view.result.current.openChain("Design Loop"));
+      act(() => view.result.current.renameChain("Design Loop", "Design Loop"));
+      expect(keys(view)).toEqual(["chain:Design Loop"]);
+    });
+  });
+
   describe("preview tab", () => {
     it("is a singleton that renavigates rather than duplicating", () => {
       const view = withTabs("a.ts");

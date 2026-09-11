@@ -3,11 +3,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import ChainCanvas, {
   applyNodePatch,
+  concurrentWidth,
   draftProblem,
   turnCeiling,
   type RunView,
@@ -110,6 +111,71 @@ describe("ChainCanvas — add node (CHA-02)", () => {
   });
 });
 
+// D14: `onNodePointerUp` nulls `dragging.current` before the click fires
+// (pointerup always precedes click), so a guard reading `dragging.current`
+// at click time always saw `null` and fell through to `activate()` — every
+// drag also opened the node's editor.
+describe("ChainCanvas — drag vs click (D14)", () => {
+  const setup = async () => {
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const node = screen.getByTestId(/^chain-node-/);
+    const surface = document.querySelector(".ds-chain-surface") as HTMLElement;
+    // addNode() opens the editor for the node it just created — close it so
+    // the drag/click sequence below starts from a known, closed state.
+    await screen.findByTestId("node-role");
+    fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("node-role")).not.toBeInTheDocument());
+    return { node, surface };
+  };
+
+  it("a drag past the threshold moves the node and opens no editor", async () => {
+    const { node, surface } = await setup();
+    fireEvent.pointerDown(node, { clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(surface, { clientX: 140, clientY: 100 });
+    fireEvent.pointerUp(surface);
+    fireEvent.click(node);
+
+    // Give any (incorrect) editor-open transition a chance to land before
+    // asserting its absence.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("node-role")).not.toBeInTheDocument();
+  });
+
+  it("a press-release with no meaningful movement opens the editor", async () => {
+    const { node, surface } = await setup();
+    fireEvent.pointerDown(node, { clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(surface);
+    fireEvent.click(node);
+
+    expect(await screen.findByTestId("node-role")).toBeInTheDocument();
+  });
+
+  it("resets on the next pointerdown so an interrupted gesture can't leave the latch stuck", async () => {
+    const { node, surface } = await setup();
+    // A drag with no matching click (e.g. the pointerup landed off the
+    // node) must not suppress the *next* gesture's click.
+    fireEvent.pointerDown(node, { clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(surface, { clientX: 140, clientY: 100 });
+    fireEvent.pointerUp(surface);
+
+    fireEvent.pointerDown(node, { clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(surface);
+    fireEvent.click(node);
+
+    expect(await screen.findByTestId("node-role")).toBeInTheDocument();
+  });
+});
+
 const chain = {
   name: "review",
   entry: "scout",
@@ -188,6 +254,52 @@ describe("turnCeiling", () => {
     expect(turnCeiling(chain)).toBe(2);
     expect(turnCeiling({ ...chain, nodes: { ...chain.nodes, audit: { role: "audit", agent: "codex", guideline: "audit" } }, edges: [{ from: "scout", to: "judge" }, { from: "scout", to: "audit" }] })).toBe(3);
     expect(turnCeiling({ ...chain, edges: [...chain.edges, { from: "judge", to: "scout", gate: { type: "approval" }, maxIterations: 2 }] })).toBe(4);
+  });
+});
+
+describe("ChainCanvas — header width line (D13)", () => {
+  it("states how many nodes run at once, and the maxParallel cap when set", async () => {
+    apiMock.listChains.mockResolvedValueOnce([{ ...chain, maxParallel: 2 }]);
+    render(
+      <MantineProvider>
+        <ChainCanvas projectHash="proj-1" chainName="review" agents={[{ id: "codex", name: "Codex" }]} verifyCommands={[]} />
+      </MantineProvider>
+    );
+    expect(await screen.findByTestId("chain-width")).toHaveTextContent("Runs 1 node at once (capped at 2)");
+  });
+});
+
+describe("ChainCanvas — empty-state teaching (D16)", () => {
+  it("explains nodes, edges, gates, and loops in place", () => {
+    render(
+      <MantineProvider>
+        <ChainCanvas projectHash="proj-1" chainName={null} agents={[]} verifyCommands={[]} />
+      </MantineProvider>
+    );
+    const empty = screen.getByTestId("chain-canvas-empty");
+    for (const term of ["node", "edge", "gate", "loop"]) {
+      expect(within(empty).getAllByText(new RegExp(term, "i")).length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("concurrentWidth (D13)", () => {
+  it("is 1 for a purely sequential chain", () => {
+    expect(concurrentWidth(chain)).toBe(1);
+  });
+
+  it("is the fan-out width for a chain that branches", () => {
+    const fanOut = {
+      ...chain,
+      nodes: { ...chain.nodes, audit: { role: "audit", agent: "codex", guideline: "audit" } },
+      edges: [{ from: "scout", to: "judge" }, { from: "scout", to: "audit" }],
+    };
+    expect(concurrentWidth(fanOut)).toBe(2);
+  });
+
+  it("ignores a loop-closing edge, matching the runner's own barrier rule", () => {
+    const looped = { ...chain, edges: [...chain.edges, { from: "judge", to: "scout", gate: { type: "approval" }, maxIterations: 2 }] };
+    expect(concurrentWidth(looped)).toBe(1);
   });
 });
 
@@ -439,6 +551,33 @@ describe("ChainCanvas — Model Select loading state", () => {
   });
 });
 
+describe("ChainCanvas — human node kind toggle (D9)", () => {
+  it("hides the agent and model pickers once a node is toggled to human", async () => {
+    render(
+      <MantineProvider>
+        <ChainCanvas projectHash="proj-1" chainName={null} agents={[{ id: "claude", name: "Claude Agent" }]} verifyCommands={[]} />
+      </MantineProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    await screen.findByTestId("node-agent");
+
+    fireEvent.click(within(screen.getByTestId("node-kind")).getByText("Human"));
+
+    expect(screen.queryByTestId("node-agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("node-model")).not.toBeInTheDocument();
+  });
+
+  it("a human node does not block on a missing agent (draftProblem)", () => {
+    const draft = {
+      ...chain,
+      nodes: { writer: { role: "writer", agent: "", kind: "human" as const, guideline: "" } },
+      entry: "writer",
+      edges: [],
+    };
+    expect(draftProblem(draft)).toBeNull();
+  });
+});
+
 describe("ChainCanvas — dirty indicator", () => {
   it("shows an unsaved-changes indicator after editing a loaded chain, and clears it after Save", async () => {
     apiMock.listChains.mockResolvedValueOnce([chain]);
@@ -453,6 +592,19 @@ describe("ChainCanvas — dirty indicator", () => {
     expect(await screen.findByTestId("chain-dirty")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByTestId("chain-dirty")).not.toBeInTheDocument());
+  });
+
+  it("reports the saved name via onSaved, so the tab can adopt it (D15)", async () => {
+    const onSaved = vi.fn();
+    render(
+      <MantineProvider>
+        <ChainCanvas projectHash="proj-1" chainName={null} agents={[{ id: "claude", name: "Claude Agent" }]} verifyCommands={[]} onSaved={onSaved} />
+      </MantineProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.change(screen.getByTestId("chain-name"), { target: { value: "Design Loop" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith("Design Loop"));
   });
 });
 

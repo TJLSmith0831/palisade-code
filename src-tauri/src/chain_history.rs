@@ -449,11 +449,11 @@ mod tests {
         let mut nodes = HashMap::new();
         nodes.insert(
             "designer".to_string(),
-            ChainNode { role: "designer".into(), guideline: String::new(), agent: "claude".into(), model: None, retry: None },
+            ChainNode { role: "designer".into(), kind: crate::chains::NodeKind::Agent, guideline: String::new(), agent: "claude".into(), model: None, retry: None },
         );
         nodes.insert(
             "programmer".to_string(),
-            ChainNode { role: "programmer".into(), guideline: String::new(), agent: "codex".into(), model: None, retry: None },
+            ChainNode { role: "programmer".into(), kind: crate::chains::NodeKind::Agent, guideline: String::new(), agent: "codex".into(), model: None, retry: None },
         );
         Chain {
             name: name.to_string(),

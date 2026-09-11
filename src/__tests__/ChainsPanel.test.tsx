@@ -8,6 +8,7 @@ const { apiMock } = vi.hoisted(() => ({
   apiMock: {
     listChains: vi.fn(),
     deleteChain: vi.fn().mockResolvedValue(undefined),
+    saveChain: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../api", () => apiMock);
@@ -37,6 +38,7 @@ const chain = {
 beforeEach(() => {
   apiMock.listChains.mockReset();
   apiMock.deleteChain.mockClear();
+  apiMock.saveChain.mockClear();
 });
 
 describe("ChainsPanel", () => {
@@ -65,7 +67,7 @@ describe("ChainsPanel", () => {
     );
 
     fireEvent.click(await screen.findByLabelText("Actions for review"));
-    fireEvent.click(await screen.findByText("Run on this thread"));
+    fireEvent.click(await screen.findByText("Run"));
 
     expect(onRun).toHaveBeenCalledTimes(1);
     expect(onRun.mock.calls[0][0]).toBe("review");
@@ -106,6 +108,49 @@ describe("ChainsPanel", () => {
     );
 
     expect(await screen.findByText(/No chains yet/)).toBeInTheDocument();
+  });
+
+  it("empty state offers a worked example that saves and opens it (D16)", async () => {
+    apiMock.listChains.mockResolvedValue([]);
+    const onOpen = vi.fn();
+
+    render(
+      <MantineProvider>
+        <ChainsPanel projectHash="proj-1" onOpen={onOpen} agents={[{ id: "claude-code", name: "Claude Code" }]} />
+      </MantineProvider>
+    );
+
+    fireEvent.click(await screen.findByTestId("chains-panel-open-example"));
+
+    await waitFor(() =>
+      expect(apiMock.saveChain).toHaveBeenCalledWith(
+        "proj-1",
+        expect.objectContaining({
+          name: "Example - draft then review",
+          nodes: expect.objectContaining({
+            reviewer: expect.objectContaining({ kind: "human" }),
+          }),
+        })
+      )
+    );
+    expect(onOpen).toHaveBeenCalledWith("Example - draft then review");
+  });
+
+  it("does not re-save the example if it's already there", async () => {
+    apiMock.listChains.mockResolvedValue([{ ...chain, name: "Example - draft then review" }]);
+    const onOpen = vi.fn();
+
+    render(
+      <MantineProvider>
+        <ChainsPanel projectHash="proj-1" onOpen={onOpen} />
+      </MantineProvider>
+    );
+
+    // Not the empty state (a chain already exists) — reached via the row's
+    // own open action instead of the empty-state button in this branch.
+    fireEvent.click(await screen.findByTestId("chain-row-Example - draft then review"));
+    expect(onOpen).toHaveBeenCalledWith("Example - draft then review");
+    expect(apiMock.saveChain).not.toHaveBeenCalled();
   });
 
   it("surfaces a listChains rejection as an error", async () => {

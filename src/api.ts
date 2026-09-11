@@ -679,9 +679,15 @@ export type ChainGate =
   | { type: "verify"; command: string }
   | { type: "approval" };
 
+/** Agent (default) or human-in-the-loop (D9). Absent on disk means agent. */
+export type ChainNodeKind = "agent" | "human";
+
 export type ChainNode = {
   /** Doubles as the node's key in `nodes` and the edge endpoint reference. */
   role: string;
+  /** Agent node (default) or human node. A human node binds no agent and
+   * ignores `agent`, `model`, and `retry`. */
+  kind?: ChainNodeKind;
   /** Persistent behavioural guideline, applied every turn this node takes. */
   guideline: string;
   /** ACP agent id — user-picked, unlike a normal thread's executor (D16). */
@@ -774,6 +780,13 @@ export type ChainEvent = {
     /** `from`'s actual output — rendered inline; a link is not evidence. */
     output: string;
   } | null;
+  /** Set while a run is suspended at a human-in-the-loop node (D9), resolved
+   * at the same `awaiting` slot as `awaitingApproval` (D17). */
+  awaitingHuman: {
+    role: string;
+    /** The same guideline/seed/upstream text an agent node would receive. */
+    instruction: string;
+  } | null;
   /** The session backing this node's turn — click-through to its transcript. */
   sessionId: string | null;
   /** ACP-billed cost when this node's agent reported it; never fabricated as 0. */
@@ -865,6 +878,10 @@ export const resolveChainGate = (
   decision: "approve" | "reject" | "sendBack",
   note?: string
 ) => invoke<void>("resolve_chain_gate", { runId, decision, note: note ?? null });
+
+/** Answers a suspended human-in-the-loop node with the user's free text (D9). */
+export const resolveChainHuman = (runId: string, role: string, text: string) =>
+  invoke<void>("resolve_chain_human", { runId, role, text });
 
 // --------------------------------------------------------- language servers
 
