@@ -497,6 +497,9 @@ export const EventList = memo(function EventList({
             // plus a one-click retry replaces "what do I even do with this".
             if (item.role === "system") {
               const authIssue = isAuthError(item.text);
+              const managedAuthRecovery = item.text.startsWith(
+                "Palisade is waiting for you to sign in."
+              );
               // The prompt that led to this crash — found by walking back to
               // the nearest preceding user turn — is what Retry resends. A
               // crashed turn can persist a partial assistant reply right
@@ -505,7 +508,7 @@ export const EventList = memo(function EventList({
               // used to skip straight past the user turn that caused it, so
               // the button silently never appeared for exactly that shape.
               let retryText: string | null = null;
-              if (authIssue && onRetry) {
+              if (authIssue && onRetry && !managedAuthRecovery) {
                 for (let i = index - 1; i >= 0; i--) {
                   const prior = items[i];
                   if (prior.kind === "plain" && prior.role === "user") {
@@ -528,7 +531,9 @@ export const EventList = memo(function EventList({
                       data-testid="crash-banner-auth-summary"
                     >
                       {agentLogins.length > 0
-                        ? "This agent's login expired or failed to refresh. Sign in below — Palisade runs the agent's own login in a terminal here — then retry."
+                        ? managedAuthRecovery
+                          ? "This agent needs you to sign in. Choose a method below and Palisade will resume your message once."
+                          : "This agent's login expired or failed to refresh. Sign in below — Palisade runs the agent's own login in a terminal here — then retry."
                         : "This agent's login expired or failed to refresh. Palisade can't complete an interactive login on its own — sign back in outside Palisade, then retry."}
                     </div>
                   )}

@@ -473,6 +473,19 @@ pub struct ProposeWatch {
     pub before: Vec<String>,
 }
 
+/// A user turn that was written to its thread but could not be delivered
+/// because the selected executor requested authentication. The payload is
+/// deliberately non-secret and exists only for this app run; credentials stay
+/// with the ACP agent.
+#[derive(Debug, Clone)]
+pub struct PendingAuthTurn {
+    pub project_hash: String,
+    pub thread_id: String,
+    pub content: String,
+    pub mode: String,
+    pub bypass: bool,
+}
+
 pub struct Harness {
     /// Every live ACP session, keyed by its own id.
     pub acp_sessions: Mutex<HashMap<String, AcpSession>>,
@@ -482,6 +495,12 @@ pub struct Harness {
     /// handing it back, because a caller that starts a session without sending
     /// a prompt (`/go`) would otherwise drop it and lose the conversation.
     pub pending_prefix: Mutex<HashMap<String, String>>,
+    /// Every user turn blocked on this executor's sign-in, queued in the
+    /// order they were sent. A login is executor-scoped, so blocked turns
+    /// queue behind one another rather than each triggering a competing
+    /// OAuth flow; queuing (not dropping) is what backs the "will resume
+    /// automatically" message a blocked turn is given.
+    pub pending_auth_turns: Mutex<HashMap<String, Vec<PendingAuthTurn>>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
     /// Graphify watchers, keyed by project hash. A map, not a slot: every
     /// project window shares this process (#33), and a single slot meant
@@ -571,6 +590,7 @@ impl Default for Harness {
             acp_sessions: Default::default(),
             preflight: Default::default(),
             pending_prefix: Default::default(),
+            pending_auth_turns: Default::default(),
             pending_propose: Default::default(),
             watch: Default::default(),
             window_projects: Default::default(),
@@ -631,6 +651,34 @@ impl Harness {
             .values()
             .any(|s| s.thread_id == thread_id && s.is_busy())
     }
+
+    /// Queues a turn blocked on `agent_id`'s sign-in. A second (or third)
+    /// blocked turn for the same executor appends rather than replacing the
+    /// first — dropping it silently would break the "will resume
+    /// automatically" promise the caller gives the user for every one of
+    /// them.
+    pub fn queue_pending_auth_turn(&self, agent_id: &str, turn: PendingAuthTurn) {
+        self.pending_auth_turns.lock().unwrap().entry(agent_id.to_string()).or_default().push(turn);
+    }
+
+    /// Takes every turn queued for `agent_id`, oldest first, leaving none
+    /// behind. Pair with `requeue_pending_auth_turns` when delivery of one
+    /// fails partway through, so turns not yet attempted are not lost.
+    pub fn take_pending_auth_turns(&self, agent_id: &str) -> Vec<PendingAuthTurn> {
+        self.pending_auth_turns.lock().unwrap().remove(agent_id).unwrap_or_default()
+    }
+
+    /// Puts turns back at the front of `agent_id`'s queue, ahead of any that
+    /// arrived while delivery was in progress.
+    pub fn requeue_pending_auth_turns(&self, agent_id: &str, mut turns: Vec<PendingAuthTurn>) {
+        if turns.is_empty() {
+            return;
+        }
+        let mut map = self.pending_auth_turns.lock().unwrap();
+        let existing = map.entry(agent_id.to_string()).or_default();
+        turns.append(existing);
+        *existing = turns;
+    }
 }
 
 // ------------------------------------------------------------------ tests
@@ -638,6 +686,55 @@ impl Harness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RED→GREEN: a second turn blocked on the same executor's sign-in must
+    /// not be silently dropped — the system message told the user both turns
+    /// would resume automatically.
+    #[test]
+    fn a_second_pending_auth_turn_for_the_same_agent_is_not_dropped() {
+        let harness = Harness::default();
+        let turn = |content: &str| PendingAuthTurn {
+            project_hash: "proj".into(),
+            thread_id: "thread-1".into(),
+            content: content.into(),
+            mode: "go".into(),
+            bypass: false,
+        };
+        harness.queue_pending_auth_turn("codex", turn("first message"));
+        harness.queue_pending_auth_turn("codex", turn("second message"));
+
+        let queued = harness.take_pending_auth_turns("codex");
+        assert_eq!(
+            queued.iter().map(|t| t.content.as_str()).collect::<Vec<_>>(),
+            vec!["first message", "second message"],
+            "both blocked turns must still be queued, in the order they were sent"
+        );
+    }
+
+    /// A turn that fails auth again on delivery must go back in front of any
+    /// turns queued after it, not lose them.
+    #[test]
+    fn requeueing_a_failed_delivery_preserves_turns_queued_meanwhile() {
+        let harness = Harness::default();
+        let turn = |content: &str| PendingAuthTurn {
+            project_hash: "proj".into(),
+            thread_id: "thread-1".into(),
+            content: content.into(),
+            mode: "go".into(),
+            bypass: false,
+        };
+        let mut queued = harness.take_pending_auth_turns("codex");
+        queued.push(turn("still-blocked"));
+        // A new turn arrives while delivery of the queue above is in flight.
+        harness.queue_pending_auth_turn("codex", turn("arrived-during-retry"));
+        harness.requeue_pending_auth_turns("codex", queued);
+
+        let result = harness.take_pending_auth_turns("codex");
+        assert_eq!(
+            result.iter().map(|t| t.content.as_str()).collect::<Vec<_>>(),
+            vec!["still-blocked", "arrived-during-retry"]
+        );
+    }
 
     #[test]
     fn find_on_path_locates_a_real_binary_and_rejects_a_fake_one() {
