@@ -1225,7 +1225,8 @@ async fn send_message(
         ) {
             Ok(id) => id,
             Err(error) if is_auth_failure(&error) => {
-                harness.pending_auth_turns.lock().unwrap().entry(agent.id.clone()).or_insert(
+                harness.queue_pending_auth_turn(
+                    &agent.id,
                     executor::PendingAuthTurn {
                         project_hash: project_hash.clone(),
                         thread_id: thread_id.clone(),
@@ -1747,9 +1748,11 @@ async fn agent_authenticate(
             method_id,
         )?;
         // The user has chosen and completed a protocol login. If this agent
-        // was blocking a real turn, deliver that already-persisted turn once
-        // rather than asking the user to copy or retype it.
-        if let Some(pending) = harness.pending_auth_turns.lock().unwrap().remove(&agent.id) {
+        // was blocking one or more real turns, deliver every one of them, in
+        // the order they were sent, rather than asking the user to copy or
+        // retype anything (#43: a second blocked turn must not be dropped).
+        let mut queued = harness.take_pending_auth_turns(&agent.id).into_iter();
+        while let Some(pending) = queued.next() {
             match ensure_session(
                 &app,
                 &harness,
@@ -1766,7 +1769,9 @@ async fn agent_authenticate(
                     &pending.content,
                 )?,
                 Err(error) if is_auth_failure(&error) => {
-                    harness.pending_auth_turns.lock().unwrap().insert(agent.id.clone(), pending);
+                    let mut remaining = vec![pending];
+                    remaining.extend(queued);
+                    harness.requeue_pending_auth_turns(&agent.id, remaining);
                     return Err(error);
                 }
                 Err(error) => return Err(error),
