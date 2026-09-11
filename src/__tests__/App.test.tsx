@@ -216,6 +216,11 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "read_file_content") return Promise.resolve("agent rules\n");
       if (cmd === "write_file_content") return Promise.resolve();
       if (cmd === "read_thread") return Promise.resolve([]);
+      // Opening a thread auto-probes its executor's models (know-before-
+      // you-type). A bare `[]` (the generic fallback below) isn't a valid
+      // `ModelState` and crashes on `modelState.models.length`.
+      if (cmd === "list_models")
+        return Promise.resolve({ configId: null, current: null, models: [] });
       return Promise.resolve([]);
 };
 
@@ -3669,6 +3674,8 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
             summary: "",
           });
         if (cmd === "list_directory") return Promise.resolve([]);
+        if (cmd === "list_models")
+          return Promise.resolve({ configId: null, current: null, models: [] });
         return Promise.resolve([]);
       }
     );
@@ -4650,6 +4657,13 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         ]);
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "executor_status") return Promise.resolve([]);
+      // Opening a thread now auto-probes its executor's models (know-before-
+      // you-type). Most tests using this helper don't care about the model
+      // list, but they still trigger the probe, so it needs a valid
+      // `ModelState` shape here — a bare `[]` (the generic fallback below)
+      // isn't one and crashes on `modelState.models.length`.
+      if (cmd === "list_models")
+        return Promise.resolve({ configId: null, current: null, models: [] });
       if (cmd === "preflight")
         return Promise.resolve({
           agents: [
@@ -4698,6 +4712,114 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
 
     fireEvent.click(screen.getByTestId("executor-btn"));
     expect(await screen.findByTestId("executor-menu")).toBeDefined();
+  });
+
+  it("warns in the composer before typing when the thread's last turn died on auth", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread A",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+            authBlocked: "Claude Code needs to be signed in — session expired.",
+          },
+        ]);
+      // The probe never resolves in this test, so the badge stays on the
+      // persisted flag the whole time — proving that flag alone is enough
+      // to warn before the live check lands.
+      if (cmd === "list_models") return new Promise(() => {});
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    // No click needed — this comes from the thread record itself, visible
+    // before the auto-probe (fired on thread open) has even resolved.
+    await waitFor(() =>
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("sign in needed")
+    );
+    expect(screen.getByTestId("model-btn-auth-warning")).toBeInTheDocument();
+    expect(screen.getByTestId("model-btn")).toHaveAttribute(
+      "title",
+      "Claude Code needs to be signed in — session expired."
+    );
+  });
+
+  it("auto-probes the thread's executor on open and warns even with no prior failure", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_models")
+        return Promise.reject(new Error("Unauthorized: token expired"));
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    // Nothing failed yet in this thread — the warning only exists because
+    // opening the thread probed its executor automatically.
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("list_models", {
+        projectHash: "proj-1",
+        agentId: "claude",
+      })
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("sign in needed")
+    );
+    expect(screen.getByTestId("model-btn-auth-warning")).toBeInTheDocument();
+  });
+
+  it("clears a stale auth-blocked flag once the auto-probe succeeds", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title: "Thread A",
+            createdAt: "2026-08-06T00:00:00Z",
+            updatedAt: "2026-08-06T00:00:00Z",
+            currentMode: "spec",
+            openSpecChangeName: null,
+            // Stale: the user signed back in since this was recorded.
+            authBlocked: "Claude Code needs to be signed in — session expired.",
+          },
+        ]);
+      if (cmd === "list_models")
+        return Promise.resolve({
+          configId: "model",
+          current: "m1",
+          models: [{ id: "m1", name: "Model One" }],
+        });
+      return baseImpl?.(cmd) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    // The live probe succeeding outranks the stale persisted flag.
+    await waitFor(() =>
+      expect(screen.getByTestId("model-btn")).toHaveTextContent("Model One")
+    );
+    expect(screen.queryByTestId("model-btn-auth-warning")).not.toBeInTheDocument();
   });
 
   it("shows discovered ACP agents in the executor dropdown", async () => {
@@ -5254,6 +5376,13 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         ]);
       if (cmd === "read_thread") return Promise.resolve([]);
       if (cmd === "executor_status") return Promise.resolve([]);
+      // Opening a thread now auto-probes its executor's models (know-before-
+      // you-type). Most tests using this helper don't care about the model
+      // list, but they still trigger the probe, so it needs a valid
+      // `ModelState` shape here — a bare `[]` (the generic fallback below)
+      // isn't one and crashes on `modelState.models.length`.
+      if (cmd === "list_models")
+        return Promise.resolve({ configId: null, current: null, models: [] });
       if (cmd === "preflight")
         return Promise.resolve({
           agents: [

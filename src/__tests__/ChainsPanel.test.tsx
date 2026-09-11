@@ -9,6 +9,7 @@ const { apiMock } = vi.hoisted(() => ({
     listChains: vi.fn(),
     deleteChain: vi.fn().mockResolvedValue(undefined),
     saveChain: vi.fn().mockResolvedValue(undefined),
+    listModels: vi.fn().mockResolvedValue({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] }),
   },
 }));
 vi.mock("../api", () => apiMock);
@@ -127,8 +128,12 @@ describe("ChainsPanel", () => {
         "proj-1",
         expect.objectContaining({
           name: "Example - draft then review",
+          edges: expect.arrayContaining([
+            expect.objectContaining({ from: "reviewer", to: "drafter", gate: { type: "approval" } }),
+          ]),
           nodes: expect.objectContaining({
-            reviewer: expect.objectContaining({ kind: "human" }),
+            drafter: expect.objectContaining({ model: "claude-sonnet-5" }),
+            reviewer: expect.objectContaining({ model: "claude-sonnet-5" }),
           }),
         })
       )

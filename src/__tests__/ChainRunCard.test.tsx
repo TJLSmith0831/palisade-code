@@ -7,7 +7,6 @@ import ChainRunCard, { type ChainRunCardView } from "../ChainRunCard";
 const { apiMock } = vi.hoisted(() => ({
   apiMock: {
     resolveChainGate: vi.fn().mockResolvedValue(undefined),
-    resolveChainHuman: vi.fn().mockResolvedValue(undefined),
     cancelChainRun: vi.fn().mockResolvedValue(undefined),
     rerunChainRun: vi.fn().mockResolvedValue("new-run-id"),
     listChainRuns: vi.fn().mockResolvedValue([]),
@@ -218,51 +217,6 @@ describe("ChainRunCard — past runs (D8)", () => {
     await waitFor(() =>
       expect(apiMock.rerunChainRun).toHaveBeenCalledWith("proj-1", "past-run-1", "scout", "thread-1")
     );
-  });
-});
-
-describe("ChainRunCard — human node (D9/D17)", () => {
-  const humanRun: ChainRunCardView = {
-    ...baseRun,
-    awaitingHuman: { role: "writer", instruction: "Original request: build a page" },
-  };
-
-  it("shows '<role> needs your input' with the instruction rendered inline", () => {
-    renderCard(humanRun);
-    expect(screen.getByText("writer needs your input")).toBeInTheDocument();
-    expect(screen.getByTestId("chain-run-card-human-instruction")).toHaveTextContent(
-      "Original request: build a page"
-    );
-  });
-
-  it("submits free text via resolveChainHuman on Enter, at the same awaiting slot a gate uses", async () => {
-    renderCard(humanRun);
-    const input = screen.getByTestId("chain-run-card-human-input");
-    fireEvent.change(input, { target: { value: "here is my draft" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() =>
-      expect(apiMock.resolveChainHuman).toHaveBeenCalledWith("run-1", "writer", "here is my draft")
-    );
-    expect(await screen.findByTestId("chain-run-card-human-submitted")).toBeInTheDocument();
-  });
-
-  it("resets to a fresh input when a different role becomes awaiting", async () => {
-    const { rerender } = renderCard(humanRun);
-    const input = screen.getByTestId("chain-run-card-human-input");
-    fireEvent.change(input, { target: { value: "here is my draft" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await screen.findByTestId("chain-run-card-human-submitted");
-
-    rerender(
-      <MantineProvider>
-        <ChainRunCard
-          run={{ ...humanRun, awaitingHuman: { role: "editor", instruction: "review the draft" } }}
-          projectHash="proj-1"
-        />
-      </MantineProvider>
-    );
-    expect(screen.getByText("editor needs your input")).toBeInTheDocument();
-    expect(screen.queryByTestId("chain-run-card-human-submitted")).not.toBeInTheDocument();
   });
 });
 

@@ -37,10 +37,6 @@ pub struct ChainEvent {
     pub outcome: Option<Outcome>,
     /// Set while a run is suspended at an approval gate.
     pub awaiting_approval: Option<AwaitingApproval>,
-    /// Set while a run is suspended at a human-in-the-loop node (D9),
-    /// resolved at the same `awaiting` slot as `awaiting_approval` (D17) —
-    /// one pause surface, not two.
-    pub awaiting_human: Option<AwaitingHuman>,
     /// The session backing `role`'s turn, so the view can open its transcript.
     pub session_id: Option<String>,
     /// `role`'s most recent reported cost (D-d) — absent when its agent
@@ -57,16 +53,6 @@ pub struct AwaitingApproval {
     /// `from`'s actual output. Both deciding surfaces render it inline — a
     /// link is not evidence (PLAN §4.5, the critique's P1).
     pub output: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AwaitingHuman {
-    pub role: String,
-    /// The same composed guideline/seed/upstream text an agent node in this
-    /// position would have received — the human sees exactly what an agent
-    /// would have been prompted with (D9).
-    pub instruction: String,
 }
 
 /// Every node's most recent reported cost (D-d). `usage.cost` is already
@@ -274,7 +260,6 @@ impl AcpNodeRunner {
             state: None,
             outcome: None,
             awaiting_approval: None,
-            awaiting_human: None,
             session_id: None,
             cost: None,
         }
@@ -375,60 +360,13 @@ impl NodeRunner for AcpNodeRunner {
         }
     }
 
-    /// A human node's turn (D9): parks on a channel `resolve_chain_human`
-    /// sends into, taking a `Budget::pause()` guard so the run's wall clock
-    /// doesn't advance while waiting, and polling the same cancellation flag
-    /// `run_turn`'s turn-wait loop does.
-    fn human_turn(&self, role: &str, instruction: &str) -> TurnResult {
-        post_thread_summary(
-            &self.app,
-            &self.project_hash,
-            &self.thread_id,
-            &format!("Chain `{}` is waiting for your input at **{role}**.", self.chain.name),
-        );
-        let (tx, rx) = mpsc::channel();
-        self.harness().chain_humans.lock().unwrap().insert((self.run_id.clone(), role.to_string()), tx);
-        self.emit(ChainEvent {
-            role: Some(role.to_string()),
-            awaiting_human: Some(AwaitingHuman { role: role.to_string(), instruction: instruction.to_string() }),
-            ..self.base_event()
-        });
-
-        let _pause = self.budget.pause();
-        let result = loop {
-            if self.cancel.load(Ordering::SeqCst) {
-                break Err(format!("`{role}` cancelled"));
-            }
-            match rx.recv_timeout(CANCEL_POLL) {
-                Ok(text) => break Ok(text),
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break Err("the human node was torn down".to_string()),
-            }
-        };
-        drop(_pause);
-        self.harness().chain_humans.lock().unwrap().remove(&(self.run_id.clone(), role.to_string()));
-
-        if let Ok(output) = &result {
-            *self.iterations.lock().unwrap().entry(role.to_string()).or_insert(0) += 1;
-            if let Err(err) =
-                chain_history::record_output(&crate::palisade_home(), &self.project_hash, &self.run_id, role, output.clone())
-            {
-                eprintln!("chain run {}: could not persist {role}'s output: {err}", self.run_id);
-            }
-        }
-        result
-    }
-
     fn on_state(&self, role: &str, state: NodeState) {
         // ChainRun announces Executing/Retrying before it invokes
         // `run_turn`. Create the role session here so each persisted/live
         // attempt transition has its transcript id rather than requiring a
         // second synthetic event.
-        // A human node binds no agent (D9/D11) — never start a session for
-        // one, even on an Executing announcement.
-        let is_human = self.chain.nodes.get(role).is_some_and(|n| n.kind == crate::chains::NodeKind::Human);
         let session_id = match state {
-            NodeState::Executing | NodeState::Retrying(_) if !is_human => self.session_for(role).ok(),
+            NodeState::Executing | NodeState::Retrying(_) => self.session_for(role).ok(),
             _ => self.sessions.lock().unwrap().get(role).cloned(),
         };
         let cost = self.costs.get(role);
@@ -523,7 +461,6 @@ impl GateEvaluator for AcpGateEvaluator {
                     to: to_role.to_string(),
                     output: output.to_string(),
                 }),
-                awaiting_human: None,
                 session_id: None,
                 cost: None,
             },
@@ -607,8 +544,7 @@ mod tests {
     // ---------------------------------------------------- §4.2: cancellation
 
     fn node(role: &str) -> ChainNode {
-        ChainNode { role: role.into(), kind: crate::chains::NodeKind::Agent,
-                guideline: String::new(), agent: "claude-code".into(), model: None, retry: None }
+        ChainNode { role: role.into(), guideline: String::new(), agent: "claude-code".into(), model: None, retry: None }
     }
 
     /// entry -> leaf0, entry -> leaf1; both leaves are sinks, dispatched in

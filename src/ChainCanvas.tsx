@@ -4,11 +4,11 @@ import {
   Alert,
   Badge,
   Button,
+  Drawer,
   Group,
   Modal,
   NumberInput,
   Select,
-  SegmentedControl,
   Stack,
   Text,
   TextInput,
@@ -185,9 +185,10 @@ export function draftProblem(draft: Draft): string | null {
   // Keyed, not `n.role`: the map key *is* the role, and a node whose `role`
   // field went missing is precisely the case that used to report itself as
   // "undefined has no agent bound to it".
-  // A human node binds no agent (D9/D11) — the check is meaningless for it.
-  const missingAgent = Object.entries(draft.nodes).find(([, n]) => n.kind !== "human" && !n.agent);
+  const missingAgent = Object.entries(draft.nodes).find(([, n]) => !n.agent);
   if (missingAgent) return `${missingAgent[0]} has no agent bound to it.`;
+  const missingModel = Object.entries(draft.nodes).find(([, n]) => !n.model);
+  if (missingModel) return `${missingModel[0]} has no model bound to it.`;
   const loops = loopEdgeIndices(draft);
   for (const index of loops) {
     const edge = draft.edges[index];
@@ -245,9 +246,6 @@ export type RunView = {
     taskCalls?: Array<{ title: string; status: "running" | "done" | "failed"; result?: string }>;
   }>;
   awaiting: { from: string; to: string; output?: string; resolved?: "approve" | "sendBack" | "reject" } | null;
-  /** A suspended human-in-the-loop node (D9) — resolved at the same
-   * `awaiting` slot as an approval gate (D17), not a second surface. */
-  awaitingHuman?: { role: string; instruction: string; resolved?: string } | null;
   outcome: api.ChainOutcome | null;
 };
 
@@ -341,13 +339,23 @@ export default function ChainCanvas({
     setModelsLoading(true);
     api
       .listModels(projectHash, editingAgent)
-      .then((state) => live && setModels(state.models))
+      .then((state) => {
+        if (!live) return;
+        setModels(state.models);
+        // A model is required to save (no model = no node) — pick the
+        // agent's first offered model the same way addNode picks the first
+        // installed agent, so a freshly added node is savable without
+        // forcing a manual choice when there's an obvious default.
+        if (editing && state.models[0] && !nodesRef.current[editing]?.model) {
+          setDraft((d) => applyNodePatch(d, editing, { model: state.models[0].id }));
+        }
+      })
       .catch(() => live && setModels([]))
       .finally(() => live && setModelsLoading(false));
     return () => {
       live = false;
     };
-  }, [projectHash, editingAgent]);
+  }, [projectHash, editingAgent, editing]);
 
   const roles = useMemo(() => Object.keys(draft.nodes), [draft.nodes]);
   const loops = useMemo(() => loopEdgeIndices(draft), [draft]);
@@ -979,11 +987,12 @@ export default function ChainCanvas({
         </Stack>
       </Modal>
 
-      <Modal
+      <Drawer
         opened={!!node}
         onClose={() => setEditing(null)}
         title={`Node: ${editing ?? ""}`}
-        size="md"
+        position="right"
+        size="sm"
       >
         {node && editing && (
           <Stack gap="sm">
@@ -997,53 +1006,33 @@ export default function ChainCanvas({
               onBlur={(e) => renameNode(editing, e.target.value.trim())}
               data-testid="node-role"
             />
-            {/* D9: a human node contributes its own free text instead of
-                running an agent — hides the agent/model pickers, which are
-                meaningless for it (D10). */}
-            <SegmentedControl
-              data-testid="node-kind"
-              fullWidth
-              value={node.kind === "human" ? "human" : "agent"}
+            <Select
+              label="Agent"
+              description="Which installed agent runs this role."
+              data={agents.map((a) => ({ value: a.id, label: a.name }))}
+              value={node.agent || null}
               onChange={(value) =>
-                setDraft((d) => applyNodePatch(d, editing, { kind: value === "human" ? "human" : "agent" }))
+                value && setDraft((d) => applyNodePatch(d, editing, { agent: value }))
               }
-              data={[
-                { label: "Agent", value: "agent" },
-                { label: "Human", value: "human" },
-              ]}
+              data-testid="node-agent"
             />
-            {node.kind !== "human" && (
-              <>
-                <Select
-                  label="Agent"
-                  description="Which installed agent runs this role."
-                  data={agents.map((a) => ({ value: a.id, label: a.name }))}
-                  value={node.agent || null}
-                  onChange={(value) =>
-                    value && setDraft((d) => applyNodePatch(d, editing, { agent: value }))
-                  }
-                  data-testid="node-agent"
-                />
-                <Select
-                  label="Model"
-                  description="Which model that agent runs on. Left empty, the node follows the thread's model."
-                  placeholder={modelsLoading ? "Loading models…" : models.length ? "Agent default" : "No models offered"}
-                  disabled={modelsLoading || !models.length}
-                  clearable
-                  // Agents offer well over a hundred models; an unfiltered list
-                  // is unscrollable in practice, the same reason the chat's
-                  // picker has a search box.
-                  searchable
-                  nothingFoundMessage="No model by that name"
-                  data={models.map((m) => ({ value: m.id, label: m.name }))}
-                  value={node.model ?? null}
-                  onChange={(value) =>
-                    setDraft((d) => applyNodePatch(d, editing, { model: value }))
-                  }
-                  data-testid="node-model"
-                />
-              </>
-            )}
+            <Select
+              label="Model"
+              description="Which model that agent runs on. Required — a node with no model can't be saved."
+              placeholder={modelsLoading ? "Loading models…" : models.length ? "Pick a model" : "No models offered"}
+              disabled={modelsLoading || !models.length}
+              // Agents offer well over a hundred models; an unfiltered list
+              // is unscrollable in practice, the same reason the chat's
+              // picker has a search box.
+              searchable
+              nothingFoundMessage="No model by that name"
+              data={models.map((m) => ({ value: m.id, label: m.name }))}
+              value={node.model ?? null}
+              onChange={(value) =>
+                value && setDraft((d) => applyNodePatch(d, editing, { model: value }))
+              }
+              data-testid="node-model"
+            />
             <Textarea
               label="Guideline"
               description="How this role should act. Applied on every turn, on top of the original request and the previous step's output — retries start a fresh session but see the same upstream output."
@@ -1084,15 +1073,16 @@ export default function ChainCanvas({
             </Group>
           </Stack>
         )}
-      </Modal>
+      </Drawer>
 
       {/* Edge editor — the edge is the single source of truth for what
           happens between two nodes, so its gate lives here and nowhere else. */}
-      <Modal
+      <Drawer
         opened={!!edge}
         onClose={() => setEditingEdge(null)}
         title={edge ? `${edge.from} → ${edge.to}` : ""}
-        size="md"
+        position="right"
+        size="sm"
       >
         {edge && editingEdge !== null && (
           <Stack gap="sm">
@@ -1192,7 +1182,7 @@ export default function ChainCanvas({
             </Button>
           </Stack>
         )}
-      </Modal>
+      </Drawer>
     </div>
   );
 }

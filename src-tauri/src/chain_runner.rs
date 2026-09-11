@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::chains::{Chain, ChainEdge, Gate, NodeKind};
+use crate::chains::{Chain, ChainEdge, Gate};
 
 /// A run's wall clock, pause-aware (D12/design §1). `elapsed()` excludes time
 /// spent paused, so a run blocked on a human — a human-in-the-loop node or an
@@ -100,16 +100,6 @@ pub trait NodeRunner: Send + Sync {
     /// node produced. `attempt` is 1-based; a retry gets a fresh session
     /// rather than continuing the crashed one's context (D21).
     fn run_turn(&self, role: &str, instruction: &str, attempt: u32) -> TurnResult;
-
-    /// A human-in-the-loop node's turn (D9/design §2): presents `instruction`
-    /// (the same composed seed/upstream text an agent node would receive) and
-    /// returns the human's free text. Dispatched by the scheduler instead of
-    /// `run_turn`, with no retry loop — `max_attempts` is an agent-crash
-    /// concept and retrying a human's prompt is meaningless. Default falls
-    /// back to `run_turn` so existing fakes need no change.
-    fn human_turn(&self, role: &str, instruction: &str) -> TurnResult {
-        self.run_turn(role, instruction, 1)
-    }
 
     /// Called as each node changes state, so the live DAG view can highlight
     /// the executing node (D7). Default no-op keeps tests terse. May be
@@ -341,26 +331,22 @@ impl ChainRun {
                     let max_attempts = self.chain.retry_for(&role).max_attempts.max(1);
                     let budget = Arc::clone(&self.budget);
                     let timeout = self.timeout;
-                    let kind = node.kind;
                     in_flight.insert(role.clone());
 
                     let tx = tx.clone();
                     let abort = Arc::clone(&abort);
                     let role_for_thread = role.clone();
                     scope.spawn(move || {
-                        let result = match kind {
-                            NodeKind::Agent => run_node_turn(
-                                runner,
-                                &role_for_thread,
-                                &instruction,
-                                max_attempts,
-                                &budget,
-                                timeout,
-                                &abort,
-                                cancel,
-                            ),
-                            NodeKind::Human => run_human_turn(runner, &role_for_thread, &instruction, &abort, cancel),
-                        };
+                        let result = run_node_turn(
+                            runner,
+                            &role_for_thread,
+                            &instruction,
+                            max_attempts,
+                            &budget,
+                            timeout,
+                            &abort,
+                            cancel,
+                        );
                         let _ = tx.send((role_for_thread, result));
                     });
                 }
@@ -689,37 +675,6 @@ fn run_node_turn<R: NodeRunner>(
     }
 }
 
-/// A human node's turn (D9/design §2): one attempt, never retried — a human
-/// prompt has no crashed-session concept for a retry to make sense of. Stop
-/// while suspended yields `Cancelled`, matching an agent turn's own
-/// cancellation shape.
-fn run_human_turn<R: NodeRunner>(
-    runner: &R,
-    role: &str,
-    instruction: &str,
-    abort: &AtomicBool,
-    cancel: &AtomicBool,
-) -> Result<String, Outcome> {
-    let is_cancelled = || abort.load(Ordering::SeqCst) || cancel.load(Ordering::SeqCst);
-    if is_cancelled() {
-        runner.on_state(role, NodeState::Cancelled);
-        return Err(Outcome::Cancelled { at: vec![role.to_string()] });
-    }
-    runner.on_state(role, NodeState::Executing);
-    match runner.human_turn(role, instruction) {
-        Ok(output) => Ok(output),
-        Err(message) => {
-            if is_cancelled() {
-                runner.on_state(role, NodeState::Cancelled);
-                Err(Outcome::Cancelled { at: vec![role.to_string()] })
-            } else {
-                runner.on_state(role, NodeState::Failed);
-                Err(Outcome::RetriesExhausted { at: role.into(), attempts: 1, message })
-            }
-        }
-    }
-}
-
 /// D23: the guideline shapes *how* the node acts on the seed and its
 /// upstream's output — it doesn't replace either. The first node has no
 /// upstream segment; a send-back appends the human's note rather than
@@ -1034,16 +989,11 @@ mod tests {
     fn node(role: &str) -> ChainNode {
         ChainNode {
             role: role.into(),
-            kind: NodeKind::Agent,
             guideline: format!("You are the {role}."),
             agent: "claude-code".into(),
             model: None,
             retry: None,
         }
-    }
-
-    fn human_node(role: &str) -> ChainNode {
-        ChainNode { kind: NodeKind::Human, agent: String::new(), ..node(role) }
     }
 
     fn two_node_chain(edges: Vec<ChainEdge>) -> Chain {
@@ -1768,94 +1718,6 @@ mod tests {
             1,
             "a node that itself observed the caller's cancellation must not spend a second attempt"
         );
-        assert_eq!(outcome, Outcome::Cancelled { at: vec!["designer".into()] });
-    }
-
-    // ------------------------------------------------------- human nodes
-
-    #[test]
-    fn a_human_nodes_text_reaches_its_downstream_node_as_upstream_output() {
-        let mut chain = two_node_chain(vec![forward()]);
-        chain.nodes.insert("designer".into(), human_node("designer"));
-        let r = FakeRunner::new(&[("designer", vec![Ok("go bigger".into())])]);
-        let outcome = run(chain).walk(&r, &mut FakeGates::none(), &no_cancel());
-        assert_eq!(outcome, Outcome::Completed { output: "programmer output".into() });
-        let calls = r.calls();
-        let (_, instruction, _) = &calls[1];
-        assert!(instruction.contains("Previous step output (designer): go bigger"), "{instruction}");
-    }
-
-    #[test]
-    fn a_human_node_as_entry_receives_the_seed() {
-        let mut chain = two_node_chain(vec![]);
-        chain.nodes.remove("programmer");
-        chain.nodes.insert("designer".into(), human_node("designer"));
-        let r = FakeRunner::echoing();
-        run(chain).walk(&r, &mut FakeGates::none(), &no_cancel());
-        let calls = r.calls();
-        assert!(calls[0].1.contains("Original request: build me a settings page"), "{}", calls[0].1);
-    }
-
-    #[test]
-    fn a_human_node_in_a_loop_is_still_bounded_by_the_iteration_cap() {
-        let mut chain = two_node_chain(vec![forward(), back(Gate::Verify { command: "t".into() }, 2)]);
-        chain.nodes.insert("designer".into(), human_node("designer"));
-        let r = FakeRunner::echoing();
-        let mut g = FakeGates::verifying(vec![Ok(false), Ok(false), Ok(false), Ok(false)]);
-        let outcome = run(chain).walk(&r, &mut g, &no_cancel());
-        assert_eq!(outcome, Outcome::CapReached { at: "designer".into(), max_iterations: 2 });
-    }
-
-    #[test]
-    fn a_human_node_is_never_retried() {
-        let mut chain = two_node_chain(vec![]);
-        chain.nodes.remove("programmer");
-        chain.retry = RetryPolicy { max_attempts: 3 };
-        chain.nodes.insert("designer".into(), human_node("designer"));
-        let r = FakeRunner::new(&[("designer", vec![Err("no answer".into())])]);
-        let outcome = run(chain).walk(&r, &mut FakeGates::none(), &no_cancel());
-        assert_eq!(r.calls().len(), 1, "a human node must never be retried");
-        assert!(matches!(outcome, Outcome::RetriesExhausted { attempts: 1, .. }), "{outcome:?}");
-    }
-
-    /// Stop during a human wait must yield `Cancelled`, matching an agent
-    /// turn's own cancellation shape — not `Failed`.
-    #[test]
-    fn stop_during_a_human_wait_yields_cancelled_not_failed() {
-        struct BlockingHuman {
-            release: Mutex<Option<mpsc::Receiver<()>>>,
-            started: Mutex<Option<mpsc::Sender<()>>>,
-        }
-        impl NodeRunner for BlockingHuman {
-            fn run_turn(&self, _role: &str, _instruction: &str, _attempt: u32) -> TurnResult {
-                unreachable!("this node is a human node")
-            }
-            fn human_turn(&self, role: &str, _instruction: &str) -> TurnResult {
-                if let Some(tx) = self.started.lock().unwrap().take() {
-                    let _ = tx.send(());
-                }
-                if let Some(rx) = self.release.lock().unwrap().take() {
-                    rx.recv().ok();
-                }
-                Err(format!("`{role}` cancelled"))
-            }
-        }
-        let mut chain = two_node_chain(vec![]);
-        chain.nodes.remove("programmer");
-        chain.nodes.insert("designer".into(), human_node("designer"));
-        let cancel = AtomicBool::new(false);
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let runner = BlockingHuman { release: Mutex::new(Some(release_rx)), started: Mutex::new(Some(started_tx)) };
-        let mut chain_run = run(chain);
-
-        let outcome = std::thread::scope(|scope| {
-            let handle = scope.spawn(|| chain_run.walk(&runner, &mut FakeGates::none(), &cancel));
-            started_rx.recv().unwrap();
-            cancel.store(true, Ordering::SeqCst);
-            release_tx.send(()).unwrap();
-            handle.join().unwrap()
-        });
         assert_eq!(outcome, Outcome::Cancelled { at: vec!["designer".into()] });
     }
 

@@ -111,6 +111,23 @@ describe("ChainCanvas — add node (CHA-02)", () => {
   });
 });
 
+describe("ChainCanvas — node editor is a side panel, not a blocking modal", () => {
+  it("opens the node editor as a Drawer, leaving the canvas node visible behind it", async () => {
+    render(
+      <MantineProvider>
+        <ChainCanvas projectHash="proj-1" chainName={null} agents={[{ id: "claude", name: "Claude Agent" }]} verifyCommands={[]} />
+      </MantineProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    await screen.findByTestId("node-role");
+
+    expect(document.querySelector(".mantine-Drawer-root")).toBeInTheDocument();
+    expect(screen.getByTestId("node-role").closest(".mantine-Drawer-content")).toBeTruthy();
+    expect(screen.getByTestId(/^chain-node-/)).toBeInTheDocument();
+  });
+});
+
 // D14: `onNodePointerUp` nulls `dragging.current` before the click fires
 // (pointerup always precedes click), so a guard reading `dragging.current`
 // at click time always saw `null` and fell through to `activate()` — every
@@ -182,8 +199,8 @@ const chain = {
   timeoutSeconds: 1800,
   retry: { maxAttempts: 2 },
   nodes: {
-    scout: { role: "scout", agent: "codex", guideline: "inspect" },
-    judge: { role: "judge", agent: "codex", guideline: "judge" },
+    scout: { role: "scout", agent: "codex", model: "gpt-5", guideline: "inspect" },
+    judge: { role: "judge", agent: "codex", model: "gpt-5", guideline: "judge" },
   },
   edges: [{ from: "scout", to: "judge" }],
   layout: {},
@@ -322,7 +339,9 @@ describe("ChainCanvas — Test run guard (Wave E gap)", () => {
 
     expect(screen.queryByRole("button", { name: "Test run" })).not.toBeInTheDocument();
 
+    apiMock.listModels.mockResolvedValueOnce({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] });
     fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    await waitFor(() => expect(document.querySelector(".ds-chain-node-model")).toBeInTheDocument());
     fireEvent.change(screen.getByTestId("chain-name"), { target: { value: "brand-new" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -432,8 +451,10 @@ describe("ChainCanvas — removeNode layout cleanup", () => {
         <ChainCanvas projectHash="proj-1" chainName={null} agents={[{ id: "claude", name: "Claude Agent" }]} verifyCommands={[]} />
       </MantineProvider>
     );
+    apiMock.listModels.mockResolvedValue({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] });
     fireEvent.click(screen.getByRole("button", { name: "Node" })); // adds "step"
     fireEvent.click(screen.getByRole("button", { name: "Node" })); // adds "step-2"
+    await waitFor(() => expect(document.querySelector(".ds-chain-node-model")).toBeInTheDocument());
     // Keyboard delete (H2) removes "step" without needing to route through
     // its editor modal — and without disturbing "step-2"'s.
     fireEvent.keyDown(screen.getByTestId("chain-node-step"), { key: "Delete" });
@@ -551,33 +572,6 @@ describe("ChainCanvas — Model Select loading state", () => {
   });
 });
 
-describe("ChainCanvas — human node kind toggle (D9)", () => {
-  it("hides the agent and model pickers once a node is toggled to human", async () => {
-    render(
-      <MantineProvider>
-        <ChainCanvas projectHash="proj-1" chainName={null} agents={[{ id: "claude", name: "Claude Agent" }]} verifyCommands={[]} />
-      </MantineProvider>
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Node" }));
-    await screen.findByTestId("node-agent");
-
-    fireEvent.click(within(screen.getByTestId("node-kind")).getByText("Human"));
-
-    expect(screen.queryByTestId("node-agent")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("node-model")).not.toBeInTheDocument();
-  });
-
-  it("a human node does not block on a missing agent (draftProblem)", () => {
-    const draft = {
-      ...chain,
-      nodes: { writer: { role: "writer", agent: "", kind: "human" as const, guideline: "" } },
-      entry: "writer",
-      edges: [],
-    };
-    expect(draftProblem(draft)).toBeNull();
-  });
-});
-
 describe("ChainCanvas — dirty indicator", () => {
   it("shows an unsaved-changes indicator after editing a loaded chain, and clears it after Save", async () => {
     apiMock.listChains.mockResolvedValueOnce([chain]);
@@ -601,7 +595,9 @@ describe("ChainCanvas — dirty indicator", () => {
         <ChainCanvas projectHash="proj-1" chainName={null} agents={[{ id: "claude", name: "Claude Agent" }]} verifyCommands={[]} onSaved={onSaved} />
       </MantineProvider>
     );
+    apiMock.listModels.mockResolvedValueOnce({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] });
     fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    await waitFor(() => expect(document.querySelector(".ds-chain-node-model")).toBeInTheDocument());
     fireEvent.change(screen.getByTestId("chain-name"), { target: { value: "Design Loop" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith("Design Loop"));
@@ -729,6 +725,22 @@ describe("draftProblem", () => {
     });
     expect(problem).toBe("auditor has no agent bound to it.");
     expect(problem).not.toContain("undefined");
+  });
+
+  it("requires a model on every node", () => {
+    const problem = draftProblem({
+      name: "c",
+      entry: "scout",
+      nodes: {
+        scout: { role: "scout", guideline: "", agent: "claude", model: "claude-sonnet-5" },
+        auditor: { role: "auditor", guideline: "", agent: "claude" },
+      },
+      edges: [],
+      layout: {},
+      timeoutSeconds: 600,
+      retry: { maxAttempts: 1 },
+    });
+    expect(problem).toBe("auditor has no model bound to it.");
   });
 });
 

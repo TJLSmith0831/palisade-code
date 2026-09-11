@@ -311,7 +311,7 @@ pub(crate) fn is_auth_required(err: &acp::Error) -> bool {
 
 /// Mirror of the frontend's `isAuthError` (src/errors.ts): agents report an
 /// expired or missing login in prose, with no shared error code between them.
-fn reads_as_auth_failure(text: &str) -> bool {
+pub(crate) fn reads_as_auth_failure(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     [
         "authenticate",

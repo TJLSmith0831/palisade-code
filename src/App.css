@@ -4932,6 +4932,11 @@ button.ds-onboarding-status {
   flex-shrink: 0;
 }
 
+.ds-composer-picker.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
 .ds-composer-picker-label {
   min-width: 0;
   overflow: hidden;

@@ -696,7 +696,7 @@ impl Sink for AppSink {
         }
 
         match &envelope_ref.event {
-            ExecutorEvent::Crashed { .. } => {
+            ExecutorEvent::Crashed { message, .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
                 // #18: only a dead agent drops the thread back to spec. A
                 // retryable turn failure (expired auth, a cancelled turn)
@@ -705,11 +705,35 @@ impl Sink for AppSink {
                 if executor::crash_resets_mode(&envelope_ref.event) {
                     let _ = executor::on_crash(&palisade_home(), &self.project_hash, &thread_id);
                 }
+                // Persist an auth-shaped failure on the thread so the
+                // composer can warn before the *next* message is even typed,
+                // not just after it fails the same way again.
+                if acp_client::reads_as_auth_failure(message) {
+                    let _ = store::set_thread_auth_blocked(
+                        &palisade_home(),
+                        &self.project_hash,
+                        &thread_id,
+                        Some(message),
+                    );
+                }
                 let _ = self.app.emit("thread-updated", &thread_id);
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
                 let _ = harness.session_log_writer.lock().unwrap().flush();
+                // A turn made it to completion, so whatever auth problem
+                // blocked an earlier one no longer applies.
+                if thread_meta(&self.project_hash, &thread_id)
+                    .is_some_and(|m| m.auth_blocked.is_some())
+                {
+                    let _ = store::set_thread_auth_blocked(
+                        &palisade_home(),
+                        &self.project_hash,
+                        &thread_id,
+                        None,
+                    );
+                    let _ = self.app.emit("thread-updated", &thread_id);
+                }
                 let watch = harness.pending_propose.lock().unwrap().take();
                 if let Some(watch) = watch {
                     let after = executor::openspec_changes(&harness.openspec_cache, &watch.project_root);
@@ -2946,9 +2970,7 @@ fn unavailable_agents(chain: &chains::Chain, installed: impl Fn(&str) -> bool) -
     let mut missing: Vec<String> = chain
         .nodes
         .values()
-        // Human nodes bind no agent (D11) — otherwise this preflight would
-        // block every chain containing one.
-        .filter(|node| node.kind == chains::NodeKind::Agent && !installed(&node.agent))
+        .filter(|node| !installed(&node.agent))
         .map(|node| format!("`{}` needs {}", node.role, node.agent))
         .collect();
     if missing.is_empty() {
@@ -3133,7 +3155,6 @@ fn launch_chain_run(
                 state: None,
                 outcome: Some(outcome),
                 awaiting_approval: None,
-                awaiting_human: None,
                 session_id: None,
                 cost: None,
             },
@@ -3229,22 +3250,6 @@ async fn resolve_chain_gate(
         .cloned()
         .ok_or("that chain run isn't waiting at an approval gate")?;
     sender.send(approval).map_err(|_| "that chain run is no longer listening".to_string())
-}
-
-/// D9: answers a suspended human-in-the-loop node with the user's free text.
-/// Shaped like `resolve_chain_gate` just above, including its deliberate
-/// error for a run that isn't actually waiting there.
-#[tauri::command]
-async fn resolve_chain_human(app: tauri::AppHandle, run_id: String, role: String, text: String) -> Res<()> {
-    let harness: tauri::State<'_, Harness> = app.state();
-    let sender = harness
-        .chain_humans
-        .lock()
-        .unwrap()
-        .get(&(run_id, role))
-        .cloned()
-        .ok_or("that chain run isn't waiting on a human node")?;
-    sender.send(text).map_err(|_| "that chain run is no longer listening".to_string())
 }
 
 /// What the project root suggests running. A proposal the user confirms —
@@ -3841,7 +3846,6 @@ pub fn run() {
             rerun_chain_run,
             cancel_chain_run,
             resolve_chain_gate,
-            resolve_chain_human,
             mac_rounded_corners::enable_rounded_corners,
             mac_rounded_corners::enable_modern_window_style,
             mac_rounded_corners::reposition_traffic_lights,
@@ -3970,8 +3974,7 @@ mod tests {
                             role.to_string(),
                             ChainNode {
                                 role: role.to_string(),
-                                kind: crate::chains::NodeKind::Agent,
-                guideline: String::new(),
+                                guideline: String::new(),
                                 agent: agent.to_string(),
                                 model: None,
                                 retry: None,
@@ -4012,15 +4015,6 @@ mod tests {
             let programmer = err.find("`programmer`").unwrap();
             assert!(designer < programmer, "{err}");
         }
-
-        /// D11: a human node binds no agent, so the preflight must not block
-        /// a chain made entirely of them.
-        #[test]
-        fn a_chain_of_only_human_nodes_is_not_blocked() {
-            let mut c = chain(&[("designer", "")]);
-            c.nodes.get_mut("designer").unwrap().kind = crate::chains::NodeKind::Human;
-            assert!(crate::unavailable_agents(&c, |_| false).is_ok());
-        }
     }
 
     mod chain_rerun_start {
@@ -4035,8 +4029,7 @@ mod tests {
                     role.to_string(),
                     ChainNode {
                         role: role.into(),
-                        kind: crate::chains::NodeKind::Agent,
-                guideline: if role == "judge" { "snapshot judge".into() } else { String::new() },
+                        guideline: if role == "judge" { "snapshot judge".into() } else { String::new() },
                         agent: "codex".into(),
                         model: None,
                         retry: None,
@@ -4260,6 +4253,7 @@ mod tests {
             merged_at: None,
             worktree_enabled: true,
             title_source: "manual".into(),
+            auth_blocked: None,
         }
     }
 

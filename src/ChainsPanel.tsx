@@ -46,29 +46,35 @@ type Props = {
 
 /**
  * The empty-state worked example (D16): a two-node chain — an agent drafts,
- * a human reviews — small enough to read at a glance while still
- * demonstrating the one genuinely new capability (D9). `agentId` binds the
- * drafter to whatever is actually installed; `chains::save`'s own validation
- * is what a schema change breaking this shape would fail against.
+ * an agent reviews, and a human approves or sends it back for another draft
+ * — small enough to read at a glance while still demonstrating the
+ * human-in-the-loop approval gate. `agentId` binds both nodes to whatever is
+ * actually installed; a model is required on every node (no model = no
+ * node), so `modelId` binds both to whatever that agent actually offers.
+ * `chains::save`'s own validation is what a schema change breaking this
+ * shape would fail against.
  */
-export function workedExampleChain(agentId: string): api.Chain {
+export function workedExampleChain(agentId: string, modelId: string): api.Chain {
   return {
     name: "Example - draft then review",
     nodes: {
       drafter: {
         role: "drafter",
-        kind: "agent",
         guideline: "Write a short first draft answering the request.",
         agent: agentId,
+        model: modelId,
       },
       reviewer: {
         role: "reviewer",
-        kind: "human",
-        guideline: "Read the draft. Type your own edit, or retype it as-is to approve it.",
-        agent: "",
+        guideline: "Critique the draft against the original request.",
+        agent: agentId,
+        model: modelId,
       },
     },
-    edges: [{ from: "drafter", to: "reviewer" }],
+    edges: [
+      { from: "drafter", to: "reviewer" },
+      { from: "reviewer", to: "drafter", gate: { type: "approval" }, maxIterations: 3 },
+    ],
     entry: "drafter",
     timeoutSeconds: 1800,
     retry: { maxAttempts: 2 },
@@ -117,7 +123,10 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
     if (!projectHash) return;
     setExampleBusy(true);
     try {
-      const example = workedExampleChain(agents?.[0]?.id ?? "claude-code");
+      const agentId = agents?.[0]?.id ?? "claude-code";
+      const { models } = await api.listModels(projectHash, agentId);
+      if (!models[0]) throw new Error(`${agentId} offers no models to bind the worked example to.`);
+      const example = workedExampleChain(agentId, models[0].id);
       if (!chains.some((c) => c.name === example.name)) {
         await api.saveChain(projectHash, example);
         announceChainsChanged();

@@ -83,9 +83,6 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
   const [pending, setPending] = useState<"approve" | "sendBack" | "reject" | null>(null);
   const [sendingBack, setSendingBack] = useState(false);
   const [note, setNote] = useState("");
-  const [humanText, setHumanText] = useState("");
-  const [submittingHuman, setSubmittingHuman] = useState(false);
-  const [humanSubmitted, setHumanSubmitted] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,29 +104,6 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     }
     lastResolved.current = resolved;
   }, [run.awaiting?.resolved, run.awaiting?.from]);
-
-  const lastHumanRole = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const role = run.awaitingHuman?.role;
-    if (role !== lastHumanRole.current) {
-      setHumanText("");
-      setHumanSubmitted(false);
-    }
-    lastHumanRole.current = role;
-  }, [run.awaitingHuman?.role]);
-
-  const submitHuman = async () => {
-    if (!run.awaitingHuman || !humanText.trim()) return;
-    setSubmittingHuman(true);
-    try {
-      await api.resolveChainHuman(run.runId, run.awaitingHuman.role, humanText);
-      setHumanSubmitted(true);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setSubmittingHuman(false);
-    }
-  };
 
   const decide = async (decision: "approve" | "sendBack" | "reject") => {
     setPending(decision);
@@ -314,44 +288,6 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
                 Reject
               </Button>
             </Group>
-          )}
-        </Stack>
-      )}
-
-      {run.awaitingHuman && (
-        <Stack gap={4} mt={4} data-testid="chain-run-card-human">
-          <Text size="xs" fw={600}>
-            {run.awaitingHuman.role} needs your input
-          </Text>
-          <Text
-            size="xs"
-            data-testid="chain-run-card-human-instruction"
-            style={{ maxHeight: "10em", overflow: "auto", whiteSpace: "pre-wrap" }}
-          >
-            {run.awaitingHuman.instruction}
-          </Text>
-          {humanSubmitted ? (
-            <Text size="xs" data-testid="chain-run-card-human-submitted">
-              Submitted
-            </Text>
-          ) : (
-            <TextInput
-              size="xs"
-              autoFocus
-              placeholder="Your response"
-              value={humanText}
-              onChange={(e) => setHumanText(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && humanText.trim()) void submitHuman();
-              }}
-              rightSection={
-                <Button size="compact-xs" disabled={!humanText.trim() || submittingHuman} onClick={() => void submitHuman()}>
-                  Send
-                </Button>
-              }
-              rightSectionWidth={50}
-              data-testid="chain-run-card-human-input"
-            />
           )}
         </Stack>
       )}

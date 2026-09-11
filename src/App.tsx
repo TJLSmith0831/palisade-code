@@ -88,7 +88,7 @@ import type {
   ThreadMeta,
 } from "./api";
 import { onActivateKey } from "./a11y";
-import { describeError } from "./errors";
+import { describeError, isAuthError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
 import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
 import { applyMention, mentionAt, rankMentions } from "./mentions";
@@ -620,6 +620,18 @@ export const ChatSurface = memo(
       models && typeof models === "object" && !("error" in models)
         ? models
         : null;
+    // Two sources for the same fact, live wins: `modelError` comes from the
+    // thread-open auto-probe and reflects the agent's *current* status; a
+    // successful probe (`modelState`) clears any stale `thread.authBlocked`
+    // left over from the last turn that failed, without waiting for the
+    // backend to see another turn complete. Before the probe resolves,
+    // `authBlocked` is the best signal available.
+    const authIssue =
+      modelError && isAuthError(modelError)
+        ? modelError
+        : modelState
+          ? null // a fresh, successful probe outranks a stale persisted flag
+          : (thread?.authBlocked ?? null);
     const filteredModels = useMemo(() => {
       if (!modelState) return [];
       if (!modelQuery) return modelState.models;
@@ -789,11 +801,16 @@ export const ChatSurface = memo(
     const currentModelId =
       thread?.model ?? framingModel ?? modelState?.current ?? null;
     const modelLabel =
-      models === "loading"
-        ? "…"
-        : modelError
-          ? "models unavailable"
-          : currentModelId
+      // A known bad flag (from a persisted `authBlocked`, since the live
+      // probe can't have finished yet if it's loading) outranks "…" — an
+      // in-flight probe must never hide a warning already known to be true.
+      authIssue
+        ? "sign in needed"
+        : models === "loading"
+          ? "…"
+          : modelError
+            ? "models unavailable"
+            : currentModelId
             ? (modelState?.models.find((m) => m.id === currentModelId)?.name ??
               currentModelId)
             : "default";
@@ -2097,12 +2114,17 @@ export const ChatSurface = memo(
                 <button
                   className={`ds-composer-picker${
                     currentModelId ? " selected" : ""
-                  }`}
+                  }${authIssue ? " warn" : ""}`}
                   data-testid="model-btn"
                   data-tauri-drag-region-exclude
                   disabled={!executor}
+                  title={authIssue ?? undefined}
                 >
-                  <IconBox size={14} />
+                  {authIssue ? (
+                    <IconAlertTriangle size={14} data-testid="model-btn-auth-warning" />
+                  ) : (
+                    <IconBox size={14} />
+                  )}
                   <span className="ds-composer-picker-label">{modelLabel}</span>
                   <IconChevronDown size={12} />
                 </button>
@@ -4540,16 +4562,6 @@ export default function App() {
               : payload.state
                 ? null
                 : base.awaiting,
-          // Mirrors `awaiting`'s own clearing rules exactly (D17): a run
-          // outcome or a node starting its next turn clears a stale
-          // suspension the same way it does for an approval gate.
-          awaitingHuman: payload.outcome
-            ? null
-            : payload.awaitingHuman
-              ? { role: payload.awaitingHuman.role, instruction: payload.awaitingHuman.instruction }
-              : payload.state
-                ? null
-                : base.awaitingHuman,
           outcome: payload.outcome ?? base.outcome,
         };
       });
@@ -6003,6 +6015,18 @@ export default function App() {
   // how the two shells drifted apart in the first place.
   const activeExecutor =
     thread?.executor ?? framingExecutor ?? flight?.selected ?? null;
+  // Know before you type, not just after a turn already died on it (#19
+  // follow-up): probe the thread's real executor once when it opens.
+  // `probeAgentModels` already caches per agent id, so switching back to a
+  // thread already probed this run costs nothing. Deliberately scoped to an
+  // *open thread's* actual executor — never all installed agents, and never
+  // on the onboarding screen (`OnboardingScreen.tsx`'s own probe stays
+  // click-only there), because a probe is a real spawn and at least one
+  // agent (Devin) launches its own sign-in flow the moment it's probed.
+  useEffect(() => {
+    if (!project || !thread || !activeExecutor) return;
+    probeAgentModels(activeExecutor);
+  }, [project, thread?.id, activeExecutor, probeAgentModels]);
   const chatProps = {
     project,
     thread,

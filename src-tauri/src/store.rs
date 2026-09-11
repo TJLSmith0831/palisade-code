@@ -338,6 +338,13 @@ pub struct ThreadMeta {
     /// carry names their users typed, and renaming those would be theft.
     #[serde(default = "manual_title_source")]
     pub title_source: String,
+    /// Set when this thread's last turn died on the executor's own
+    /// "needs authentication" signal (ACP `auth_required`, or an agent's
+    /// prose fallback) — the detail text, so the composer can warn before
+    /// the next message is even typed instead of only after it fails again.
+    /// Cleared on the thread's next successful turn.
+    #[serde(default)]
+    pub auth_blocked: Option<String>,
 }
 
 fn manual_title_source() -> String {
@@ -380,6 +387,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         // A brand new thread's title is a placeholder ("New thread"), not a
         // choice — the first turn replaces it.
         title_source: "auto".into(),
+        auth_blocked: None,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -596,6 +604,20 @@ pub fn set_thread_executor(
     update_thread(home, hash, id, |m| {
         m.executor = executor.map(str::to_string);
         m.model = model.map(str::to_string);
+    })
+}
+
+/// Record (or clear, with `None`) the thread's auth-blocked state (see
+/// `ThreadMeta::auth_blocked`). Not a session-log entry: this is transient
+/// "is the next turn likely to fail" status, not a durable turn outcome.
+pub fn set_thread_auth_blocked(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    detail: Option<&str>,
+) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.auth_blocked = detail.map(str::to_string);
     })
 }
 
@@ -1239,6 +1261,28 @@ mod tests {
             set_thread_executor(home.path(), &project.hash, &thread.id, None, None).unwrap();
         assert_eq!(cleared.executor, None);
         assert_eq!(cleared.model, None);
+    }
+
+    #[test]
+    fn thread_auth_blocked_round_trips_and_clears() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert_eq!(thread.auth_blocked, None);
+
+        let blocked =
+            set_thread_auth_blocked(home.path(), &project.hash, &thread.id, Some("codex needs to be signed in"))
+                .unwrap();
+        assert_eq!(blocked.auth_blocked.as_deref(), Some("codex needs to be signed in"));
+
+        // Persisted, not just in memory.
+        let loaded = list_threads(home.path(), &project.hash).unwrap();
+        let found = loaded.iter().find(|t| t.id == thread.id).unwrap();
+        assert_eq!(found.auth_blocked.as_deref(), Some("codex needs to be signed in"));
+
+        // A successful turn clears it.
+        let cleared = set_thread_auth_blocked(home.path(), &project.hash, &thread.id, None).unwrap();
+        assert_eq!(cleared.auth_blocked, None);
     }
 
     #[test]
