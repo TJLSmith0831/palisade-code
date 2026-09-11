@@ -1,35 +1,52 @@
 ---
 name: Palisade Code
-description: A configurable, dense desktop workbench for coding-agent work.
+description: A minimalist, intuitive workbench for orchestrating ACP agents.
 colors:
+  backdrop: "oklch(11% 0.015 var(--accent-hue, 145))"
   chrome-bg: "oklch(15% 0.004 250)"
-  bg: "oklch(18% 0.005 250)"
+  workbench-charcoal: "oklch(18% 0.005 250)"
   editor-bg: "oklch(20% 0.005 250)"
   surface: "oklch(22% 0.006 250)"
   surface-warm: "oklch(26% 0.008 250)"
-  active-row: "oklch(24% 0.02 var(--accent-hue, 145))"
-  fg: "oklch(96% 0.003 250)"
+  selected-surface: "oklch(24% 0.02 var(--accent-hue, 145))"
+  foreground: "oklch(96% 0.003 250)"
   muted: "oklch(66% 0.012 250)"
   border: "oklch(30% 0.01 250)"
-  accent: "oklch(88% 0.21 var(--accent-hue, 145))"
-  accent-on: "oklch(20% 0.03 var(--accent-hue, 145))"
+  agent-signal: "oklch(88% 0.21 var(--accent-hue, 145))"
+  agent-signal-ink: "oklch(20% 0.03 var(--accent-hue, 145))"
+  twilight-glow: "oklch(18% 0.03 var(--accent-hue, 145))"
   success: "oklch(72% 0.15 160)"
-  warn: "oklch(76% 0.15 65)"
+  warning: "oklch(76% 0.15 65)"
   danger: "oklch(64% 0.22 25)"
+  danger-ink: "oklch(98% 0.02 25)"
 typography:
+  display:
+    fontFamily: '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    fontSize: "21px"
+    fontWeight: 700
+    lineHeight: 1.3
+    letterSpacing: "-0.01em"
   body:
     fontFamily: '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.5
   label:
-    fontFamily: '"Geist Sans", Inter, system-ui, sans-serif'
+    fontFamily: '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
     fontSize: "11px"
     fontWeight: 600
+    lineHeight: 1.4
+  micro:
+    fontFamily: '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    fontSize: "10px"
+    fontWeight: 600
+    lineHeight: 1.3
+    letterSpacing: "0.05em"
   mono:
     fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace'
     fontSize: "12px"
     fontWeight: 400
+    lineHeight: 1.5
 rounded:
   xs: "4px"
   sm: "6px"
@@ -43,137 +60,201 @@ spacing:
   lg: "12px"
   xl: "16px"
 components:
-  icon-button:
+  button-primary:
+    backgroundColor: "{colors.agent-signal}"
+    textColor: "{colors.agent-signal-ink}"
+    rounded: "{rounded.sm}"
+    padding: "6px 10px"
+  button-ghost:
     backgroundColor: "transparent"
     textColor: "{colors.muted}"
     rounded: "{rounded.sm}"
-    size: "32px"
+    padding: "6px 10px"
+  input:
+    backgroundColor: "{colors.surface-warm}"
+    textColor: "{colors.foreground}"
+    rounded: "{rounded.sm}"
+    padding: "6px 10px"
   active-navigation:
-    backgroundColor: "{colors.active-row}"
-    textColor: "{colors.accent}"
+    backgroundColor: "{colors.selected-surface}"
+    textColor: "{colors.agent-signal}"
     rounded: "{rounded.sm}"
     size: "32px"
-  modal:
-    backgroundColor: "{colors.bg}"
-    textColor: "{colors.fg}"
+  composer-picker:
+    backgroundColor: "transparent"
+    textColor: "{colors.muted}"
     rounded: "{rounded.md}"
-    padding: "{spacing.lg}"
+    padding: "0 10px"
+    height: "34px"
+  command-chip:
+    backgroundColor: "{colors.selected-surface}"
+    textColor: "{colors.agent-signal}"
+    rounded: "{rounded.pill}"
+    padding: "3px 8px"
+  project-card:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.foreground}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.xl}"
+  chain-node:
+    backgroundColor: "{colors.surface-warm}"
+    textColor: "{colors.foreground}"
+    rounded: "{rounded.sm}"
+    padding: "8px 10px"
 ---
 
 # Design System: Palisade Code
 
 ## Overview
 
-**Creative North Star: "The Adaptive Agent Workbench"**
+**Creative North Star: "The Minimalist, Intuitive Agent Workbench"**
 
-Palisade Code is a compact desktop environment for directing agents and inspecting the work they produce. Its visual language is operational rather than branded: quiet neutral planes establish a stable field, precise borders divide dense information, and a configurable accent singles out the one thing that needs attention now. The interface stays recognizably one product when a user changes its accent, shell palette, editor colors, or light/dark scheme.
+Palisade Code should feel like an idyllic place to do serious work: ordered, calm, and quietly alive. Dense tools sit in a legible hierarchy of neutral planes, while Agent Signal marks the current selection, live process, or next meaningful action. The result is minimalist without becoming anhedonic—visual pleasure comes from clarity, responsive state, and moments of restrained warmth rather than ornament.
 
-The two workspace arrangements have different priorities, not different identities. Editor prioritizes files and code; Vibe prioritizes conversation and sessions. They share one mounted structure, one token system, and one component vocabulary.
+The system practices quietly tactile restraint. Controls answer with a tonal lift, a crisp focus halo, or a short transition; running sessions pulse softly; chain nodes change state with deliberate color; onboarding carries one ambient glow. Those responses make the workbench feel inhabited while keeping attention on code, agents, and evidence.
+
+Editor and Vibe are two arrangements of the same mounted workspace rather than separate identities. The theme can move between dark and light, and users can change the accent hue, shell colors, editor colors, and editor font without breaking the hierarchy.
 
 **Key Characteristics:**
 
-- Native desktop-density: a 36px utility chrome, 44px activity rail, compact rows, and resizable task surfaces.
-- A neutral, themeable foundation with user-selectable accent and editor/shell palettes.
-- Sans for readable language and mono for code, paths, commands, values, labels, and status.
-- Borders and tonal steps create resting hierarchy; shadow is reserved for floating context.
-- Standard controls come from Mantine and icons from Tabler.
+- Compact desktop density with a 36px utility chrome, a 44px activity rail, and resizable work surfaces.
+- Themeable neutral planes organized around one configurable Agent Signal accent.
+- Human-readable sans text paired with mono for code, paths, commands, values, and technical status.
+- Borders and tonal steps at rest; shadow only for floating context or an intentional active lift.
+- Quiet tactile feedback through 120–180ms transitions, focus halos, state pulses, and restrained ambient motion.
 
 ## Colors
 
-The default is a cool dark workbench; light mode mirrors every shell and syntax role. `--accent-hue` defaults to 145 but Settings exposes green, blue, violet, amber, rose, teal, red, and orange choices. The color system must therefore describe roles rather than assuming one permanent brand hue.
+The default dark palette begins with Workbench Charcoal and cool, near-neutral structural planes. Light mode mirrors the same semantic roles with pale, low-chroma surfaces. Agent Signal follows the user-selected accent hue, so the system names color by purpose rather than assuming green is permanent.
 
 ### Primary
 
-- **Active Accent** (`oklch(88% 0.21 var(--accent-hue, 145))`): selection, keyboard focus, active navigation, and live agent state.
-- **Accent Ink** (`oklch(20% 0.03 var(--accent-hue, 145))`): content on an accent fill.
-- **Selected Surface** (`oklch(24% 0.02 var(--accent-hue, 145))`): low-intensity selection fill.
+- **Agent Signal:** Reserved for selected, focused, live, agent-touched, or primary-action state.
+- **Agent Signal Ink:** Maintains readable content on a solid signal fill.
+- **Selected Surface:** Carries low-intensity selection without competing with the foreground.
 
 ### Neutral
 
-- **Chrome** (`oklch(15% 0.004 250)`), **canvas** (`oklch(18% 0.005 250)`), and **editor** (`oklch(20% 0.005 250)`) establish the structural planes.
-- **Surface** (`oklch(22% 0.006 250)`) and **raised surface** (`oklch(26% 0.008 250)`) distinguish panels, controls, and hover lifts.
-- **Foreground**, **muted**, and **border** provide normal hierarchy and 1px separation.
+- **Workbench Charcoal:** The dark-mode working canvas and tonal anchor.
+- **Chrome, Editor, Surface, and Warm Surface:** Form a closely stepped hierarchy for navigation, work areas, panels, controls, and hover lift.
+- **Foreground, Muted, and Border:** Separate primary content, secondary context, and structural boundaries.
 
 ### Semantic and code color
 
-- Success, warning, and danger (`oklch(72% 0.15 160)`, `oklch(76% 0.15 65)`, `oklch(64% 0.22 25)`) always appear with a label, glyph, or icon.
-- Syntax colors are independent of application state: violet keywords, green atoms, amber numbers/functions, orange strings, blue variables, teal types, and muted comments.
+- **Success, Warning, and Danger:** Communicate outcomes and risk only when paired with language, a glyph, or an icon.
+- Syntax colors remain independent of application state so code meaning never competes with agent state.
 
-**The Active-Only Rule.** Accent color marks attention and state, not decoration. Inactive chrome, borders, and routine buttons remain neutral.
+**The One Signal Rule.** Agent Signal marks attention and state, never decoration; routine chrome and inactive controls remain neutral.
+
+**The Theme-by-Role Rule.** New colors must preserve their semantic role in dark, light, and user-customized themes instead of depending on one fixed hue.
 
 ## Typography
 
+**Display Font:** Geist Sans, Inter, then the system sans stack.
+
 **Body Font:** Geist Sans, Inter, then the system sans stack.
 
-**Mono Font:** `ui-monospace`, SF Mono, JetBrains Mono, then platform fallbacks.
+**Label/Mono Font:** The platform UI monospace stack, led by SF Mono on macOS when available.
 
-**Character:** Text that a person reads as a sentence uses the sans voice. Text that a developer scans, copies, or parses uses mono.
+**Character:** Sentence-level language is calm and direct in sans. Anything a developer scans, copies, compares, or parses moves to mono, creating a natural boundary between explanation and operation.
 
 ### Hierarchy
 
-- **Body** (400, 13px, 1.5): messages, descriptions, and ordinary UI text.
-- **Label** (600, 11px): compact controls and panel headings.
-- **Mono** (400, 12px): code, paths, terminal, tabs, and values.
-- **Micro label** (600, 10px): metadata, status, keyboard chords, and uppercase section labels.
-- **Display** (700, 21px): sparse introductory headings, never the default working rhythm.
+- **Display:** Sparse onboarding and introductory headings only; it should never become the default working rhythm.
+- **Body:** Messages, descriptions, and ordinary interface prose.
+- **Label:** Compact controls, panel headings, and short action language.
+- **Micro:** Metadata, uppercase section labels, state text, and keyboard chords.
+- **Mono:** Code, paths, terminal output, tabs, branches, values, and tabular technical data.
 
-**The Read/Run Rule.** Sans is for understanding; mono is for operating.
+**The Read/Run Rule.** Use sans for understanding and mono for operating.
 
 ## Layout
 
-The shell fills the window below a 36px top bar. A permanent 44px activity rail exposes twelve destinations: Explorer, Search, Source Control, Workspace, Specs, Codebase Map, Run, MCP, Database, Chains, History, and Settings. The selected destination uses a consistent compact side-panel head/body structure.
+The application fills a desktop window beneath a fixed utility bar. A narrow activity rail opens one task-focused side panel beside the main editor and chat workspace; a terminal and problems region can rise from the bottom. Editor prioritizes files and code, while Vibe reorders the same surfaces to prioritize sessions and conversation.
 
-Editor orders the workspace as rail → panel → editor → chat. Vibe rearranges the same nodes so sessions and chat lead, followed by editor, panel, and rail. The terminal/problems tray is a resizable bottom region with a 220px default. All collapsible rails exit the flex layout rather than covering work behind them.
+The spacing rhythm is compact and deliberate. Small steps structure rows, icon groups, labels, and inline controls; larger steps are reserved for messages, overlays, onboarding cards, and breathing room around primary decisions. Resizable regions preserve user choice, while collapsed regions leave the flex layout entirely rather than covering content.
 
-Spacing is fixed at 4, 6, 8, 12, and 16px. Dense control groups use the smaller steps; introductory/overlay surfaces use the larger ones.
+At narrower desktop widths, the session list yields first, then fixed side widths compress, then the side panel hides while the activity rail remains available. The shell protects a usable editor/chat surface before preserving every simultaneous column.
+
+**The One Workspace Rule.** Editor and Vibe may reorder or emphasize surfaces, but they must share the same component vocabulary, state language, and mounted project context.
 
 ## Elevation & Depth
 
-Resting UI is flat. Closely stepped neutral surfaces and the border token create hierarchy. Palettes, modals, tooltips, and context menus use `0 4px 20px rgba(0, 0, 0, 0.35)`; prominent popovers use `0 8px 24px rgba(0, 0, 0, 0.35)`. Modal scrims use `rgba(0, 0, 0, 0.68)` and blur.
+Resting UI is flat. Closely stepped neutral surfaces and one-pixel borders create everyday depth. Menus, palettes, tooltips, modals, and floating inspectors receive compact ambient shadow; the onboarding composer earns a softer Agent Signal lift only while focused. Modal scrims are dark and lightly blurred.
 
-Every native control and keyboard-operable custom row uses the same visible focus recipe: `0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%)`. Motion is a short 120–180ms state transition and is reduced when the OS asks for reduced motion.
+The tactile quality comes from response rather than permanent elevation. Hover lifts one tonal step, focus adds the shared signal halo, and pressed or selected state resolves immediately. Motion is short for operational state, slower only for the onboarding ambience, and removed when the operating system requests reduced motion.
 
-**The Resting-Plane Rule.** Shadows signal a floating layer or a deliberate active lift—not ordinary panels, rows, or tabs.
+### Shadow Vocabulary
+
+- **Focus Halo:** A two-pixel Agent Signal mix around every keyboard-focusable control.
+- **Floating Context:** A compact ambient shadow for menus, palettes, and tooltips.
+- **Prominent Float:** A larger ambient shadow for popovers and floating inspectors.
+- **Focused Composer:** A low-chroma signal shadow that makes the primary input feel awake.
+
+**The Resting-Plane Rule.** Shadows indicate a floating layer or a deliberate active lift, never an ordinary panel, row, tab, or card.
 
 ## Shapes
 
-Use 4px for rows and small chips, 6px for controls/tabs/rail buttons, 8px for command and composer surfaces, 12px for the outer window, and 9999px for pills and circular controls. Editor and panel surfaces remain square. The active rail marker and active-thread inset are 2px state indicators, not an alternate border style.
+The form language is gently compact rather than soft or bubbly. Small rows and chips use the tightest curves; controls, tabs, and rail buttons use a modest curve; composers, palettes, canvases, and cards use the medium curve; the transparent desktop window carries the largest curve. Pills are reserved for modes, compact status, and removable command tokens.
+
+Borders are functional separators. Editor and panel surfaces remain square where they meet so the workspace reads as one fitted instrument rather than a stack of floating cards. Accent edges are thin state indicators, not decoration.
 
 ## Components
 
-### Navigation and side panels
+### Buttons
 
-Rail controls are 32px muted Tabler icons. Hover introduces a neutral raised surface; active state adds the selected surface and a 2px accent edge on the work-facing side. Source Control adds a warning dot for uncommitted work. Side panels share an uppercase 11px header and scrollable body.
+- **Shape:** Compact and gently curved, with enough padding for confident activation.
+- **Primary:** Agent Signal fill with matched signal ink, reserved for the one dominant action in a local decision.
+- **Ghost:** Transparent and muted at rest; hover lifts to foreground and, where appropriate, a warmer surface.
+- **Hover / Focus:** A short tonal response and the universal focus halo. Disabled state reduces opacity without erasing the label.
 
-### Tabs, rows, and badges
+### Chips
 
-Editor tabs are compact mono labels; the active tab lifts onto the editor plane with a 6px top edge. Bottom and chat-rail tabs stay flatter with an accent underline. Lists and tree rows share keyboard activation, 4px corners, neutral hover/focus lift, and the global focus ring. Badges combine text and color in an uppercase mono pill.
+- **Style:** Compact pills bind a selected command, agent, model, mode, or status to nearby content.
+- **State:** Neutral chips remain quiet. A selected command uses Selected Surface and Agent Signal; chain commands use the code-keyword hue so their different execution meaning is not colorless.
 
-### Inputs and overlays
+### Cards / Containers
 
-Mantine `Modal`, `Menu`, input, select, button, and popover primitives are the baseline. Controls use 6px corners, raised-surface fill, and border-token outlines. Transient actions share a common modal/scrim family; command, file, and text-search palettes use the same compact row rhythm.
+- **Corner Style:** Medium curves for onboarding choices, Graphify canvases, composers, and floating containers; fitted workspace panes remain square.
+- **Background:** Surface at rest and Warm Surface on interactive lift.
+- **Shadow Strategy:** Flat by default; shadow follows the elevation rules above.
+- **Border:** One-pixel structural boundaries, strengthened with an Agent Signal mix for primary or focused state.
+- **Internal Padding:** Compact in operating surfaces and more generous on onboarding choices.
 
-### Operational surfaces
+### Inputs / Fields
 
-Chat reads as one continuous log: assistant turns use a quiet avatar treatment, user turns are comparatively bare, and tool/permission/error/file-edit events share a 6px container logic. Diff rows pair color with `+` and `−`. A chain canvas remains neutral until a live node receives selected-surface fill and the accent role.
+- **Style:** Warm Surface fill, foreground text, muted placeholder, structural border, and compact control height.
+- **Focus:** One signal-colored edge plus the shared halo; composite composers apply focus to the whole container.
+- **Error / Disabled:** Error uses Danger with explanatory text; disabled state remains legible at reduced opacity.
 
-The Graphify view is a bordered 8px canvas with floating tooltip treatment. Database grids inherit the workbench's table variables and truncate oversized values instead of sacrificing the surrounding workspace.
+### Navigation
+
+The activity rail uses muted Tabler icons in compact square targets. Hover adds a neutral lift; active state combines Selected Surface, Agent Signal, and a thin inset edge that follows the work-facing side when the shell reverses. Tabs use mono labels and lift onto their content plane; flatter chat and bottom tabs use an accent edge or underline.
+
+### Agent Chain Node
+
+Chain nodes are neutral workbench tiles until execution gives one node Agent Signal priority. Completed nodes keep only a quiet success border, retrying nodes use warning, and failed nodes use danger. Ports remain hidden until hover or keyboard focus so the canvas stays readable at rest.
+
+### Conversation
+
+Chat is one continuous working log rather than a stack of decorative cards. Agent turns gain a quiet Twilight Glow avatar; user turns remain comparatively bare. Tool calls, permissions, file edits, and failures share a compact container grammar and make their state explicit in text.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** use the active accent for selected, focused, live, or agent-touched state only.
-- **Do** preserve the 4/6/8/12/9999px radius scale and 4/6/8/12/16px spacing scale.
+- **Do** reserve Agent Signal for selected, focused, live, agent-touched, or primary-action state.
+- **Do** create delight through immediate tactile response, excellent alignment, and calm transitions.
+- **Do** preserve the established compact spacing, radius, and type scales across CSS and Mantine components.
 - **Do** make every custom interactive row keyboard-operable with hover, focus, and an accessible name.
-- **Do** use Mantine and Tabler before adding a custom control or icon implementation.
 - **Do** pair semantic color with wording, an icon, or a glyph.
+- **Do** use Mantine and Tabler before introducing a new control or icon language.
 
 ### Don't:
 
-- **Don't** assume a fixed brand hue; the user can change the active accent and shell palette.
-- **Don't** add a second local palette or let a stock library blue leak into the shell.
-- **Don't** put shadows on resting panels, rows, or tabs.
-- **Don't** use selected-surface color as plain hover feedback.
-- **Don't** put heavy editable content inside a navigation side panel.
-- **Don't** rely on placeholders or color alone to explain an action or state.
+- **Don't** make minimalism emotionally vacant; retain warmth in active, successful, and first-run moments.
+- **Don't** assume a fixed brand hue or allow a stock library blue to leak into the shell.
+- **Don't** place shadows on resting panels, rows, tabs, or ordinary cards.
+- **Don't** use Selected Surface as generic hover feedback; hover remains neutral so selection stays distinct.
+- **Don't** turn every tool into a floating card or place heavy editable content inside a navigation panel.
+- **Don't** rely on placeholders, color alone, or agent narration to explain an action or state.
