@@ -48,6 +48,10 @@ pub struct NotebookKernel {
     stderr_handle: Mutex<Option<thread::JoinHandle<()>>>,
     stopping: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
+    /// Where this kernel's PID is recorded between runs, once it has been
+    /// spawned and so has a notebook id to key it by. Mirrors `Watcher`'s
+    /// field in integrations.rs.
+    pid_path: Mutex<Option<PathBuf>>,
 }
 
 impl NotebookKernel {
@@ -59,6 +63,7 @@ impl NotebookKernel {
             stderr_handle: Mutex::new(None),
             stopping: Arc::new(AtomicBool::new(false)),
             alive: Arc::new(AtomicBool::new(false)),
+            pid_path: Mutex::new(None),
         }
     }
 
@@ -82,6 +87,14 @@ impl NotebookKernel {
 
         let python = find_on_path("python3").ok_or("python3 not found on PATH")?;
 
+        // A hard restart never runs Drop, so the previous run's driver — and
+        // the Jupyter kernel it owns — outlive the app that started them.
+        // notebook_driver.py is an absolute path unique to this app, so it
+        // re-identifies the child safely even after PID reuse.
+        let pid_path = kernel_pid_path(notebook_id);
+        crate::pidguard::reap_stale(&pid_path, &kernel_reap_token(driver_path));
+        *self.pid_path.lock().unwrap() = Some(pid_path.clone());
+
         let mut cmd = Command::new(python);
         cmd.arg(driver_path);
         if let Some(name) = kernelspec_name {
@@ -92,6 +105,7 @@ impl NotebookKernel {
         let mut child = cmd
             .spawn()
             .map_err(|err| format!("failed to spawn notebook driver: {err}"))?;
+        crate::pidguard::record(&pid_path, child.id());
 
         let stdin = child.stdin.take().ok_or("notebook driver stdin unavailable")?;
         let stdout = child.stdout.take().ok_or("notebook driver stdout unavailable")?;
@@ -194,6 +208,10 @@ impl NotebookKernel {
         self.stopping.store(true, Ordering::SeqCst);
         self.alive.store(false, Ordering::SeqCst);
 
+        if let Some(path) = self.pid_path.lock().unwrap().take() {
+            crate::pidguard::clear(&path);
+        }
+
         // Closing stdin tells the driver's request loop to return. Do this
         // before waiting on the process so its `finally` block can stop the
         // Jupyter kernel it owns; killing the driver first orphaned that
@@ -237,6 +255,24 @@ impl Drop for NotebookKernel {
     fn drop(&mut self) {
         self.terminate();
     }
+}
+
+/// Where one notebook's kernel PID is recorded between runs. A notebook id is
+/// `"{project_hash}::{relative_path}"` (D18), which contains separators a
+/// filename cannot, so it is folded to a flat token rather than used raw.
+pub(crate) fn kernel_pid_path(notebook_id: &str) -> PathBuf {
+    let flat: String = notebook_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    crate::store::palisade_home().join("kernels").join(format!("{flat}.pid"))
+}
+
+/// What has to appear in a process's command line before it is recognised as
+/// one of our kernel drivers. The absolute driver path — `python3` alone
+/// would match every Python the user is running.
+pub(crate) fn kernel_reap_token(driver_path: &Path) -> String {
+    driver_path.display().to_string()
 }
 
 /// Every open notebook's kernel, keyed by notebook id (decisions.md D18:

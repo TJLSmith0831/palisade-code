@@ -128,6 +128,15 @@ impl CompletionServer {
         let port = find_free_port()?;
         *self.port.lock().unwrap() = port;
 
+        // The previous run's Drop may never have executed — a `tauri dev`
+        // hard restart, a crash, a force quit. An audit found one of these
+        // still holding a GPU-backed model 31 hours after its app had gone,
+        // reparented to init with nothing left to reap it. The model path is
+        // absolute and unique to this app, so it re-identifies the child
+        // safely even if the PID has since been reused.
+        let pid_path = sidecar_pid_path();
+        crate::pidguard::reap_stale(&pid_path, &sidecar_reap_token(model));
+
         let mut cmd = Command::new(binary);
         cmd.arg("--model")
             .arg(model)
@@ -146,6 +155,7 @@ impl CompletionServer {
         let mut child = cmd
             .spawn()
             .map_err(|err| format!("failed to spawn completion sidecar: {err}"))?;
+        crate::pidguard::record(&pid_path, child.id());
 
         let stopping = self.stopping.clone();
 
@@ -218,6 +228,7 @@ impl CompletionServer {
             let _ = handle.join();
         }
 
+        crate::pidguard::clear(&sidecar_pid_path());
         self.stopping.store(false, Ordering::SeqCst);
     }
 
@@ -900,6 +911,24 @@ fn sidecar_binary_name_with_target() -> String {
         "unknown"
     };
     format!("llama-server-{target}")
+}
+
+/// Where the sidecar's PID is recorded between runs. App-global rather than
+/// per-project, because there is one model server for the whole app.
+///
+/// ponytail: assumes one Palisade instance, like every other pidguard user.
+/// Two instances would each reap the other's sidecar on spawn. Fixing that
+/// means keying the file by instance, which is only worth doing if running
+/// two copies at once becomes a supported thing.
+pub(crate) fn sidecar_pid_path() -> PathBuf {
+    crate::store::palisade_home().join(".completion-sidecar.pid")
+}
+
+/// What has to appear in a process's command line before it is recognised as
+/// our sidecar. The absolute model path — `llama-server` alone would match
+/// any llama.cpp server the user happens to be running.
+pub(crate) fn sidecar_reap_token(model: &Path) -> String {
+    model.display().to_string()
 }
 
 /// Ports already handed out but not yet bound by the child that asked for
