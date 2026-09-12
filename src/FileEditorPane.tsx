@@ -231,7 +231,7 @@ const popupTheme = EditorView.theme({
     color: "var(--fg)",
     border: "1px solid var(--border)",
     borderRadius: "6px",
-    boxShadow: "0 4px 20px rgba(0, 0, 0, 0.35)",
+    boxShadow: "var(--shadow-float)",
     fontSize: "12px",
     // A hover-doc signature has no natural width limit (generics, long
     // arrow types), so without a cap the card stretches to fit the content

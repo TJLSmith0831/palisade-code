@@ -194,7 +194,7 @@ export default function Palette<T>({
         content: {
           background: "var(--bg)",
           border: "1px solid var(--border)",
-          boxShadow: "0 24px 80px rgba(0,0,0,.55), 0 8px 24px rgba(0,0,0,.35)",
+          boxShadow: "var(--shadow-overlay)",
           overflow: "hidden",
         },
         header: {

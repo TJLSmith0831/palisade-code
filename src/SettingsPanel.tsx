@@ -626,7 +626,7 @@ export default function SettingsPanel({
         content: {
           background: panel,
           border: `1px solid ${border}`,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+          boxShadow: "var(--shadow-lift)",
           overflow: "hidden",
         },
         header: {

@@ -15,6 +15,14 @@
      this value; they just spelled it two different ways inline, so it read
      as a one-off in each file instead of the convention it is. */
   --scrim: rgba(0, 0, 0, 0.68);
+  /* Elevation. Every floating layer picks one of these four — nothing in the
+     app spells a shadow inline any more. They are tokens rather than literals
+     because black at 0.35 reads as soot on a near-white ground: the light
+     blocks below redefine all five at the alphas light UI actually wants. */
+  --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.25);
   --chrome-bg: var(--app-shell-dark-override, oklch(15% 0.004 250));
   --bg: var(--app-shell-dark-override, oklch(18% 0.005 250));
   --surface: var(--shell-accent-dark-override, oklch(22% 0.006 250));
@@ -98,6 +106,11 @@
     --code-function: oklch(45% 0.11 95);
     --code-meta: oklch(46% 0.01 250);
     --code-invalid: oklch(46% 0.22 25);
+    --scrim: rgba(0, 0, 0, 0.32);
+    --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.12);
+    --shadow-lift: 0 8px 24px rgba(0, 0, 0, 0.14);
+    --shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.1);
+    --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.15);
     color-scheme: light;
   }
 }
@@ -137,6 +150,11 @@
   --code-function: oklch(45% 0.11 95);
   --code-meta: oklch(46% 0.01 250);
   --code-invalid: oklch(46% 0.22 25);
+  --scrim: rgba(0, 0, 0, 0.32);
+  --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.12);
+  --shadow-lift: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.1);
+  --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.15);
   color-scheme: light;
 }
 
@@ -373,7 +391,7 @@ input[type="checkbox"] {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -1086,7 +1104,7 @@ input[type="checkbox"] {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
   font-size: 12px;
   list-style: none;
   margin: 0;
@@ -1557,7 +1575,7 @@ input[type="checkbox"] {
   color: var(--fg);
   /* Matches .cm-tooltip's elevation in FileEditorPane.tsx — one popup
      family, one shadow value. */
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
 }
 
 .cm-tooltip-autocomplete ul li {
@@ -2401,7 +2419,7 @@ details.graph-report-wrap > summary {
   gap: 2px;
   font-size: 12px;
   max-width: 280px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
 }
 
 .graph-tooltip span {
@@ -2427,7 +2445,7 @@ details.graph-report-wrap > summary {
   border-radius: 8px;
   background: var(--surface);
   padding: 10px 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lift);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -2769,7 +2787,7 @@ details.graph-report-wrap > summary {
   border-color: var(--accent);
   background: var(--surface-warm);
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lift);
 }
 
 /* The card whose expanded input is showing below (#35): it stays visibly
