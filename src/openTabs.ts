@@ -397,3 +397,5 @@ export function useOpenTabs() {
     cycle,
   };
 }
+
+export type OpenTabs = ReturnType<typeof useOpenTabs>;
