@@ -54,7 +54,7 @@ fn status_of(harness: &Harness, project_hash: &str) -> Res<DebugStatus> {
 pub async fn debug_breakpoints(project_hash: String) -> Res<store::BreakpointsByFile> {
     tokio::task::spawn_blocking(move || store::read_breakpoints(&palisade_home(), &project_hash))
         .await
-        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+        .map_err(crate::PalisadeError::from)?
 }
 
 /// Adds or removes a breakpoint at one line, and returns the file's new set.
@@ -99,7 +99,7 @@ pub async fn debug_toggle_breakpoint(
         Ok(file)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Turns a breakpoint off without forgetting it, or back on.
@@ -122,7 +122,7 @@ pub async fn debug_set_breakpoint_enabled(
         Ok(all.get(&path).cloned().unwrap_or_default())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -131,7 +131,7 @@ pub async fn debug_clear_breakpoints(project_hash: String) -> Res<()> {
         store::write_breakpoints(&palisade_home(), &project_hash, &store::BreakpointsByFile::new())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 // ----------------------------------------------------------------- session
@@ -141,7 +141,7 @@ pub async fn debug_clear_breakpoints(project_hash: String) -> Res<()> {
 pub async fn debug_adapter(language: String) -> Res<Option<dap::AdapterInfo>> {
     tokio::task::spawn_blocking(move || Ok(dap::adapter(&language)))
         .await
-        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+        .map_err(crate::PalisadeError::from)?
 }
 
 /// What Start would actually launch: the `run` command it derives from, and
@@ -180,7 +180,7 @@ pub async fn debug_launch_options(
         Ok(options)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -190,7 +190,7 @@ pub async fn debug_status(app: tauri::AppHandle, project_hash: String) -> Res<De
         status_of(&harness, &project_hash)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Starts a debug session: spawn the adapter, hand it the launch config,
@@ -304,7 +304,7 @@ pub async fn debug_start(
         })
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -319,7 +319,7 @@ pub async fn debug_stop(app: tauri::AppHandle) -> Res<()> {
         Ok(())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 // ---------------------------------------------------------------- stepping
@@ -356,7 +356,7 @@ pub async fn debug_step(app: tauri::AppHandle, action: String, thread_id: Option
         Ok(())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 // --------------------------------------------------------------- inspection
@@ -383,7 +383,7 @@ pub async fn debug_scopes(app: tauri::AppHandle, frame_id: i64) -> Res<Vec<(Stri
             .unwrap_or_default())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -395,7 +395,7 @@ pub async fn debug_variables(app: tauri::AppHandle, variables_reference: i64) ->
         Ok(dap::parse_variables(&body))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Evaluates watch expressions in one frame.
@@ -415,7 +415,7 @@ pub async fn debug_evaluate(
         Ok(expressions.iter().map(|e| session.evaluate(e, frame_id)).collect())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 // ------------------------------------------------------------------ events

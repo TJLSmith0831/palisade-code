@@ -26,7 +26,7 @@ pub async fn list_spec_changes(
         Ok(executor::openspec_list(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -41,7 +41,7 @@ pub async fn show_spec_change(
         Ok(executor::openspec_show(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// `None` when `openspec` isn't installed — "we can't tell", which is a
@@ -57,7 +57,7 @@ pub async fn validate_spec_changes(
         Ok(executor::openspec_validate(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -72,7 +72,7 @@ pub async fn archive_spec_change(
         executor::openspec_archive(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Set the thread's spec link by hand — how the user resolves the ambiguity
@@ -87,5 +87,5 @@ pub async fn set_spec_change(
         store::set_open_spec_change(&store::palisade_home(), &project_hash, &thread_id, name.as_deref())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }

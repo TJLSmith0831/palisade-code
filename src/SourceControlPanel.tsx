@@ -435,6 +435,7 @@ export default function SourceControlPanel({
   const [files, setFiles] = useState<FileStatus[]>([]);
   const [, setLog] = useState<LogEntry[]>([]);
   const [graph, setGraph] = useState<api.GraphCommit[]>([]);
+  const [graphHasMore, setGraphHasMore] = useState(false);
   /**
    * How many commits the graph has asked for.
    *
@@ -506,7 +507,6 @@ export default function SourceControlPanel({
         if (errorKind(err) === "notAGitRepo") return;
         onError(err);
       });
-    api.gitGraph(projectHash, graphLimit).then(setGraph).catch(onError);
     // No upstream is a normal state, not an error — no counts, no banner.
     api.gitAheadBehind(projectHash, tree).then(
       (value) => {
@@ -518,9 +518,25 @@ export default function SourceControlPanel({
         setHasUpstream(false);
       }
     );
-  }, [projectHash, tree, onError, graphLimit]);
+  }, [projectHash, tree, onError]);
 
   useEffect(reload, [reload, refreshToken]);
+
+  // Its own effect so "Load more" (which only bumps graphLimit) doesn't
+  // re-fetch status/log/ahead-behind too.
+  //
+  // Asks for one commit past graphLimit so a repo whose history ends exactly
+  // on a page boundary can tell "there is more" from "that was all of it"
+  // without an extra round trip.
+  useEffect(() => {
+    api
+      .gitGraph(projectHash, graphLimit + 1)
+      .then((commits) => {
+        setGraph(commits.slice(0, graphLimit));
+        setGraphHasMore(commits.length > graphLimit);
+      })
+      .catch(onError);
+  }, [projectHash, graphLimit, onError, refreshToken]);
 
   const [ahead, behind] = aheadBehind ?? [0, 0];
   const staged = files.filter((f) => isStaged(f.code));
@@ -953,15 +969,14 @@ export default function SourceControlPanel({
             })}
           </div>
           {/* Truthful rather than approximate: the count is what is actually
-              loaded, and the button appears only while the last page came
-              back full — which is the one thing that distinguishes "there is
-              more" from "this is the whole history". */}
+              loaded, and the button appears only when a commit past the
+              current page was actually seen. */}
           <Group gap={8} px={4} pt={4} justify="space-between" data-testid="sc-graph-footer">
             <Text size="xs" c="dimmed">
               {graph.length} commit{graph.length === 1 ? "" : "s"}
-              {graph.length < graphLimit ? " · all of them" : ""}
+              {graphHasMore ? "" : " · all of them"}
             </Text>
-            {graph.length >= graphLimit && (
+            {graphHasMore && (
               <Button
                 size="compact-xs"
                 variant="subtle"

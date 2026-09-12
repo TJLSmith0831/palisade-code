@@ -46,7 +46,7 @@ pub async fn terminal_spawn(
             .map_err(|err| crate::PalisadeError::from(format!("start terminal: {err}")))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -60,7 +60,7 @@ pub async fn terminal_input(
         harness.tooling.terminals.write(&terminal_id, data.as_bytes())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -75,7 +75,7 @@ pub async fn terminal_resize(
         harness.tooling.terminals.resize(&terminal_id, cols, rows)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Closes one tab's shell. Other tabs, including this project's, keep running.
@@ -87,7 +87,7 @@ pub async fn terminal_kill(app: tauri::AppHandle, terminal_id: String) -> Res<()
         Ok(())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Closes every tab belonging to one project — what a project switch does,
@@ -100,7 +100,7 @@ pub async fn terminal_kill_project(app: tauri::AppHandle, project_hash: String) 
         Ok(())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Which tabs are actually alive for a project. The frontend restores its tab
@@ -113,5 +113,5 @@ pub async fn terminal_list(app: tauri::AppHandle, project_hash: String) -> Res<V
         Ok(harness.tooling.terminals.list(&project_hash))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }

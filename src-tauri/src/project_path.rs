@@ -68,9 +68,9 @@ impl ProjectPath {
         let root = canonical_root(root);
         let joined = root.join(relative);
         let resolved = std::fs::canonicalize(&joined)
-            .map_err(|err| crate::PalisadeError::from(format!("no such file: {} ({err})", joined.display())))?;
+            .map_err(|err| crate::PalisadeError::not_found(format!("no such file: {} ({err})", joined.display())))?;
         if !resolved.starts_with(&root) {
-            return Err(ESCAPED.into());
+            return Err(crate::PalisadeError::outside_project(ESCAPED));
         }
         Ok(Self { path: resolved })
     }
@@ -87,7 +87,7 @@ impl ProjectPath {
         // under the root, so rejecting those two outright means the walk
         // below is only ever looking for symlinks.
         if rel.is_absolute() || rel.components().any(|c| matches!(c, Component::ParentDir)) {
-            return Err(ESCAPED.into());
+            return Err(crate::PalisadeError::outside_project(ESCAPED));
         }
         let root = canonical_root(root);
         let target = root.join(rel);
@@ -100,9 +100,9 @@ impl ProjectPath {
             }
         }
         let resolved_existing = std::fs::canonicalize(&existing)
-            .map_err(|err| crate::PalisadeError::from(format!("cannot resolve {}: {err}", existing.display())))?;
+            .map_err(|err| crate::PalisadeError::not_found(format!("cannot resolve {}: {err}", existing.display())))?;
         if !resolved_existing.starts_with(&root) {
-            return Err(ESCAPED.into());
+            return Err(crate::PalisadeError::outside_project(ESCAPED));
         }
         Ok(Self { path: target })
     }

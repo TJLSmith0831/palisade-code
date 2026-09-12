@@ -31,7 +31,7 @@ pub async fn run_graphify(
         integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Load a previous run's output without re-running the extract.
@@ -41,7 +41,7 @@ pub async fn load_graphify(project_hash: String) -> Res<integrations::GraphifyRu
         integrations::read_run(&integrations::default_out_dir(&project_root(&project_hash)?))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -60,5 +60,5 @@ pub async fn query_graphify(
         )
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }

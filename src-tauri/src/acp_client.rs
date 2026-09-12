@@ -952,8 +952,7 @@ fn write_guard_input(
         v1::SessionUpdate::ToolCall(call) => {
             let kind = tool_kind(Some(&call.kind));
             kinds
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .insert(call.tool_call_id.to_string(), kind);
             Some((
                 kind,
@@ -969,8 +968,7 @@ fn write_guard_input(
             let kind = match update.fields.kind.as_ref() {
                 Some(k) => tool_kind(Some(k)),
                 None => *kinds
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .get(&update.tool_call_id.to_string())?,
             };
             Some((
@@ -1666,9 +1664,7 @@ struct CollectingSink(Arc<Mutex<Collected>>);
 
 impl Sink for CollectingSink {
     fn emit(&self, envelope: &Envelope) {
-        if let Ok(mut collected) = self.0.lock() {
-            collected.accept(&envelope.event);
-        }
+        self.0.lock_or_recover().accept(&envelope.event);
     }
 }
 
@@ -1691,7 +1687,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<St
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if collected.lock().map(|c| c.finished).unwrap_or(true) {
+        if collected.lock_or_recover().finished {
             break;
         }
         if std::time::Instant::now() >= deadline {
@@ -1702,7 +1698,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<St
     }
     let _ = cmd_tx.send(BridgeCommand::Shutdown);
 
-    let collected = collected.lock().map_err(|_| "collector poisoned")?;
+    let collected = collected.lock_or_recover();
     if let Some(error) = &collected.error {
         return Err(error.clone().into());
     }

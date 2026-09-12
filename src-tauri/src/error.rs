@@ -128,6 +128,15 @@ impl From<&str> for PalisadeError {
     }
 }
 
+/// A `spawn_blocking` task panicked or was cancelled. Every IPC command that
+/// offloads to a blocking task hits this the same way, so it is done once
+/// here instead of at each of its ~60 call sites.
+impl From<tokio::task::JoinError> for PalisadeError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        Self::from(err.to_string())
+    }
+}
+
 /// So a `PalisadeError` can still be fed to anything wanting a plain message.
 impl From<PalisadeError> for String {
     fn from(err: PalisadeError) -> Self {

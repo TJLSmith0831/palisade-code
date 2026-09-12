@@ -654,9 +654,10 @@ describe("the graph says how much history it is showing", () => {
       refs: [],
     }));
 
-  it("offers more while the page came back full", async () => {
+  it("offers more when a commit past the page is actually seen", async () => {
     mocked.gitStatus.mockResolvedValue([]);
-    mocked.gitGraph.mockResolvedValue(page(80));
+    // Asked for 81 (graphLimit + 1); getting 81 back means there's more.
+    mocked.gitGraph.mockResolvedValue(page(81));
     render(<SourceControlPanel {...props} />);
 
     await screen.findByTestId("sc-graph-load-more");
@@ -665,7 +666,7 @@ describe("the graph says how much history it is showing", () => {
     mocked.gitGraph.mockResolvedValue(page(120));
     fireEvent.click(screen.getByTestId("sc-graph-load-more"));
 
-    await waitFor(() => expect(mocked.gitGraph).toHaveBeenCalledWith("p1", 160));
+    await waitFor(() => expect(mocked.gitGraph).toHaveBeenCalledWith("p1", 161));
     await waitFor(() =>
       expect(screen.getByTestId("sc-graph-footer").textContent).toContain("120 commits")
     );
@@ -674,6 +675,18 @@ describe("the graph says how much history it is showing", () => {
   it("says so, and stops offering, once the whole history is in", async () => {
     mocked.gitStatus.mockResolvedValue([]);
     mocked.gitGraph.mockResolvedValue(page(12));
+    render(<SourceControlPanel {...props} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-graph-footer").textContent).toContain("all of them")
+    );
+    expect(screen.queryByTestId("sc-graph-load-more")).toBeNull();
+  });
+
+  it("does not offer more when the history ends exactly on a page boundary", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    // Asked for 81, only 80 exist — that's all of history, not a full page.
+    mocked.gitGraph.mockResolvedValue(page(80));
     render(<SourceControlPanel {...props} />);
 
     await waitFor(() =>

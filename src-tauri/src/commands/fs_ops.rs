@@ -68,7 +68,7 @@ pub async fn list_directory(
         Ok(entries)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Recursive file listing for the fuzzy file-open palette (task 5.2). Applies
@@ -118,7 +118,7 @@ pub async fn list_all_files(project_hash: String) -> Res<Vec<String>> {
         Ok(files)
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -266,7 +266,7 @@ pub async fn search_text(
         search_text_in(&root, &query, options.unwrap_or_default())
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Resolves `relative_path` against `root`, requiring it to already exist
@@ -327,7 +327,7 @@ pub async fn read_file_content(
             .map_err(|err| crate::PalisadeError::from(format!("cannot read file: {err}")))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Reads a file as base64 for binary previews (images/video/gif) the editor
@@ -342,7 +342,7 @@ pub async fn read_file_base64(project_hash: String, relative_path: String) -> Re
         Ok(BASE64_STANDARD.encode(&bytes))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Resolves `relative_path` against `root` for creating a file or directory
@@ -414,7 +414,7 @@ pub async fn write_file_content(
         Ok(settings::run_format_on_save(&settings, &root, &relative_path))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Refuses a delete that would take the whole project with it. An empty
@@ -475,7 +475,7 @@ pub async fn rename_path(
         std::fs::rename(&source, &target).map_err(|err| crate::PalisadeError::from(format!("rename: {err}")))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Deletes a file or directory (recursively) from the project.
@@ -498,7 +498,7 @@ pub async fn delete_path(
         }
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Creates a directory (and any missing parents) — the file tree's "New
@@ -511,7 +511,7 @@ pub async fn create_directory(project_hash: String, relative_path: String) -> Re
         std::fs::create_dir_all(&target).map_err(|err| crate::PalisadeError::from(format!("create directory: {err}")))
     })
     .await
-    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[cfg(test)]
