@@ -80,6 +80,7 @@ import { useAppShell } from "./hooks/useAppShell";
 import { useProjectManager } from "./hooks/useProjectManager";
 import { resolvePrefs, useThreadPrefs } from "./hooks/useThreadPrefs";
 import { useNewThreadFlow } from "./hooks/useNewThreadFlow";
+import { useThreadActions } from "./hooks/useThreadActions";
 import { useExecutor } from "./hooks/useExecutor";
 import type {
   Envelope,
@@ -2811,6 +2812,42 @@ function buildReviewRunView(record: api.ChainRunRecord): ChainRunCardView {
   };
 }
 
+/**
+ * A one-line prompt, confirm, or picker, rendered as the app's own command
+ * bar. `window.prompt` and `window.confirm` do nothing in Tauri's WKWebView —
+ * they return null without ever showing a dialog — so anything needing a line
+ * of text, or a yes/no, has to go through this.
+ *
+ * Hoisted out of App so the hooks that raise one can name it.
+ */
+export type CommandBarRequest =
+    | {
+        kind: "input";
+        label: string;
+        value: string;
+        placeholder?: string;
+        submit: (value: string) => void;
+      }
+    | {
+        kind: "confirm";
+        label: string;
+        confirmLabel?: string;
+        onConfirm: () => void;
+        onCancel?: () => void;
+      }
+    | {
+        kind: "select";
+        label: string;
+        /** "branch" keeps the create/delete/DWIM-worktree extras that only
+         *  make sense for branches; "list" is a plain switcher (working
+         *  trees today) that just picks a row. One modal, one look, for
+         *  both — only the row extras differ. */
+        variant: "branch" | "list";
+        options: { value: string; label: string; secondary?: string }[];
+        submit: (value: string) => void;
+      }
+    | null;
+
 export default function App() {
   const pm = useProjectManager();
   const project = pm.project;
@@ -2850,34 +2887,7 @@ export default function App() {
   // Tauri's WKWebView — they return null without ever showing a dialog —
   // so anything that needs a line of text, or a yes/no from the user, has
   // to go through this.
-  const [bar, setBar] = useState<
-    | {
-        kind: "input";
-        label: string;
-        value: string;
-        placeholder?: string;
-        submit: (value: string) => void;
-      }
-    | {
-        kind: "confirm";
-        label: string;
-        confirmLabel?: string;
-        onConfirm: () => void;
-        onCancel?: () => void;
-      }
-    | {
-        kind: "select";
-        label: string;
-        /** "branch" keeps the create/delete/DWIM-worktree extras that only
-         *  make sense for branches; "list" is a plain switcher (working
-         *  trees today) that just picks a row. One modal, one look, for
-         *  both — only the row extras differ. */
-        variant: "branch" | "list";
-        options: { value: string; label: string; secondary?: string }[];
-        submit: (value: string) => void;
-      }
-    | null
-  >(null);
+  const [bar, setBar] = useState<CommandBarRequest>(null);
   const {
     newThreadPicker,
     setNewThreadPicker,
@@ -4191,83 +4201,6 @@ export default function App() {
     }
   };
 
-  const onRenameThread = (target: ThreadMeta) => {
-    if (!project) return;
-    setBar({
-      kind: "input",
-      label: "Thread title",
-      value: target.title,
-      submit: async (title) => {
-        try {
-          const renamed = await api.renameThread(
-            project.hash,
-            target.id,
-            title
-          );
-          if (thread?.id === target.id) setThread(renamed);
-          setThreads(await api.listThreads(project.hash));
-        } catch (err) {
-          fail(err);
-        }
-      },
-    });
-  };
-
-  const onArchiveThread = (target: ThreadMeta) => {
-    if (!project) return;
-    const archiving = !target.archived;
-    const worktree = worktrees.get(target.id);
-    // Archiving is reversible and must stay that way, so it never discards
-    // work on its own: the backend's sweep only prunes a worktree whose
-    // commits the base branch already has. Unmerged work is the one case the
-    // user has to answer for, and it is offered as its own destructive
-    // choice — the same confirm bar deleting a thread uses.
-    const unmerged =
-      archiving && worktree && (!worktree.clean || worktree.ahead > 0);
-    pm.setThreadArchived(project.hash, target.id, archiving)
-      .then(() => {
-        loadWorktrees();
-        if (!unmerged) return;
-        setBar({
-          kind: "confirm",
-          label: `"${target.title}" still has work that ${worktree.baseBranch} doesn't. Delete its worktree and branch anyway?`,
-          confirmLabel: "Clean up",
-          onConfirm: async () => {
-            setBar(null);
-            try {
-              await api.pruneThreadWorktree(project.hash, target.id, true);
-              loadWorktrees();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        });
-      })
-      .catch(fail);
-  };
-
-  const onDeleteThread = (target: ThreadMeta) => {
-    if (!project) return;
-    setBar({
-      kind: "confirm",
-      label: `Delete "${target.title}"? This can't be undone.`,
-      onConfirm: async () => {
-        setBar(null);
-        try {
-          await api.deleteThread(project.hash, target.id);
-          const found = await api.listThreads(project.hash);
-          setThreads(found);
-          // Only reselect if the deleted thread was the one open (D22) —
-          // mirrors selectProject's found[0] ?? null fallback.
-          if (thread?.id === target.id)
-            await selectThread(project.hash, found[0] ?? null);
-        } catch (err) {
-          fail(err);
-        }
-      },
-    });
-  };
-
   // Keeps the event listener (registered once) pointed at the current thread.
   const current = useRef({ project, thread });
   current.current = { project, thread };
@@ -4383,6 +4316,20 @@ export default function App() {
       () => setWorktrees(new Map())
     );
   }, []);
+
+  const { onRenameThread, onArchiveThread, onDeleteThread } = useThreadActions({
+    projectHash: project?.hash ?? null,
+    activeThread: thread,
+    setThread,
+    setThreads,
+    setBar,
+    fail,
+    worktrees,
+    loadWorktrees,
+    setThreadArchived: pm.setThreadArchived,
+    selectThread,
+  });
+
   // Polled only while an agent is actually working — the stat is otherwise
   // static, and a timer running against an idle app buys nothing. The diff
   // pane rides the same tick, so watching chat and watching the code stay in
