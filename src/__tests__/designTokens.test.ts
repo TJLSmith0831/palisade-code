@@ -89,3 +89,42 @@ describe("elevation is tokenised, and the tokens flip with the theme", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the app's own chrome is painted from tokens, not literals", () => {
+  // SettingsPanel.tsx:647 held `color: "#9ca3ab"` — the only non-theme hex in
+  // the app's own chrome, and the one the bundled detector kept flagging.
+  //
+  // Scoped deliberately to hexes in a *style property* position. The app has
+  // three legitimate hex tables that are data, not chrome, and banning those
+  // would be wrong: icons.tsx's language brand colours (intentional per
+  // icons.tsx:53-56), SettingsPanel's user-pickable appearance palette, and
+  // GraphView's node-category colours. None of them theme; all of them are
+  // chosen values a user or a language owns.
+  const STYLE_HEX = /\b(color|background|backgroundColor|border|borderColor|outline|fill|stroke|boxShadow)\s*:\s*"#[0-9a-fA-F]{3,8}"/;
+
+  /** Literals that are correct, each for a reason that is not "we forgot". */
+  const JUSTIFIED: Record<string, RegExp> = {
+    // Language brand colours, keyed by extension. Not ours to theme.
+    "icons.tsx": /.*/,
+    // The dev-server preview iframe. It hosts an arbitrary web page, which
+    // expects a white canvas under it; tinting that to --bg would recolour
+    // the user's own site rather than the app's chrome.
+    "PreviewPane.tsx": /background: "#fff"/,
+  };
+
+  it("no component hardcodes a hex in a style property", () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(resolve(root, "src"))) {
+      if (!/\.tsx?$/.test(file)) continue;
+      const allowed = JUSTIFIED[file];
+      readFileSync(resolve(root, "src", file), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (!STYLE_HEX.test(line)) return;
+          if (allowed?.test(line)) return;
+          offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
+});

@@ -526,3 +526,29 @@ it("saving appearance no longer depends on the project settings file parsing cle
   );
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+// The Mantine close button was the app's only genuinely unnamed focusable
+// control: SVG-only content, no aria-label, no title. It was also the only
+// place in the app's own chrome painting a non-theme hex (#9ca3ab).
+it("names its close button and paints it from the theme", async () => {
+  invokeMock.mockReset().mockResolvedValue(undefined);
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  const close = screen.getByRole("button", { name: "Close settings" });
+  expect(close.style.color).toBe("var(--muted)");
+});
+
+// The swatches painted oklch(65% 0.18 hue) — a colour the app never ships.
+// The real accent is 88%/0.21 dark and 46%/0.16 light, so every preview was
+// wrong in both themes. They now read the same two tokens --accent derives
+// from, which is what makes them unable to drift again.
+it("previews the accent the active theme will actually use", async () => {
+  invokeMock.mockReset().mockResolvedValue(undefined);
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  for (const swatch of screen.getAllByTestId("accent-swatch")) {
+    expect(swatch.style.background).toMatch(
+      /^oklch\(var\(--accent-l\) var\(--accent-c\) \d+\)$/
+    );
+  }
+});

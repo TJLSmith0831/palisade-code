@@ -618,6 +618,7 @@ export default function SettingsPanel({
         transition: "fade",
       }}
       data-testid="settings-panel"
+      closeButtonProps={{ "aria-label": "Close settings" }}
       styles={{
         overlay: {
           background: "var(--scrim)",
@@ -644,7 +645,7 @@ export default function SettingsPanel({
         close: {
           width: 32,
           height: 32,
-          color: "#9ca3ab",
+          color: "var(--muted)",
           borderRadius: 6,
         },
         body: {
@@ -703,7 +704,7 @@ export default function SettingsPanel({
                       : "2px solid transparent",
                     outline: active ? `2px solid ${accent}` : "none",
                     outlineOffset: 1,
-                    background: `oklch(65% 0.18 ${preset.hue})`,
+                    background: `oklch(var(--accent-l) var(--accent-c) ${preset.hue})`,
                     cursor: "pointer",
                     boxSizing: "border-box",
                   }}
