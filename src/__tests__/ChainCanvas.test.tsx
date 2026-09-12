@@ -858,3 +858,85 @@ describe("ChainCanvas — undo", () => {
     expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(0);
   });
 });
+
+// Ten controls sat in one wrapping flex row with no dividers and every button
+// at variant="default", so "Test run" — which spends money and takes time —
+// was indistinguishable from "Save", which writes a file. Two status strings
+// sat among them, reading as things to click.
+describe("ChainCanvas — toolbar hierarchy", () => {
+  const renderCanvas = () =>
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+
+  it("splits the controls into authoring, execution and viewport groups", () => {
+    renderCanvas();
+    expect(screen.getByTestId("chain-authoring-group")).toBeDefined();
+    expect(screen.getByTestId("chain-execution-group")).toBeDefined();
+    expect(screen.getByTestId("chain-viewport-group")).toBeDefined();
+    // The groups are separated, not merely adjacent.
+    expect(
+      document.querySelectorAll(
+        '.ds-chain-toolbar > .mantine-Divider-root[data-orientation="vertical"]'
+      ).length
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the status strings out of the button row", () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const toolbar = document.querySelector(".ds-chain-toolbar")!;
+    const width = screen.getByTestId("chain-width");
+    const dirty = screen.getByTestId("chain-dirty");
+    expect(toolbar.contains(width)).toBe(false);
+    expect(toolbar.contains(dirty)).toBe(false);
+    expect(screen.getByTestId("chain-statusbar").contains(width)).toBe(true);
+    expect(screen.getByTestId("chain-statusbar").contains(dirty)).toBe(true);
+  });
+
+  it("says unsaved changes in something louder than the quietest voice available", () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const dirty = screen.getByTestId("chain-dirty");
+    // It was <Text size="xs" c="dimmed">, the quietest treatment in the
+    // system, on the one thing a user can actually lose. Colour is paired
+    // with an icon, per DESIGN.md's "never colour alone".
+    expect(dirty.className).not.toMatch(/dimmed/);
+    expect(dirty.querySelector("svg")).not.toBeNull();
+  });
+});
+
+// fit() ran only from the toolbar button and a double-click, so opening a
+// chain left the viewport wherever the previous session's pan had put it —
+// observed live at 1280px with the `reviewer` node entirely outside the pane.
+describe("ChainCanvas — the canvas fits its content", () => {
+  it("fits once the chain's nodes are in, and does not refit on a drag", () => {
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+    mockSurfaceRect({ width: 900, height: 600 });
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const afterFirst = planeTransform();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const afterSecond = planeTransform();
+    // Adding a node changes the set of roles, so the view is refitted.
+    expect(afterSecond).not.toEqual(afterFirst);
+    // Never magnified past natural size.
+    expect(afterSecond.zoom).toBeLessThanOrEqual(1);
+    expect(afterSecond.zoom).toBeGreaterThanOrEqual(0.4);
+  });
+});

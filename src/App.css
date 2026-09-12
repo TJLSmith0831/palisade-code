@@ -5670,6 +5670,26 @@ button.ds-onboarding-status {
   flex-wrap: wrap;
 }
 
+/* The vertical rules between the toolbar's four groups. A Mantine vertical
+   Divider sizes itself from its parent's cross axis, which a wrapping flex
+   row does not give it, so it needs a height of its own. */
+.ds-chain-toolbar > .mantine-Divider-root[data-orientation="vertical"] {
+  align-self: stretch;
+  min-height: 20px;
+}
+
+/* State that used to sit between the buttons, reading as something to click.
+   Its own line, above the canvas and below the controls. */
+.ds-chain-statusbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
 .ds-chain-surface {
   position: relative;
   flex: 1;
