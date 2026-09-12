@@ -416,7 +416,7 @@ pub fn openspec_archive(
 ) -> crate::store::Res<String> {
     cache
         .archive(project_root, name)
-        .map_err(|e| format!("`openspec archive {name}` failed — {e}"))
+        .map_err(|e| crate::PalisadeError::from(format!("`openspec archive {name}` failed — {e}")))
 }
 
 /// Names of the OpenSpec change directories in a project — the fallback when

@@ -8,6 +8,7 @@ mod chains;
 mod chain_history;
 mod completion;
 mod db;
+mod error;
 mod executor;
 mod graph_nudge;
 mod grill_inject;
@@ -151,6 +152,7 @@ use executor::{Envelope, ExecutorEvent, Harness, Sink};
 use serde::Serialize;
 use store::{palisade_home, Message, Project};
 use crate::locks::MutexExt;
+pub(crate) use error::PalisadeError;
 pub(crate) use store::{Res, ThreadMeta};
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,7 +171,7 @@ pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
         .into_iter()
         .find(|p| p.hash == hash)
         .map(|p| PathBuf::from(p.root))
-        .ok_or_else(|| format!("unknown project: {hash}"))
+        .ok_or_else(|| crate::PalisadeError::not_found(format!("unknown project: {hash}")))
 }
 
 /// A fresh Palisade process owns no chain workers. Sweep every persisted
@@ -197,7 +199,7 @@ pub(crate) fn git_bin() -> Res<PathBuf> {
 async fn list_projects() -> Res<Vec<Project>> {
     tokio::task::spawn_blocking(|| store::list_projects(&palisade_home()))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -208,7 +210,7 @@ async fn add_project(app: tauri::AppHandle, path: String) -> Res<Project> {
         Ok(project)
     })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Open a separate native window with its own frontend project state.
@@ -229,8 +231,9 @@ async fn open_project_window(app: tauri::AppHandle, hash: String) -> Res<String>
     let config = project_windows::window_config(&palisade_home(), &hash)?;
     let label = config.label.clone();
     tauri::WebviewWindowBuilder::from_config(&app, &config)
-        .map_err(|e| format!("configure project window: {e}"))?
-        .build().map_err(|e| format!("open project window: {e}"))?;
+        .map_err(|e| crate::PalisadeError::from(format!("configure project window: {e}")))?
+        .build()
+        .map_err(|e| crate::PalisadeError::from(format!("open project window: {e}")))?;
     Ok(label)
 }
 
@@ -240,7 +243,7 @@ async fn remove_project(app: tauri::AppHandle, hash: String) -> Res<()> {
         project_windows::remove_saved_project(&palisade_home(), &app.state::<Harness>(), &hash)?;
         let _ = app.emit("projects-changed", &hash);
         Ok(())
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Amendment 8's Clone Repository card: clone, then register the result as
@@ -254,7 +257,7 @@ async fn clone_repository(app: tauri::AppHandle, url: String, parent: String) ->
         Ok(project)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -292,7 +295,7 @@ async fn switch_project(window: tauri::Window, app: tauri::AppHandle, hash: Stri
         Ok(project)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Idempotently registers Graphify's MCP server (D9/D21) with whichever
@@ -412,21 +415,21 @@ async fn rename_project(app: tauri::AppHandle, hash: String, display_name: Strin
         Ok(project)
     })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn create_thread(project_hash: String, title: String) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || store::create_thread(&palisade_home(), &project_hash, &title))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn list_threads(project_hash: String) -> Res<Vec<ThreadMeta>> {
     tokio::task::spawn_blocking(move || store::list_threads(&palisade_home(), &project_hash))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -439,7 +442,7 @@ async fn rename_thread(
         store::rename_thread(&palisade_home(), &project_hash, &thread_id, &title)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -452,7 +455,7 @@ async fn set_thread_mode(
         store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, &mode)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Refused while this thread has an executor turn in flight — deleting the
@@ -473,7 +476,7 @@ async fn set_thread_archived(
         Ok(meta)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -504,7 +507,7 @@ async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: S
         store::delete_thread(&palisade_home(), &project_hash, &thread_id)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -529,14 +532,14 @@ async fn append_message(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
     tokio::task::spawn_blocking(move || store::read_thread(&palisade_home(), &project_hash, &thread_id))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------- executor handoff
@@ -792,7 +795,7 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
         preflight_for_harness(&*harness, refresh)
     })
     .await
-    .map_err(|e| e.to_string())?)
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
 }
 
 /// Pure decision: which executor a project should use, given a preflight
@@ -1237,7 +1240,7 @@ async fn leave_thread(_app: tauri::AppHandle, _thread_id: String) -> Res<()> {
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Record the user's turn, then forward it to the executor if one is live.
@@ -1292,7 +1295,7 @@ async fn send_message(
             bypass,
         ) {
             Ok(id) => id,
-            Err(error) if is_auth_failure(&error) => {
+            Err(error) if is_auth_failure(&error.message) => {
                 harness.queue_pending_auth_turn(
                     &agent.id,
                     executor::PendingAuthTurn {
@@ -1327,7 +1330,7 @@ async fn send_message(
         Ok(message)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// ACP agents use a structured `auth_required` error when they can, but a few
@@ -1476,7 +1479,7 @@ async fn go_mode(
         Ok(meta)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Wrap the spec_type in a sentence so the agent knows it is the starting
@@ -1662,7 +1665,7 @@ async fn spec_mode(
         Ok(meta)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The thread's executor picker choice (D9/D18). `None` reverts to the
@@ -1686,7 +1689,7 @@ async fn set_thread_executor(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The models an installed agent actually offers, learned by spawning it for
@@ -1721,7 +1724,7 @@ async fn list_models(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// One interactive login an agent advertised, as the frontend can offer it.
@@ -1780,7 +1783,7 @@ async fn agent_logins(
             .collect())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Run one of an agent's advertised logins that the protocol drives.
@@ -1836,7 +1839,7 @@ async fn agent_authenticate(
                     &session_id,
                     &pending.content,
                 )?,
-                Err(error) if is_auth_failure(&error) => {
+                Err(error) if is_auth_failure(&error.message) => {
                     let mut remaining = vec![pending];
                     remaining.extend(queued);
                     harness.requeue_pending_auth_turns(&agent.id, remaining);
@@ -1848,7 +1851,7 @@ async fn agent_authenticate(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The user's home directory, or the current directory if it can't be read.
@@ -1895,7 +1898,7 @@ async fn propose(
         send_to(&harness, &project_hash, &id, &prompt)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Which diff Generate should describe: whatever is staged, or — when
@@ -2011,7 +2014,7 @@ async fn suggest_commit_message(
         Ok(server.commit_subject(&diff).unwrap_or_default())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -2063,7 +2066,7 @@ async fn draft_commit_message(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Build the grill-apply prompt for a one-shot injection in spec-mode.
@@ -2110,7 +2113,7 @@ async fn apply_skill(
         send_to(&harness, &project_hash, &id, &prompt)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// `change_status`: whether a change's planning artifacts are all complete.
@@ -2128,7 +2131,7 @@ async fn change_status(
         Ok(executor::openspec_change_status(&cache, &root, &change_name))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Stop one session by id. With no id, stop the named thread's sessions —
@@ -2183,7 +2186,7 @@ async fn stop_executor(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Resolve a pending tool-call approval prompt (D7, D-design-2). A missing
@@ -2206,7 +2209,7 @@ async fn answer_permission_prompt(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What each live session is doing.
@@ -2245,7 +2248,7 @@ async fn executor_status(app: tauri::AppHandle) -> Res<Vec<SessionStatus>> {
         Ok(statuses)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// A thread's isolated worktree, and what has changed inside it.
@@ -2327,7 +2330,7 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
         Ok(out)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Turn this thread's worktree isolation on or off.
@@ -2365,7 +2368,7 @@ async fn set_thread_worktree_enabled(
         store::set_thread_worktree_enabled(&home, &project_hash, &thread_id, enabled)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What a merge-back attempt did, as the gate card renders it.
@@ -2417,7 +2420,7 @@ async fn merge_thread_worktree(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Push the thread's branch and open a pull request for it, returning the URL
@@ -2441,7 +2444,7 @@ async fn open_thread_pr(project_hash: String, thread_id: String) -> Res<String> 
                 .current_dir(&path)
                 .env("PATH", executor::child_path_env())
                 .output()
-                .map_err(|err| format!("could not run gh: {err}"))?;
+                .map_err(|err| crate::PalisadeError::from(format!("could not run gh: {err}")))?;
             if out.status.success() {
                 if let Some(url) = String::from_utf8_lossy(&out.stdout)
                     .lines()
@@ -2469,7 +2472,7 @@ async fn open_thread_pr(project_hash: String, thread_id: String) -> Res<String> 
         compare_url(&bin, &root, &base, &branch)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The thread's worktree path, branch, and base branch — the trio every
@@ -2482,7 +2485,7 @@ fn thread_branch(
     thread_id: &str,
 ) -> Res<(PathBuf, String, String)> {
     let meta = thread_meta(project_hash, thread_id)
-        .ok_or_else(|| "This thread no longer exists.".to_string())?;
+        .ok_or_else(|| crate::PalisadeError::from("This thread no longer exists."))?;
     let (Some(path), Some(branch)) = (meta.worktree_path, meta.worktree_branch) else {
         return Err(
             "This thread has no worktree of its own, so there is nothing separate to merge back."
@@ -2492,7 +2495,7 @@ fn thread_branch(
     let base = meta
         .worktree_base_branch
         .or_else(|| git::current_branch_name(bin, root).ok())
-        .ok_or_else(|| "Could not tell which branch to merge into.".to_string())?;
+        .ok_or_else(|| crate::PalisadeError::from("Could not tell which branch to merge into."))?;
     Ok((PathBuf::from(path), branch, base))
 }
 
@@ -2537,7 +2540,7 @@ async fn prune_thread_worktree(
             if !ready.clean || ready.ahead > 0 {
                 return Err(format!(
                     "`{branch}` still has work that `{base}` does not — merge it first, or clean up anyway to discard it."
-                ));
+                ).into());
             }
         }
         git::remove_worktree(&bin, &root, &path, Some(&branch))?;
@@ -2545,7 +2548,7 @@ async fn prune_thread_worktree(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Drop the worktrees of archived threads whose work has provably landed.
@@ -2599,7 +2602,7 @@ async fn list_sessions(
         store::close_stale_sessions(&palisade_home(), &project_hash, &thread_id, &live)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------ verification
@@ -2623,7 +2626,7 @@ async fn run_verify(
         // Fail fast on an unknown name, before spawning a thread that can only
         // report the same error later and less visibly.
         if !settings.verify.contains_key(&name) {
-            return Err(format!("no verify command named `{name}` in .palisade/project-settings.json"));
+            return Err(format!("no verify command named `{name}` in .palisade/project-settings.json").into());
         }
 
         std::thread::spawn(move || {
@@ -2632,7 +2635,7 @@ async fn run_verify(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Runs one named verify command to completion, persists the run, emits
@@ -2682,7 +2685,7 @@ pub(crate) fn record_verification(
             name: name.to_string(),
             command: String::new(),
             exit_code: -1,
-            output_tail: message,
+            output_tail: message.message,
             git_head: head,
             at: chrono::Utc::now().to_rfc3339(),
             tests: None,
@@ -2703,7 +2706,7 @@ pub(crate) fn record_verification(
 async fn list_verifications(project_hash: String) -> Res<Vec<store::VerificationRun>> {
     tokio::task::spawn_blocking(move || store::read_verifications(&palisade_home(), &project_hash))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // -------------------------------------------------------- language servers
@@ -2719,7 +2722,7 @@ async fn lsp_start(
 ) -> Res<lsp::LspStatus> {
     tokio::task::spawn_blocking(move || start_language_server(&app, &project_hash, &language))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Spawns the server and wires its two callbacks. Recursive by design: the
@@ -2772,7 +2775,7 @@ fn start_language_server(
                         state: lsp::LspState::Disabled,
                         server: None,
                         restarts: status.restarts,
-                        detail: Some(err),
+                        detail: Some(err.message),
                     }),
                 );
             });
@@ -2791,7 +2794,7 @@ async fn lsp_send(
     let servers = app.state::<lsp::SharedLsp>().inner().clone();
     tokio::task::spawn_blocking(move || servers.send(&project_hash, &language, &body))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -2819,7 +2822,7 @@ async fn lsp_install_command(language: String) -> Res<Option<String>> {
 async fn lsp_install(language: String) -> Res<()> {
     tokio::task::spawn_blocking(move || lsp::install(&language))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Kills every server for a project — the frontend calls this on project
@@ -2829,7 +2832,7 @@ async fn lsp_shutdown(app: tauri::AppHandle, project_hash: String) -> Res<()> {
     let servers = app.state::<lsp::SharedLsp>().inner().clone();
     tokio::task::spawn_blocking(move || servers.shutdown_project(&project_hash))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))
 }
 
 // ------------------------------------------------------------ run commands
@@ -2845,7 +2848,7 @@ async fn run_commands(project_hash: String) -> Res<Vec<(String, String)>> {
         Ok(commands)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Replaces the project's `run` map. The whole map, not one entry: the panel
@@ -2857,7 +2860,7 @@ async fn save_run_commands(project_hash: String, commands: Vec<(String, String)>
         settings::save_run(&root, commands.into_iter().collect())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Replaces the project's `verifyPins` map. The whole map, not one entry:
@@ -2873,7 +2876,7 @@ async fn save_verify_pins(
         settings::save_verify_pins(&root, pins)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Replaces the project's `appearance` object. Opaque to Palisade — see
@@ -2885,7 +2888,7 @@ async fn save_appearance(project_hash: String, appearance: serde_json::Value) ->
         settings::save_appearance(&root, appearance)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2898,7 +2901,7 @@ async fn save_appearance(project_hash: String, appearance: serde_json::Value) ->
 async fn list_chains(project_hash: String) -> Res<Vec<chains::Chain>> {
     tokio::task::spawn_blocking(move || Ok(chains::list(&project_root(&project_hash)?)))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Writes a chain, keyed by its own `name`. Validation lives in
@@ -2908,14 +2911,14 @@ async fn list_chains(project_hash: String) -> Res<Vec<chains::Chain>> {
 async fn save_chain(project_hash: String, chain: chains::Chain) -> Res<()> {
     tokio::task::spawn_blocking(move || chains::save(&project_root(&project_hash)?, &chain))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn delete_chain(project_hash: String, name: String) -> Res<()> {
     tokio::task::spawn_blocking(move || chains::delete(&project_root(&project_hash)?, &name))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Past chain runs for this project. Reading is also startup reconciliation:
@@ -2937,7 +2940,7 @@ async fn list_chain_runs(
         Ok(records)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Retrieves one past run. Like the list endpoint it first reconciles a
@@ -2956,7 +2959,7 @@ async fn get_chain_run(
         chain_history::get_run(&palisade_home(), &project_hash, &run_id)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// D17: every node's bound agent must be installed before the run starts —
@@ -2984,7 +2987,7 @@ fn unavailable_agents(chain: &chains::Chain, installed: impl Fn(&str) -> bool) -
         "This chain can't run — {} not installed or not on PATH: {}.",
         if missing.len() == 1 { "its agent is" } else { "some of its agents are" },
         missing.join(", ")
-    ))
+    ).into())
 }
 
 /// The portion of a persisted run definition that is safe to replay. Kept
@@ -3006,7 +3009,7 @@ fn rerun_start(record: &chain_history::ChainRunRecord, from_role: Option<&str>) 
     let chain = record.chain_snapshot.clone();
     let role = from_role.unwrap_or(&chain.entry).to_string();
     if !chain.nodes.contains_key(&role) {
-        return Err(format!("chain run `{}` has no role `{role}`", record.id));
+        return Err(format!("chain run `{}` has no role `{role}`", record.id).into());
     }
     if from_role.is_none() {
         return Ok(RerunStart { chain, seed: record.seed.clone(), role, inputs: vec![] });
@@ -3055,7 +3058,7 @@ async fn run_chain(
             Ok::<_, String>(chain)
         })
         .await
-        .map_err(|e| e.to_string())??
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))??
     };
 
     launch_chain_run(app, project_hash, chain, seed_input, thread_id, None)
@@ -3192,7 +3195,7 @@ async fn rerun_chain_run(
         Ok::<_, String>(start)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))??;
 
     launch_chain_run(
         app,
@@ -3242,7 +3245,7 @@ async fn resolve_chain_gate(
         "approve" => chain_runner::Approval::Approve,
         "reject" => chain_runner::Approval::Reject,
         "sendBack" => chain_runner::Approval::SendBack(note.unwrap_or_default()),
-        other => return Err(format!("unknown gate decision `{other}`")),
+        other => return Err(format!("unknown gate decision `{other}`").into()),
     };
     let harness: tauri::State<'_, Harness> = app.state();
     let sender = harness
@@ -3252,7 +3255,7 @@ async fn resolve_chain_gate(
         .get(&run_id)
         .cloned()
         .ok_or("that chain run isn't waiting at an approval gate")?;
-    sender.send(approval).map_err(|_| "that chain run is no longer listening".to_string())
+    sender.send(approval).map_err(|_| crate::PalisadeError::from("that chain run is no longer listening"))
 }
 
 /// What the project root suggests running. A proposal the user confirms —
@@ -3264,7 +3267,7 @@ async fn detect_run_commands(project_hash: String) -> Res<Vec<(String, String)>>
         Ok(settings::detect_run(&root))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The names a project has configured, so the UI can offer them.
@@ -3278,7 +3281,7 @@ async fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
         Ok(commands)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------ attribution
@@ -3340,7 +3343,7 @@ async fn session_attribution(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // --------------------------------------------------------------- completion
@@ -3361,12 +3364,12 @@ fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
             "completion sidecar or model missing: binary={}, model={}",
             binary.display(),
             model.display()
-        ));
+        ).into());
     }
 
     let server = completion::CompletionServer::default();
     if let Err(err) = server.spawn(&binary, &model) {
-        return Err(format!("failed to start completion sidecar: {err}"));
+        return Err(format!("failed to start completion sidecar: {err}").into());
     }
     *server_slot = Some(server);
     Ok(())
@@ -3450,7 +3453,7 @@ async fn complete_code(
         server.complete(&file_path, &prefix, &suffix)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3471,7 +3474,7 @@ async fn set_completion_enabled(
         Ok(enabled)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3485,7 +3488,7 @@ async fn set_completion_keybinding(
         Ok(keybinding)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------------ mcp
@@ -3499,21 +3502,21 @@ async fn set_completion_keybinding(
 async fn list_mcp_servers(project_hash: String) -> Res<Vec<mcp::McpServer>> {
     tokio::task::spawn_blocking(move || Ok(mcp::list(&project_root(&project_hash)?)))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn save_mcp_server(project_hash: String, server: mcp::McpServer) -> Res<()> {
     tokio::task::spawn_blocking(move || mcp::save(&project_root(&project_hash)?, &server))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn remove_mcp_server(project_hash: String, name: String) -> Res<()> {
     tokio::task::spawn_blocking(move || mcp::remove(&project_root(&project_hash)?, &name))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3526,7 +3529,7 @@ async fn set_mcp_server_enabled(
         mcp::set_enabled(&project_root(&project_hash)?, &name, enabled)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3537,7 +3540,7 @@ async fn search_mcp_registry(
 ) -> Res<mcp::RegistryPage> {
     tokio::task::spawn_blocking(move || mcp::search_registry(&query, limit, cursor.as_deref()))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3546,7 +3549,7 @@ async fn flush_completion_telemetry(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || completion::flush_telemetry(&telemetry))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What a bug report needs attached that a tester cannot be asked to find.
@@ -3597,7 +3600,7 @@ async fn collect_diagnostics(app: tauri::AppHandle) -> Res<Diagnostics> {
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// `sw_vers -productVersion`, or a placeholder. A diagnostic that fails must
@@ -3625,7 +3628,7 @@ async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::Compl
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity// ------------------------------------------------------------- graphify

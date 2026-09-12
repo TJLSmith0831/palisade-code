@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::acp_registry;
+use crate::Res;
 
 /// Detection status for one discovered ACP agent.
 #[derive(Debug, Clone, Serialize)]
@@ -109,13 +110,13 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
 pub fn resolve_executor(
     flight: &Preflight,
     override_id: Option<String>,
-) -> Result<(&AgentStatus, Option<String>), String> {
+) -> Res<(&AgentStatus, Option<String>)> {
     let auto = || {
         flight
             .selected
             .as_deref()
             .and_then(|id| flight.agent(id))
-            .ok_or_else(|| "No ACP agent found on PATH — chat-only mode.".to_string())
+            .ok_or_else(|| crate::PalisadeError::from("No ACP agent found on PATH — chat-only mode."))
     };
 
     let Some(wanted) = override_id else {

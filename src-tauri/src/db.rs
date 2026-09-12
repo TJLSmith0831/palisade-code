@@ -12,10 +12,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub type Res<T> = Result<T, String>;
+/// The same alias as `store::Res`, restated here so this module reads
+/// standalone. One error type across the backend.
+pub type Res<T> = Result<T, crate::error::PalisadeError>;
 
-fn e(ctx: &str, err: impl std::fmt::Display) -> String {
-    format!("{ctx}: {err}")
+fn e(ctx: &str, err: impl std::fmt::Display) -> crate::PalisadeError {
+    crate::PalisadeError::from(format!("{ctx}: {err}"))
 }
 
 // ------------------------------------------------------------------ backends
@@ -39,7 +41,7 @@ pub fn backend_of(url: &str) -> Res<Backend> {
         "" => Err("connection string is missing a scheme (expected postgres:// or sqlite://)".into()),
         other => Err(format!(
             "unsupported database scheme '{other}' — this build speaks postgres:// and sqlite://"
-        )),
+        ).into()),
     }
 }
 
@@ -208,7 +210,7 @@ pub fn parse_url(url: &str) -> Res<(Details, Option<String>)> {
             let (host, port) = match hostport.rsplit_once(':') {
                 Some((h, p)) => (
                     h.to_string(),
-                    p.parse::<u16>().map_err(|_| format!("'{p}' is not a valid port"))?,
+                    p.parse::<u16>().map_err(|_| crate::PalisadeError::from(format!("'{p}' is not a valid port")))?,
                 ),
                 None => (hostport.to_string(), 5432),
             };
@@ -222,7 +224,7 @@ pub fn parse_url(url: &str) -> Res<(Details, Option<String>)> {
         }
         other => Err(format!(
             "unsupported database scheme '{other}' — this build speaks postgres:// and sqlite://"
-        )),
+        ).into()),
     }
 }
 
@@ -295,41 +297,42 @@ impl StoredConnection {
 /// fall back to the file, not a failure (D8).
 #[cfg(all(not(test), any(target_os = "macos", target_os = "windows")))]
 mod vault {
+    use crate::Res;
     const SERVICE: &str = "palisade-code";
 
-    fn entry(hash: &str, id: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new(SERVICE, &format!("{hash}:{id}")).map_err(|err| err.to_string())
+    fn entry(hash: &str, id: &str) -> Res<keyring::Entry> {
+        keyring::Entry::new(SERVICE, &format!("{hash}:{id}")).map_err(|err| crate::PalisadeError::from(err.to_string()))
     }
 
     /// Idempotent on purpose. macOS rejects a write over an existing item with
     /// `errSecDuplicateItem` rather than updating it, and two `list_connections`
     /// calls can race during migration — the panel mounts and refreshes before
     /// the first has rewritten the file — so the loser must converge, not warn.
-    pub fn set(hash: &str, id: &str, url: &str) -> Result<(), String> {
+    pub fn set(hash: &str, id: &str, url: &str) -> Res<()> {
         let entry = entry(hash, id)?;
         match entry.set_password(url) {
             Ok(()) => Ok(()),
             Err(_) => {
                 let _ = entry.delete_credential();
-                entry.set_password(url).map_err(|err| err.to_string())
+                entry.set_password(url).map_err(|err| crate::PalisadeError::from(err.to_string()))
             }
         }
     }
 
-    pub fn get(hash: &str, id: &str) -> Result<Option<String>, String> {
+    pub fn get(hash: &str, id: &str) -> Res<Option<String>> {
         match entry(hash, id)?.get_password() {
             Ok(v) => Ok(Some(v)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
     /// Deleting what is already gone is success — removal must not fail
     /// because a credential never made it into the store (D9).
-    pub fn delete(hash: &str, id: &str) -> Result<(), String> {
+    pub fn delete(hash: &str, id: &str) -> Res<()> {
         match entry(hash, id)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 }
@@ -338,15 +341,16 @@ mod vault {
 /// file fallback is the only path (D15).
 #[cfg(all(not(test), not(any(target_os = "macos", target_os = "windows"))))]
 mod vault {
+    use crate::Res;
     const NONE: &str = "no OS credential store on this platform";
 
-    pub fn set(_: &str, _: &str, _: &str) -> Result<(), String> {
+    pub fn set(_: &str, _: &str, _: &str) -> Res<()> {
         Err(NONE.into())
     }
-    pub fn get(_: &str, _: &str) -> Result<Option<String>, String> {
+    pub fn get(_: &str, _: &str) -> Res<Option<String>> {
         Err(NONE.into())
     }
-    pub fn delete(_: &str, _: &str) -> Result<(), String> {
+    pub fn delete(_: &str, _: &str) -> Res<()> {
         Ok(())
     }
 }
@@ -356,6 +360,7 @@ mod vault {
 /// backends are exercised by running the app.
 #[cfg(test)]
 pub mod vault {
+    use crate::Res;
     use crate::locks::MutexExt;
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
@@ -386,7 +391,7 @@ pub mod vault {
         g.0.contains(hash)
     }
 
-    pub fn set(hash: &str, id: &str, url: &str) -> Result<(), String> {
+    pub fn set(hash: &str, id: &str, url: &str) -> Res<()> {
         let mut g = store().lock_or_recover();
         if down(&g, hash) {
             return Err("credential store unavailable".into());
@@ -395,7 +400,7 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn get(hash: &str, id: &str) -> Result<Option<String>, String> {
+    pub fn get(hash: &str, id: &str) -> Res<Option<String>> {
         let g = store().lock_or_recover();
         if down(&g, hash) {
             return Err("credential store unavailable".into());
@@ -403,7 +408,7 @@ pub mod vault {
         Ok(g.1.get(&format!("{hash}:{id}")).cloned())
     }
 
-    pub fn delete(hash: &str, id: &str) -> Result<(), String> {
+    pub fn delete(hash: &str, id: &str) -> Res<()> {
         let mut g = store().lock_or_recover();
         if down(&g, hash) {
             return Err("credential store unavailable".into());
@@ -514,7 +519,7 @@ pub fn with_secret(home: &Path, hash: &str, conn: &DbConnection) -> Res<(DbConne
 
     let mut stored = read_stored(home, hash)?;
     let Some(i) = stored.iter().position(|r| r.id == conn.id) else {
-        return Err(format!("no connection {}", conn.id));
+        return Err(format!("no connection {}", conn.id).into());
     };
 
     // Details are missing entirely: a build that stored the whole connection
@@ -541,7 +546,7 @@ pub fn with_secret(home: &Path, hash: &str, conn: &DbConnection) -> Res<(DbConne
             Some(pw) => match vault::set(hash, &conn.id, pw) {
                 Ok(()) => None,
                 Err(why) => {
-                    warning = Some(degraded(&stored[i].name, &why));
+                    warning = Some(degraded(&stored[i].name, &why.message));
                     password.clone()
                 }
             },
@@ -586,7 +591,7 @@ fn stow(hash: &str, id: &str, name: &str, details: &Details, password: Option<&s
         Some(pw) => match vault::set(hash, id, pw) {
             Ok(()) => None,
             Err(why) => {
-                warning = Some(degraded(name, &why));
+                warning = Some(degraded(name, &why.message));
                 Some(pw.to_string())
             }
         },
@@ -643,7 +648,7 @@ pub fn rename_connection(home: &Path, hash: &str, id: &str, name: &str) -> Res<D
     let found = list
         .iter_mut()
         .find(|c| c.id == id)
-        .ok_or_else(|| format!("no connection {id}"))?;
+        .ok_or_else(|| crate::PalisadeError::not_found(format!("no connection {id}")))?;
     found.name = name.to_string();
     save_stored(home, hash, &list)?;
     find_connection(home, hash, id)
@@ -656,7 +661,7 @@ pub fn find_connection(home: &Path, hash: &str, id: &str) -> Res<DbConnection> {
         .0
         .into_iter()
         .find(|c| c.id == id)
-        .ok_or_else(|| format!("no connection {id}"))
+        .ok_or_else(|| crate::PalisadeError::not_found(format!("no connection {id}")))
 }
 
 // ------------------------------------------------------------------ timeout
@@ -685,7 +690,7 @@ async fn bounded_for<T>(
         Err(_) => Err(format!(
             "{what} timed out after {}s — Palisade stopped waiting; the database may still be running it",
             limit.as_secs()
-        )),
+        ).into()),
     }
 }
 
@@ -762,7 +767,7 @@ impl AuditEntry {
             }
             Err(err) => {
                 self.ok = false;
-                self.error = Some(err.clone());
+                self.error = Some(err.message.clone());
             }
         }
         self
@@ -954,7 +959,7 @@ pub fn build_update(
     if pk.is_empty() {
         return Err(format!(
             "{table_ref} has no primary key among the fetched columns, so its rows can't be updated safely"
-        ));
+        ).into());
     }
     let type_of = |name: &str| columns.iter().find(|c| c.name == name).map(|c| c.data_type.clone());
 
@@ -963,7 +968,7 @@ pub fn build_update(
     let mut set_preview = Vec::new();
     for (col, value) in &edit.changes {
         if type_of(col).is_none() {
-            return Err(format!("unknown column {col}"));
+            return Err(format!("unknown column {col}").into());
         }
         binds.push(value.clone());
         let bound = cast(backend, &placeholder(backend, binds.len()), type_of(col).as_deref());
@@ -985,7 +990,7 @@ pub fn build_update(
         .chain(columns.iter().filter(|c| !c.primary_key).map(|c| c.name.clone()));
     for col in ordered {
         let Some(original) = edit.original.get(&col) else {
-            return Err(format!("row is missing original value for {col}"));
+            return Err(format!("row is missing original value for {col}").into());
         };
         binds.push(original.clone());
         let ph = placeholder(backend, binds.len());
@@ -1241,7 +1246,7 @@ async fn columns_of_inner(conn: &DbConnection, schema: Option<&str>, table: &str
         })
         .collect();
     if columns.is_empty() {
-        return Err(format!("no such table: {table}"));
+        return Err(format!("no such table: {table}").into());
     }
     Ok(columns)
 }
@@ -1282,7 +1287,7 @@ async fn fetch_page_inner(
     let mut binds: Vec<String> = Vec::new();
     if let Some(f) = filter.filter(|f| !f.value.is_empty()) {
         if !known(&f.column) {
-            return Err(format!("no column {} on {table}", f.column));
+            return Err(format!("no column {} on {table}", f.column).into());
         }
         binds.push(format!("%{}%", f.value));
         sql.push_str(&format!(
@@ -1293,7 +1298,7 @@ async fn fetch_page_inner(
     }
     if let Some(s) = sort {
         if !known(&s.column) {
-            return Err(format!("no column {} on {table}", s.column));
+            return Err(format!("no column {} on {table}", s.column).into());
         }
         // Qualified with the table, not bare: the projection above aliases
         // `CAST(col AS TEXT)` back to `col`, and a bare ORDER BY name binds to
@@ -1437,7 +1442,7 @@ async fn apply_edits_inner(
             return Err(format!(
                 "conflict: {} changed in the database since it was loaded, so nothing was applied",
                 describe_row(edit)
-            ));
+            ).into());
         }
         applied += 1;
     }
@@ -1458,6 +1463,7 @@ fn describe_row(edit: &RowEdit) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::Res;
     use super::*;
 
     fn pg_at(host: &str, port: u16, user: &str, db: &str) -> Details {
@@ -2023,7 +2029,7 @@ mod tests {
         let conn = conn_for_audit();
         let entry = AuditEntry::new("query", &conn)
             .statement("select * from users where email = 'a@b.c'")
-            .outcome(&Ok::<i64, String>(3), |r: &i64| Some(*r));
+            .outcome(&Ok::<i64, crate::PalisadeError>(3), |r: &i64| Some(*r));
         append_audit(tmp.path(), "h", &entry).unwrap();
 
         let body = std::fs::read_to_string(audit_path(tmp.path(), "h")).unwrap();
@@ -2045,7 +2051,7 @@ mod tests {
             "h",
             &AuditEntry::new("edit", &conn)
                 .at(Some("public"), "users")
-                .outcome(&Ok::<i64, String>(2), |r: &i64| Some(*r)),
+                .outcome(&Ok::<i64, crate::PalisadeError>(2), |r: &i64| Some(*r)),
         )
         .unwrap();
 
@@ -2115,7 +2121,7 @@ mod tests {
         // is injected — the code path under test is the shipped one.
         let hung = async {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            Ok::<i64, String>(1)
+            Ok::<i64, crate::PalisadeError>(1)
         };
         let err = bounded_for(std::time::Duration::from_millis(50), "query", hung)
             .await
@@ -2127,7 +2133,7 @@ mod tests {
         assert_eq!(QUERY_TIMEOUT.as_secs(), 30);
 
         // The helper passes a fast operation straight through.
-        let ok = bounded("query", async { Ok::<i64, String>(7) }).await.unwrap();
+        let ok = bounded("query", async { Ok::<i64, crate::PalisadeError>(7) }).await.unwrap();
         assert_eq!(ok, 7);
     }
 
@@ -2136,7 +2142,7 @@ mod tests {
     async fn a_fast_operation_is_unaffected_by_the_bound() {
         let out = bounded("reading rows", async {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            Ok::<&str, String>("done")
+            Ok::<&str, crate::PalisadeError>("done")
         })
         .await;
         assert_eq!(out.unwrap(), "done");

@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use crate::chains::{Chain, ChainEdge, Gate};
 use crate::locks::MutexExt;
+use crate::Res;
 
 /// A run's wall clock, pause-aware (D12/design §1). `elapsed()` excludes time
 /// spent paused, so a run blocked on a human — a human-in-the-loop node or an
@@ -114,7 +115,7 @@ pub trait NodeRunner: Send + Sync {
 /// this stays `&mut self` — no concurrency to guard against.
 pub trait GateEvaluator {
     /// `Ok(true)` when the named command exited 0.
-    fn verify(&mut self, command: &str) -> Result<bool, String>;
+    fn verify(&mut self, command: &str) -> Res<bool>;
 
     /// Blocks until the human decides, or the run is torn down. `output` is
     /// `from_role`'s actual text, carried so the deciding surface can show the
@@ -124,7 +125,7 @@ pub trait GateEvaluator {
         from_role: &str,
         to_role: &str,
         output: &str,
-    ) -> Result<Approval, String>;
+    ) -> Res<Approval>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -567,7 +568,7 @@ impl ChainRun {
                     at: edge.from.clone(),
                     command: command.clone(),
                 }),
-                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err }),
+                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err.message }),
             },
             Gate::Approval => match gates.approval(&edge.from, &edge.to, output) {
                 Ok(Approval::Approve) if is_loop => Crossing::ExitLoop,
@@ -584,7 +585,7 @@ impl ChainRun {
                     if is_loop { edge.to.clone() } else { edge.from.clone() },
                     note,
                 ),
-                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err }),
+                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err.message }),
             },
         }
     }
@@ -926,19 +927,19 @@ mod tests {
     }
 
     impl GateEvaluator for FakeGates {
-        fn verify(&mut self, command: &str) -> Result<bool, String> {
+        fn verify(&mut self, command: &str) -> Res<bool> {
             self.verify_calls.push(command.into());
             if self.verify.is_empty() {
                 return Ok(true);
             }
             Ok(self.verify.remove(0)?)
         }
-        fn approval(&mut self, from: &str, _to: &str, output: &str) -> Result<Approval, String> {
+        fn approval(&mut self, from: &str, _to: &str, output: &str) -> Res<Approval> {
             self.approval_outputs.push((from.into(), output.into()));
             if self.approval.is_empty() {
                 return Ok(Approval::Approve);
             }
-            self.approval.remove(0)
+            self.approval.remove(0).map_err(crate::PalisadeError::from)
         }
     }
 
@@ -1677,7 +1678,7 @@ mod tests {
                 rx.recv().ok();
             }
             if self.cancel.load(Ordering::SeqCst) {
-                return Err(format!("`{role}` cancelled"));
+                return Err(format!("`{role}` cancelled").into());
             }
             Ok(format!("{role} output"))
         }

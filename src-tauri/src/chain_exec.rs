@@ -298,7 +298,7 @@ impl NodeRunner for AcpNodeRunner {
         if let Err(err) = sent {
             self.harness().turn_watchers.lock_or_recover().remove(&session_id);
             self.discard_session(role);
-            return Err(err);
+            return Err(err.into());
         }
 
         // Polled in short slices rather than one `recv_timeout(TURN_TIMEOUT)`:
@@ -345,18 +345,18 @@ impl NodeRunner for AcpNodeRunner {
             }
             Some(Ok(TurnEnd::Crashed(message))) => {
                 self.discard_session(role);
-                Err(message)
+                Err(message.into())
             }
             Some(Err(_)) => {
                 self.discard_session(role);
-                Err(format!("`{role}` produced nothing for {} minutes", TURN_TIMEOUT.as_secs() / 60))
+                Err(format!("`{role}` produced nothing for {} minutes", TURN_TIMEOUT.as_secs() / 60).into())
             }
             // Cancelled: interrupt through the existing per-session path
             // rather than waiting for the agent to notice on its own.
             None => {
                 self.on_state(role, NodeState::Cancelled);
                 self.cancel_turn(role, &session_id);
-                Err(format!("`{role}` cancelled"))
+                Err(format!("`{role}` cancelled").into())
             }
         }
     }
@@ -416,7 +416,7 @@ impl AcpGateEvaluator {
 }
 
 impl GateEvaluator for AcpGateEvaluator {
-    fn verify(&mut self, command: &str) -> Result<bool, String> {
+    fn verify(&mut self, command: &str) -> Res<bool> {
         // Palisade runs it and records the exit code — a gate is never
         // satisfied because an agent said the work was done (CLAUDE.md).
         let exit_code = crate::record_verification(
@@ -434,7 +434,7 @@ impl GateEvaluator for AcpGateEvaluator {
         from_role: &str,
         to_role: &str,
         output: &str,
-    ) -> Result<Approval, String> {
+    ) -> Res<Approval> {
         post_thread_summary(
             &self.app,
             &self.project_hash,
@@ -482,15 +482,15 @@ impl GateEvaluator for AcpGateEvaluator {
 /// regression test of the P0 Stop path. Bounded only by cancellation, not by
 /// the run's timeout (D12) — the caller has already paused the run's budget
 /// for the duration of this wait.
-fn wait_for_approval(rx: &mpsc::Receiver<Approval>, cancel: &AtomicBool) -> Result<Approval, String> {
+fn wait_for_approval(rx: &mpsc::Receiver<Approval>, cancel: &AtomicBool) -> Res<Approval> {
     loop {
         if cancel.load(Ordering::SeqCst) {
-            return Err("chain run cancelled while awaiting approval".to_string());
+            return Err("chain run cancelled while awaiting approval".into());
         }
         match rx.recv_timeout(CANCEL_POLL) {
             Ok(decision) => return Ok(decision),
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err("the approval gate was torn down".to_string()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err("the approval gate was torn down".into()),
         }
     }
 }
@@ -539,7 +539,7 @@ mod tests {
 
         let started = Instant::now();
         let result = wait_for_approval(&rx, &cancel);
-        assert_eq!(result.unwrap_err(), "chain run cancelled while awaiting approval");
+        assert_eq!(&*result.unwrap_err(), "chain run cancelled while awaiting approval");
         assert!(started.elapsed() < Duration::from_secs(1), "Stop must not wait out the gate budget");
     }
 
@@ -573,10 +573,10 @@ mod tests {
 
     struct NoGates;
     impl GateEvaluator for NoGates {
-        fn verify(&mut self, _command: &str) -> Result<bool, String> {
+        fn verify(&mut self, _command: &str) -> Res<bool> {
             Ok(true)
         }
-        fn approval(&mut self, _from: &str, _to: &str, _output: &str) -> Result<Approval, String> {
+        fn approval(&mut self, _from: &str, _to: &str, _output: &str) -> Res<Approval> {
             Ok(Approval::Approve)
         }
     }

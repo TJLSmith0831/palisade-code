@@ -18,6 +18,7 @@ import {
 } from "@tabler/icons-react";
 import * as api from "./api";
 import ChainRunHistory from "./ChainRunHistory";
+import { describeError } from "./errors";
 
 // The Chains side panel. List-only, deliberately: the panel finds a chain,
 // the center-workspace tab is where it's built (DESIGN.md's side-panel rule,
@@ -98,7 +99,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
       api
         .listChains(projectHash)
         .then((next) => live && setChains(next))
-        .catch((err) => live && setError(String(err)));
+        .catch((err) => live && setError(describeError(err, { loading: "your chains" })));
     void load();
     window.addEventListener(CHAINS_CHANGED_EVENT, load);
     return () => {
@@ -113,7 +114,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
       await api.deleteChain(projectHash, name);
       announceChainsChanged();
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 
@@ -133,7 +134,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
       }
       onOpen(example.name);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setExampleBusy(false);
     }

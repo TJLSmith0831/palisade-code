@@ -105,7 +105,7 @@ impl NotebookKernel {
 
         let mut child = cmd
             .spawn()
-            .map_err(|err| format!("failed to spawn notebook driver: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed to spawn notebook driver: {err}")))?;
         crate::pidguard::record(&pid_path, child.id());
 
         let stdin = child.stdin.take().ok_or("notebook driver stdin unavailable")?;
@@ -167,7 +167,7 @@ impl NotebookKernel {
             Ok(Ok(())) => Ok(()),
             Ok(Err(message)) => {
                 self.terminate();
-                Err(message)
+                Err(message.into())
             }
             Err(_) => {
                 self.terminate();
@@ -182,9 +182,9 @@ impl NotebookKernel {
         }
         let mut guard = self.stdin.lock_or_recover();
         let stdin = guard.as_mut().ok_or("notebook driver stdin unavailable")?;
-        let line = serde_json::to_string(&request).map_err(|err| err.to_string())?;
-        writeln!(stdin, "{line}").map_err(|err| format!("write to notebook driver: {err}"))?;
-        stdin.flush().map_err(|err| err.to_string())
+        let line = serde_json::to_string(&request).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+        writeln!(stdin, "{line}").map_err(|err| crate::PalisadeError::from(format!("write to notebook driver: {err}")))?;
+        stdin.flush().map_err(|err| crate::PalisadeError::from(err.to_string()))
     }
 
     pub fn execute(&self, cell_id: &str, source: &str) -> Res<()> {
@@ -321,11 +321,11 @@ pub fn list_kernelspecs() -> Res<Vec<String>> {
     let output = Command::new("jupyter")
         .args(["kernelspec", "list", "--json"])
         .output()
-        .map_err(|err| format!("jupyter kernelspec list: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("jupyter kernelspec list: {err}")))?;
     if !output.status.success() {
         return Err("jupyter kernelspec list exited non-zero".into());
     }
-    let parsed: Value = serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())?;
+    let parsed: Value = serde_json::from_slice(&output.stdout).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
     let names = parsed
         .get("kernelspecs")
         .and_then(Value::as_object)
@@ -354,7 +354,7 @@ pub fn resolve_driver_path(app: &AppHandle) -> Res<PathBuf> {
         use tauri::Manager;
         app.path()
             .resolve("driver/notebook_driver.py", BaseDirectory::Resource)
-            .map_err(|err| format!("failed to resolve bundled notebook driver: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("failed to resolve bundled notebook driver: {err}")))
     }
 }
 

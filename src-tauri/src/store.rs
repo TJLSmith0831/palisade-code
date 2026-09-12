@@ -14,10 +14,13 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub type Res<T> = Result<T, String>;
+/// Every IPC command's result. The error carries a `kind` the frontend can
+/// branch on rather than a bare string it has to pattern-match; see
+/// `error.rs` for why the long tail still arrives as `ErrorKind::Unknown`.
+pub type Res<T> = Result<T, crate::error::PalisadeError>;
 
-fn e(ctx: &str, err: impl std::fmt::Display) -> String {
-    format!("{ctx}: {err}")
+fn e(ctx: &str, err: impl std::fmt::Display) -> crate::PalisadeError {
+    crate::PalisadeError::from(format!("{ctx}: {err}"))
 }
 
 /// `~/.palisade-code` — the session store, deliberately outside any target repo.
@@ -195,7 +198,7 @@ pub fn add_project(home: &Path, dir: &Path) -> Res<Project> {
     let canonical = fs::canonicalize(dir)
         .map_err(|err| e(&format!("resolve {}", dir.display()), err))?;
     if !canonical.is_dir() {
-        return Err(format!("{} is not a directory", canonical.display()));
+        return Err(format!("{} is not a directory", canonical.display()).into());
     }
     let root = canonical.to_string_lossy().to_string();
     let hash = project_hash(&root);
@@ -236,7 +239,7 @@ pub fn remove_project(home: &Path, hash: &str) -> Res<()> {
     let _guard = lock_index();
     let mut projects = list_projects_locked(home)?;
     if !projects.iter().any(|p| p.hash == hash) {
-        return Err(format!("unknown project: {hash}"));
+        return Err(format!("unknown project: {hash}").into());
     }
     fs::write(project_dir(home, hash).join("removed"), b"")
         .map_err(|err| e("remove saved project", err))?;
@@ -640,7 +643,7 @@ pub fn set_spec_type(home: &Path, hash: &str, id: &str, spec_type: &str) -> Res<
 /// `role: "tool"` marker to the session log. No process is spawned here.
 pub fn set_thread_mode(home: &Path, hash: &str, id: &str, mode: &str) -> Res<ThreadMeta> {
     if mode != "spec" && mode != "go" {
-        return Err(format!("invalid mode: {mode}"));
+        return Err(format!("invalid mode: {mode}").into());
     }
     let meta = update_thread(home, hash, id, |m| m.current_mode = mode.to_string())?;
     append_message(home, hash, id, "tool", mode, &format!("Switched to {mode} mode"), None)?;

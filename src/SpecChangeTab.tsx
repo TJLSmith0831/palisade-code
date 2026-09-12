@@ -105,7 +105,7 @@ export default function SpecChangeTab({
         const content = await api.readFileContent(projectHash, relativePath);
         setter({ content, loading: false, error: null });
       } catch (err) {
-        setter({ content: null, loading: false, error: describeError(err) });
+        setter({ content: null, loading: false, error: describeError(err, { loading: "that file" }) });
       }
     },
     [projectHash]
@@ -133,7 +133,7 @@ export default function SpecChangeTab({
         setSpecLoading(false);
       })
       .catch((err) => {
-        setSpecError(describeError(err));
+        setSpecError(describeError(err, { loading: "this change's spec deltas" }));
         setSpecLoading(false);
       });
   }, [projectHash, specName]);

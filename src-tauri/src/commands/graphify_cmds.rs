@@ -24,14 +24,14 @@ pub async fn run_graphify(
         // Graphify maps the active project, never the harness — and never
         // anywhere outside the project the user selected.
         let target = ProjectPath::existing(&root, subpath.trim())
-            .map_err(|err| format!("Graphify target must stay inside the active project. ({err})"))?
+            .map_err(|err| crate::PalisadeError::from(format!("Graphify target must stay inside the active project. ({err})")))?
             .into_path_buf();
 
         let out_dir = integrations::default_out_dir(&root);
         integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Load a previous run's output without re-running the extract.
@@ -41,7 +41,7 @@ pub async fn load_graphify(project_hash: String) -> Res<integrations::GraphifyRu
         integrations::read_run(&integrations::default_out_dir(&project_root(&project_hash)?))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -60,5 +60,5 @@ pub async fn query_graphify(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }

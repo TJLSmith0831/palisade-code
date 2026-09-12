@@ -19,14 +19,14 @@ fn run(bin: &Path, root: &Path, args: &[&str]) -> Res<String> {
         .current_dir(root)
         .env("PATH", crate::executor::child_path_env())
         .output()
-        .map_err(|err| format!("could not run git: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("could not run git: {err}")))?;
     if !output.status.success() {
         // git reports some failures entirely on stdout ("nothing to commit"),
         // so stderr alone can leave the error blank and undiagnosable.
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let detail = [stderr.trim(), stdout.trim()].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n");
-        return Err(format!("git {} failed:\n{}", args.join(" "), detail));
+        return Err(format!("git {} failed:\n{}", args.join(" "), detail).into());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -96,16 +96,16 @@ fn apply(bin: &Path, root: &Path, patch: &str, args: &[&str]) -> Res<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| format!("could not run git apply: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("could not run git apply: {err}")))?;
     child
         .stdin
         .take()
         .ok_or("git apply stdin unavailable")?
         .write_all(patch.as_bytes())
-        .map_err(|err| format!("write patch to git apply: {err}"))?;
-    let output = child.wait_with_output().map_err(|err| format!("git apply: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("write patch to git apply: {err}")))?;
+    let output = child.wait_with_output().map_err(|err| crate::PalisadeError::from(format!("git apply: {err}")))?;
     if !output.status.success() {
-        return Err(format!("git apply failed:\n{}", String::from_utf8_lossy(&output.stderr).trim()));
+        return Err(format!("git apply failed:\n{}", String::from_utf8_lossy(&output.stderr).trim()).into());
     }
     Ok(())
 }
@@ -187,7 +187,7 @@ pub fn checkout_branch(bin: &Path, root: &Path, name: &str) -> Res<()> {
         return Err(format!(
             "`{name}` is already checked out in another worktree ({}). A branch can only live in one worktree at a time \u{2014} open that worktree to work on it, or pick a different branch here.",
             path.display()
-        ));
+        ).into());
     }
     run(bin, root, &["checkout", name]).map(|_| ())
 }
@@ -306,14 +306,14 @@ pub fn merges_cleanly(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<
         .current_dir(root)
         .env("PATH", crate::executor::child_path_env())
         .output()
-        .map_err(|err| format!("could not run git: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("could not run git: {err}")))?;
     match output.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
         _ => Err(format!(
             "git merge-tree failed:\n{}",
             String::from_utf8_lossy(&output.stderr).trim()
-        )),
+        ).into()),
     }
 }
 
@@ -392,7 +392,7 @@ pub fn merge_into_base(bin: &Path, root: &Path, base: &str, branch: &str) -> Res
             return Err(format!(
                 "`{base}` is checked out at {} with uncommitted changes — commit or stash them before merging.",
                 path.display()
-            ));
+            ).into());
         }
     }
 
@@ -423,7 +423,7 @@ pub fn merge_into_base(bin: &Path, root: &Path, base: &str, branch: &str) -> Res
                 merged: false,
                 conflict_path: Some(scratch),
                 conflict_branch: Some(tmp_branch),
-                detail,
+                detail: detail.message,
             });
         }
     }
@@ -471,7 +471,7 @@ pub fn pull(bin: &Path, root: &Path) -> Res<String> {
 pub fn push(bin: &Path, root: &Path) -> Res<String> {
     match run(bin, root, &["push"]) {
         Ok(out) => Ok(out),
-        Err(err) if err.contains("has no upstream branch") => {
+        Err(err) if err.message.contains("has no upstream branch") => {
             let branch = current_branch_name(bin, root)?;
             run(bin, root, &["push", "--set-upstream", "origin", &branch])
         }
@@ -505,14 +505,14 @@ pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res
                 "{GRAPH_DIR}/ holds this project's code graph, which Palisade maintains — \
                  discarding changes won't delete it. Remove the folder yourself if you \
                  really want it gone."
-            ));
+            ).into());
         }
         let full = root.join(path);
         // An untracked directory (git status reports it as one entry, e.g.
         // "graphify-out/") needs remove_dir_all — remove_file only deletes
         // a single file and errors ("Operation not permitted") on a dir.
         let result = if full.is_dir() { std::fs::remove_dir_all(&full) } else { std::fs::remove_file(&full) };
-        result.map_err(|err| format!("could not delete {path}: {err}"))
+        result.map_err(|err| crate::PalisadeError::from(format!("could not delete {path}: {err}")))
     } else {
         run(bin, root, &["checkout", "--", path]).map(|_| ())
     }
@@ -538,7 +538,7 @@ fn clone_dir_name(url: &str) -> String {
 pub fn clone(bin: &Path, url: &str, parent: &Path) -> Res<std::path::PathBuf> {
     let target = parent.join(clone_dir_name(url));
     if target.exists() {
-        return Err(format!("{} already exists", target.display()));
+        return Err(format!("{} already exists", target.display()).into());
     }
     run(bin, parent, &["clone", url, target.to_str().ok_or("bad path")?])?;
     Ok(target)

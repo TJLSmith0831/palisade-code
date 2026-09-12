@@ -311,7 +311,7 @@ export default function DiffPane({
       setStagedFiles(parseFilePatches(staged));
       setError(null);
     } catch (err) {
-      setError(describeError(err));
+      setError(describeError(err, { loading: "the working diff" }));
     }
   }, [projectHash, threadId]);
 
@@ -336,7 +336,7 @@ export default function DiffPane({
         if (!cancelled) setCommitFiles(parseFilePatches(diff));
       })
       .catch((err) => {
-        if (!cancelled) setCommitError(describeError(err));
+        if (!cancelled) setCommitError(describeError(err, { loading: "that commit" }));
       })
       .finally(() => {
         if (!cancelled) setCommitLoading(false);
@@ -353,7 +353,7 @@ export default function DiffPane({
         await action();
         await refresh();
       } catch (err) {
-        setError(describeError(err));
+        setError(describeError(err, { action: "apply that change" }));
       } finally {
         setBusy(false);
       }

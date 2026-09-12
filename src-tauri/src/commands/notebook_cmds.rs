@@ -64,7 +64,7 @@ pub async fn run_notebook_cell(
         kernel.execute(&cell_id, &source)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -75,7 +75,7 @@ pub async fn interrupt_notebook_kernel(app: tauri::AppHandle, project_hash: Stri
         kernel_for(&harness, &id).interrupt()
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -86,7 +86,7 @@ pub async fn restart_notebook_kernel(app: tauri::AppHandle, project_hash: String
         kernel_for(&harness, &id).restart()
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Stops and drops a notebook's kernel entirely — called on tab close
@@ -103,5 +103,5 @@ pub async fn close_notebook_kernel(app: tauri::AppHandle, project_hash: String, 
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }

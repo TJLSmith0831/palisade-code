@@ -121,7 +121,7 @@ impl DapConnection {
             // their timeout with no idea why.
             let orphaned: Vec<_> = waiters.lock_or_recover().drain().collect();
             for (_, tx) in orphaned {
-                let _ = tx.send(Err("debug adapter disconnected".to_string()));
+                let _ = tx.send(Err("debug adapter disconnected".into()));
             }
             let _ = dispatch.send(("__closed".to_string(), Value::Null));
         });
@@ -165,7 +165,7 @@ impl DapConnection {
                 // Drop the waiter so a late response is discarded rather than
                 // delivered to a channel nobody is listening on.
                 self.waiters.lock_or_recover().remove(&seq);
-                Err(format!("debug adapter did not answer `{command}` within {timeout:?}"))
+                Err(format!("debug adapter did not answer `{command}` within {timeout:?}").into())
             }
         }
     }
@@ -182,12 +182,12 @@ impl DapConnection {
     }
 
     fn write(&self, envelope: &Value) -> Res<()> {
-        let body = serde_json::to_string(envelope).map_err(|err| format!("encode: {err}"))?;
+        let body = serde_json::to_string(envelope).map_err(|err| crate::PalisadeError::from(format!("encode: {err}")))?;
         let mut writer = self.writer.lock_or_recover();
         writer
             .write_all(crate::lsp::frame(&body).as_bytes())
-            .map_err(|err| format!("write to debug adapter: {err}"))?;
-        writer.flush().map_err(|err| format!("flush debug adapter: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("write to debug adapter: {err}")))?;
+        writer.flush().map_err(|err| crate::PalisadeError::from(format!("flush debug adapter: {err}")))
     }
 
     /// Answers a reverse request. The adapter blocks on these.
@@ -230,7 +230,9 @@ fn pump(
                     if let Some(tx) = waiter {
                         let _ = tx.send(match success {
                             true => Ok(body),
-                            false => Err(message.unwrap_or_else(|| "request failed".into())),
+                            false => Err(message
+                                .map(crate::PalisadeError::from)
+                                .unwrap_or_else(|| crate::PalisadeError::from("request failed"))),
                         });
                     }
                 }
@@ -412,7 +414,7 @@ pub fn configure_with(
             Err(message) => {
                 for breakpoint in breakpoints.iter_mut() {
                     breakpoint.verified = Some(false);
-                    breakpoint.message = Some(message.clone());
+                    breakpoint.message = Some(message.message.clone());
                 }
             }
         }
@@ -725,7 +727,7 @@ impl DebugSession {
             return Err(format!(
                 "no debug adapter for {language}: `{}` is not on PATH",
                 adapter.command
-            ));
+            ).into());
         }
         let executable = crate::executor::find_on_path(&adapter.command)
             .unwrap_or_else(|| std::path::PathBuf::from(&adapter.command));
@@ -737,7 +739,7 @@ impl DebugSession {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|err| format!("start {}: {err}", adapter.command))?;
+            .map_err(|err| crate::PalisadeError::from(format!("start {}: {err}", adapter.command)))?;
 
         let stdout = child.stdout.take().ok_or("debug adapter has no stdout")?;
         let stdin = child.stdin.take().ok_or("debug adapter has no stdin")?;

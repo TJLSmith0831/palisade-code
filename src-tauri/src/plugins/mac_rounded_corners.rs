@@ -14,6 +14,7 @@ use cocoa::{
 
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
+use crate::Res;
 
 pub struct TrafficLightsConfig {
     pub offset_x: f64,
@@ -36,7 +37,7 @@ pub fn enable_rounded_corners<R: Runtime>(
     window: WebviewWindow<R>,
     offset_x: Option<f64>,
     offset_y: Option<f64>,
-) -> Result<(), String> {
+) -> Res<()> {
     #[cfg(target_os = "macos")]
     {
         let config = TrafficLightsConfig {
@@ -59,7 +60,7 @@ pub fn enable_rounded_corners<R: Runtime>(
                 content_view.setWantsLayer(cocoa::base::YES);
                 position_traffic_lights(ns_window, config.offset_x, config.offset_y);
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::PalisadeError::from(e.to_string()))?;
 
         Ok(())
     }
@@ -79,7 +80,7 @@ pub fn enable_modern_window_style<R: Runtime>(
     corner_radius: Option<f64>,
     offset_x: Option<f64>,
     offset_y: Option<f64>,
-) -> Result<(), String> {
+) -> Res<()> {
     #[cfg(target_os = "macos")]
     {
         let config = TrafficLightsConfig {
@@ -111,7 +112,7 @@ pub fn enable_modern_window_style<R: Runtime>(
                 }
                 position_traffic_lights(ns_window, config.offset_x, config.offset_y);
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::PalisadeError::from(e.to_string()))?;
 
         // Keep them put across a live resize. AppKit re-lays-out the titlebar
         // on every step of a drag, which drops the buttons back at their
@@ -152,7 +153,7 @@ pub fn reposition_traffic_lights<R: Runtime>(
     window: WebviewWindow<R>,
     offset_x: Option<f64>,
     offset_y: Option<f64>,
-) -> Result<(), String> {
+) -> Res<()> {
     #[cfg(target_os = "macos")]
     {
         let config = TrafficLightsConfig {
@@ -165,7 +166,7 @@ pub fn reposition_traffic_lights<R: Runtime>(
                 let ns_window = webview.ns_window() as id;
                 position_traffic_lights(ns_window, config.offset_x, config.offset_y);
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::PalisadeError::from(e.to_string()))?;
 
         Ok(())
     }

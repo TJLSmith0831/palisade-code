@@ -178,23 +178,23 @@ impl Chain {
             return Err("chain needs at least one node".into());
         }
         if !self.nodes.contains_key(&self.entry) {
-            return Err(format!("entry node `{}` isn't one of this chain's nodes", self.entry));
+            return Err(format!("entry node `{}` isn't one of this chain's nodes", self.entry).into());
         }
         for (key, node) in &self.nodes {
             if node.role != *key {
-                return Err(format!("node `{key}` has mismatched role `{}`", node.role));
+                return Err(format!("node `{key}` has mismatched role `{}`", node.role).into());
             }
             if node.agent.trim().is_empty() {
-                return Err(format!("node `{key}` has no agent bound to it"));
+                return Err(format!("node `{key}` has no agent bound to it").into());
             }
             if node.model.as_deref().unwrap_or("").trim().is_empty() {
-                return Err(format!("node `{key}` has no model bound to it"));
+                return Err(format!("node `{key}` has no model bound to it").into());
             }
         }
         for edge in &self.edges {
             for endpoint in [&edge.from, &edge.to] {
                 if !self.nodes.contains_key(endpoint) {
-                    return Err(format!("edge {} → {} refers to unknown node `{endpoint}`", edge.from, edge.to));
+                    return Err(format!("edge {} → {} refers to unknown node `{endpoint}`", edge.from, edge.to).into());
                 }
             }
         }
@@ -207,20 +207,20 @@ impl Chain {
                     return Err(format!(
                         "loop edge {} → {} needs a gate (a verify command or human approval)",
                         edge.from, edge.to
-                    ));
+                    ).into());
                 }
                 match edge.max_iterations {
                     None => {
                         return Err(format!(
                             "loop edge {} → {} needs a maximum iteration count",
                             edge.from, edge.to
-                        ))
+                        ).into())
                     }
                     Some(0) => {
                         return Err(format!(
                             "loop edge {} → {} needs a maximum iteration count above zero",
                             edge.from, edge.to
-                        ))
+                        ).into())
                     }
                     Some(_) => {}
                 }
@@ -285,8 +285,8 @@ pub fn list(project_root: &Path) -> Vec<Chain> {
 
 pub fn load(project_root: &Path, name: &str) -> Res<Chain> {
     let path = path_for(project_root, name)?;
-    let raw = std::fs::read_to_string(&path).map_err(|_| format!("no chain named `{name}` in this project"))?;
-    let chain: Chain = serde_json::from_str(&raw).map_err(|err| format!("chain `{name}` is malformed: {err}"))?;
+    let raw = std::fs::read_to_string(&path).map_err(|_| crate::PalisadeError::from(format!("no chain named `{name}` in this project")))?;
+    let chain: Chain = serde_json::from_str(&raw).map_err(|err| crate::PalisadeError::from(format!("chain `{name}` is malformed: {err}")))?;
     chain.validate()?;
     Ok(chain)
 }
@@ -297,15 +297,15 @@ pub fn save(project_root: &Path, chain: &Chain) -> Res<()> {
     chain.validate()?;
     let path = path_for(project_root, &chain.name)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|err| crate::PalisadeError::from(format!("create {}: {err}", parent.display())))?;
     }
-    let body = serde_json::to_string_pretty(chain).map_err(|err| err.to_string())?;
-    std::fs::write(&path, body + "\n").map_err(|err| format!("write chain `{}`: {err}", chain.name))
+    let body = serde_json::to_string_pretty(chain).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+    std::fs::write(&path, body + "\n").map_err(|err| crate::PalisadeError::from(format!("write chain `{}`: {err}", chain.name)))
 }
 
 pub fn delete(project_root: &Path, name: &str) -> Res<()> {
     let path = path_for(project_root, name)?;
-    std::fs::remove_file(&path).map_err(|err| format!("delete chain `{name}`: {err}"))
+    std::fs::remove_file(&path).map_err(|err| crate::PalisadeError::from(format!("delete chain `{name}`: {err}")))
 }
 
 #[cfg(test)]

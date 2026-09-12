@@ -155,7 +155,7 @@ impl CompletionServer {
 
         let mut child = cmd
             .spawn()
-            .map_err(|err| format!("failed to spawn completion sidecar: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed to spawn completion sidecar: {err}")))?;
         crate::pidguard::record(&pid_path, child.id());
 
         let stopping = self.stopping.clone();
@@ -266,7 +266,7 @@ impl CompletionServer {
                 Ok(resp) => {
                     let text = resp
                         .into_string()
-                        .map_err(|err| format!("failed to read completion response: {err}"))?;
+                        .map_err(|err| crate::PalisadeError::from(format!("failed to read completion response: {err}")))?;
                     return parse_completion_response(&text);
                 }
                 Err(ureq::Error::Status(503, resp)) => {
@@ -274,12 +274,12 @@ impl CompletionServer {
                     thread::sleep(Duration::from_millis(200));
                 }
                 Err(err) => {
-                    return Err(format!("completion request failed: {err}"));
+                    return Err(format!("completion request failed: {err}").into());
                 }
             }
         }
 
-        Err(format!("completion sidecar timed out: {last_err}"))
+        Err(format!("completion sidecar timed out: {last_err}").into())
     }
 }
 
@@ -297,17 +297,17 @@ impl CompletionServer {
         let resp = ureq::post(&url)
             .timeout(Duration::from_secs(4))
             .send_json(&title_request_body(prompt))
-            .map_err(|err| format!("title request failed: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("title request failed: {err}")))?;
         let text = resp
             .into_string()
-            .map_err(|err| format!("failed to read title response: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed to read title response: {err}")))?;
         let raw = serde_json::from_str::<serde_json::Value>(&text)
-            .map_err(|err| format!("failed to parse title response: {err}"))?
+            .map_err(|err| crate::PalisadeError::from(format!("failed to parse title response: {err}")))?
             .get("content")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        clean_title(&raw).ok_or_else(|| "model returned no usable title".to_string())
+        clean_title(&raw).ok_or_else(|| crate::PalisadeError::from("model returned no usable title"))
     }
 
     /// A one-line commit subject for a diff, from the local model.
@@ -322,17 +322,17 @@ impl CompletionServer {
         let resp = ureq::post(&url)
             .timeout(Duration::from_secs(6))
             .send_json(&commit_request_body(diff))
-            .map_err(|err| format!("commit-message request failed: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("commit-message request failed: {err}")))?;
         let text = resp
             .into_string()
-            .map_err(|err| format!("failed to read commit-message response: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed to read commit-message response: {err}")))?;
         let raw = serde_json::from_str::<serde_json::Value>(&text)
-            .map_err(|err| format!("failed to parse commit-message response: {err}"))?
+            .map_err(|err| crate::PalisadeError::from(format!("failed to parse commit-message response: {err}")))?
             .get("content")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        clean_title(&raw).ok_or_else(|| "model returned no usable subject".to_string())
+        clean_title(&raw).ok_or_else(|| crate::PalisadeError::from("model returned no usable subject"))
     }
 }
 
@@ -499,7 +499,7 @@ fn request_body(prompt: &str, n_predict: u32) -> serde_json::Value {
 
 pub fn parse_completion_response(body: &str) -> Res<CompletionResponse> {
     let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|err| format!("invalid completion JSON: {err}"))?;
+        serde_json::from_str(body).map_err(|err| crate::PalisadeError::from(format!("invalid completion JSON: {err}")))?;
 
     let content = value
         .get("content")
@@ -618,7 +618,7 @@ pub fn resolve_sidecar_paths(app: &AppHandle) -> Res<(PathBuf, PathBuf)> {
         // Sidecar binaries live next to the main executable on all platforms
         // when bundled via `externalBin`.
         let exe_dir = std::env::current_exe()
-            .map_err(|err| format!("failed to get current exe: {err}"))?
+            .map_err(|err| crate::PalisadeError::from(format!("failed to get current exe: {err}")))?
             .parent()
             .ok_or("current exe has no parent directory")?
             .to_path_buf();
@@ -688,7 +688,7 @@ fn install_atomically(target: &Path, write: impl FnOnce(&Path) -> Res<()>) -> Re
         return Err(err);
     }
     std::fs::rename(&part, target)
-        .map_err(|err| format!("failed to install model at {}: {err}", target.display()))
+        .map_err(|err| crate::PalisadeError::from(format!("failed to install model at {}: {err}", target.display())))
 }
 
 /// Removes model files this build no longer uses from `dir`.
@@ -736,7 +736,7 @@ fn write_verified(
     mut on_progress: impl FnMut(u64),
 ) -> Res<()> {
     let mut file = std::fs::File::create(dest)
-        .map_err(|err| format!("failed to create {}: {err}", dest.display()))?;
+        .map_err(|err| crate::PalisadeError::from(format!("failed to create {}: {err}", dest.display())))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     let mut written: u64 = 0;
@@ -744,18 +744,18 @@ fn write_verified(
     loop {
         let read = reader
             .read(&mut buf)
-            .map_err(|err| format!("model download failed: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("model download failed: {err}")))?;
         if read == 0 {
             break;
         }
         hasher.update(&buf[..read]);
         file.write_all(&buf[..read])
-            .map_err(|err| format!("failed writing model: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed writing model: {err}")))?;
         written += read as u64;
         on_progress(written);
     }
     file.flush()
-        .map_err(|err| format!("failed writing model: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("failed writing model: {err}")))?;
 
     let digest = hasher
         .finalize()
@@ -765,7 +765,7 @@ fn write_verified(
     if !digest.eq_ignore_ascii_case(expected_sha256.trim()) {
         return Err(format!(
             "model checksum mismatch: expected {expected_sha256}, got {digest}"
-        ));
+        ).into());
     }
     Ok(())
 }
@@ -779,13 +779,13 @@ fn write_verified(
 fn select_model(manifest_json: &str, role: &str) -> Res<ModelManifest> {
     let manifests: std::collections::BTreeMap<String, ModelManifest> =
         serde_json::from_str(manifest_json)
-            .map_err(|err| format!("model manifest is not valid JSON: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("model manifest is not valid JSON: {err}")))?;
     let count = manifests.len();
     manifests
         .into_iter()
         .find(|(key, _)| key == role)
         .map(|(_, entry)| entry)
-        .ok_or_else(|| format!("model manifest has no \"{role}\" entry ({count} roles listed)"))
+        .ok_or_else(|| crate::PalisadeError::not_found(format!("model manifest has no \"{role}\" entry ({count} roles listed)")))
 }
 
 /// The installed model's home: `<app-data>/models/`.
@@ -798,7 +798,7 @@ fn installed_model_dir(app: &AppHandle) -> Res<PathBuf> {
     app.path()
         .app_data_dir()
         .map(|dir| dir.join("models"))
-        .map_err(|err| format!("failed to resolve app data dir: {err}"))
+        .map_err(|err| crate::PalisadeError::from(format!("failed to resolve app data dir: {err}")))
 }
 
 #[cfg(not(debug_assertions))]
@@ -831,7 +831,7 @@ pub fn ensure_model_installed(app: &AppHandle) -> Res<()> {
             return Ok(());
         }
         std::fs::create_dir_all(&dir)
-            .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed to create {}: {err}", dir.display())))?;
 
         // The installer build carries the model as a bundle resource. Copy it
         // out rather than moving it: removing a file from a signed `.app`
@@ -846,7 +846,7 @@ pub fn ensure_model_installed(app: &AppHandle) -> Res<()> {
                 install_atomically(&target, |part| {
                     std::fs::copy(&bundled, part)
                         .map(|_| ())
-                        .map_err(|err| format!("failed to copy bundled model: {err}"))
+                        .map_err(|err| crate::PalisadeError::from(format!("failed to copy bundled model: {err}")))
                 })?;
                 prune_stale_models(&dir, MODEL_FILE_NAME)?;
                 emit_model_progress(app, "ready", 0, 0);
@@ -867,9 +867,9 @@ fn download_model(app: &AppHandle, target: &Path) -> Res<()> {
 
     let body = ureq::get(manifest_url)
         .call()
-        .map_err(|err| format!("failed to fetch model manifest: {err}"))?
+        .map_err(|err| crate::PalisadeError::from(format!("failed to fetch model manifest: {err}")))?
         .into_string()
-        .map_err(|err| format!("failed to read model manifest: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("failed to read model manifest: {err}")))?;
     let manifest = select_model(&body, MODEL_ROLE)?;
 
     let app_version = env!("CARGO_PKG_VERSION");
@@ -877,13 +877,13 @@ fn download_model(app: &AppHandle, target: &Path) -> Res<()> {
         return Err(format!(
             "model {} needs Palisade {} or newer (running {app_version})",
             manifest.filename, manifest.min_app_version
-        ));
+        ).into());
     }
 
     emit_model_progress(app, "downloading", 0, manifest.size);
     let response = ureq::get(&manifest.url)
         .call()
-        .map_err(|err| format!("failed to download model: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("failed to download model: {err}")))?;
     let mut reader = response.into_reader();
 
     // Emit at most once per 8MB — a per-chunk event would flood the webview.
@@ -985,7 +985,7 @@ fn wait_for_health(port: u16, timeout: Duration) -> Res<()> {
         thread::sleep(Duration::from_millis(250));
     }
 
-    Err(format!("completion sidecar did not become healthy on port {port}"))
+    Err(format!("completion sidecar did not become healthy on port {port}").into())
 }
 
 /// Persists the public completion telemetry counters to `~/.palisade-code/completion-telemetry.json`.
@@ -996,7 +996,7 @@ pub fn flush_telemetry(telemetry: &CompletionTelemetry) -> Res<()> {
     })?;
     let path = home.join("completion-telemetry.json");
     let json = serde_json::to_string_pretty(telemetry)
-        .map_err(|err| format!("failed to serialize telemetry: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("failed to serialize telemetry: {err}")))?;
     std::fs::write(&path, json).map_err(|err| {
         format!("failed to write telemetry to {}: {err}", path.display())
     })?;
@@ -1472,7 +1472,7 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         );
 
         install_atomically(&target, |part| {
-            std::fs::write(part, b"whole model").map_err(|e| e.to_string())
+            std::fs::write(part, b"whole model").map_err(|e| crate::PalisadeError::from(e.to_string()))
         })
         .unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"whole model");

@@ -53,7 +53,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
       setRuns(history);
       setError(null);
     } catch (err) {
-      setError(describeError(err));
+      setError(describeError(err, { loading: "this project's verification history" }));
     } finally {
       setLoading(false);
     }
@@ -86,7 +86,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
   const run = (name: string) => {
     setRunning((previous) => new Set(previous).add(name));
     api.runVerify(projectHash, name, threadId).catch((err) => {
-      setError(describeError(err));
+      setError(describeError(err, { action: `run ${name}` }));
       setRunning((previous) => {
         const next = new Set(previous);
         next.delete(name);

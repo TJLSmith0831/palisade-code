@@ -3,6 +3,7 @@ import { ActionIcon, Group, Menu, Stack, Text } from "@mantine/core";
 import { IconDots, IconExternalLink, IconRefresh } from "@tabler/icons-react";
 import * as api from "./api";
 import { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
+import { describeError } from "./errors";
 
 // Durable run history for one chain, rendered inline inside the Chains side
 // panel (DESIGN.md's side-panel rule: this finds and opens a past run, it
@@ -33,7 +34,7 @@ export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onR
           if (live) setRuns(next);
         })
         .catch((err) => {
-          if (live) setError(String(err));
+          if (live) setError(describeError(err, { loading: "this chain's run history" }));
         });
     void load();
     window.addEventListener(CHAINS_CHANGED_EVENT, load);

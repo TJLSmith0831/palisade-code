@@ -23,6 +23,7 @@ use serde::Serialize;
 use crate::executor::{Envelope, ExecutorEvent, Sink};
 use crate::permissions::{self, PermissionDecision, PermissionMode};
 use crate::locks::MutexExt;
+use crate::Res;
 
 /// How long session startup (spawn + initialize + session/new) may take
 /// before Palisade gives up. Cold npx installs can't happen — availability
@@ -1054,7 +1055,7 @@ async fn run_bridge(
     // Set to run one `authenticate` for this method and stop — the sign-in
     // path for an agent whose login the protocol drives (#19).
     auth_only: Option<String>,
-) -> Result<(), String> {
+) -> Res<()> {
     let notif_sink = sink.clone();
     let notif_session = palisade_session_id.clone();
     let notif_thread = spawn.thread_id.clone();
@@ -1292,7 +1293,7 @@ async fn run_bridge(
                         acp_session_id: String::new(),
                         models: ModelState::default(),
                     }),
-                    Err(e) => Err(format!("{e}")),
+                    Err(e) => Err(format!("{e}").into()),
                 });
                 return Ok(());
             }
@@ -1457,7 +1458,7 @@ async fn run_bridge(
                     ExecutorEvent::agent_died(None, message.clone()),
                 );
             }
-            Err(message)
+            Err(message.into())
         }
     }
 }
@@ -1502,7 +1503,7 @@ fn start_with_transport(
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = ready_tx.send(Err(format!("tokio runtime: {e}")));
+                let _ = ready_tx.send(Err(format!("tokio runtime: {e}").into()));
                 return;
             }
         };
@@ -1534,7 +1535,7 @@ fn start_with_transport(
             pending_permissions,
         )),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(format!("agent did not answer within {deadline:?}")),
+        Err(_) => Err(format!("agent did not answer within {deadline:?}").into()),
     }
 }
 
@@ -1544,7 +1545,7 @@ fn start_with_transport(
 /// handshake, creates a session (applying the thread's model choice), and
 /// bridges notifications to the sync `Sink`. Blocks until the session is
 /// ready or startup fails.
-pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Result<AcpSession, String> {
+pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Res<AcpSession> {
     let agent = agent_config(&spawn);
     let identity = SessionIdentity::from(&spawn);
     let (id, models, cmd_tx, busy, acp_session_id, pending_permissions) =
@@ -1563,7 +1564,7 @@ pub fn probe_models(
     bin: PathBuf,
     args: Vec<String>,
     project_root: PathBuf,
-) -> Result<ModelState, String> {
+) -> Res<ModelState> {
     let spawn = AcpSpawn {
         // Named, not blank: the probe completes a real `initialize`, which is
         // where an agent's advertised logins are learned — recording them
@@ -1602,7 +1603,7 @@ pub fn authenticate_agent(
     args: Vec<String>,
     project_root: PathBuf,
     method_id: String,
-) -> Result<(), String> {
+) -> Res<()> {
     let spawn = AcpSpawn {
         agent_id,
         agent_name: String::new(),
@@ -1675,7 +1676,7 @@ impl Sink for CollectingSink {
 ///
 /// The session is terminated either way — this is not a thread the user can
 /// see or resume, so leaving it live would leak a child process per click.
-pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result<String, String> {
+pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<String> {
     let collected = Arc::new(Mutex::new(Collected::default()));
     let sink = Arc::new(CollectingSink(collected.clone()));
     let agent = agent_config(&spawn);
@@ -1686,7 +1687,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result
     busy.store(true, Ordering::SeqCst);
     cmd_tx
         .send(BridgeCommand::Prompt(prompt.to_string()))
-        .map_err(|_| "agent connection is closed".to_string())?;
+        .map_err(|_| crate::PalisadeError::from("agent connection is closed"))?;
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -1703,7 +1704,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result
 
     let collected = collected.lock().map_err(|_| "collector poisoned")?;
     if let Some(error) = &collected.error {
-        return Err(error.clone());
+        return Err(error.clone().into());
     }
     Ok(collected.text.trim().to_string())
 }
@@ -1771,7 +1772,7 @@ impl SessionIdentity {
 
 /// Send a user message to a live ACP session. The prompt response arrives
 /// on the bridge thread, which emits `Done` (or `Crashed`) and clears busy.
-pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Result<(), String> {
+pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Res<()> {
     if session.is_busy() {
         return Err("executor is mid-turn".into());
     }
@@ -1782,7 +1783,7 @@ pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Result<(), String
     // into the user's project. One-shot metadata requests bypass this path.
     let preview = include_str!("../skills/palisade-preview.md");
     tx.send(BridgeCommand::Prompt(format!("{preview}\n\n{message}")))
-        .map_err(|_| "agent connection is closed".to_string())
+        .map_err(|_| crate::PalisadeError::from("agent connection is closed"))
 }
 
 fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {

@@ -34,7 +34,7 @@ impl Terminal {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
-            .map_err(|err| format!("open pty: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("open pty: {err}")))?;
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let mut cmd = CommandBuilder::new(&shell);
@@ -50,14 +50,14 @@ impl Terminal {
         // not set"). xterm.js speaks the xterm-256color terminfo dialect.
         cmd.env("TERM", "xterm-256color");
 
-        let child = pair.slave.spawn_command(cmd).map_err(|err| format!("spawn shell: {err}"))?;
+        let child = pair.slave.spawn_command(cmd).map_err(|err| crate::PalisadeError::from(format!("spawn shell: {err}")))?;
         // The child holds its own fd for the slave side; drop our copy so we
         // don't keep an extra reference alive past the child's lifetime.
         drop(pair.slave);
 
         let mut reader =
-            pair.master.try_clone_reader().map_err(|err| format!("clone pty reader: {err}"))?;
-        let writer = pair.master.take_writer().map_err(|err| format!("take pty writer: {err}"))?;
+            pair.master.try_clone_reader().map_err(|err| crate::PalisadeError::from(format!("clone pty reader: {err}")))?;
+        let writer = pair.master.take_writer().map_err(|err| crate::PalisadeError::from(format!("take pty writer: {err}")))?;
 
         let stopping = Arc::new(AtomicBool::new(false));
         let reader_handle = thread::spawn(move || {
@@ -81,14 +81,14 @@ impl Terminal {
 
     pub fn write(&self, bytes: &[u8]) -> Res<()> {
         let mut writer = self.writer.lock_or_recover();
-        writer.write_all(bytes).map_err(|err| format!("write to pty: {err}"))?;
-        writer.flush().map_err(|err| format!("flush pty: {err}"))
+        writer.write_all(bytes).map_err(|err| crate::PalisadeError::from(format!("write to pty: {err}")))?;
+        writer.flush().map_err(|err| crate::PalisadeError::from(format!("flush pty: {err}")))
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Res<()> {
         self.master
             .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|err| format!("resize pty: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("resize pty: {err}")))
     }
 
     pub fn terminate(&mut self) {
@@ -158,7 +158,7 @@ impl TerminalRegistry {
         if open_for_project >= MAX_TERMINALS_PER_PROJECT {
             return Err(format!(
                 "at the limit of {MAX_TERMINALS_PER_PROJECT} terminal tabs for this project — close one first"
-            ));
+            ).into());
         }
         let terminal = Terminal::spawn(project_root, on_output)?;
         tabs.insert(id.to_string(), Tab { project_hash: project_hash.to_string(), terminal });

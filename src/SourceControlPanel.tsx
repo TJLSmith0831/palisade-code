@@ -16,6 +16,7 @@ import {
 import * as api from "./api";
 import type { FileStatus, LogEntry } from "./api";
 import { relativeTime } from "./SessionList";
+import { errorKind } from "./errors";
 
 // Amendment 7's Source Control panel: the primary git surface, behind the
 // left rail's Source Control icon. Built from mockup.html's #panel-git.
@@ -488,7 +489,9 @@ export default function SourceControlPanel({
         setFiles(value);
       })
       .catch((err) => {
-        if (/not a git repository/i.test(String(err))) {
+        // Was a regex over whatever text reached here. git's own wording is
+        // classified once, in Rust, and arrives as a kind.
+        if (errorKind(err) === "notAGitRepo") {
           setNotARepo(true);
           return;
         }
@@ -500,7 +503,7 @@ export default function SourceControlPanel({
       .catch((err) => {
         // "Not a git repository" is reported once already, via gitStatus
         // above — a second identical toast from the same cause is noise.
-        if (/not a git repository/i.test(String(err))) return;
+        if (errorKind(err) === "notAGitRepo") return;
         onError(err);
       });
     api.gitGraph(projectHash, graphLimit).then(setGraph).catch(onError);

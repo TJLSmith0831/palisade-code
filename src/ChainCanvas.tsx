@@ -34,6 +34,7 @@ import {
 import * as api from "./api";
 import { useElapsed } from "./useElapsed";
 import { announceChainsChanged } from "./ChainsPanel";
+import { describeError } from "./errors";
 
 // The chain builder canvas and its live run view — one surface in two states,
 // per the design brief: run mode is the same graph "watching", not a
@@ -370,7 +371,7 @@ export default function ChainCanvas({
           }).catch(() => undefined);
         }
       })
-      .catch((err) => live && setError(String(err)));
+      .catch((err) => live && setError(describeError(err, { loading: "this chain" })));
     return () => {
       live = false;
     };
@@ -530,7 +531,7 @@ export default function ChainCanvas({
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err, { action: "save this chain" }));
     }
   };
 
@@ -820,7 +821,7 @@ export default function ChainCanvas({
               variant="light"
               leftSection={<IconPlayerStop size={14} />}
               loading={stopping}
-              onClick={async () => { setStopping(true); try { await api.cancelChainRun(run!.runId); } catch (err) { setError(String(err)); } finally { setStopping(false); } }}
+              onClick={async () => { setStopping(true); try { await api.cancelChainRun(run!.runId); } catch (err) { setError(describeError(err, { action: "stop this run" })); } finally { setStopping(false); } }}
             >
               Stop
             </Button>
@@ -1361,7 +1362,7 @@ function ApprovalBar({ run, onError, onTranscript, onResolved }: { run: RunView;
       await api.resolveChainGate(run.runId, decision, decision === "sendBack" ? note : undefined);
       onResolved?.(decision);
     } catch (err) {
-      onError(String(err));
+      onError(describeError(err));
     } finally {
       setPending(null);
     }

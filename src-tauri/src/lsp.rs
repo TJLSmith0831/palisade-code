@@ -131,17 +131,17 @@ pub fn install(language: &str) -> Res<()> {
         .args(&argv[1..])
         .env("PATH", crate::executor::child_path_env())
         .output()
-        .map_err(|err| format!("{}: {err}", argv[0]))?;
+        .map_err(|err| crate::PalisadeError::from(format!("{}: {err}", argv[0])))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let detail = stderr.trim();
-    Err(if detail.is_empty() {
+    Err(crate::PalisadeError::from(if detail.is_empty() {
         format!("{} exited with {}", argv.join(" "), output.status)
     } else {
         detail.to_string()
-    })
+    }))
 }
 
 /// The server command for a language, if Palisade knows one.
@@ -314,7 +314,7 @@ impl LspServers {
             // the status bar could not report while this was /dev/null.
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| format!("start {binary}: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("start {binary}: {err}")))?;
 
         let mut stderr = child.stderr.take();
         let last_error = Arc::new(Mutex::new(String::new()));
@@ -372,7 +372,7 @@ impl LspServers {
         stdin
             .write_all(frame(body).as_bytes())
             .and_then(|_| stdin.flush())
-            .map_err(|err| format!("write to {language} server: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("write to {language} server: {err}")))
     }
 
     /// Records a server exit and applies D14's restart policy: the caller

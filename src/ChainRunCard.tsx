@@ -5,6 +5,7 @@ import * as api from "./api";
 import { useElapsed } from "./useElapsed";
 import { outcomeText, type RunView } from "./ChainCanvas";
 import ChainRunHistory from "./ChainRunHistory";
+import { describeError } from "./errors";
 
 /**
  * The chat-side run view: `RunView` plus the two fields the card needs that
@@ -111,7 +112,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       await api.resolveChainGate(run.runId, decision, decision === "sendBack" ? note : undefined);
       onGateResolved?.(decision);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setPending(null);
     }
@@ -122,7 +123,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     try {
       await api.cancelChainRun(run.runId);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setStopping(false);
     }
@@ -133,7 +134,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     try {
       await api.rerunChainRun(projectHash, run.runId, fromRole, run.threadId);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setRerunning(null);
     }
@@ -147,7 +148,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     try {
       await api.rerunChainRun(projectHash, runId, fromRole, run.threadId);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 

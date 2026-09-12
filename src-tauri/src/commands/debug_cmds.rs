@@ -35,7 +35,7 @@ fn session(harness: &Harness) -> Res<Arc<DebugSession>> {
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| "no debug session is running".to_string())
+        .ok_or_else(|| crate::PalisadeError::from("no debug session is running"))
 }
 
 fn status_of(harness: &Harness, project_hash: &str) -> Res<DebugStatus> {
@@ -54,7 +54,7 @@ fn status_of(harness: &Harness, project_hash: &str) -> Res<DebugStatus> {
 pub async fn debug_breakpoints(project_hash: String) -> Res<store::BreakpointsByFile> {
     tokio::task::spawn_blocking(move || store::read_breakpoints(&palisade_home(), &project_hash))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Adds or removes a breakpoint at one line, and returns the file's new set.
@@ -99,7 +99,7 @@ pub async fn debug_toggle_breakpoint(
         Ok(file)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Turns a breakpoint off without forgetting it, or back on.
@@ -122,7 +122,7 @@ pub async fn debug_set_breakpoint_enabled(
         Ok(all.get(&path).cloned().unwrap_or_default())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -131,7 +131,7 @@ pub async fn debug_clear_breakpoints(project_hash: String) -> Res<()> {
         store::write_breakpoints(&palisade_home(), &project_hash, &store::BreakpointsByFile::new())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ----------------------------------------------------------------- session
@@ -141,7 +141,7 @@ pub async fn debug_clear_breakpoints(project_hash: String) -> Res<()> {
 pub async fn debug_adapter(language: String) -> Res<Option<dap::AdapterInfo>> {
     tokio::task::spawn_blocking(move || Ok(dap::adapter(&language)))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What Start would actually launch: the `run` command it derives from, and
@@ -180,7 +180,7 @@ pub async fn debug_launch_options(
         Ok(options)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -190,7 +190,7 @@ pub async fn debug_status(app: tauri::AppHandle, project_hash: String) -> Res<De
         status_of(&harness, &project_hash)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Starts a debug session: spawn the adapter, hand it the launch config,
@@ -219,16 +219,15 @@ pub async fn debug_start(
         // all, which showed up as a Start button spinning for thirty seconds
         // and then failing with nothing useful to say.
         if configuration.as_object().is_none_or(|c| c.is_empty()) {
-            return Err(
+            return Err(crate::PalisadeError::from(
                 "nothing to launch: add a `run` command to \
-                 .palisade/project-settings.json that starts this project"
-                    .to_string(),
-            );
+                 .palisade/project-settings.json that starts this project",
+            ));
         }
 
         let root = project_root(&project_hash)?;
         let adapter = dap::adapter(&language).ok_or_else(|| {
-            format!("Palisade knows no debug adapter for {language}")
+            crate::PalisadeError::not_found(format!("Palisade knows no debug adapter for {language}"))
         })?;
 
         let id = ulid::Ulid::new().to_string();
@@ -289,7 +288,7 @@ pub async fn debug_start(
 
         if let Err(message) = launch.join().unwrap_or_else(|_| Err("launch panicked".into())) {
             session.stop();
-            return Err(format!("launch failed: {message}"));
+            return Err(format!("launch failed: {message}").into());
         }
 
         *harness.debug_session.lock_or_recover() = Some(Arc::clone(&session));
@@ -305,7 +304,7 @@ pub async fn debug_start(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -320,7 +319,7 @@ pub async fn debug_stop(app: tauri::AppHandle) -> Res<()> {
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ---------------------------------------------------------------- stepping
@@ -335,7 +334,7 @@ fn step_command(action: &str) -> Res<&'static str> {
         "stepOut" => "stepOut",
         "pause" => "pause",
         "restart" => "restart",
-        other => return Err(format!("unknown debug action `{other}`")),
+        other => return Err(format!("unknown debug action `{other}`").into()),
     })
 }
 
@@ -357,7 +356,7 @@ pub async fn debug_step(app: tauri::AppHandle, action: String, thread_id: Option
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // --------------------------------------------------------------- inspection
@@ -384,7 +383,7 @@ pub async fn debug_scopes(app: tauri::AppHandle, frame_id: i64) -> Res<Vec<(Stri
             .unwrap_or_default())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -396,7 +395,7 @@ pub async fn debug_variables(app: tauri::AppHandle, variables_reference: i64) ->
         Ok(dap::parse_variables(&body))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Evaluates watch expressions in one frame.
@@ -416,7 +415,7 @@ pub async fn debug_evaluate(
         Ok(expressions.iter().map(|e| session.evaluate(e, frame_id)).collect())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------------ events

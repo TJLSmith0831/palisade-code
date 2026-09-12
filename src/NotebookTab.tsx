@@ -38,6 +38,7 @@ import {
   setCellSource,
   setCellType,
 } from "./notebook";
+import { describeError } from "./errors";
 
 /** One code cell's CodeMirror instance — mounted once, mirrors
  *  SqlQueryTab's single-editor pattern (basicSetup + the app's shared
@@ -184,7 +185,7 @@ export default function NotebookTab({
         }
       })
       .catch((err) => {
-        if (!cancelled) setLoadError(String(err));
+        if (!cancelled) setLoadError(describeError(err, { loading: "this notebook" }));
       });
     return () => {
       cancelled = true;
@@ -340,7 +341,7 @@ export default function NotebookTab({
         .catch((err) => {
           setRunningCellId(null);
           setKernelStarting(false);
-          setWarning(String(err));
+          setWarning(describeError(err));
         });
     },
     [doc, path, projectHash, runningCellId]

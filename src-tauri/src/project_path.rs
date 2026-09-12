@@ -68,7 +68,7 @@ impl ProjectPath {
         let root = canonical_root(root);
         let joined = root.join(relative);
         let resolved = std::fs::canonicalize(&joined)
-            .map_err(|err| format!("no such file: {} ({err})", joined.display()))?;
+            .map_err(|err| crate::PalisadeError::from(format!("no such file: {} ({err})", joined.display())))?;
         if !resolved.starts_with(&root) {
             return Err(ESCAPED.into());
         }
@@ -100,7 +100,7 @@ impl ProjectPath {
             }
         }
         let resolved_existing = std::fs::canonicalize(&existing)
-            .map_err(|err| format!("cannot resolve {}: {err}", existing.display()))?;
+            .map_err(|err| crate::PalisadeError::from(format!("cannot resolve {}: {err}", existing.display())))?;
         if !resolved_existing.starts_with(&root) {
             return Err(ESCAPED.into());
         }
@@ -156,10 +156,10 @@ mod tests {
         // rejection has to come from the containment check and not from the
         // file simply being absent.
         let err = ProjectPath::existing(&root, "../../../../../../etc/passwd").unwrap_err();
-        assert_eq!(err, ESCAPED, "traversal was refused for the wrong reason");
+        assert_eq!(&*err, ESCAPED, "traversal was refused for the wrong reason");
 
         let err = ProjectPath::creatable(&root, "../escaped.txt").unwrap_err();
-        assert_eq!(err, ESCAPED);
+        assert_eq!(&*err, ESCAPED);
     }
 
     #[test]
@@ -176,11 +176,11 @@ mod tests {
         // The symlink itself is inside the project and the target exists, so
         // only canonicalizing catches this.
         let err = ProjectPath::existing(&root, "escape/secret.txt").unwrap_err();
-        assert_eq!(err, ESCAPED);
+        assert_eq!(&*err, ESCAPED);
 
         // And planted partway down a path whose leaf does not exist yet.
         let err = ProjectPath::creatable(&root, "escape/planted.txt").unwrap_err();
-        assert_eq!(err, ESCAPED);
+        assert_eq!(&*err, ESCAPED);
     }
 
     #[test]
