@@ -1326,11 +1326,16 @@ export const ChatSurface = memo(
             </Button>
           </Alert>
         )}
+        {/* Polite, not assertive: agent output streams continuously, and an
+            assertive region would interrupt the screen reader on every token.
+            A permission prompt carries its own labelled group inside. */}
         <div
           className="messages"
           data-testid="messages"
           ref={messagesRef}
           onScroll={handleScroll}
+          aria-live="polite"
+          aria-relevant="additions text"
           data-autoscroll={autoScroll}
         >
           <>

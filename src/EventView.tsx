@@ -13,6 +13,7 @@ import {
   IconTerminal2,
 } from "@tabler/icons-react";
 
+import { onActivateKey } from "./a11y";
 import type { AgentLogin, ExecutorEvent, Message, Preflight } from "./api";
 import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
@@ -172,6 +173,10 @@ function ReasoningBlock({
     >
       <Box
         onClick={() => setOpen(!open)}
+        onKeyDown={onActivateKey(() => setOpen(!open))}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
         data-testid="reasoning-block-header"
         style={{
           display: "flex",
@@ -253,6 +258,11 @@ function ToolBlock({
   const running = !output;
   const badgeColor = pending ? "warn" : running ? "neutral" : failed ? "danger" : "success";
   const preview = event.command.split("\n")[0].slice(0, 120);
+  // A pending call is a consent moment: the first line, truncated to 120
+  // chars, is not the command — a heredoc or `&&` chain hides its second line
+  // behind a benign-looking first one. Force the full command into view while
+  // the decision is open, regardless of the user's collapse state.
+  const expanded = open || !!pending;
 
   return (
     <Paper
@@ -272,6 +282,10 @@ function ToolBlock({
     >
       <Box
         onClick={() => setOpen(!open)}
+        onKeyDown={onActivateKey(() => setOpen(!open))}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
         data-testid="tool-block-header"
         style={{
           display: "flex",
@@ -284,7 +298,7 @@ function ToolBlock({
           boxSizing: "border-box",
         }}
       >
-        {open ? (
+        {expanded ? (
           <IconChevronDown
             size={14}
             style={{ flex: "0 0 auto" }}
@@ -321,7 +335,14 @@ function ToolBlock({
           {preview}
         </Box>
         {pending ? (
-          <Group gap={4} wrap="nowrap" data-testid="permission-prompt" onClick={(e) => e.stopPropagation()}>
+          <Group
+            gap={4}
+            wrap="nowrap"
+            data-testid="permission-prompt"
+            role="group"
+            aria-label={`Permission requested for ${event.name}`}
+            onClick={(e) => e.stopPropagation()}
+          >
             <Button
               size="compact-xs"
               variant="light"
@@ -340,9 +361,12 @@ function ToolBlock({
             >
               Deny
             </Button>
+            {/* Subtle, not `light`: this is the broadest of the three grants
+                and stands until the session ends, so it must not be as easy to
+                click reflexively as the single-shot Allow beside it. */}
             <Button
               size="compact-xs"
-              variant="light"
+              variant="subtle"
               color="neutral"
               data-testid="permission-allow-session"
               onClick={() => onAnswer?.(pending.id, "allow_session")}
@@ -388,7 +412,7 @@ function ToolBlock({
           {pending.warning}
         </Alert>
       )}
-      {open && (
+      {expanded && (
         <Stack gap="xs" p="sm" style={{ borderTop: "1px solid var(--border)" }}>
           <Code
             block
