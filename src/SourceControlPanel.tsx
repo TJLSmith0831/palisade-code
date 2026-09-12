@@ -188,8 +188,11 @@ function GraphLanes({ row, laneCount, isFirstRow, height }: { row: GraphRow; lan
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}
-      aria-label={`Commit graph lane ${row.lane + 1}`}
       data-testid="sc-graph-lane"
+      // Decoration: the commit row beside this already carries the commit's
+      // accessible name, and "commit graph lane 2" is nothing a reader can
+      // act on. The aria-label that used to sit here was dead anyway —
+      // aria-hidden wins when both are on the same element.
       aria-hidden="true"
     >
       {row.edges.map(({ from, to, color }, index) => {

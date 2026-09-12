@@ -372,3 +372,38 @@ describe("status colour goes through the theme, not Mantine's stock ramps", () =
     }
   });
 });
+
+describe("every custom interactive row can be seen to have focus", () => {
+  // App.css has one :focus-visible recipe for rows that are role="button"
+  // divs, since the global button/input rule never reaches them.
+  // .ds-debug-frame — the call stack — was role="button" tabIndex={0} with a
+  // :hover rule and no entry here, so a keyboard user moving through the call
+  // stack had no idea where they were.
+  const recipe = css.slice(
+    css.indexOf(".ds-tree-row:focus-visible"),
+    css.indexOf("}", css.indexOf(".ds-tree-row:focus-visible"))
+  );
+
+  const inRecipe = [...recipe.matchAll(/\.([a-z-]+):focus-visible/g)].map((m) => m[1]);
+
+  it("covers every class the shell declares as a custom row", () => {
+    expect(inRecipe).toContain("ds-debug-frame");
+  });
+
+  it("gives each of them an actual ring", () => {
+    expect(recipe).toContain("box-shadow: 0 0 0 2px");
+  });
+
+  // A class only belongs in that recipe if something actually renders it as a
+  // focusable row; otherwise the rule is decoration for an element that can
+  // never receive focus.
+  it("names only classes that are rendered as focusable rows", () => {
+    const sources = readdirSync(resolve(root, "src"))
+      .filter((f) => /\.tsx$/.test(f))
+      .map((f) => readFileSync(resolve(root, "src", f), "utf8"))
+      .join("\n");
+    for (const cls of inRecipe) {
+      expect(sources, `${cls} is in the focus recipe but nothing renders it`).toContain(cls);
+    }
+  });
+});

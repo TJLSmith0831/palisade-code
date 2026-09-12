@@ -675,3 +675,19 @@ describe("the graph says how much history it is showing", () => {
     expect(screen.queryByTestId("sc-graph-load-more")).toBeNull();
   });
 });
+
+it("does not label a graphic it also hides from the reader", async () => {
+  mocked.gitStatus.mockResolvedValue([]);
+  mocked.gitGraph.mockResolvedValue([
+    { hash: "c1", parents: [], subject: "only", author: "T", date: "2026-09-11", refs: [] },
+  ]);
+  render(<SourceControlPanel {...props} />);
+  await screen.findByText("only");
+  // aria-hidden wins when both sit on the same element, so the aria-label was
+  // dead. The lanes are decoration — the commit row beside them already
+  // carries the commit's accessible name.
+  const lane = screen.getAllByTestId("sc-graph-lane")[0];
+  expect(lane.getAttribute("aria-hidden")).toBe("true");
+  expect(lane.getAttribute("aria-label")).toBeNull();
+  expect(screen.getAllByTestId("sc-commit-row")[0].getAttribute("aria-label")).toContain("only");
+});

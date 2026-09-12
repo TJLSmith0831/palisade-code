@@ -161,3 +161,46 @@ describe("TabBar", () => {
     expect(container.contains(md) && container.contains(diff)).toBe(true);
   });
 });
+
+// The close control had an aria-label but no role and no tabIndex, so it was
+// named for a screen reader and unreachable by keyboard — the only way to
+// close a file tab was with a mouse. The thread tab's close in App.tsx had
+// always done this correctly; this is that same shape.
+describe("TabBar — closing a tab without a mouse", () => {
+  const renderTabs = (over: { onClose?: () => void; onSelect?: () => void } = {}) =>
+    render_(
+      <TabBar
+        tabs={[tab("README.md")]}
+        activePath="README.md"
+        onSelect={over.onSelect ?? (() => {})}
+        onClose={over.onClose ?? (() => {})}
+        diffOpen={false}
+        onToggleDiff={() => {}}
+        activeMdPreview={false}
+        onToggleMdPreview={() => {}}
+      />
+    );
+
+  it("puts the close control in the tab order and activates it from the keyboard", () => {
+    const onClose = vi.fn();
+    renderTabs({ onClose });
+    const close = screen.getAllByTestId("file-tab-close")[0];
+    expect(close.getAttribute("role")).toBe("button");
+    expect(close.getAttribute("tabIndex")).toBe("0");
+    expect(close.getAttribute("aria-label")).toMatch(/^Close /);
+
+    fireEvent.keyDown(close, { key: "Enter" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(close, { key: " " });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not also select the tab it is closing", () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    renderTabs({ onClose, onSelect });
+    fireEvent.keyDown(screen.getAllByTestId("file-tab-close")[0], { key: "Enter" });
+    expect(onClose).toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});

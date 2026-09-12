@@ -981,6 +981,7 @@ input[type="checkbox"] {
 .ds-search-hit:focus-visible,
 .ds-sc-file:focus-visible,
 .ds-run-row:focus-visible,
+.ds-debug-frame:focus-visible,
 .ds-db-cell:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
