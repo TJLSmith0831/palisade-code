@@ -2,19 +2,19 @@
 
 Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through a spec-then-build cycle. Sessions are concurrent: a thread can hold more than one, and two threads can run at once. Rust + Tauri 2 backend, React 19 + TS frontend (Vite), pnpm.
 
-## Commands (verified 2026-08-08)
+## Commands (verified 2026-09-11)
 
 - `pnpm install` — frontend deps (standalone repo, not a workspace member)
-- `pnpm test` — all frontend tests (vitest, 25 files / 277 tests, ~5s)
+- `pnpm test` — all frontend tests (vitest, 67 files / 1,073 tests, ~24s)
 - `npx vitest run src/__tests__/errors.test.ts` — one frontend test file
 - `npx tsc --noEmit` — typecheck only; `pnpm build` = `tsc && vite build`
-- `cd src-tauri && cargo test` — all Rust tests (173)
+- `cd src-tauri && cargo test` — all Rust tests (757: 756 pass, 1 ignored, ~8s after build)
 - `cd src-tauri && cargo test git::` — one Rust module's tests
 - `pnpm start` (= `tauri dev`) — dev window; see run skill below before driving it
 
 ## Map
 
-- `src/App.tsx` (~1.7k lines) — the entire IDE shell: panes, threads, chat, routing
+- `src/App.tsx` (~7.3k lines) — the entire IDE shell: panes, threads, chat, routing. `src/App.css` is ~5.9k lines; `src-tauri/src/lib.rs` ~4.5k. Grep for the symbol and read a line range — never open one of these whole.
 - `src/api.ts` — typed wrapper over every Tauri IPC command
 - `src-tauri/src/lib.rs` — IPC command layer; the `generate_handler!` registry is at the bottom
 - `src-tauri/src/executor.rs` — executor detect/spawn, stdout JSON-line parsing for both CLIs
@@ -53,6 +53,8 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 - Scoped verification: run the narrowest check that proves the change (single test file > full suite) — then the full gate only before done.
 - Claim only what you ran: "done" means executed and observed. If not run, say "not run".
 - When a task is ambiguous, state your assumption in one line and proceed; don't build both interpretations.
+- **Never pattern-kill processes.** No `pkill`/`killall` — resolve the exact PID and verify its `cwd` first. Pattern-kills have twice destroyed unrelated agents' work in this repo.
+- **`impeccable detect` exits `0` even when it reports findings.** Assert on its `--json` output; exit code alone is not a pass signal in CI.
 - **UI components only:** Use Mantine components and Tabler icons exclusively. No custom CSS components or inline SVGs unless absolutely necessary.
 
 ## Pointers
