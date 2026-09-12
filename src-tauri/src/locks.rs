@@ -36,16 +36,20 @@
 //!
 //! | Outer | Inner | Where |
 //! |---|---|---|
-//! | `chain_sessions` | `acp_sessions` | `lib.rs`, `find_live_session` |
-//! | chain-local `sessions` | `acp_sessions` | `chain_exec.rs`, `session_for` |
-//! | `completion_server` | `completion_crashes` | `lib.rs`, sidecar restart |
+//! | `chain.chain_sessions` | `agent.acp_sessions` | `lib.rs`, `find_live_session` |
+//! | chain-local `sessions` | `agent.acp_sessions` | `chain_exec.rs`, `session_for` |
+//! | `completion.completion_server` | `completion.completion_crashes` | `lib.rs`, sidecar restart |
 //! | `servers` | that server's `last_error` | `lsp.rs`, `record_exit` |
 //!
-//! **`acp_sessions` is always taken last.** It is the lock every subsystem
-//! eventually wants, so anything that takes it first and then reaches for a
-//! chain lock closes the cycle. The same rule generalises: a per-item mutex
-//! (`last_error`, a session's buffers) is taken after the collection that
-//! owns the item, never before.
+//! **`agent.acp_sessions` is always taken last.** It is the lock every
+//! subsystem eventually wants, so anything that takes it first and then
+//! reaches for a chain lock closes the cycle. The same rule generalises: a
+//! per-item mutex (`last_error`, a session's buffers) is taken after the
+//! collection that owns the item, never before.
+//!
+//! Three of the four cross a group boundary, and the groups now make that
+//! visible in the code: `chain.…` reaching for `agent.…` reads as one
+//! subsystem borrowing another's, which is exactly the shape worth noticing.
 //!
 //! Holding any of these across an `await`, or across a callback that can
 //! re-enter the harness, is what turns an ordering into a deadlock. Release

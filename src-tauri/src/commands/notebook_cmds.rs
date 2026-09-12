@@ -20,7 +20,7 @@ struct NotebookWarning {
 /// registry, returning the shared handle used for both spawn and send.
 fn kernel_for(harness: &Harness, notebook_id: &str) -> Arc<NotebookKernel> {
     harness
-        .notebook_kernels
+        .tooling.notebook_kernels
         .lock()
         .unwrap()
         .entry(notebook_id.to_string())
@@ -97,7 +97,7 @@ pub async fn close_notebook_kernel(app: tauri::AppHandle, project_hash: String, 
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let id = notebook::notebook_id(&project_hash, &relative_path);
-        if let Some(kernel) = harness.notebook_kernels.lock_or_recover().remove(&id) {
+        if let Some(kernel) = harness.tooling.notebook_kernels.lock_or_recover().remove(&id) {
             kernel.terminate();
         }
         Ok(())

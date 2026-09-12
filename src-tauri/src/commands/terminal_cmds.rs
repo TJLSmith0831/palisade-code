@@ -32,7 +32,7 @@ pub async fn terminal_spawn(
         let app_output = app.clone();
         let id_for_output = terminal_id.clone();
         harness
-            .terminals
+            .tooling.terminals
             .ensure(&terminal_id, &project_hash, &root, move |bytes| {
                 use base64::prelude::*;
                 let _ = app_output.emit(
@@ -57,7 +57,7 @@ pub async fn terminal_input(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        harness.terminals.write(&terminal_id, data.as_bytes())
+        harness.tooling.terminals.write(&terminal_id, data.as_bytes())
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -72,7 +72,7 @@ pub async fn terminal_resize(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        harness.terminals.resize(&terminal_id, cols, rows)
+        harness.tooling.terminals.resize(&terminal_id, cols, rows)
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -83,7 +83,7 @@ pub async fn terminal_resize(
 pub async fn terminal_kill(app: tauri::AppHandle, terminal_id: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        harness.terminals.kill(&terminal_id);
+        harness.tooling.terminals.kill(&terminal_id);
         Ok(())
     })
     .await
@@ -96,7 +96,7 @@ pub async fn terminal_kill(app: tauri::AppHandle, terminal_id: String) -> Res<()
 pub async fn terminal_kill_project(app: tauri::AppHandle, project_hash: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        harness.terminals.kill_project(&project_hash);
+        harness.tooling.terminals.kill_project(&project_hash);
         Ok(())
     })
     .await
@@ -110,7 +110,7 @@ pub async fn terminal_kill_project(app: tauri::AppHandle, project_hash: String) 
 pub async fn terminal_list(app: tauri::AppHandle, project_hash: String) -> Res<Vec<String>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        Ok(harness.terminals.list(&project_hash))
+        Ok(harness.tooling.terminals.list(&project_hash))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?

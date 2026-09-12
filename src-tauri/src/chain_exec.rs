@@ -149,7 +149,7 @@ impl AcpNodeRunner {
         {
             let mut sessions = self.sessions.lock_or_recover();
             if let Some(id) = sessions.get(role) {
-                if self.harness().acp_sessions.lock_or_recover().contains_key(id) {
+                if self.harness().agent.acp_sessions.lock_or_recover().contains_key(id) {
                     return Ok(id.clone());
                 }
                 sessions.remove(role);
@@ -172,7 +172,7 @@ impl AcpNodeRunner {
             Some(agent),
             model,
         )?;
-        self.harness().chain_sessions.lock_or_recover().insert(id.clone());
+        self.harness().chain.chain_sessions.lock_or_recover().insert(id.clone());
         self.sessions.lock_or_recover().insert(role.to_string(), id.clone());
         Ok(id)
     }
@@ -183,8 +183,8 @@ impl AcpNodeRunner {
     fn discard_session_as(&self, role: &str, outcome: &str) {
         let id = self.sessions.lock_or_recover().remove(role);
         if let Some(id) = id {
-            self.harness().chain_sessions.lock_or_recover().remove(&id);
-            self.harness().turn_watchers.lock_or_recover().remove(&id);
+            self.harness().chain.chain_sessions.lock_or_recover().remove(&id);
+            self.harness().chain.turn_watchers.lock_or_recover().remove(&id);
             crate::end_session(&self.harness(), &self.thread_id, &id, outcome);
         }
     }
@@ -212,8 +212,8 @@ impl AcpNodeRunner {
     /// Releases every session this run started, closing each record idle.
     pub fn release(&mut self) {
         for (_, id) in std::mem::take(self.sessions.get_mut().unwrap()) {
-            self.harness().chain_sessions.lock_or_recover().remove(&id);
-            self.harness().turn_watchers.lock_or_recover().remove(&id);
+            self.harness().chain.chain_sessions.lock_or_recover().remove(&id);
+            self.harness().chain.turn_watchers.lock_or_recover().remove(&id);
             crate::end_session(&self.harness(), &self.thread_id, &id, "done");
         }
     }
@@ -292,11 +292,11 @@ impl NodeRunner for AcpNodeRunner {
         // would otherwise emit Done before anything was listening.
         let (tx, rx) = mpsc::channel();
         let watch = Arc::new(TurnWatch::new(tx));
-        self.harness().turn_watchers.lock_or_recover().insert(session_id.clone(), watch.clone());
+        self.harness().chain.turn_watchers.lock_or_recover().insert(session_id.clone(), watch.clone());
 
         let sent = crate::send_to(&self.harness(), &self.project_hash, &session_id, instruction);
         if let Err(err) = sent {
-            self.harness().turn_watchers.lock_or_recover().remove(&session_id);
+            self.harness().chain.turn_watchers.lock_or_recover().remove(&session_id);
             self.discard_session(role);
             return Err(err.into());
         }
@@ -320,7 +320,7 @@ impl NodeRunner for AcpNodeRunner {
                 Err(err) => break Some(Err(err)),
             }
         };
-        self.harness().turn_watchers.lock_or_recover().remove(&session_id);
+        self.harness().chain.turn_watchers.lock_or_recover().remove(&session_id);
 
         match end {
             Some(Ok(TurnEnd::Done)) => {
@@ -444,7 +444,7 @@ impl GateEvaluator for AcpGateEvaluator {
         let (tx, rx) = mpsc::channel();
         self.app
             .state::<Harness>()
-            .chain_gates
+            .chain.chain_gates
             .lock()
             .unwrap()
             .insert(self.run_id.clone(), tx);
@@ -472,7 +472,7 @@ impl GateEvaluator for AcpGateEvaluator {
         let _pause = self.budget.pause();
         let decision = wait_for_approval(&rx, &self.cancel);
         drop(_pause);
-        self.app.state::<Harness>().chain_gates.lock_or_recover().remove(&self.run_id);
+        self.app.state::<Harness>().chain.chain_gates.lock_or_recover().remove(&self.run_id);
         decision
     }
 }

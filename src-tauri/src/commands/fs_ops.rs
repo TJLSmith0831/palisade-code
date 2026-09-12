@@ -372,7 +372,7 @@ pub(crate) fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Pa
     // Every open project's watcher (#33). The path is absolute, so only the
     // watcher that actually owns it can see the event this suppresses; the
     // others are told about a path they will never report.
-    for watcher in harness.fswatch.lock_or_recover().values() {
+    for watcher in harness.workspace.fswatch.lock_or_recover().values() {
         watcher.note_self_write(resolved);
     }
 }

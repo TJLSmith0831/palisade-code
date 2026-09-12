@@ -21,7 +21,7 @@ pub async fn list_spec_changes(
     project_hash: String,
     thread_id: Option<String>,
 ) -> Res<Vec<executor::SpecChange>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         Ok(executor::openspec_list(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
     })
@@ -36,7 +36,7 @@ pub async fn show_spec_change(
     thread_id: Option<String>,
     name: String,
 ) -> Res<Option<serde_json::Value>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         Ok(executor::openspec_show(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name))
     })
@@ -52,7 +52,7 @@ pub async fn validate_spec_changes(
     project_hash: String,
     thread_id: Option<String>,
 ) -> Res<Option<bool>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         Ok(executor::openspec_validate(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
     })
@@ -67,7 +67,7 @@ pub async fn archive_spec_change(
     thread_id: Option<String>,
     name: String,
 ) -> Res<String> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         executor::openspec_archive(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name)
     })

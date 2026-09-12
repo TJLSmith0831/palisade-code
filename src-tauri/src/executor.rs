@@ -498,7 +498,12 @@ pub struct PendingAuthTurn {
     pub bypass: bool,
 }
 
-pub struct Harness {
+/// Everything belonging to a live ACP agent conversation.
+///
+/// Lifecycle: a session starts when a thread first needs an agent and ends
+/// when that agent's process does. Nothing here outlives the agent.
+#[derive(Default)]
+pub struct AgentState {
     /// Every live ACP session, keyed by its own id.
     pub acp_sessions: Mutex<HashMap<String, AcpSession>>,
     pub preflight: Mutex<Option<crate::acp_preflight::Preflight>>,
@@ -514,6 +519,14 @@ pub struct Harness {
     /// automatically" message a blocked turn is given.
     pub pending_auth_turns: Mutex<HashMap<String, Vec<PendingAuthTurn>>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
+}
+
+/// Everything scoped to an open project or window.
+///
+/// Lifecycle: created when a window opens a project and torn down when the
+/// last window showing that project closes — which is why `watch` and
+/// `fswatch` are maps keyed by project hash rather than single slots (#33).
+pub struct WorkspaceState {
     /// Graphify watchers, keyed by project hash. A map, not a slot: every
     /// project window shares this process (#33), and a single slot meant
     /// opening a second window silently stopped watching the first project.
@@ -521,11 +534,6 @@ pub struct Harness {
     /// Which project each window is showing, keyed by window label. The
     /// watchers above live exactly as long as some window still needs them.
     pub window_projects: Mutex<HashMap<String, String>>,
-    /// The one live debug session, if any. Single by design: two debuggers
-    /// attached to one project fight over breakpoints and the debuggee.
-    pub debug_session: Mutex<Option<std::sync::Arc<crate::dap::DebugSession>>>,
-    /// Every live terminal tab, keyed by tab id (several per project).
-    pub terminals: crate::terminal::TerminalRegistry,
     /// Filesystem watchers, keyed by project hash — see `watch`.
     pub fswatch: Mutex<HashMap<String, crate::fswatch::FsWatcher>>,
     /// Buffered JSONL writer for session and thread logs; flushed on turn-done
@@ -533,6 +541,31 @@ pub struct Harness {
     pub session_log_writer: crate::session_log_writer::SharedSessionLogWriter,
     /// Mtime-keyed cache over `openspec` CLI output (D10).
     pub openspec_cache: std::sync::Arc<crate::openspec_cache::OpenSpecCache>,
+}
+
+/// Long-running child processes the editor drives: the debugger, the
+/// terminals, the notebook kernels.
+///
+/// Lifecycle: each is started on demand by a pane and lives until that pane
+/// closes or the app quits. Grouped because they share one hazard — every one
+/// of them owns an OS process that has to be reaped (see `pidguard`).
+#[derive(Default)]
+pub struct ToolingState {
+    /// The one live debug session, if any. Single by design: two debuggers
+    /// attached to one project fight over breakpoints and the debuggee.
+    pub debug_session: Mutex<Option<std::sync::Arc<crate::dap::DebugSession>>>,
+    /// Every live terminal tab, keyed by tab id (several per project).
+    pub terminals: crate::terminal::TerminalRegistry,
+    /// Every open notebook's kernel process (design.md D2, decisions.md
+    /// D16/D18), keyed by `notebook::notebook_id`.
+    pub notebook_kernels: crate::notebook::NotebookRegistry,
+}
+
+/// The local FIM completion sidecar and the settings governing it.
+///
+/// Lifecycle: one sidecar per app, started lazily and restarted at most once
+/// per session (D33).
+pub struct CompletionState {
     /// Local FIM completion sidecar (llama-server).
     pub completion_server: Mutex<Option<crate::completion::CompletionServer>>,
     /// Consecutive sidecar crashes; one restart, then disable for the session (D33).
@@ -541,6 +574,15 @@ pub struct Harness {
     pub completion_enabled: Mutex<bool>,
     /// Configurable accept keybinding, stored as a CodeMirror key name.
     pub completion_keybinding: Mutex<String>,
+}
+
+/// Everything belonging to a chain run in flight.
+///
+/// Lifecycle: created when a run starts and dropped when it finishes,
+/// crashes or is cancelled. Held separately from `AgentState` on purpose —
+/// a chain's sessions must never be handed to a user's `/go` (D25).
+#[derive(Default)]
+pub struct ChainState {
     /// Sessions a chain run owns, so `find_live_session` never hands one to a
     /// user pressing `/go` on the same thread (D25). Chain nodes run with
     /// go-mode permissions, which would otherwise make them look reusable.
@@ -557,9 +599,96 @@ pub struct Harness {
     /// currently polling it — one flag, not two mechanisms. Mirrors
     /// `chain_gates`'s shape and locking discipline exactly.
     pub chain_cancels: Mutex<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
-    /// Every open notebook's kernel process (design.md D2, decisions.md
-    /// D16/D18), keyed by `notebook::notebook_id`.
-    pub notebook_kernels: crate::notebook::NotebookRegistry,
+}
+
+/// The app's shared state, as five groups rather than twenty-one fields.
+///
+/// It was a single struct of twenty-one mutexes that twenty-one of the
+/// thirty-four backend modules reached into. The per-field mutexes were never
+/// the problem — subsystems genuinely do not contend, and that stays true
+/// here, since the groups below hold the same mutexes and not a lock of their
+/// own. What a flat struct could not say is which fields belong together and
+/// how long each lives, so every new subsystem widened the same object.
+///
+/// Grouped by lifecycle, because that is what actually distinguishes them:
+/// an agent's state dies with its process, a workspace's with its window, a
+/// chain's with its run. Harness stays a thin container so a call site moves
+/// by naming its group and nothing else.
+///
+/// Lock ordering across these groups is documented in `crate::locks`.
+#[derive(Default)]
+pub struct Harness {
+    pub agent: AgentState,
+    pub workspace: WorkspaceState,
+    pub tooling: ToolingState,
+    pub completion: CompletionState,
+    pub chain: ChainState,
+}
+
+#[cfg(test)]
+mod harness_shape_tests {
+    use std::collections::BTreeMap;
+
+    /// `pub` field counts per struct, read from this file.
+    fn field_counts() -> BTreeMap<String, usize> {
+        let src = include_str!("executor.rs");
+        let mut counts = BTreeMap::new();
+        for name in [
+            "AgentState",
+            "WorkspaceState",
+            "ToolingState",
+            "CompletionState",
+            "ChainState",
+            "Harness",
+        ] {
+            let at = src
+                .find(&format!("pub struct {name} {{"))
+                .unwrap_or_else(|| panic!("{name} is gone"));
+            let end = src[at..].find("\n}").unwrap() + at;
+            counts.insert(
+                name.to_string(),
+                src[at..end].matches("\n    pub ").count(),
+            );
+        }
+        counts
+    }
+
+    /// Harness was one struct of twenty-one mutexes that twenty-one of the
+    /// thirty-four backend modules reached into, and it widened with every
+    /// subsystem added. The split only stays a split if the next subsystem
+    /// has to choose a group rather than appending to a pile.
+    #[test]
+    fn no_group_grows_back_into_a_god_object() {
+        for (name, count) in field_counts() {
+            assert!(
+                count <= 8,
+                "{name} has {count} fields — pick a group, or add one"
+            );
+        }
+    }
+
+    /// The container itself must stay thin: it holds groups, never fields.
+    /// A field added directly to Harness is a field that belongs to nothing.
+    #[test]
+    fn the_container_holds_only_groups() {
+        let counts = field_counts();
+        assert_eq!(counts["Harness"], 5, "Harness should hold exactly its groups");
+        let grouped: usize = ["AgentState", "WorkspaceState", "ToolingState", "CompletionState", "ChainState"]
+            .iter()
+            .map(|n| counts[*n])
+            .sum();
+        assert_eq!(grouped, 21, "a field was dropped or added without a home");
+    }
+
+    /// The field comments are why this codebase is auditable; a refactor that
+    /// loses them costs more than it saved.
+    #[test]
+    fn the_decision_notes_travelled_with_their_fields() {
+        let src = include_str!("executor.rs");
+        for note in ["#33", "D25", "D33", "D16/D18", "\u{a7}4.2"] {
+            assert!(src.contains(note), "decision note {note} was lost in the split");
+        }
+    }
 }
 
 /// How a chain run watches one node's turn. The sink owns the writing end;
@@ -644,30 +773,27 @@ mod turn_watch_tests {
     }
 }
 
-impl Default for Harness {
+impl Default for WorkspaceState {
     fn default() -> Self {
         Self {
-            acp_sessions: Default::default(),
-            preflight: Default::default(),
-            pending_prefix: Default::default(),
-            pending_auth_turns: Default::default(),
-            pending_propose: Default::default(),
             watch: Default::default(),
             window_projects: Default::default(),
-            debug_session: Default::default(),
-            terminals: Default::default(),
             fswatch: Default::default(),
             session_log_writer: crate::session_log_writer::shared_session_log_writer(),
-            openspec_cache: std::sync::Arc::new(crate::openspec_cache::OpenSpecCache::with_real_adapter()),
+            openspec_cache: std::sync::Arc::new(
+                crate::openspec_cache::OpenSpecCache::with_real_adapter(),
+            ),
+        }
+    }
+}
+
+impl Default for CompletionState {
+    fn default() -> Self {
+        Self {
             completion_server: Default::default(),
             completion_crashes: Mutex::new(0),
             completion_enabled: Mutex::new(true),
             completion_keybinding: Mutex::new("Alt-Tab".into()),
-            chain_sessions: Default::default(),
-            turn_watchers: Default::default(),
-            chain_gates: Default::default(),
-            chain_cancels: Default::default(),
-            notebook_kernels: Default::default(),
         }
     }
 }
@@ -678,7 +804,7 @@ impl Harness {
     /// that fails (session gone, agent mid-turn) must leave the transcript
     /// parked for the next attempt instead of eating it.
     pub fn with_pending_prefix(&self, session_id: &str, content: &str) -> String {
-        match self.pending_prefix.lock_or_recover().get(session_id) {
+        match self.agent.pending_prefix.lock_or_recover().get(session_id) {
             Some(prefix) => format!("{prefix}\n\n{content}"),
             None => content.to_string(),
         }
@@ -686,7 +812,7 @@ impl Harness {
 
     /// Drop a session's parked transcript, once it has actually been sent.
     pub fn clear_pending_prefix(&self, session_id: &str) {
-        self.pending_prefix.lock_or_recover().remove(session_id);
+        self.agent.pending_prefix.lock_or_recover().remove(session_id);
     }
 
     /// Whether *any* of a thread's sessions is mid-turn. A thread can hold
@@ -697,7 +823,7 @@ impl Harness {
     /// cannot honestly be split between them (D13) — attribution says so
     /// rather than guessing.
     pub fn sessions_in_project(&self, project_hash: &str) -> usize {
-        self.acp_sessions
+        self.agent.acp_sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
@@ -706,7 +832,7 @@ impl Harness {
     }
 
     pub fn thread_is_busy(&self, thread_id: &str) -> bool {
-        self.acp_sessions
+        self.agent.acp_sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
@@ -719,14 +845,14 @@ impl Harness {
     /// automatically" promise the caller gives the user for every one of
     /// them.
     pub fn queue_pending_auth_turn(&self, agent_id: &str, turn: PendingAuthTurn) {
-        self.pending_auth_turns.lock_or_recover().entry(agent_id.to_string()).or_default().push(turn);
+        self.agent.pending_auth_turns.lock_or_recover().entry(agent_id.to_string()).or_default().push(turn);
     }
 
     /// Takes every turn queued for `agent_id`, oldest first, leaving none
     /// behind. Pair with `requeue_pending_auth_turns` when delivery of one
     /// fails partway through, so turns not yet attempted are not lost.
     pub fn take_pending_auth_turns(&self, agent_id: &str) -> Vec<PendingAuthTurn> {
-        self.pending_auth_turns.lock_or_recover().remove(agent_id).unwrap_or_default()
+        self.agent.pending_auth_turns.lock_or_recover().remove(agent_id).unwrap_or_default()
     }
 
     /// Puts turns back at the front of `agent_id`'s queue, ahead of any that
@@ -735,7 +861,7 @@ impl Harness {
         if turns.is_empty() {
             return;
         }
-        let mut map = self.pending_auth_turns.lock_or_recover();
+        let mut map = self.agent.pending_auth_turns.lock_or_recover();
         let existing = map.entry(agent_id.to_string()).or_default();
         turns.append(existing);
         *existing = turns;
