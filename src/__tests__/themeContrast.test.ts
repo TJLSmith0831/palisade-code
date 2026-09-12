@@ -43,7 +43,12 @@ describe("the shell's palette actually reaches Mantine", () => {
   });
 
   it("keeps --accent and --accent-on far enough apart to read", () => {
-    const accent = lightnessOf("--accent");
+    // The accent fill's lightness moved into --accent-l when --accent was
+    // derived from it, so the settings swatches could preview the real
+    // colour. Same number, one indirection further out.
+    const accent = [...css.matchAll(/--accent-l:\s*(\d+(?:\.\d+)?)%/g)].map((m) =>
+      Number(m[1])
+    );
     const ink = lightnessOf("--accent-on");
     expect(accent.length).toBeGreaterThan(0);
     expect(ink.length).toBe(accent.length);
