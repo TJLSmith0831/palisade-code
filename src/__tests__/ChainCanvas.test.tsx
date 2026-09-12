@@ -773,3 +773,88 @@ describe("applyNodePatch", () => {
     expect(base.nodes.scout.agent).toBe("claude");
   });
 });
+
+// Delete or Backspace on a focused node removed it and every edge attached to
+// it immediately: no undo, no confirm, no beforeunload. Nodes are
+// tabIndex={0}, so a stray Backspace while tabbing was a live way to lose the
+// most expensive artifact a user builds by hand here.
+describe("ChainCanvas — undo", () => {
+  const renderCanvas = () =>
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+
+  const modZ = () =>
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+
+  it("restores a deleted node along with the edges that died with it", async () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const before = screen.queryAllByTestId(/^chain-node-/).map((n) => n.getAttribute("data-testid"));
+    expect(before).toHaveLength(2);
+
+    const [first, second] = before as string[];
+    const firstRole = first.replace("chain-node-", "");
+    const secondRole = second.replace("chain-node-", "");
+
+    // Actually wire them together, so the delete has an edge to take with it.
+    fireEvent.click(screen.getByLabelText(`Connect from ${firstRole}`));
+    fireEvent.click(screen.getByTestId(second));
+    const edges = () => document.querySelectorAll(".ds-chain-edge").length;
+    expect(edges()).toBe(1);
+
+    fireEvent.keyDown(screen.getByTestId(second), { key: "Backspace" });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(1);
+    // The edge died with the node it pointed at.
+    expect(edges()).toBe(0);
+
+    act(() => { modZ(); });
+
+    const after = screen.queryAllByTestId(/^chain-node-/).map((n) => n.getAttribute("data-testid"));
+    expect(after).toHaveLength(2);
+    expect(after).toContain(`chain-node-${firstRole}`);
+    expect(after).toContain(`chain-node-${secondRole}`);
+    // And came back with it — one undo, not two.
+    expect(edges()).toBe(1);
+  });
+
+  it("walks back more than one step", async () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(3);
+
+    act(() => { modZ(); });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(2);
+    act(() => { modZ(); });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(1);
+  });
+
+  it("leaves Mod+Z alone inside a text field, which has its own undo", async () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const name = screen.getByPlaceholderText("Chain name");
+    fireEvent.change(name, { target: { value: "my chain" } });
+
+    act(() => { fireEvent.keyDown(name, { key: "z", metaKey: true }); });
+
+    // The node count is untouched: the keystroke belonged to the input.
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(2);
+  });
+
+  it("does nothing when there is nothing to undo", async () => {
+    renderCanvas();
+    act(() => { modZ(); });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(0);
+  });
+});

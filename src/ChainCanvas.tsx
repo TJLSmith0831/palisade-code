@@ -260,7 +260,42 @@ export default function ChainCanvas({
   run,
   onGateResolved,
 }: Props) {
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [draft, setDraftNow] = useState<Draft>(emptyDraft);
+
+  /**
+   * The last few drafts, newest last, for Mod+Z.
+   *
+   * Delete and Backspace on a focused node removed it and every edge attached
+   * to it immediately, with no undo, no confirm and no beforeunload — and
+   * nodes are tabIndex={0}, so a stray Backspace while tabbing was a live way
+   * to lose the most expensive thing a user builds by hand here.
+   *
+   * One mechanism rather than three: snapshotting inside the setter means
+   * node deletes, edge deletes and accidental drags are all covered by the
+   * same undo without a single call site opting in, and without a confirm
+   * dialog in front of an action that is now cheap to reverse.
+   */
+  const undoStack = useRef<Draft[]>([]);
+  const UNDO_DEPTH = 10;
+
+  const setDraft = useCallback<React.Dispatch<React.SetStateAction<Draft>>>((update) => {
+    setDraftNow((prev) => {
+      const next = typeof update === "function" ? (update as (d: Draft) => Draft)(prev) : update;
+      if (next === prev) return prev;
+      // StrictMode invokes this updater twice with the same `prev`; the
+      // identity check keeps the second pass from stacking a duplicate.
+      if (undoStack.current[undoStack.current.length - 1] !== prev) {
+        undoStack.current.push(prev);
+        if (undoStack.current.length > UNDO_DEPTH) undoStack.current.shift();
+      }
+      return next;
+    });
+  }, []);
+
+  const undo = useCallback(() => {
+    const previous = undoStack.current.pop();
+    if (previous) setDraftNow(previous);
+  }, []);
   const [editing, setEditing] = useState<string | null>(null);
   const [editingEdge, setEditingEdge] = useState<number | null>(null);
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
@@ -296,8 +331,11 @@ export default function ChainCanvas({
   const watching = !!run && !run.outcome;
 
   useEffect(() => {
+    // Switching chains is not an edit. Undoing across it would drop the user
+    // into a chain they were never editing, so the history starts over.
+    undoStack.current = [];
     if (!chainName) {
-      setDraft(emptyDraft());
+      setDraftNow(emptyDraft());
       return;
     }
     let live = true;
@@ -306,7 +344,7 @@ export default function ChainCanvas({
       .then((chains) => {
         const found = chains.find((c) => c.name === chainName);
         if (live && found) {
-          setDraft(found);
+          setDraftNow(found);
           persisted.current = found.name;
           savedSnapshot.current = JSON.stringify(found);
           // History is advisory here: a missing or unreadable record never
@@ -615,6 +653,30 @@ export default function ChainCanvas({
     if (dragging.current?.moved) justDragged.current = true;
     dragging.current = null;
   };
+
+  /**
+   * Mod+Z anywhere in the canvas.
+   *
+   * On the window rather than the canvas element because the thing a user
+   * most wants to undo — a node deleted with Backspace — also removes the
+   * element that had focus, so by the time the keystroke for the undo
+   * arrives there is nothing inside the canvas holding it.
+   */
+  useEffect(() => {
+    if (watching) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "z" || !(e.metaKey || e.ctrlKey) || e.shiftKey) return;
+      // A text field has its own undo, and taking Mod+Z away from a half
+      // typed guideline would be its own kind of data loss.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      e.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, watching]);
 
   const node = editing ? draft.nodes[editing] : null;
   const edge = editingEdge !== null ? draft.edges[editingEdge] : null;
