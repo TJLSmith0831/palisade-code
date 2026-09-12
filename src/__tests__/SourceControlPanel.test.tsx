@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import SourceControlPanel, { isStaged, layoutGraph, statusChip, splitPath } from "../SourceControlPanel";
+import SourceControlPanel, { commitRowHeight, isStaged, layoutGraph, shortRef, statusChip, splitPath, subjectLines } from "../SourceControlPanel";
 import * as api from "../api";
 
 vi.mock("../api", () => ({
@@ -147,11 +147,16 @@ describe("SourceControlPanel staging", () => {
     await screen.findByText("merge feature");
     const lane = screen.getAllByTestId("sc-graph-lane")[0];
     expect(lane.getAttribute("width")).toBe("26");
-    // Bug #1: rows used to carry 1px of vertical padding around this 24px
-    // SVG, leaving a 2px seam between adjacent rows where the connecting
-    // lane line broke. Locking the SVG's own height to the row's exact
-    // height is what makes rows butt together with no gap.
-    expect(lane.getAttribute("height")).toBe("24");
+    // Bug #1: rows used to carry 1px of vertical padding around this SVG,
+    // leaving a 2px seam between adjacent rows where the connecting lane line
+    // broke. Locking the SVG's own height to the row's exact height is what
+    // makes rows butt together with no gap. The height is no longer a flat 24
+    // — a row is as tall as its subject and refs need — so the invariant is
+    // the agreement between the two, not the constant it used to be.
+    expect(lane.getAttribute("height")).toBe(
+      String(parseInt(screen.getAllByTestId("sc-commit-row")[0].style.height, 10))
+    );
+    expect(lane.getAttribute("height")).toBe(String(commitRowHeight("merge feature", 1)));
     // The filter box sits above the scrollable commit list, not inside it —
     // scrolling a long history must not scroll the filter out of reach.
     expect(screen.getByTestId("sc-graph-body").contains(screen.getByLabelText("Filter commit graph"))).toBe(false);
@@ -561,5 +566,69 @@ describe("layoutGraph", () => {
         { from: 0, to: 1, lane: 0, color: 1 },
       ],
     });
+  });
+});
+
+describe("a commit row shows the whole commit", () => {
+  // Measured live before this changed: the graph rendered 103 overflowing
+  // elements — 340 by the time the branch had a long name — with an 89-char
+  // subject showing 91px of 469 and a branch badge showing 6px of 87. The
+  // detail that made it a defect rather than a density choice is that the
+  // ellipsis happened inside the content box, so the panel's own overflow-x
+  // had nothing to scroll to. The text was unreachable, not merely clipped.
+  const EIGHTY = "fix: make the source control graph show an entire commit subject at last";
+  const LONG_REF = "origin/claude/impeccable-critique-agent-chain-0bf99b";
+
+  beforeEach(() => {
+    mocked.gitStatus.mockResolvedValue([]);
+    mocked.gitGraph.mockResolvedValue([
+      { hash: "c2", parents: ["c1"], subject: EIGHTY, author: "TJLSmith0831", date: "2026-09-11", refs: [LONG_REF, "origin/main"] },
+      { hash: "c1", parents: [], subject: "short one", author: "TJLSmith0831", date: "2026-09-10", refs: [] },
+    ]);
+  });
+
+  it("gives an 80-character subject enough lines to render whole", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText(EIGHTY);
+    // Four lines at the measured 25 characters a line covers 100 characters.
+    expect(subjectLines(EIGHTY)).toBe(3);
+    expect(subjectLines(EIGHTY) * 25).toBeGreaterThanOrEqual(EIGHTY.length);
+    // The row is tall enough to hold those lines plus its metadata and both
+    // ref badges — and nothing is asked to share a line with the subject.
+    expect(commitRowHeight(EIGHTY, 2)).toBe(15 * 3 + 14 + 16 * 2);
+  });
+
+  it("keeps the half of a branch name that tells two branches apart", () => {
+    // origin/claude/…-0bf99b and origin/claude/…-0bf9aa differ only at the
+    // end, which is precisely what an ordinary end-ellipsis would eat.
+    const shortened = shortRef(LONG_REF);
+    expect(shortened.startsWith("…")).toBe(true);
+    expect(LONG_REF.endsWith(shortened.slice(1))).toBe(true);
+    expect(shortRef("origin/main")).toBe("origin/main");
+    expect(shortRef("origin/claude/foo")).not.toBe(shortRef("origin/claude/bar"));
+  });
+
+  it("renders one badge per ref rather than one badge holding them all", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText(EIGHTY);
+    // Joined into a single nowrap string, four refs on one commit measured
+    // 699px inside a 138px row and none of them was readable.
+    expect(screen.getByText(shortRef(LONG_REF))).toBeDefined();
+    expect(screen.getByText("origin/main")).toBeDefined();
+  });
+
+  it("sizes each lane SVG to its own row so the graph still joins up", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText(EIGHTY);
+    const lanes = screen.getAllByTestId("sc-graph-lane");
+    const rows = screen.getAllByTestId("sc-commit-row");
+    // The lane SVG has to be exactly as tall as its row or adjacent rows'
+    // paths meet with a seam — the reason row height is computed rather than
+    // measured.
+    rows.forEach((row, i) => {
+      expect(lanes[i].getAttribute("height")).toBe(String(parseInt(row.style.height, 10)));
+    });
+    expect(parseInt(rows[0].style.height, 10)).toBe(commitRowHeight(EIGHTY, 2));
+    expect(parseInt(rows[1].style.height, 10)).toBe(commitRowHeight("short one", 0));
   });
 });

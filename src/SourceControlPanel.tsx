@@ -115,6 +115,61 @@ export function layoutGraph(commits: api.GraphCommit[]): GraphRow[] {
  *  commit subject and collapse overflow lanes into the final visible lane.
  *  Shared by GraphLanes and the uncommitted-changes node above it so both
  *  draw lane 0 at the same x — otherwise their lines wouldn't line up. */
+/**
+ * How tall one commit row is, in pixels.
+ *
+ * Rows used to be a flat 24px with the subject, the metadata and the branch
+ * badge all competing for one nowrap line. The subject lost: measured live it
+ * rendered 91px of a 469px string, and because the ellipsis happened inside
+ * the content box, the panel's own overflow-x had nothing to scroll to — the
+ * text was unreachable rather than merely clipped.
+ *
+ * Each part has its own row now, so the height has to be computed rather than
+ * fixed. It stays *deterministic* — derived from the ref count, never
+ * measured — because the lane SVG beside it has to be exactly as tall as its
+ * row for adjacent rows' lane paths to meet without a seam.
+ */
+const SUBJECT_LINE_H = 15;
+const META_H = 14;
+const BADGE_H = 16;
+/**
+ * Characters per line for the subject at the panel's default width. Measured
+ * in the running app rather than estimated — the subject column is 164px and
+ * the body face averages 5.96px a character there, so 27 fit on a line and
+ * 25 is the safe number once wrapping breaks at spaces.
+ *
+ * A constant rather than a measurement on purpose: the lane SVG has to be
+ * rendered at exactly its row's height in the same pass, and a ResizeObserver
+ * would leave the two disagreeing for a frame every time the panel is
+ * dragged. Widening the panel leaves a row slightly roomier than it needs;
+ * narrowing it clips into the title attribute.
+ *
+ * Four lines covers a 100-character subject. Conventional ones are far
+ * shorter and take one or two, so a row only costs the height its own
+ * content asks for.
+ */
+const SUBJECT_CHARS_PER_LINE = 25;
+const MAX_SUBJECT_LINES = 4;
+
+export const subjectLines = (subject: string) =>
+  Math.min(MAX_SUBJECT_LINES, Math.max(1, Math.ceil(subject.length / SUBJECT_CHARS_PER_LINE)));
+
+/**
+ * Branch names for a badge, shortened from the front.
+ *
+ * Generated names share a prefix and differ in their tail —
+ * origin/claude/foo against origin/claude/bar — so the ordinary end-ellipsis
+ * hides the only part that distinguishes them. Measured: the badge's name
+ * column is 138px at its widest and the mono face averages 6.42px a
+ * character there, so 21 is what fits.
+ */
+const BRANCH_BADGE_CHARS = 21;
+export const shortRef = (ref: string) =>
+  ref.length <= BRANCH_BADGE_CHARS ? ref : `…${ref.slice(-(BRANCH_BADGE_CHARS - 1))}`;
+
+export const commitRowHeight = (subject: string, refCount: number) =>
+  SUBJECT_LINE_H * subjectLines(subject) + META_H + BADGE_H * refCount;
+
 function graphLaneGeometry(laneCount: number) {
   const visibleLanes = Math.min(laneCount, 3);
   return {
@@ -124,15 +179,15 @@ function graphLaneGeometry(laneCount: number) {
   };
 }
 
-function GraphLanes({ row, laneCount, isFirstRow }: { row: GraphRow; laneCount: number; isFirstRow: boolean }) {
+function GraphLanes({ row, laneCount, isFirstRow, height }: { row: GraphRow; laneCount: number; isFirstRow: boolean; height: number }) {
   const { visibleLanes, width, x } = graphLaneGeometry(laneCount);
   const laneClass = (color: number) => `lane-${Math.min(color, visibleLanes - 1)}`;
   return (
     <svg
       className="ds-sc-graph-lanes"
-      viewBox={`0 0 ${width} 24`}
+      viewBox={`0 0 ${width} ${height}`}
       width={width}
-      height="24"
+      height={height}
       aria-label={`Commit graph lane ${row.lane + 1}`}
       data-testid="sc-graph-lane"
       aria-hidden="true"
@@ -162,8 +217,8 @@ function GraphLanes({ row, laneCount, isFirstRow }: { row: GraphRow; laneCount: 
               className={`ds-sc-graph-line ${laneClass(color)}`}
               d={
                 isOwnEdge
-                  ? `M ${x(from)} 12 C ${x(from)} 16, ${x(to)} 18, ${x(to)} 24`
-                  : `M ${x(from)} 0 C ${x(from)} 16, ${x(to)} 18, ${x(to)} 24`
+                  ? `M ${x(from)} 12 C ${x(from)} ${height - 8}, ${x(to)} ${height - 6}, ${x(to)} ${height}`
+                  : `M ${x(from)} 0 C ${x(from)} ${height - 8}, ${x(to)} ${height - 6}, ${x(to)} ${height}`
               }
             />
           </g>
@@ -178,17 +233,17 @@ function GraphLanes({ row, laneCount, isFirstRow }: { row: GraphRow; laneCount: 
  *  the graph reads as the true head of history instead of stopping at the
  *  last commit. Dashed and a distinct colour rather than a lane colour —
  *  it isn't a commit yet, and shouldn't read as one. */
-function UncommittedLane({ laneCount }: { laneCount: number }) {
+function UncommittedLane({ laneCount, height }: { laneCount: number; height: number }) {
   const { width, x } = graphLaneGeometry(laneCount);
   return (
     <svg
       className="ds-sc-graph-lanes"
-      viewBox={`0 0 ${width} 24`}
+      viewBox={`0 0 ${width} ${height}`}
       width={width}
-      height="24"
+      height={height}
       aria-hidden="true"
     >
-      <path className="ds-sc-graph-line ds-sc-uncommitted-line" d={`M ${x(0)} 12 L ${x(0)} 24`} />
+      <path className="ds-sc-graph-line ds-sc-uncommitted-line" d={`M ${x(0)} 12 L ${x(0)} ${height}`} />
       <circle className="ds-sc-graph-node ds-sc-uncommitted-node" cx={x(0)} cy="12" r="3.5" />
     </svg>
   );
@@ -824,7 +879,7 @@ export default function SourceControlPanel({
                 data-testid="sc-uncommitted-row"
                 onClick={onSelectWorkingChanges}
               >
-                <UncommittedLane laneCount={graphLaneCount} />
+                <UncommittedLane laneCount={graphLaneCount} height={commitRowHeight("", 0)} />
                 <div className="ds-sc-commit-text">
                   <span className="ds-sc-commit-msg">Uncommitted changes</span>
                   <span className="ds-sc-commit-meta">
@@ -847,25 +902,36 @@ export default function SourceControlPanel({
                 aria-label={`View commit ${entry.subject}`}
                 aria-pressed={selected}
                 data-testid="sc-commit-row"
+                style={{ height: commitRowHeight(entry.subject, entry.refs.length) }}
                 onClick={() => {
                   setSelectedGraphHash(entry.hash);
                   onSelectCommit(entry);
                 }}
               >
-                <GraphLanes row={row} laneCount={graphLaneCount} isFirstRow={index === 0 && !showUncommittedNode} />
+                <GraphLanes row={row} laneCount={graphLaneCount} isFirstRow={index === 0 && !showUncommittedNode} height={commitRowHeight(entry.subject, entry.refs.length)} />
                 <div className="ds-sc-commit-text">
-                  <span className="ds-sc-commit-msg">{entry.subject}</span>
+                  <span
+                    className="ds-sc-commit-msg"
+                    title={entry.subject}
+                    style={{ WebkitLineClamp: subjectLines(entry.subject) }}
+                  >
+                    {entry.subject}
+                  </span>
+                  {/* One chip per ref rather than one chip holding every ref
+                      joined by a separator: a commit that is both HEAD and the
+                      tip of three branches produced a 699px nowrap string in a
+                      138px row, so none of the names was readable. */}
+                  {entry.refs.map((ref) => (
+                    <span key={ref} className="ds-sc-branch-badge" title={ref}>
+                      <IconGitBranch size={11} />
+                      <span className="ds-sc-branch-badge-name">{shortRef(ref)}</span>
+                    </span>
+                  ))}
                   <span className="ds-sc-commit-meta">
-                    <span className="ds-sc-commit-author">{entry.author}</span>
+                    <span className="ds-sc-commit-author" title={entry.author}>{entry.author}</span>
                     <span className="ds-sc-commit-age">{relativeTime(entry.date)}</span>
                     <span className="ds-sc-commit-hash" title={entry.hash}>{entry.hash.slice(0, 7)}</span>
                   </span>
-                  {entry.refs.length > 0 && (
-                    <span className="ds-sc-branch-badge" title={entry.refs.join(", ")}>
-                      <IconGitBranch size={11} />
-                      <span className="ds-sc-branch-badge-name">{entry.refs.join(" · ")}</span>
-                    </span>
-                  )}
                 </div>
               </UnstyledButton>
               );

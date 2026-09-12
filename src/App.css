@@ -3906,14 +3906,13 @@ details.graph-report-wrap > summary {
 
 .ds-sc-commit {
   display: flex;
-  align-items: center;
   gap: 2px;
   width: 100%;
-  /* Exactly 24px, no vertical padding: each row's lane SVG is also 24px
-     tall and stretches edge-to-edge (.ds-sc-graph-lanes below), so adjacent
-     rows' paths meet with no seam. The 1px top/bottom padding this used to
-     carry left a 2px gap between rows where the connecting lane line broke. */
-  height: 24px;
+  /* Height comes from commitRowHeight() as an inline style, and the row's
+     lane SVG is rendered at exactly the same number, so adjacent rows' paths
+     still meet with no seam. No vertical padding, for the same reason: the
+     1px top/bottom this used to carry left a 2px gap where the lane broke. */
+  align-items: flex-start;
   padding: 0 4px;
   border-radius: 4px;
   color: inherit;
@@ -3988,28 +3987,44 @@ details.graph-report-wrap > summary {
   font-style: italic;
 }
 
+/* Subject, refs and metadata used to share one nowrap line, and the subject
+   is the one that yielded: measured live, it rendered 91px of a 469px string.
+   Scrolling did not help either — this row's ellipsis happens inside the
+   content box, so the panel's overflow-x had nothing to scroll to and the
+   text was unreachable rather than merely clipped. Each part gets its own
+   row now, and the subject gets the full width. */
 .ds-sc-commit-text {
   display: flex;
-  align-items: baseline;
-  gap: 5px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   min-width: 0;
   flex: 1;
 }
 
+/* Three lines is roughly 90 characters at this panel's resting width, which
+   covers a conventional subject with room to spare. Past that it clamps and
+   the title attribute carries the rest. */
 .ds-sc-commit-msg {
   font-size: 11px;
+  line-height: 15px;
   font-weight: 500;
   color: var(--fg);
+  align-self: stretch;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .ds-sc-commit-meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 4px;
+  height: 14px;
   min-width: 0;
+  max-width: 100%;
   font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
@@ -4017,8 +4032,12 @@ details.graph-report-wrap > summary {
 
 /* The author is the same name on every row of a personal repo; the age is
    the row's only varying fact. So the author is what truncates. */
+/* The one part of a commit row allowed to truncate. Subject, refs, age and
+   hash each have room to render whole; when the row is still short, the
+   author yields, because it is the field a reader is least likely to be
+   scanning for and the only one whose full value is also on hover. */
 .ds-sc-commit-author {
-  flex-shrink: 0;
+  flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4043,17 +4062,19 @@ details.graph-report-wrap > summary {
 }
 
 /* Marks the commit HEAD is on. Branch names are generated — a worktree's can
-   run to fifty characters — and unbounded it starved the commit subject
-   beside it down to two letters. It is the annotation, not the content: it
-   yields first and truncates, with the full name on hover. */
+   run to fifty characters — so this used to cap at 42% of the row and yield
+   to the subject beside it. That left it showing 6px of an 87px name: a lone
+   letter, which distinguishes nothing. On its own row it can take the full
+   width without costing the subject anything, and two branches that differ
+   only in their last segment stay tellable apart. */
 .ds-sc-branch-badge {
   display: flex;
   align-items: center;
   gap: 3px;
+  height: 16px;
   flex-shrink: 1;
   min-width: 0;
-  max-width: 42%;
-  margin-left: auto;
+  max-width: 100%;
   font-size: 10px;
   font-family: var(--mono);
   text-transform: none;
@@ -4068,6 +4089,10 @@ details.graph-report-wrap > summary {
   flex-shrink: 0;
 }
 
+/* The name arrives already shortened by shortRef(), which drops characters
+   off the *front*. CSS ellipsis is the backstop for a narrowed panel only —
+   it cuts the tail, which is the half that tells two generated branch names
+   apart, so it should rarely be what the reader sees. */
 .ds-sc-branch-badge-name {
   overflow: hidden;
   text-overflow: ellipsis;
