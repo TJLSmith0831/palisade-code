@@ -1,5 +1,6 @@
 use crate::executor::Harness;
 use crate::settings;
+use crate::project_path::ProjectPath;
 use crate::{project_root, DirEntry, Res};
 use tauri::Manager;
 
@@ -45,16 +46,7 @@ pub async fn list_directory(
 ) -> Res<Vec<DirEntry>> {
     tokio::task::spawn_blocking(move || {
         let root = project_root(&project_hash)?;
-        let target = if relative_path.is_empty() {
-            root.clone()
-        } else {
-            let joined = root.join(&relative_path);
-            std::fs::canonicalize(&joined)
-                .map_err(|err| format!("no such directory: {} ({err})", joined.display()))?
-        };
-        if !target.starts_with(&root) {
-            return Err("path must stay inside the project".into());
-        }
+        let target = ProjectPath::existing(&root, &relative_path)?.into_path_buf();
         let mut entries: Vec<DirEntry> = Vec::new();
         for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
             let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
@@ -279,13 +271,7 @@ pub async fn search_text(
 /// Resolves `relative_path` against `root`, requiring it to already exist
 /// and stay inside the project.
 pub(crate) fn resolve_existing_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
-    let target = root.join(relative_path);
-    let resolved = std::fs::canonicalize(&target)
-        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
-    if !resolved.starts_with(root) {
-        return Err("path must stay inside the project".into());
-    }
-    Ok(resolved)
+    Ok(ProjectPath::existing(root, relative_path)?.into_path_buf())
 }
 
 /// Above this, a file is refused rather than loaded. The whole document
@@ -366,25 +352,7 @@ pub async fn read_file_base64(project_hash: String, relative_path: String) -> Re
 /// just that — catching a symlink escape planted partway down an existing
 /// subtree — before creating whatever's missing beneath it.
 pub(crate) fn resolve_creatable_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
-    let rel = Path::new(relative_path);
-    if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err("path must stay inside the project".into());
-    }
-    let target = root.join(rel);
-
-    let mut existing = target.clone();
-    while !existing.exists() {
-        match existing.parent() {
-            Some(parent) => existing = parent.to_path_buf(),
-            None => break,
-        }
-    }
-    let resolved_existing = std::fs::canonicalize(&existing)
-        .map_err(|err| format!("cannot resolve {}: {err}", existing.display()))?;
-    if !resolved_existing.starts_with(root) {
-        return Err("path must stay inside the project".into());
-    }
-
+    let target = ProjectPath::creatable(root, relative_path)?.into_path_buf();
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|err| format!("create directory: {err}"))?;
     }

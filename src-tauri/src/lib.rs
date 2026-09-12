@@ -26,6 +26,7 @@ mod session_log_writer;
 mod openspec_cache;
 mod settings;
 mod store;
+mod project_path;
 mod project_windows;
 mod dap;
 mod terminal;

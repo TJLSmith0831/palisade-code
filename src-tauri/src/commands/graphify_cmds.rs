@@ -1,6 +1,7 @@
 use crate::{executor, integrations, project_root, Res};
 
 use std::path::PathBuf;
+use crate::project_path::ProjectPath;
 
 /// Where the `graphify` binary lives, or a readable error if it isn't there.
 pub(crate) fn graphify_bin() -> Res<PathBuf> {
@@ -22,17 +23,9 @@ pub async fn run_graphify(
         let root = project_root(&project_hash)?;
         // Graphify maps the active project, never the harness — and never
         // anywhere outside the project the user selected.
-        let target = if subpath.trim().is_empty() {
-            root.clone()
-        } else {
-            let joined = root.join(subpath.trim());
-            let resolved = std::fs::canonicalize(&joined)
-                .map_err(|err| format!("no such directory in this project: {} ({err})", joined.display()))?;
-            if !resolved.starts_with(std::fs::canonicalize(&root).unwrap_or(root.clone())) {
-                return Err("Graphify target must stay inside the active project.".into());
-            }
-            resolved
-        };
+        let target = ProjectPath::existing(&root, subpath.trim())
+            .map_err(|err| format!("Graphify target must stay inside the active project. ({err})"))?
+            .into_path_buf();
 
         let out_dir = integrations::default_out_dir(&root);
         integrations::run_graphify(&graphify_bin()?, &target, &out_dir, &options)
