@@ -79,6 +79,7 @@ import * as api from "./api";
 import { useAppShell } from "./hooks/useAppShell";
 import { useProjectManager } from "./hooks/useProjectManager";
 import { resolvePrefs, useThreadPrefs } from "./hooks/useThreadPrefs";
+import { useNewThreadFlow } from "./hooks/useNewThreadFlow";
 import { useExecutor } from "./hooks/useExecutor";
 import type {
   Envelope,
@@ -2877,17 +2878,23 @@ export default function App() {
       }
     | null
   >(null);
-  // Shows the inline Vibe/Spec picker in the chat surface in place of the
-  // thread view — not part of `bar` since it isn't an overlay (spec:
-  // new-thread-mode-picker requires it inline, not a modal dialog).
-  const [newThreadPicker, setNewThreadPicker] = useState(false);
-  // D19/D20: deferred thread creation — picking a mode from the Vibe/Spec
-  // picker no longer creates a thread immediately. For "go", an empty composer
-  // appears; the thread is created on first send. For "spec", the framing menu
-  // appears (Group 7); the thread is created on spec-type commit (Group 8).
-  const [pendingMode, setPendingMode] = useState<api.Mode | null>(null);
-  // D21: executor/model selected in the framing menu — stored before the
-  // thread exists, then persisted on the thread when it's created.
+  const {
+    newThreadPicker,
+    setNewThreadPicker,
+    pendingMode,
+    setPendingMode,
+    framingExecutor,
+    setFramingExecutor,
+    framingModel,
+    setFramingModel,
+    specTypePicker,
+    setSpecTypePicker,
+    composerSpecTypePicker,
+    setComposerSpecTypePicker,
+    transitioning,
+    setTransitioning,
+    reset: resetNewThreadFlow,
+  } = useNewThreadFlow();
   // The project being opened, if any — drives the onboarding row's spinner.
   const [openingProject, setOpeningProject] = useState<string | null>(null);
   /** Branch → the worktree path that holds it, for every worktree but the
@@ -2896,20 +2903,6 @@ export default function App() {
   const [worktreeBranches, setWorktreeBranches] = useState<Map<string, string>>(
     new Map()
   );
-  const [framingExecutor, setFramingExecutor] = useState<string | null>(null);
-  const [framingModel, setFramingModel] = useState<string | null>(null);
-  // D1: spec-type framing menu — shown after picking "Spec" from the Vibe/Spec
-  // picker. The user picks Feature/Bugfix/Other before the agent runs (D2/D3).
-  const [specTypePicker, setSpecTypePicker] = useState(false);
-  // D9: composer-toggle spec-type framing menu — shown when toggling an
-  // existing thread to spec mode with no open change and no stored spec_type.
-  // Separate from `specTypePicker` because the thread already exists — the
-  // spec-type handler calls specMode(thread.id, specType) directly.
-  const [composerSpecTypePicker, setComposerSpecTypePicker] = useState(false);
-  // D19/D20: transitioning — true during the async gap between clearing
-  // picker state and the thread being selected. Prevents the Vibe shell's
-  // showEmptyModePicker from re-rendering the mode picker mid-transition.
-  const [transitioning, setTransitioning] = useState(false);
   const [selectQuery, setSelectQuery] = useState("");
   useEffect(() => {
     if (!bar) setSelectQuery("");
@@ -4086,10 +4079,7 @@ export default function App() {
     // the chat's render condition, so leaving one set made every "New
     // thread" button silently do nothing — pick Go, don't send, and the
     // app had no way back to the picker.
-    setPendingMode(null);
-    setSpecTypePicker(false);
-    setComposerSpecTypePicker(false);
-    setTransitioning(false);
+    resetNewThreadFlow();
     // Deselect the thread you were reading. The picker renders *over* the
     // chat, so leaving it selected meant picking Go fell straight through
     // to that thread's history — the new draft vanished and an older
