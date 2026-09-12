@@ -321,3 +321,54 @@ describe("every var() the app reads names a token the app defines", () => {
     expect([...missing]).toEqual([]);
   });
 });
+
+describe("status colour goes through the theme, not Mantine's stock ramps", () => {
+  // main.tsx registers success/danger/warn/neutral against App.css's tokens
+  // and remaps Mantine's blue onto the accent — but never red, green, yellow,
+  // teal, orange or gray. 67 call sites used those stock names anyway, so
+  // "passed" was stock green in one panel and --success in another, and 41%
+  // of the app's status colour ignored the accent picker and carried
+  // Mantine's own light/dark curve instead of Palisade's.
+  //
+  // This is the lint rule: there is no eslint in this repo, and design
+  // invariants are enforced here alongside the rest of them.
+  const STOCK = [
+    "red", "green", "yellow", "teal", "orange", "gray",
+    "grape", "lime", "pink", "cyan", "indigo", "violet",
+  ];
+  /** A stock name in a colour-prop or colour-field position. */
+  const STOCK_COLOR = new RegExp(
+    String.raw`(\b(?:color|c)\s*=\s*\{?"|\bcolor:\s*"|\?\s*"|:\s*")(${STOCK.join("|")})"`
+  );
+
+  it("no component names a stock Mantine colour", () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(resolve(root, "src"))) {
+      if (!/\.tsx$/.test(file)) continue;
+      readFileSync(resolve(root, "src", file), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (STOCK_COLOR.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the rule would catch a reintroduced one", () => {
+    expect(STOCK_COLOR.test('<Badge color="red">failed</Badge>')).toBe(true);
+    expect(STOCK_COLOR.test('<Text c="teal">+3</Text>')).toBe(true);
+    expect(STOCK_COLOR.test('color={ok ? "green" : "red"}')).toBe(true);
+    expect(STOCK_COLOR.test('  passed: "green",')).toBe(true);
+    // blue is deliberately exempt: main.tsx remaps it onto the accent, so it
+    // does reach the theme.
+    expect(STOCK_COLOR.test('<Badge color="blue">running</Badge>')).toBe(false);
+    expect(STOCK_COLOR.test('<Badge color="danger">failed</Badge>')).toBe(false);
+  });
+
+  it("registers a ramp for every name the app now uses", () => {
+    const main = readFileSync(resolve(root, "src/main.tsx"), "utf8");
+    for (const name of ["success", "danger", "warn", "neutral"]) {
+      expect(main).toMatch(new RegExp(`${name}: statusTuple\\("--[a-z]+"\\)`));
+    }
+  });
+});

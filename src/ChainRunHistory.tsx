@@ -152,7 +152,7 @@ function RunRow({
           <ActionIcon
             size="sm"
             variant="subtle"
-            color="gray"
+            color="neutral"
             aria-label={`Open run from ${run.startedAt}`}
             onClick={() => onOpenRun?.(run.id)}
           >
@@ -164,7 +164,7 @@ function RunRow({
               <ActionIcon
                 size="sm"
                 variant="subtle"
-                color="gray"
+                color="neutral"
                 aria-label={`Actions for run from ${run.startedAt}`}
               >
                 <IconDots size={14} />

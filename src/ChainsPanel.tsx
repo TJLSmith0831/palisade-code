@@ -148,7 +148,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
             <ActionIcon
               size="sm"
               variant="subtle"
-              color="gray"
+              color="neutral"
               aria-label="New chain"
               onClick={() => onOpen(null)}
             >
@@ -160,7 +160,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
 
       <div className="ds-panel-body" data-testid="chains-panel">
         {error && (
-          <Text size="xs" c="red" p="xs">
+          <Text size="xs" c="danger" p="xs">
             {error}
           </Text>
         )}
@@ -206,7 +206,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
                 <ActionIcon
                   size="sm"
                   variant="subtle"
-                  color="gray"
+                  color="neutral"
                   aria-label={`Run history for ${chain.name}`}
                   aria-pressed={historyFor === chain.name}
                   onClick={() =>
@@ -221,7 +221,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
                   <ActionIcon
                     size="sm"
                     variant="subtle"
-                    color="gray"
+                    color="neutral"
                     aria-label={`Actions for ${chain.name}`}
                   >
                     <IconDots size={14} />
@@ -237,7 +237,7 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
                     </Menu.Item>
                   )}
                   <Menu.Item
-                    color="red"
+                    color="danger"
                     leftSection={<IconTrash size={14} />}
                     onClick={() => void remove(chain.name)}
                   >

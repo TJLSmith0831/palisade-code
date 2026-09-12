@@ -29,10 +29,10 @@ type Props = {
 };
 
 const STATUS_COLOR: Record<TestStatus, string> = {
-  passed: "green",
-  failed: "red",
-  errored: "orange",
-  skipped: "gray",
+  passed: "success",
+  failed: "danger",
+  errored: "warn",
+  skipped: "neutral",
 };
 
 const STATUS_MARK: Record<TestStatus, string> = {
@@ -182,14 +182,14 @@ export default function TestExplorer({ projectHash, threadId, onOpen, lastEditAt
       )}
 
       {stale && (
-        <Alert color="yellow" variant="light" data-testid="test-stale">
+        <Alert color="warn" variant="light" data-testid="test-stale">
           A file was saved after this run — these results describe the code as
           it was, not as it is.
         </Alert>
       )}
 
       {report?.unexplainedFailure && (
-        <Alert color="red" variant="light" data-testid="test-unexplained">
+        <Alert color="danger" variant="light" data-testid="test-unexplained">
           {`The command exited ${latest?.exitCode} but no individual test
             failed — the run may have crashed before reporting. Read the
             output below rather than the rows above.`}
@@ -211,14 +211,14 @@ export default function TestExplorer({ projectHash, threadId, onOpen, lastEditAt
       {report?.parsed && (
         <>
           <Group gap="xs" data-testid="test-summary">
-            <Badge size="xs" color="green" variant="light">
+            <Badge size="xs" color="success" variant="light">
               {counts.passed} passed
             </Badge>
-            <Badge size="xs" color="red" variant="light">
+            <Badge size="xs" color="danger" variant="light">
               {counts.failed + counts.errored} failed
             </Badge>
             {counts.skipped > 0 && (
-              <Badge size="xs" color="gray" variant="light">
+              <Badge size="xs" color="neutral" variant="light">
                 {counts.skipped} skipped
               </Badge>
             )}

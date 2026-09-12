@@ -689,7 +689,7 @@ export default function ChainCanvas({
           <ActionIcon
             size="sm"
             variant="subtle"
-            color="gray"
+            color="neutral"
             onClick={() => zoomBy(-0.2)}
             aria-label="Zoom out"
           >
@@ -700,7 +700,7 @@ export default function ChainCanvas({
           <ActionIcon
             size="sm"
             variant="subtle"
-            color="gray"
+            color="neutral"
             onClick={() => zoomBy(0.2)}
             aria-label="Zoom in"
             data-testid="chain-zoom-in"
@@ -709,7 +709,7 @@ export default function ChainCanvas({
           </ActionIcon>
         </Tooltip>
         <Tooltip label="Fit to view">
-          <ActionIcon size="sm" variant="subtle" color="gray" onClick={fit} aria-label="Fit to view">
+          <ActionIcon size="sm" variant="subtle" color="neutral" onClick={fit} aria-label="Fit to view">
             <IconMaximize size={14} />
           </ActionIcon>
         </Tooltip>
@@ -726,7 +726,7 @@ export default function ChainCanvas({
         {watching && (
           <Group gap="xs">
             <Badge size="sm" variant="light">Running · {elapsed}s · turn up to {ceiling}</Badge>
-            <Button size="xs" color="red" variant="light" leftSection={<IconPlayerStop size={14} />} loading={stopping}
+            <Button size="xs" color="danger" variant="light" leftSection={<IconPlayerStop size={14} />} loading={stopping}
               onClick={async () => { setStopping(true); try { await api.cancelChainRun(run!.runId); } catch (err) { setError(String(err)); } finally { setStopping(false); } }}>
               Stop
             </Button>
@@ -779,7 +779,7 @@ export default function ChainCanvas({
         {(error || problem) && (!watching || !!error) && (
           <Alert
             variant="light"
-            color={error ? "red" : "yellow"}
+            color={error ? "danger" : "warn"}
             icon={<IconAlertTriangle size={14} />}
             className="ds-chain-problem-overlay"
             withCloseButton={!!error}
@@ -1063,7 +1063,7 @@ export default function ChainCanvas({
               )}
               <Button
                 size="xs"
-                color="red"
+                color="danger"
                 variant="light"
                 leftSection={<IconTrash size={14} />}
                 onClick={() => removeNode(editing)}
@@ -1087,7 +1087,7 @@ export default function ChainCanvas({
         {edge && editingEdge !== null && (
           <Stack gap="sm">
             {loops.has(editingEdge) && (
-              <Alert variant="light" color="yellow" icon={<IconAlertTriangle size={14} />}>
+              <Alert variant="light" color="warn" icon={<IconAlertTriangle size={14} />}>
                 <Text size="xs">
                   This edge loops back. It needs a gate and an iteration cap
                   before the chain can be saved.
@@ -1167,7 +1167,7 @@ export default function ChainCanvas({
             )}
             <Button
               size="xs"
-              color="red"
+              color="danger"
               variant="light"
               leftSection={<IconTrash size={14} />}
               onClick={() => {
@@ -1232,7 +1232,7 @@ function ApprovalBar({ run, onError, onTranscript, onResolved }: { run: RunView;
       </Button>
       <Button
         size="xs"
-        color="red"
+        color="danger"
         variant="light"
         loading={pending === "reject"} disabled={!!pending} onClick={() => void decide("reject")}
       >
@@ -1255,7 +1255,7 @@ function OutcomeBar({ outcome }: { outcome: api.ChainOutcome }) {
   return (
     <Alert
       variant="light"
-      color={good ? "green" : "red"}
+      color={good ? "success" : "danger"}
       icon={good ? <IconCheck size={14} /> : <IconAlertTriangle size={14} />}
       m="xs"
       data-testid="chain-outcome"

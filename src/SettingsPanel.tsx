@@ -734,7 +734,7 @@ export default function SettingsPanel({
         {/* App shell                                                         */}
         {/* ---------------------------------------------------------------- */}
 
-        {saveError && <Alert color="red" role="alert" mb="sm">{saveError}</Alert>}
+        {saveError && <Alert color="danger" role="alert" mb="sm">{saveError}</Alert>}
         <SegmentedControl
           aria-label="Appearance scope"
           value={scope}

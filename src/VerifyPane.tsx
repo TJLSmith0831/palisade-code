@@ -141,7 +141,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
           <Group gap="xs" wrap="nowrap">
             <Badge
               size="xs"
-              color={entry.exitCode === 0 ? "green" : "red"}
+              color={entry.exitCode === 0 ? "success" : "danger"}
               variant="light"
             >
               exit {entry.exitCode}

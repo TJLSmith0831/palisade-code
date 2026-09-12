@@ -1506,7 +1506,7 @@ export const ChatSurface = memo(
                   <ActionIcon
                     size="sm"
                     variant="subtle"
-                    color="gray"
+                    color="neutral"
                     data-testid="queued-remove"
                     aria-label={`Remove queued message: ${message.text}`}
                     onClick={() => onRemoveQueued?.(message.id)}
@@ -2719,7 +2719,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                     <Menu.Target>
                       <ActionIcon
                         variant="subtle"
-                        color="gray"
+                        color="neutral"
                         size="sm"
                         aria-label={`Actions for ${p.displayName}`}
                         data-testid="recent-project-menu"
@@ -2740,7 +2740,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                         Open in new window
                       </Menu.Item>
                       <Menu.Item
-                        color="red"
+                        color="danger"
                         leftSection={<IconTrash size={14} />}
                         data-testid="recent-project-remove"
                         onClick={(event) => {

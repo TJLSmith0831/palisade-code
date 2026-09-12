@@ -82,12 +82,12 @@ export default function LiveFileChips({ live, busy }: Props) {
                 style={{ cursor: "pointer", fontFamily: "var(--mono, monospace)" }}
               >
                 {file.path === current ? "● " : ""}
-                <Text span c="teal" size="xs">
+                <Text span c="success" size="xs">
                   +{file.added}
                 </Text>{" "}
                 {file.removed > 0 && (
                   <>
-                    <Text span c="red" size="xs">
+                    <Text span c="danger" size="xs">
                       −{file.removed}
                     </Text>{" "}
                   </>

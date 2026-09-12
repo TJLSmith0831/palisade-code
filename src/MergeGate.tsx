@@ -164,7 +164,7 @@ export default function MergeGate({
     return (
       <Card withBorder radius="md" p="9px 11px" data-testid="merge-gate-merged">
         <Group gap={8} wrap="nowrap">
-          <ThemeIcon size={16} radius="xl" variant="light" color="teal">
+          <ThemeIcon size={16} radius="xl" variant="light" color="success">
             <IconCheck size={10} />
           </ThemeIcon>
           <Text size="xs" style={{ flex: 1 }}>
@@ -207,16 +207,16 @@ export default function MergeGate({
             {worktree.branch}
           </Text>
           <Text size="xs" ff="monospace" span>
-            <Text span c="teal">
+            <Text span c="success">
               +{worktree.added}
             </Text>{" "}
-            <Text span c="red">
+            <Text span c="danger">
               −{worktree.removed}
             </Text>
           </Text>
           <div style={{ flex: 1 }} />
           {!worktree.mergeable && (
-            <Badge size="xs" variant="light" color="red">
+            <Badge size="xs" variant="light" color="danger">
               conflicts
             </Badge>
           )}
@@ -234,7 +234,7 @@ export default function MergeGate({
               size={16}
               radius="xl"
               variant="light"
-              color={worktree.mergeable ? "teal" : "yellow"}
+              color={worktree.mergeable ? "success" : "warn"}
             >
               {worktree.mergeable ? <IconCheck size={10} /> : <IconAlertTriangle size={10} />}
             </ThemeIcon>

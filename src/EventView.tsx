@@ -561,7 +561,7 @@ export const EventList = memo(function EventList({
               return (
                 <Alert
                   key={index}
-                  color="gray"
+                  color="neutral"
                   variant="light"
                   icon={<IconRoute size={16} />}
                   data-testid="chain-summary"

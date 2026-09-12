@@ -279,7 +279,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
               </Button>
               <Button
                 size="xs"
-                color="red"
+                color="danger"
                 variant="light"
                 loading={pending === "reject"}
                 disabled={!!pending}
@@ -311,7 +311,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       {!run.outcome && (
         <Button
           size="xs"
-          color="red"
+          color="danger"
           variant="light"
           mt={4}
           leftSection={<IconPlayerStop size={14} />}
@@ -323,7 +323,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       )}
 
       {error && (
-        <Alert variant="light" color="red" icon={<IconAlertTriangle size={14} />} mt={4} withCloseButton onClose={() => setError(null)}>
+        <Alert variant="light" color="danger" icon={<IconAlertTriangle size={14} />} mt={4} withCloseButton onClose={() => setError(null)}>
           <Text size="xs">{error}</Text>
         </Alert>
       )}
@@ -333,7 +333,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       <Button
         size="compact-xs"
         variant="subtle"
-        color="gray"
+        color="neutral"
         mt={4}
         leftSection={historyOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
         onClick={() => setHistoryOpen((v) => !v)}
