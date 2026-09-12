@@ -460,6 +460,30 @@ describe("EventList crash banner", () => {
     expect(screen.queryByTestId("crash-banner-retry")).not.toBeInTheDocument();
   });
 
+  it("keeps a structured provider failure temporary even when its prose says sign in", () => {
+    const onRetry = vi.fn();
+    renderWithMantine(
+      <EventList
+        items={[
+          { kind: "plain", role: "user", mode: "spec", text: "Hello?", seq: 42 },
+          {
+            kind: "plain", role: "system", mode: "spec",
+            text: "Failed to refresh OAuth token; sign in again if it persists.",
+            failureClass: "transientProvider",
+          },
+        ]}
+        executor={null}
+        onRetry={onRetry}
+        onAgentLogin={() => {}}
+        agentLogins={[{ methodId: "login", label: "Login", kind: "protocol" }]}
+      />
+    );
+    expect(screen.getByTestId("crash-banner-transient-summary")).toHaveTextContent(/temporarily unavailable/i);
+    expect(screen.queryByTestId("crash-banner-signin")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("crash-banner-retry"));
+    expect(onRetry).toHaveBeenCalledWith(42);
+  });
+
   it("omits Retry when no onRetry handler is wired up (read-only render paths)", () => {
     renderWithMantine(<EventList items={items} executor={null} />);
     expect(screen.getByTestId("crash-banner-auth-summary")).toBeDefined();

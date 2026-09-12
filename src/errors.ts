@@ -11,6 +11,8 @@
 
 /** What the backend now sends: `{ kind, message }`. See `src-tauri/src/error.rs`. */
 export type ErrorKind =
+  | "authRequired"
+  | "transientProvider"
   | "notAGitRepo"
   | "notFound"
   | "outsideProject"

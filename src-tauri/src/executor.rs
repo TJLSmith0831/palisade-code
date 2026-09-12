@@ -165,6 +165,8 @@ pub enum ExecutorEvent {
     Crashed {
         exit_code: Option<i32>,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_class: Option<crate::acp_client::FailureClass>,
         #[serde(default)]
         retryable: bool,
     },
@@ -174,12 +176,16 @@ impl ExecutorEvent {
     /// The turn failed but the agent is still there — a prompt error, an
     /// expired login, a policy cancellation. The user can retry.
     pub fn turn_failed(message: String) -> Self {
-        Self::Crashed { exit_code: None, message, retryable: true }
+        Self::turn_failed_classified(message, None)
+    }
+
+    pub fn turn_failed_classified(message: String, failure_class: Option<crate::acp_client::FailureClass>) -> Self {
+        Self::Crashed { exit_code: None, message, failure_class, retryable: true }
     }
 
     /// The agent process or its connection is gone. Nothing to retry against.
     pub fn agent_died(exit_code: Option<i32>, message: String) -> Self {
-        Self::Crashed { exit_code, message, retryable: false }
+        Self::Crashed { exit_code, message, failure_class: None, retryable: false }
     }
 }
 
@@ -208,8 +214,8 @@ pub fn persist(
     mode: &str,
     event: &ExecutorEvent,
 ) {
-    let (role, content) = match event {
-        ExecutorEvent::Text { text } => ("assistant", text.clone()),
+    let (role, content, failure_class) = match event {
+        ExecutorEvent::Text { text } => ("assistant", text.clone(), None),
         // Deltas are a live-rendering signal only — the complete
         // Text/Reasoning event that follows each one is what actually gets
         // persisted (below, capped like tool output).
@@ -218,10 +224,10 @@ pub fn persist(
         | ExecutorEvent::ToolOutputDelta { .. }
         | ExecutorEvent::PermissionRequest { .. }
         | ExecutorEvent::Done => return,
-        ExecutorEvent::Crashed { message, .. } => ("system", message.clone()),
-        structured => ("tool", serde_json::to_string(&capped(structured)).unwrap_or_default()),
+        ExecutorEvent::Crashed { message, failure_class, .. } => ("system", message.clone(), *failure_class),
+        structured => ("tool", serde_json::to_string(&capped(structured)).unwrap_or_default(), None),
     };
-    let _ = store::append_message(home, project_hash, thread_id, role, mode, &content, Some(session_id));
+    let _ = store::append_message_with_failure_class(home, project_hash, thread_id, role, mode, &content, Some(session_id), failure_class);
 }
 
 /// A full-file rewrite or a verbose build log written verbatim into permanent

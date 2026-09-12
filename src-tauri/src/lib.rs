@@ -702,7 +702,7 @@ impl Sink for AppSink {
         }
 
         match &envelope_ref.event {
-            ExecutorEvent::Crashed { message, .. } => {
+            ExecutorEvent::Crashed { message, failure_class, .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
                 // #18: only a dead agent drops the thread back to spec. A
                 // retryable turn failure (expired auth, a cancelled turn)
@@ -714,7 +714,7 @@ impl Sink for AppSink {
                 // Persist an auth-shaped failure on the thread so the
                 // composer can warn before the *next* message is even typed,
                 // not just after it fails the same way again.
-                if acp_client::reads_as_auth_failure(message) {
+                if *failure_class == Some(acp_client::FailureClass::AuthRequired) {
                     let _ = store::set_thread_auth_blocked(
                         &palisade_home(),
                         &self.project_hash,
@@ -1295,7 +1295,7 @@ async fn send_message(
             bypass,
         ) {
             Ok(id) => id,
-            Err(error) if is_auth_failure(&error.message) => {
+            Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
                 harness.queue_pending_auth_turn(
                     &agent.id,
                     executor::PendingAuthTurn {
@@ -1333,25 +1333,33 @@ async fn send_message(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// Re-send a durable user turn after a failed prompt without appending a
+/// second copy. Prompt requests are intentionally never retried by the ACP
+/// bridge: a Go turn may have partially executed before its transport failed.
+#[tauri::command]
+async fn retry_message(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: String,
+    message_seq: u64,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let home = palisade_home();
+        let message = store::read_thread(&home, &project_hash, &thread_id)?
+            .into_iter()
+            .find(|message| message.seq == message_seq && message.role == "user")
+            .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
+        let harness: tauri::State<'_, Harness> = app.state();
+        let id = ensure_session(&app, &harness, &project_hash, &thread_id, &message.mode, None, false)?;
+        send_to(&harness, &project_hash, &id, &message.content)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// ACP agents use a structured `auth_required` error when they can, but a few
 /// adapters still surface only provider prose. Keep this mirror intentionally
 /// narrow and aligned with the frontend's auth error classification.
-fn is_auth_failure(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    [
-        "auth_required",
-        "authentication required",
-        "failed to authenticate",
-        "not logged in",
-        "session expired",
-        "token expired",
-        "unauthorized",
-        "needs to be signed in",
-    ]
-    .iter()
-    .any(|needle| error.contains(needle))
-}
-
 /// A thread title written by the bundled local model, or `None` if it isn't
 /// up yet or didn't return anything usable.
 ///
@@ -1839,7 +1847,7 @@ async fn agent_authenticate(
                     &session_id,
                     &pending.content,
                 )?,
-                Err(error) if is_auth_failure(&error.message) => {
+                Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
                     let mut remaining = vec![pending];
                     remaining.extend(queued);
                     harness.requeue_pending_auth_turns(&agent.id, remaining);
@@ -3736,6 +3744,7 @@ pub fn run() {
             read_thread,
             preflight,
             send_message,
+            retry_message,
             go_mode,
             spec_mode,
             propose,
@@ -3953,16 +3962,16 @@ mod tests {
     }
 
     #[test]
-    fn auth_failures_include_acp_and_executor_login_messages() {
+    fn legacy_untyped_auth_messages_remain_compatible() {
         for error in [
             "auth_required",
             "Authentication required",
             "Codex needs to be signed in",
             "session expired",
         ] {
-            assert!(crate::is_auth_failure(error), "should classify as auth: {error}");
+            assert!(crate::acp_client::reads_as_auth_failure(error), "should classify as auth: {error}");
         }
-        assert!(!crate::is_auth_failure("context window exceeded"));
+        assert!(!crate::acp_client::reads_as_auth_failure("context window exceeded"));
     }
 
     /// D17: a chain whose bound agent isn't installed is blocked before it

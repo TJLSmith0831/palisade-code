@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActionIcon, Box, Menu, Textarea, TextInput } from "@mantine/core";
 import {
   IconAlertTriangle,
@@ -120,6 +120,15 @@ export default function OnboardingScreen({
   const activeAgent = executor ?? detected;
   const activeAgentName =
     flight?.agents?.find((a) => a.id === activeAgent)?.name ?? activeAgent;
+  // Claude and Codex support a quiet ACP readiness handshake. Run it as soon
+  // as the first screen knows which one will be used, so a new user sees a
+  // useful state before composing a turn. Other adapters retain the explicit
+  // check because some launch their own interactive UI while probing.
+  useEffect(() => {
+    if ((activeAgent === "claude" || activeAgent === "claude-acp" || activeAgent === "codex" || activeAgent === "codex-acp") && !agentModels?.[activeAgent]) {
+      onProbeAgent?.(activeAgent);
+    }
+  }, [activeAgent, agentModels, onProbeAgent]);
   const modelList =
     models && models !== "loading" && !("error" in models) ? models.models : [];
   const agentSelected =
@@ -295,7 +304,7 @@ export default function OnboardingScreen({
                   );
                 })}
                 <div className="ds-onboarding-status-footnote">
-                  Checking an agent runs it briefly — only done on request.
+                  Claude and Codex are checked quietly when selected; other agents are checked on request.
                 </div>
               </Menu.Dropdown>
             </Menu>

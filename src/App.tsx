@@ -92,7 +92,7 @@ import type {
   ThreadMeta,
 } from "./api";
 import { onActivateKey } from "./a11y";
-import { describeError, isAuthError } from "./errors";
+import { describeError, errorKind, isAuthError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
 import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
 import { applyMention, mentionAt, rankMentions } from "./mentions";
@@ -1362,9 +1362,15 @@ export const ChatSurface = memo(
               executor={executor}
               sessionId={sessionId}
               onPermissionAnswered={onPermissionAnswered}
-              onRetry={(text) => {
-                setDraft(text);
-                handleSend();
+              onRetry={(message) => {
+                if (typeof message === "number" && project && thread) {
+                  void api.retryMessage(project.hash, thread.id, message).catch((err) => onError?.(describeError(err)));
+                } else if (typeof message === "string") {
+                  // Legacy records lacked sequence ids. Preserve their old
+                  // text retry behaviour; newly persisted failures use the
+                  // sequence-keyed path above and cannot duplicate a row.
+                  setDraft(message);
+                }
               }}
               agentLogins={agentLogins}
               agentLoginsFor={agentLoginsFor}
@@ -4813,9 +4819,17 @@ export default function App() {
       const state = await api.listModels(project?.hash ?? null, agentId);
       modelsRef.current = { ...modelsRef.current, [agentId]: state };
     } catch (err) {
+      const kind = errorKind(err);
+      // Readiness runs before a user has attempted a turn. Keep ACP's raw
+      // provider diagnostic out of that first experience.
+      const error = kind === "transientProvider"
+        ? "Temporarily unavailable — retry in a moment."
+        : kind === "authRequired"
+          ? "Sign in required."
+          : describeError(err);
       modelsRef.current = {
         ...modelsRef.current,
-        [agentId]: { error: describeError(err) },
+        [agentId]: { error },
       };
     }
     setModelsByAgent(modelsRef.current);

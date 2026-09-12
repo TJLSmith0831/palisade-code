@@ -977,6 +977,9 @@ pub struct Message {
     /// that had no session id to record", never "no session".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// ACP failure classification, if the producing build had structured data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<crate::acp_client::FailureClass>,
 }
 
 /// Next `seq` per log path, alongside the file length it was computed at.
@@ -1002,6 +1005,20 @@ pub fn append_message(
     content: &str,
     session_id: Option<&str>,
 ) -> Res<Message> {
+    append_message_with_failure_class(home, hash, id, role, mode, content, session_id, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn append_message_with_failure_class(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    role: &str,
+    mode: &str,
+    content: &str,
+    session_id: Option<&str>,
+    failure_class: Option<crate::acp_client::FailureClass>,
+) -> Res<Message> {
     let path = log_path(home, hash, id);
 
     // Lock the writer first so no other thread can change the buffered byte
@@ -1025,6 +1042,7 @@ pub fn append_message(
         mode: mode.to_string(),
         content: content.to_string(),
         session_id: session_id.map(str::to_string),
+        failure_class,
     };
     let line = serde_json::to_string(&message).map_err(|err| e("serialize message", err))?;
 
@@ -1862,6 +1880,7 @@ mod tests {
             mode: "spec".into(),
             content: "smuggled".into(),
             session_id: None,
+            failure_class: None,
         };
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{}", serde_json::to_string(&smuggled).unwrap()).unwrap();

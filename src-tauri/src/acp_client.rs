@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use agent_client_protocol::schema::v1;
 use agent_client_protocol::{self as acp, ConnectTo};
 use agent_client_protocol::schema::ProtocolVersion;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::executor::{Envelope, ExecutorEvent, Sink};
 use crate::permissions::{self, PermissionDecision, PermissionMode};
@@ -34,6 +34,13 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long an interactive sign-in may take. Longer than startup on purpose:
 /// the agent's own flow can send the user to a browser and wait for them.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Backoff before each retry of a `session/new` that failed with Claude
+/// Code's transient OAuth-refresh-race `server_error` (see
+/// `is_transient_server_error`). The per-agent spawn lock already prevents
+/// This is intentionally not paired with a process-local mutex: other
+/// Palisade instances and terminal agents share the provider credentials.
+const SESSION_NEW_RETRY_DELAYS: [Duration; 3] = [Duration::from_secs(1), Duration::from_secs(3), Duration::from_secs(7)];
 
 // ------------------------------------------------------------- models
 
@@ -204,6 +211,20 @@ pub(crate) fn record_logins(agent_id: &str, logins: Vec<AgentLogin>) {
     agent_logins().lock_or_recover().insert(agent_id.to_string(), logins);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FailureClass { AuthRequired, TransientProvider, Other }
+
+impl FailureClass {
+    pub fn error_kind(self) -> crate::error::ErrorKind {
+        match self {
+            Self::AuthRequired => crate::error::ErrorKind::AuthRequired,
+            Self::TransientProvider => crate::error::ErrorKind::TransientProvider,
+            Self::Other => crate::error::ErrorKind::Unknown,
+        }
+    }
+}
+
 /// What the user can be offered to sign this agent in, or empty when the agent
 /// advertised no client-runnable login (or has not been reached yet).
 pub fn logins_for(agent_id: &str) -> Vec<AgentLogin> {
@@ -301,21 +322,53 @@ pub(crate) fn logins_from(
 /// wording; the prose check is a fallback for agents that only say it in text
 /// (#19), not the contract.
 pub(crate) fn is_auth_required(err: &acp::Error) -> bool {
-    if matches!(err.code, acp::ErrorCode::AuthRequired) {
-        return true;
+    classify_acp_error(err) == FailureClass::AuthRequired
+}
+
+/// Structured ACP fields take precedence over error prose. In particular, a
+/// provider's `server_error` is never upgraded to a login requirement merely
+/// because its troubleshooting text says “sign in again”.
+pub(crate) fn classify_acp_error(err: &acp::Error) -> FailureClass {
+    if matches!(err.code, acp::ErrorCode::AuthRequired) { return FailureClass::AuthRequired; }
+    if let Some(data) = err.data.as_ref().and_then(|value| value.as_object()) {
+        if data.get("reason").and_then(|value| value.as_str()) == Some("auth_required") {
+            return FailureClass::AuthRequired;
+        }
+        if let Some(kind) = data.get("errorKind").and_then(|value| value.as_str()) {
+            return match kind {
+                "authentication_failed" => FailureClass::AuthRequired,
+                "server_error" => FailureClass::TransientProvider,
+                _ => FailureClass::Other,
+            };
+        }
     }
-    let reason = err.data.as_ref().and_then(|d| d.get("reason")).and_then(|r| r.as_str());
-    if reason == Some("auth_required") {
-        return true;
-    }
-    reads_as_auth_failure(&err.to_string())
+    if reads_as_auth_failure(&err.to_string()) { FailureClass::AuthRequired } else { FailureClass::Other }
+}
+
+/// Whether `err` is Claude Code's known-transient OAuth-refresh race
+/// (anthropics/claude-code#27933, #25609, #24317): the refresh token is
+/// single-use, so a process that loses the race to another one gets this
+/// `errorKind` rather than `authentication_failed`. Retryable, not a real
+/// logout.
+fn is_transient_server_error(err: &acp::Error) -> bool {
+    classify_acp_error(err) == FailureClass::TransientProvider
 }
 
 /// Mirror of the frontend's `isAuthError` (src/errors.ts): agents report an
 /// expired or missing login in prose, with no shared error code between them.
 pub(crate) fn reads_as_auth_failure(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
+    // Claude Code's OAuth refresh token is single-use (anthropics/claude-code
+    // #27933, #25609, #24317): two processes racing to refresh it produce
+    // "errorKind: server_error" and a message that suggests "sign in again"
+    // as a last resort, even though the agent itself calls this transient.
+    // Without this guard the keyword scan below treats every such race as a
+    // real logout.
+    if text.contains("errorkind") && text.contains("server_error") {
+        return false;
+    }
     [
+        "auth_required",
         "authenticate",
         "authentication",
         "unauthoriz",
@@ -1047,7 +1100,7 @@ async fn run_bridge(
     busy: Arc<AtomicBool>,
     pending_permissions: PendingPermissions,
     active_commands: ActiveCommands,
-    ready_tx: mpsc::Sender<Result<ReadyReport, String>>,
+    ready_tx: mpsc::Sender<Result<ReadyReport, crate::PalisadeError>>,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>,
     probe_only: bool,
     // Set to run one `authenticate` for this method and stop — the sign-in
@@ -1291,7 +1344,7 @@ async fn run_bridge(
                         acp_session_id: String::new(),
                         models: ModelState::default(),
                     }),
-                    Err(e) => Err(format!("{e}").into()),
+                    Err(e) => Err(crate::PalisadeError::new(classify_acp_error(&e).error_kind(), e.to_string())),
                 });
                 return Ok(());
             }
@@ -1310,20 +1363,34 @@ async fn run_bridge(
                 v1::NewSessionRequest::new(spawn.project_root.clone())
                     .mcp_servers(mcp_servers.clone())
             };
-            let started = cx.send_request(new_request()).block_task().await;
+            let mut started = cx.send_request(new_request()).block_task().await;
+            for delay in SESSION_NEW_RETRY_DELAYS {
+                match &started {
+                    Err(e) if is_transient_server_error(e) => {
+                        tokio::time::sleep(delay).await;
+                        started = cx.send_request(new_request()).block_task().await;
+                    }
+                    _ => break,
+                }
+            }
             // Authentication is demand-driven. Picking the first advertised
             // method here was both surprising (Codex advertises API-key before
             // ChatGPT) and could launch a sign-in while merely opening a
             // thread. Surface `auth_required` to the UI instead; the user
             // chooses a method and a later retry creates the session.
-            let new_session = started.map_err(|e| {
-                let detail = if is_auth_required(&e) {
-                    auth_help(&spawn.agent_name, &launch, &e.to_string())
-                } else {
-                    format!("session/new failed: {e}")
-                };
-                acp::Error::internal_error().data(detail)
-            })?;
+            let new_session = match started {
+                Ok(session) => session,
+                Err(e) => {
+                    let failure_class = classify_acp_error(&e);
+                    let detail = if failure_class == FailureClass::AuthRequired {
+                        auth_help(&spawn.agent_name, &launch, &e.to_string())
+                    } else {
+                        format!("session/new failed: {e}")
+                    };
+                    let _ = ready_tx.send(Err(crate::PalisadeError::new(failure_class.error_kind(), detail)));
+                    return Ok(());
+                }
+            };
 
             let session_id = new_session.session_id;
             let mut models = extract_models(new_session.config_options.as_deref().unwrap_or(&[]));
@@ -1414,13 +1481,14 @@ async fn run_bridge(
                                         // which is where `authenticate` is
                                         // called.
                                         Err(e) => {
-                                            let message = if is_auth_required(&e) {
+                                            let failure_class = classify_acp_error(&e);
+                                            let message = if failure_class == FailureClass::AuthRequired {
                                                 auth_help(&done_agent, &done_launch, &e.to_string())
                                             } else {
                                                 format!("prompt failed: {e}")
                                             };
                                             emit(&done_sink, &done_session, &done_thread,
-                                                ExecutorEvent::turn_failed(message))
+                                                ExecutorEvent::turn_failed_classified(message, Some(failure_class)))
                                         }
                                     }
                                     Ok(())
@@ -1448,7 +1516,7 @@ async fn run_bridge(
             // If startup never completed, the caller is still waiting on the
             // ready channel; otherwise the receiver is dropped and the
             // session died mid-flight — surface it as a Crashed event.
-            if tail_ready_tx.send(Err(message.clone())).is_err() {
+            if tail_ready_tx.send(Err(crate::PalisadeError::from(message.clone()))).is_err() {
                 emit(
                     &tail_sink,
                     &tail_session,
@@ -1482,14 +1550,17 @@ fn start_with_transport(
         String,
         PendingPermissions,
     ),
-    String,
+    crate::PalisadeError,
 > {
+    // Held for this whole function: blocks a second spawn of the same agent
+    // from starting its handshake until this one is ready or has failed, so
+    // the two never race to refresh the same OAuth token.
     let palisade_session_id = ulid::Ulid::new().to_string();
     let busy = Arc::new(AtomicBool::new(false));
     let bridge_busy = busy.clone();
     let pending_permissions: PendingPermissions = Arc::new(Mutex::new(HashMap::new()));
     let bridge_pending = pending_permissions.clone();
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<ReadyReport, String>>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<ReadyReport, crate::PalisadeError>>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<BridgeCommand>();
 
     let thread_session = palisade_session_id.clone();
@@ -1501,7 +1572,7 @@ fn start_with_transport(
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = ready_tx.send(Err(format!("tokio runtime: {e}").into()));
+                let _ = ready_tx.send(Err(crate::PalisadeError::from(format!("tokio runtime: {e}"))));
                 return;
             }
         };
@@ -3181,6 +3252,43 @@ mod tests {
             let err = acp::Error::internal_error().data(serde_json::json!(detail));
             assert!(!is_auth_required(&err), "should not read as auth: {detail}");
         }
+    }
+
+    /// The exact failure from the bug report: Claude Code's OAuth refresh
+    /// token is single-use, so a losing process's own suggestion to "sign in
+    /// again" must not be read as an actual expired login — the agent's
+    /// `errorKind` says this one is a retryable `server_error`, not
+    /// `authentication_failed`.
+    #[test]
+    fn a_transient_oauth_refresh_race_is_not_mistaken_for_an_auth_failure() {
+        let detail = "Failed to refresh OAuth token: another Claude Code process is \
+            refreshing it or exited mid-refresh. This is usually transient; retry in a \
+            minute, and if it persists close other Claude Code processes or sign in \
+            again: { \"errorKind\": \"server_error\" }";
+        let err = acp::Error::internal_error().data(serde_json::json!(detail));
+        assert!(!is_auth_required(&err), "a transient race must not read as auth: {detail}");
+        assert!(!reads_as_auth_failure(detail));
+        assert!(is_transient_server_error(
+            &acp::Error::internal_error().data(serde_json::json!({ "errorKind": "server_error" }))
+        ));
+        assert!(!is_transient_server_error(
+            &acp::Error::internal_error()
+                .data(serde_json::json!({ "errorKind": "authentication_failed" }))
+        ));
+    }
+
+    #[test]
+    fn structured_failure_classification_overrides_misleading_prose() {
+        let transient = acp::Error::internal_error().data(serde_json::json!({
+            "errorKind": "server_error",
+            "detail": "please sign in again"
+        }));
+        assert_eq!(classify_acp_error(&transient), FailureClass::TransientProvider);
+        assert_eq!(classify_acp_error(&acp::Error::auth_required()), FailureClass::AuthRequired);
+        assert_eq!(
+            classify_acp_error(&acp::Error::internal_error().data(serde_json::json!({ "errorKind": "authentication_failed" }))),
+            FailureClass::AuthRequired
+        );
     }
 
     /// #19's actual finding: the thing Palisade launched is not necessarily

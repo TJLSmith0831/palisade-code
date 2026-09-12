@@ -41,7 +41,7 @@ function ChatAvatar({ executor }: { executor: Preflight["selected"] }) {
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
-  | { kind: "plain"; role: Message["role"]; mode: string; text: string }
+  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; failureClass?: Message["failureClass"] }
   /** A zero-height marker at the first turn of a session, so a chain node can
    *  scroll the transcript to what it actually did. Lives on `Item` and not on
    *  `ExecutorEvent`, which D13 caps at nine variants. */
@@ -150,6 +150,8 @@ function itemFromMessage(message: Message): Item {
       role: message.role,
       mode: message.mode,
       text: message.content,
+      seq: message.seq,
+      failureClass: message.failureClass,
     };
   })(message);
 }
@@ -467,7 +469,7 @@ export const EventList = memo(function EventList({
    *  it's giving the user a one-click way to try the *next* turn once
    *  they've fixed the agent's login outside Palisade. Omitted on read-only
    *  render paths (e.g. the diff tab), which have nowhere to route a send. */
-  onRetry?: (text: string) => void;
+  onRetry?: (message: number | string) => void;
   /** Interactive logins the thread's agent advertised over ACP. An agent that
    *  offers one expects the *client* to run it (its own `authenticate` can't),
    *  which is how an expired login gets fixed without leaving the app (#19).
@@ -577,7 +579,11 @@ export const EventList = memo(function EventList({
             // eat, but it also isn't unrecoverable: a plain-language line
             // plus a one-click retry replaces "what do I even do with this".
             if (item.role === "system") {
-              const authIssue = isAuthError(item.text);
+              // A typed provider result wins over its prose. Old persisted
+              // rows carry no class, so only those retain the text fallback.
+              const authIssue = item.failureClass === "authRequired" ||
+                (item.failureClass == null && isAuthError(item.text));
+              const transient = item.failureClass === "transientProvider";
               // Whose login is broken, not whose agent the thread happens to
               // be pointed at.
               const logins = agentLoginsFor ? agentLoginsFor(item.text) : agentLogins;
@@ -591,12 +597,12 @@ export const EventList = memo(function EventList({
               // itself failed) — stopping the walk at that assistant item
               // used to skip straight past the user turn that caused it, so
               // the button silently never appeared for exactly that shape.
-              let retryText: string | null = null;
-              if (authIssue && onRetry && !managedAuthRecovery) {
+              let retryMessage: number | string | null = null;
+              if ((authIssue || transient) && onRetry && !managedAuthRecovery) {
                 for (let i = index - 1; i >= 0; i--) {
                   const prior = items[i];
                   if (prior.kind === "plain" && prior.role === "user") {
-                    retryText = prior.text;
+                    retryMessage = prior.seq ?? prior.text;
                     break;
                   }
                 }
@@ -604,7 +610,7 @@ export const EventList = memo(function EventList({
               return (
                 <Alert
                   key={index}
-                  color="danger"
+                  color={transient ? "brand" : "danger"}
                   variant="light"
                   data-testid="crash-banner"
                   className={authIssue ? "ds-crash-banner-auth" : undefined}
@@ -621,6 +627,7 @@ export const EventList = memo(function EventList({
                         : "This agent's login expired or failed to refresh. Palisade can't complete an interactive login on its own — sign back in outside Palisade, then retry."}
                     </div>
                   )}
+                  {transient && <div data-testid="crash-banner-transient-summary">The provider is temporarily unavailable. Your message was kept; retry when it is ready.</div>}
                   <div className="ds-crash-banner-detail">{item.text}</div>
                   {authIssue &&
                     onAgentLogin &&
@@ -635,11 +642,11 @@ export const EventList = memo(function EventList({
                         Sign in with {login.label}
                       </button>
                     ))}
-                  {retryText && (
+                  {retryMessage != null && (
                     <button
                       type="button"
                       className="ds-crash-banner-retry"
-                      onClick={() => onRetry?.(retryText!)}
+                      onClick={() => onRetry?.(retryMessage!)}
                       data-testid="crash-banner-retry"
                     >
                       <IconRefresh size={12} />

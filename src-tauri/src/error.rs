@@ -42,6 +42,10 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorKind {
+    /// The ACP provider explicitly requires an interactive login.
+    AuthRequired,
+    /// The provider is temporarily unavailable; retrying is appropriate.
+    TransientProvider,
     /// The project has no git repository. A normal state for a new folder,
     /// not a failure — Source Control used to detect this by regex and had to
     /// suppress a duplicate toast because two commands reported it at once.
