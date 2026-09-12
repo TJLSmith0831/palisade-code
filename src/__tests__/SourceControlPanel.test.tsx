@@ -632,3 +632,46 @@ describe("a commit row shows the whole commit", () => {
     expect(parseInt(rows[1].style.height, 10)).toBe(commitRowHeight("short one", 0));
   });
 });
+
+// The graph asked for a flat 80 commits and said nothing about it, so a
+// repository with five thousand commits was indistinguishable from a shallow
+// clone: the list just stopped.
+describe("the graph says how much history it is showing", () => {
+  const page = (n: number, offset = 0) =>
+    Array.from({ length: n }, (_, i) => ({
+      hash: `h${offset + i}`,
+      parents: offset + i + 1 < offset + n ? [`h${offset + i + 1}`] : [],
+      subject: `commit ${offset + i}`,
+      author: "T",
+      date: "2026-09-11",
+      refs: [],
+    }));
+
+  it("offers more while the page came back full", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    mocked.gitGraph.mockResolvedValue(page(80));
+    render(<SourceControlPanel {...props} />);
+
+    await screen.findByTestId("sc-graph-load-more");
+    expect(screen.getByTestId("sc-graph-footer").textContent).toContain("80 commits");
+
+    mocked.gitGraph.mockResolvedValue(page(120));
+    fireEvent.click(screen.getByTestId("sc-graph-load-more"));
+
+    await waitFor(() => expect(mocked.gitGraph).toHaveBeenCalledWith("p1", 160));
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-graph-footer").textContent).toContain("120 commits")
+    );
+  });
+
+  it("says so, and stops offering, once the whole history is in", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    mocked.gitGraph.mockResolvedValue(page(12));
+    render(<SourceControlPanel {...props} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-graph-footer").textContent).toContain("all of them")
+    );
+    expect(screen.queryByTestId("sc-graph-load-more")).toBeNull();
+  });
+});

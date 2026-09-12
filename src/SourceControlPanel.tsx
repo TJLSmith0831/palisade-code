@@ -431,6 +431,15 @@ export default function SourceControlPanel({
   const [files, setFiles] = useState<FileStatus[]>([]);
   const [, setLog] = useState<LogEntry[]>([]);
   const [graph, setGraph] = useState<api.GraphCommit[]>([]);
+  /**
+   * How many commits the graph has asked for.
+   *
+   * It used to ask for a flat 80 and say nothing about it, so a repository
+   * with five thousand commits looked exactly like a shallow clone: the list
+   * simply stopped, with no count and no way to go further.
+   */
+  const GRAPH_PAGE = 80;
+  const [graphLimit, setGraphLimit] = useState(GRAPH_PAGE);
   const [graphFilter, setGraphFilter] = useState("");
   const [selectedGraphHash, setSelectedGraphHash] = useState<string | null>(null);
   // GIT-20/GIT-21: a non-git project made every reload reject identically
@@ -491,7 +500,7 @@ export default function SourceControlPanel({
         if (/not a git repository/i.test(String(err))) return;
         onError(err);
       });
-    api.gitGraph(projectHash, 80).then(setGraph).catch(onError);
+    api.gitGraph(projectHash, graphLimit).then(setGraph).catch(onError);
     // No upstream is a normal state, not an error — no counts, no banner.
     api.gitAheadBehind(projectHash, tree).then(
       (value) => {
@@ -503,7 +512,7 @@ export default function SourceControlPanel({
         setHasUpstream(false);
       }
     );
-  }, [projectHash, tree, onError]);
+  }, [projectHash, tree, onError, graphLimit]);
 
   useEffect(reload, [reload, refreshToken]);
 
@@ -937,6 +946,26 @@ export default function SourceControlPanel({
               );
             })}
           </div>
+          {/* Truthful rather than approximate: the count is what is actually
+              loaded, and the button appears only while the last page came
+              back full — which is the one thing that distinguishes "there is
+              more" from "this is the whole history". */}
+          <Group gap={8} px={4} pt={4} justify="space-between" data-testid="sc-graph-footer">
+            <Text size="xs" c="dimmed">
+              {graph.length} commit{graph.length === 1 ? "" : "s"}
+              {graph.length < graphLimit ? " · all of them" : ""}
+            </Text>
+            {graph.length >= graphLimit && (
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                onClick={() => setGraphLimit((n) => n + GRAPH_PAGE)}
+                data-testid="sc-graph-load-more"
+              >
+                Load {GRAPH_PAGE} more
+              </Button>
+            )}
+          </Group>
         </Section>
       </div>
       </>

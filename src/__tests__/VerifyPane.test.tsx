@@ -113,3 +113,48 @@ describe("VerifyPane", () => {
     expect(screen.queryAllByTestId("verification-run")).toHaveLength(0);
   });
 });
+
+// Every run ever recorded used to render, each as a Code block with an output
+// tail, and the app carries no windowing library to fall back on. A cap plus
+// one click is enough, and costs no dependency.
+describe("VerifyPane — long histories", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    listenMock.mockClear();
+  });
+
+  const withRuns = (n: number) => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "verify_commands") return Promise.resolve([["test", "cargo test"]]);
+      if (cmd === "list_verifications") {
+        return Promise.resolve(
+          Array.from({ length: n }, (_, i) => run({ id: `v${i}`, name: `run ${i}` }))
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+  };
+
+  it("caps what it renders and says how many it is holding back", async () => {
+    withRuns(53);
+    renderPane();
+    await waitFor(() => expect(screen.getAllByTestId("verification-run").length).toBe(20));
+    expect(screen.getByTestId("verify-show-older").textContent).toContain("33 older runs");
+  });
+
+  it("shows the rest on request", async () => {
+    withRuns(53);
+    renderPane();
+    await screen.findByTestId("verify-show-older");
+    fireEvent.click(screen.getByTestId("verify-show-older"));
+    await waitFor(() => expect(screen.getAllByTestId("verification-run").length).toBe(53));
+    expect(screen.queryByTestId("verify-show-older")).toBeNull();
+  });
+
+  it("offers nothing to expand when the history already fits", async () => {
+    withRuns(4);
+    renderPane();
+    await waitFor(() => expect(screen.getAllByTestId("verification-run").length).toBe(4));
+    expect(screen.queryByTestId("verify-show-older")).toBeNull();
+  });
+});

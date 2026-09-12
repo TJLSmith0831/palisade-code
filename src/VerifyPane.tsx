@@ -38,6 +38,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
   const [commands, setCommands] = useState<[string, string][]>([]);
   const [runs, setRuns] = useState<VerificationRun[]>([]);
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -98,6 +99,16 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
   // something; the earlier ones are history, not a score.
   const latest = [...runs].reverse();
 
+  /**
+   * Every run ever recorded used to render, each as a Code block carrying an
+   * output tail, with no windowing anywhere in the app to fall back on. A cap
+   * is enough here and costs no dependency: the rows this pane exists for are
+   * the newest ones, and the older ones are reachable in one click.
+   */
+  const PAGE = 20;
+  const shown = showAll ? latest : latest.slice(0, PAGE);
+  const older = latest.length - shown.length;
+
   return (
     <Stack gap="xs" p="xs">
       {loading && (
@@ -136,7 +147,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
         ))}
       </Group>
 
-      {latest.map((entry) => (
+      {shown.map((entry) => (
         <Stack key={entry.id} gap={2} data-testid="verification-run">
           <Group gap="xs" wrap="nowrap">
             <Badge
@@ -160,6 +171,17 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
           </Code>
         </Stack>
       ))}
+
+      {older > 0 && (
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          onClick={() => setShowAll(true)}
+          data-testid="verify-show-older"
+        >
+          Show {older} older run{older === 1 ? "" : "s"}
+        </Button>
+      )}
     </Stack>
   );
 }
