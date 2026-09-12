@@ -654,7 +654,7 @@ export default function SettingsPanel({
         },
         title: {
           color: text,
-          fontSize: 17,
+          fontSize: 16,
           fontWeight: 500,
           letterSpacing: "-0.025em",
         },
@@ -1113,7 +1113,7 @@ export default function SettingsPanel({
           }}
         >
           Edit .palisade/project-settings.json
-          <span style={{ fontSize: 14 }}>→</span>
+          <span style={{ fontSize: 13 }}>→</span>
         </button>
 
         {/* ---------------------------------------------------------------- */}

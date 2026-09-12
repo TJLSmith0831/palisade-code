@@ -36,6 +36,11 @@ typography:
     fontSize: "11px"
     fontWeight: 600
     lineHeight: 1.4
+  subhead:
+    fontFamily: '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    fontSize: "16px"
+    fontWeight: 600
+    lineHeight: 1.4
   micro:
     fontFamily: '"Geist Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
     fontSize: "10px"
@@ -169,6 +174,7 @@ So the presets clear the semantics instead. Red (25) sat on `--danger` exactly a
 - **Display:** Sparse onboarding and introductory headings only; it should never become the default working rhythm.
 - **Body:** Messages, descriptions, and ordinary interface prose.
 - **Label:** Compact controls, panel headings, and short action language.
+- **Subhead:** Empty-state headings and prominent single-field inputs — the one step between Body and Display. Already shipped as Mantine's `xl` in `main.tsx`; named here so it stops reading as an off-scale deviation.
 - **Micro:** Metadata, uppercase section labels, state text, and keyboard chords.
 - **Mono:** Code, paths, terminal output, tabs, branches, values, and tabular technical data.
 

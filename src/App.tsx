@@ -1065,7 +1065,7 @@ export const ChatSurface = memo(
                 been asked for. */}
             <p
               className="hint"
-              style={{ marginBottom: 12, fontSize: 11.5 }}
+              style={{ marginBottom: 12, fontSize: 11 }}
               data-testid="spec-type-note"
             >
               Pick how to frame it, say what you want, and the agent opens the
@@ -1386,7 +1386,7 @@ export const ChatSurface = memo(
                 style={{
                   margin: 0,
                   paddingLeft: 18,
-                  fontSize: 12.5,
+                  fontSize: 12,
                   lineHeight: 1.5,
                   color: "var(--muted)",
                 }}
@@ -1883,7 +1883,7 @@ export const ChatSurface = memo(
                     background: "transparent",
                     boxShadow: "none",
                     resize: "none",
-                    fontSize: 14,
+                    fontSize: 13,
                     lineHeight: 1.5,
                   },
                 }}
@@ -1997,7 +1997,7 @@ export const ChatSurface = memo(
                   background: "transparent",
                   boxShadow: "none",
                   resize: "none",
-                  fontSize: 14,
+                  fontSize: 13,
                   lineHeight: 1.5,
                 },
               }}

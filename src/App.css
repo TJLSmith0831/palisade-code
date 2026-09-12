@@ -482,7 +482,7 @@ input[type="checkbox"] {
   display: grid;
   place-items: center;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   transition: all 120ms ease-out;
 }
 
@@ -637,7 +637,7 @@ input[type="checkbox"] {
   margin-top: 4px;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--muted);
   font-size: 11px;
@@ -904,7 +904,7 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 9px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -1185,7 +1185,7 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   min-width: 0;
 }
@@ -1233,7 +1233,7 @@ input[type="checkbox"] {
   align-items: baseline;
   gap: 6px;
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   min-width: 0;
 }
 
@@ -1339,7 +1339,7 @@ input[type="checkbox"] {
   font-family: var(--mono);
   font-size: 11px;
   padding: 5px 10px;
-  border-radius: 5px 5px 0 0;
+  border-radius: 6px 6px 0 0;
   color: var(--muted);
   cursor: pointer;
   border: none;
@@ -3664,7 +3664,7 @@ details.graph-report-wrap > summary {
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
-  border-radius: 9px;
+  border-radius: 9999px;
   background: var(--danger);
   color: var(--bg);
   font-size: 11px;
@@ -3817,7 +3817,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-sc-target small {
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.3;
 }
 
@@ -4047,7 +4047,7 @@ details.graph-report-wrap > summary {
   min-width: 0;
   max-width: 42%;
   margin-left: auto;
-  font-size: 9px;
+  font-size: 10px;
   font-family: var(--mono);
   text-transform: none;
   color: var(--fg);
@@ -4310,7 +4310,7 @@ button.ds-onboarding-status {
   gap: 6px;
   min-width: 0;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4371,7 +4371,7 @@ button.ds-onboarding-status {
   flex: 1;
   min-width: 0;
   color: var(--warn);
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.35;
   overflow-wrap: break-word;
   display: -webkit-box;
@@ -4418,7 +4418,7 @@ button.ds-onboarding-status {
   padding: 6px 6px 0;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.4;
   text-wrap: pretty;
 }
@@ -5059,7 +5059,7 @@ button.ds-onboarding-status {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--surface);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -5306,7 +5306,7 @@ button.ds-onboarding-status {
      line, which sits lower once the row's padding is shared with it. */
   margin-top: 1px;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: 9999px;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;

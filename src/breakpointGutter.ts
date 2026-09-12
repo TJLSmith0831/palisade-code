@@ -144,9 +144,11 @@ export function breakpointGutter(onToggle: (line: number) => void): Extension {
       // Unknown = not yet sent to an adapter. Hollowed rather than coloured
       // like a rejection, which it isn't.
       ".ds-breakpoint.is-unknown": { color: "var(--danger, #e5484d)", opacity: "0.55" },
-      ".ds-breakpoint.is-rejected": { color: "var(--warning, #ffb224)" },
-      ".ds-breakpoint.is-disabled": { color: "var(--fg-dim, #888)", opacity: "0.5" },
-      ".ds-debug-current": { background: "rgba(255, 178, 36, 0.18)" },
+      ".ds-breakpoint.is-rejected": { color: "var(--warn)" },
+      ".ds-breakpoint.is-disabled": { color: "var(--muted)", opacity: "0.5" },
+      ".ds-debug-current": {
+        background: "color-mix(in oklab, var(--warn), transparent 82%)",
+      },
     }),
   ];
 }

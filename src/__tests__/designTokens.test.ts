@@ -182,3 +182,59 @@ describe("accent presets clear the hues the semantics own", () => {
     expect(collisions).toEqual([]);
   });
 });
+
+describe("type and radius stay on the declared scales", () => {
+  const design = readFileSync(resolve(root, "DESIGN.md"), "utf8");
+
+  /** Every `fontSize: "Npx"` DESIGN.md's front matter declares. */
+  const RAMP = new Set(
+    [...design.matchAll(/fontSize: "(\d+)px"/g)].map((m) => Number(m[1]))
+  );
+  /** Mantine's radius remap in main.tsx is the shape scale, verbatim. */
+  const RADII = new Set([4, 6, 8, 12, 9999]);
+
+  it("DESIGN.md still declares the ramp this test measures against", () => {
+    expect([...RAMP].sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 16, 21]);
+  });
+
+  it("no rule in App.css sets an off-ramp font-size", () => {
+    const offenders = css
+      .split("\n")
+      .map((line, i) => [i + 1, line] as const)
+      .filter(([, line]) => {
+        const m = line.match(/font-size:\s*([\d.]+)px/);
+        return m !== null && !RAMP.has(Number(m[1]));
+      })
+      .map(([n, line]) => `App.css:${n}: ${line.trim()}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("no rule in App.css sets an off-scale border-radius", () => {
+    const offenders = css
+      .split("\n")
+      .map((line, i) => [i + 1, line] as const)
+      .filter(([, line]) => {
+        const m = line.match(/border-radius:\s*([^;]+);/);
+        if (!m || m[1].includes("var(") || m[1].includes("%")) return false;
+        return m[1]
+          .split(/\s+/)
+          .some((part) => /^[\d.]+px$/.test(part) && !RADII.has(Number(part.slice(0, -2))));
+      })
+      .map(([n, line]) => `App.css:${n}: ${line.trim()}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("no component sets an off-ramp fontSize inline", () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(resolve(root, "src"))) {
+      if (!/\.tsx?$/.test(file)) continue;
+      readFileSync(resolve(root, "src", file), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          const m = line.match(/fontSize:\s*"?([\d.]+)(?:px)?"?[,\s}]/);
+          if (m && !RAMP.has(Number(m[1]))) offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
+});
