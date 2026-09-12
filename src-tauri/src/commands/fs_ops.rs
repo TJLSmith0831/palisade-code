@@ -6,6 +6,7 @@ use tauri::Manager;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use crate::locks::MutexExt;
 
 /// Shared by `list_directory` and `list_all_files` so the two entry points
 /// can't drift on which dirs/files they hide. `.git` is always hidden (huge,
@@ -371,7 +372,7 @@ pub(crate) fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Pa
     // Every open project's watcher (#33). The path is absolute, so only the
     // watcher that actually owns it can see the event this suppresses; the
     // others are told about a path they will never report.
-    for watcher in harness.fswatch.lock().unwrap().values() {
+    for watcher in harness.fswatch.lock_or_recover().values() {
         watcher.note_self_write(resolved);
     }
 }

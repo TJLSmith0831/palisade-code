@@ -27,6 +27,7 @@ use serde_json::Value;
 
 use crate::acp_client::AcpSession;
 use crate::store::{self, Res};
+use crate::locks::MutexExt;
 
 // Old compiled-in agent table removed — agents are now discovered at
 // runtime via the ACP Registry (D1, D2). The Transport enum, Agent struct,
@@ -586,7 +587,7 @@ impl TurnWatch {
     }
 
     pub fn push_text(&self, text: &str) {
-        let mut buffer = self.text.lock().unwrap();
+        let mut buffer = self.text.lock_or_recover();
         if !buffer.is_empty() {
             buffer.push_str("\n\n");
         }
@@ -595,25 +596,25 @@ impl TurnWatch {
 
     /// Everything the node said this turn — what feeds the next node.
     pub fn take_text(&self) -> String {
-        std::mem::take(&mut *self.text.lock().unwrap())
+        std::mem::take(&mut *self.text.lock_or_recover())
     }
 
     /// Records ACP's cumulative session cost. A later usage update replaces
     /// the earlier total; adding them would double-count.
     pub fn record_cost(&self, cost: crate::acp_events::Cost) {
-        *self.cost.lock().unwrap() = Some(cost);
+        *self.cost.lock_or_recover() = Some(cost);
     }
 
     /// Returns the latest reported cost without inventing a zero when the
     /// agent never supplied one.
     pub fn take_cost(&self) -> Option<crate::acp_events::Cost> {
-        self.cost.lock().unwrap().clone()
+        self.cost.lock_or_recover().clone()
     }
 
     /// Resolves the turn exactly once; a second `Done` (or a `Crashed` after
     /// one) is dropped rather than racing a later turn's receiver.
     pub fn finish(&self, end: TurnEnd) {
-        if let Some(tx) = self.tx.lock().unwrap().take() {
+        if let Some(tx) = self.tx.lock_or_recover().take() {
             let _ = tx.send(end);
         }
     }
@@ -677,7 +678,7 @@ impl Harness {
     /// that fails (session gone, agent mid-turn) must leave the transcript
     /// parked for the next attempt instead of eating it.
     pub fn with_pending_prefix(&self, session_id: &str, content: &str) -> String {
-        match self.pending_prefix.lock().unwrap().get(session_id) {
+        match self.pending_prefix.lock_or_recover().get(session_id) {
             Some(prefix) => format!("{prefix}\n\n{content}"),
             None => content.to_string(),
         }
@@ -685,7 +686,7 @@ impl Harness {
 
     /// Drop a session's parked transcript, once it has actually been sent.
     pub fn clear_pending_prefix(&self, session_id: &str) {
-        self.pending_prefix.lock().unwrap().remove(session_id);
+        self.pending_prefix.lock_or_recover().remove(session_id);
     }
 
     /// Whether *any* of a thread's sessions is mid-turn. A thread can hold
@@ -718,14 +719,14 @@ impl Harness {
     /// automatically" promise the caller gives the user for every one of
     /// them.
     pub fn queue_pending_auth_turn(&self, agent_id: &str, turn: PendingAuthTurn) {
-        self.pending_auth_turns.lock().unwrap().entry(agent_id.to_string()).or_default().push(turn);
+        self.pending_auth_turns.lock_or_recover().entry(agent_id.to_string()).or_default().push(turn);
     }
 
     /// Takes every turn queued for `agent_id`, oldest first, leaving none
     /// behind. Pair with `requeue_pending_auth_turns` when delivery of one
     /// fails partway through, so turns not yet attempted are not lost.
     pub fn take_pending_auth_turns(&self, agent_id: &str) -> Vec<PendingAuthTurn> {
-        self.pending_auth_turns.lock().unwrap().remove(agent_id).unwrap_or_default()
+        self.pending_auth_turns.lock_or_recover().remove(agent_id).unwrap_or_default()
     }
 
     /// Puts turns back at the front of `agent_id`'s queue, ahead of any that
@@ -734,7 +735,7 @@ impl Harness {
         if turns.is_empty() {
             return;
         }
-        let mut map = self.pending_auth_turns.lock().unwrap();
+        let mut map = self.pending_auth_turns.lock_or_recover();
         let existing = map.entry(agent_id.to_string()).or_default();
         turns.append(existing);
         *existing = turns;

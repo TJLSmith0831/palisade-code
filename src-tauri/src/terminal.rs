@@ -16,6 +16,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 use crate::executor::child_path_env;
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 pub struct Terminal {
     writer: Mutex<Box<dyn Write + Send>>,
@@ -79,7 +80,7 @@ impl Terminal {
     }
 
     pub fn write(&self, bytes: &[u8]) -> Res<()> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock_or_recover();
         writer.write_all(bytes).map_err(|err| format!("write to pty: {err}"))?;
         writer.flush().map_err(|err| format!("flush pty: {err}"))
     }
@@ -148,7 +149,7 @@ impl TerminalRegistry {
         project_root: &Path,
         on_output: impl Fn(Vec<u8>) + Send + 'static,
     ) -> Res<bool> {
-        let mut tabs = self.tabs.lock().unwrap();
+        let mut tabs = self.tabs.lock_or_recover();
         if tabs.contains_key(id) {
             return Ok(false);
         }
@@ -165,13 +166,13 @@ impl TerminalRegistry {
     }
 
     pub fn write(&self, id: &str, bytes: &[u8]) -> Res<()> {
-        let tabs = self.tabs.lock().unwrap();
+        let tabs = self.tabs.lock_or_recover();
         let tab = tabs.get(id).ok_or_else(|| format!("no terminal running for tab `{id}`"))?;
         tab.terminal.write(bytes)
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Res<()> {
-        let tabs = self.tabs.lock().unwrap();
+        let tabs = self.tabs.lock_or_recover();
         let tab = tabs.get(id).ok_or_else(|| format!("no terminal running for tab `{id}`"))?;
         tab.terminal.resize(cols, rows)
     }
@@ -182,7 +183,7 @@ impl TerminalRegistry {
         // Dropped outside the lock: `Terminal::drop` waits on the reader
         // thread, and holding the registry lock through that would block
         // every other tab's I/O for the duration.
-        let tab = self.tabs.lock().unwrap().remove(id);
+        let tab = self.tabs.lock_or_recover().remove(id);
         drop(tab);
     }
 
@@ -190,7 +191,7 @@ impl TerminalRegistry {
     /// tabs alone.
     pub fn kill_project(&self, project_hash: &str) {
         let doomed: Vec<Tab> = {
-            let mut tabs = self.tabs.lock().unwrap();
+            let mut tabs = self.tabs.lock_or_recover();
             let ids: Vec<String> = tabs
                 .iter()
                 .filter(|(_, tab)| tab.project_hash == project_hash)

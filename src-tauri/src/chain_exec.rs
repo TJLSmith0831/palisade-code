@@ -20,6 +20,7 @@ use crate::chain_runner::{Approval, Budget, GateEvaluator, NodeRunner, NodeState
 use crate::chains::Chain;
 use crate::executor::{Envelope, ExecutorEvent, Harness, TurnEnd, TurnWatch};
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 /// Live chain-run progress for the DAG view (D7). Carries the run id rather
 /// than riding `Envelope`, because a chain run spans several sessions and no
@@ -66,11 +67,11 @@ struct NodeCosts(Mutex<HashMap<String, Cost>>);
 
 impl NodeCosts {
     fn record(&self, role: &str, cost: Cost) {
-        self.0.lock().unwrap().insert(role.to_string(), cost);
+        self.0.lock_or_recover().insert(role.to_string(), cost);
     }
 
     fn get(&self, role: &str) -> Option<Cost> {
-        self.0.lock().unwrap().get(role).cloned()
+        self.0.lock_or_recover().get(role).cloned()
     }
 }
 
@@ -146,9 +147,9 @@ impl AcpNodeRunner {
     /// so `find_live_session` won't hand it to a user's `/go` (D25).
     fn session_for(&self, role: &str) -> Res<String> {
         {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.sessions.lock_or_recover();
             if let Some(id) = sessions.get(role) {
-                if self.harness().acp_sessions.lock().unwrap().contains_key(id) {
+                if self.harness().acp_sessions.lock_or_recover().contains_key(id) {
                     return Ok(id.clone());
                 }
                 sessions.remove(role);
@@ -171,8 +172,8 @@ impl AcpNodeRunner {
             Some(agent),
             model,
         )?;
-        self.harness().chain_sessions.lock().unwrap().insert(id.clone());
-        self.sessions.lock().unwrap().insert(role.to_string(), id.clone());
+        self.harness().chain_sessions.lock_or_recover().insert(id.clone());
+        self.sessions.lock_or_recover().insert(role.to_string(), id.clone());
         Ok(id)
     }
 
@@ -180,10 +181,10 @@ impl AcpNodeRunner {
     /// attempt (if any) starts fresh rather than continuing a contaminated
     /// context (D21).
     fn discard_session_as(&self, role: &str, outcome: &str) {
-        let id = self.sessions.lock().unwrap().remove(role);
+        let id = self.sessions.lock_or_recover().remove(role);
         if let Some(id) = id {
-            self.harness().chain_sessions.lock().unwrap().remove(&id);
-            self.harness().turn_watchers.lock().unwrap().remove(&id);
+            self.harness().chain_sessions.lock_or_recover().remove(&id);
+            self.harness().turn_watchers.lock_or_recover().remove(&id);
             crate::end_session(&self.harness(), &self.thread_id, &id, outcome);
         }
     }
@@ -211,8 +212,8 @@ impl AcpNodeRunner {
     /// Releases every session this run started, closing each record idle.
     pub fn release(&mut self) {
         for (_, id) in std::mem::take(self.sessions.get_mut().unwrap()) {
-            self.harness().chain_sessions.lock().unwrap().remove(&id);
-            self.harness().turn_watchers.lock().unwrap().remove(&id);
+            self.harness().chain_sessions.lock_or_recover().remove(&id);
+            self.harness().turn_watchers.lock_or_recover().remove(&id);
             crate::end_session(&self.harness(), &self.thread_id, &id, "done");
         }
     }
@@ -233,7 +234,7 @@ impl AcpNodeRunner {
     }
 
     fn persist_transition(&self, role: &str, state: NodeState, session_id: Option<String>) {
-        let iterations = *self.iterations.lock().unwrap().get(role).unwrap_or(&0);
+        let iterations = *self.iterations.lock_or_recover().get(role).unwrap_or(&0);
         if let Err(err) = chain_history::record_transition(
             &crate::palisade_home(),
             &self.project_hash,
@@ -291,11 +292,11 @@ impl NodeRunner for AcpNodeRunner {
         // would otherwise emit Done before anything was listening.
         let (tx, rx) = mpsc::channel();
         let watch = Arc::new(TurnWatch::new(tx));
-        self.harness().turn_watchers.lock().unwrap().insert(session_id.clone(), watch.clone());
+        self.harness().turn_watchers.lock_or_recover().insert(session_id.clone(), watch.clone());
 
         let sent = crate::send_to(&self.harness(), &self.project_hash, &session_id, instruction);
         if let Err(err) = sent {
-            self.harness().turn_watchers.lock().unwrap().remove(&session_id);
+            self.harness().turn_watchers.lock_or_recover().remove(&session_id);
             self.discard_session(role);
             return Err(err);
         }
@@ -319,7 +320,7 @@ impl NodeRunner for AcpNodeRunner {
                 Err(err) => break Some(Err(err)),
             }
         };
-        self.harness().turn_watchers.lock().unwrap().remove(&session_id);
+        self.harness().turn_watchers.lock_or_recover().remove(&session_id);
 
         match end {
             Some(Ok(TurnEnd::Done)) => {
@@ -330,7 +331,7 @@ impl NodeRunner for AcpNodeRunner {
                     self.record_cost(role, cost);
                 }
                 let output = watch.take_text();
-                *self.iterations.lock().unwrap().entry(role.to_string()).or_insert(0) += 1;
+                *self.iterations.lock_or_recover().entry(role.to_string()).or_insert(0) += 1;
                 if let Err(err) = chain_history::record_output(
                     &crate::palisade_home(),
                     &self.project_hash,
@@ -367,7 +368,7 @@ impl NodeRunner for AcpNodeRunner {
         // second synthetic event.
         let session_id = match state {
             NodeState::Executing | NodeState::Retrying(_) => self.session_for(role).ok(),
-            _ => self.sessions.lock().unwrap().get(role).cloned(),
+            _ => self.sessions.lock_or_recover().get(role).cloned(),
         };
         let cost = self.costs.get(role);
         self.persist_transition(role, state, session_id.clone());
@@ -471,7 +472,7 @@ impl GateEvaluator for AcpGateEvaluator {
         let _pause = self.budget.pause();
         let decision = wait_for_approval(&rx, &self.cancel);
         drop(_pause);
-        self.app.state::<Harness>().chain_gates.lock().unwrap().remove(&self.run_id);
+        self.app.state::<Harness>().chain_gates.lock_or_recover().remove(&self.run_id);
         decision
     }
 }
@@ -496,6 +497,7 @@ fn wait_for_approval(rx: &mpsc::Receiver<Approval>, cancel: &AtomicBool) -> Resu
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
     use crate::chain_runner::ChainRun;
     use crate::chains::{ChainEdge, ChainNode, RetryPolicy};
@@ -605,21 +607,21 @@ mod tests {
         fn run_turn(&self, role: &str, _instruction: &str, _attempt: u32) -> TurnResult {
             match role {
                 "leaf0" => {
-                    if let Some(tx) = self.leaf0_started.lock().unwrap().take() {
+                    if let Some(tx) = self.leaf0_started.lock_or_recover().take() {
                         let _ = tx.send(());
                     }
-                    if let Some(rx) = self.leaf0_release.lock().unwrap().take() {
+                    if let Some(rx) = self.leaf0_release.lock_or_recover().take() {
                         rx.recv().ok();
                     }
                     Err("cancelled".into())
                 }
                 "leaf1" => {
-                    if let Some(tx) = self.leaf1_started.lock().unwrap().take() {
+                    if let Some(tx) = self.leaf1_started.lock_or_recover().take() {
                         let _ = tx.send(());
                     }
                     // "Finishes right as cancel fires" — a fast agent whose
                     // answer was already on the wire when Stop was pressed.
-                    if let Some(rx) = self.leaf1_release.lock().unwrap().take() {
+                    if let Some(rx) = self.leaf1_release.lock_or_recover().take() {
                         rx.recv().ok();
                     }
                     Ok("leaf1 output".into())
@@ -629,9 +631,9 @@ mod tests {
         }
 
         fn on_state(&self, role: &str, state: NodeState) {
-            self.states.lock().unwrap().push((role.to_string(), state));
+            self.states.lock_or_recover().push((role.to_string(), state));
             if role == "leaf1" && state == NodeState::Done {
-                if let Some(tx) = self.leaf1_done.lock().unwrap().take() {
+                if let Some(tx) = self.leaf1_done.lock_or_recover().take() {
                     let _ = tx.send(());
                 }
             }
@@ -679,9 +681,9 @@ mod tests {
 
         assert_eq!(outcome, Outcome::Cancelled { at: vec!["leaf0".to_string()] });
         assert!(
-            runner.states.lock().unwrap().contains(&("leaf0".into(), NodeState::Cancelled)),
+            runner.states.lock_or_recover().contains(&("leaf0".into(), NodeState::Cancelled)),
             "a mid-turn cancellation must remain Cancelled rather than becoming Failed: {:?}",
-            runner.states.lock().unwrap()
+            runner.states.lock_or_recover()
         );
     }
 }

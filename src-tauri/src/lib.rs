@@ -17,6 +17,7 @@ mod fswatch;
 mod git;
 mod git_repo;
 mod integrations;
+mod locks;
 mod lsp;
 mod mcp;
 mod native_menu;
@@ -117,7 +118,7 @@ mod quit_registry_tests {
     #[test]
     fn quit_waits_for_every_dirty_window_before_exiting() {
         let registry = QuitRegistry::default();
-        let mut dirty = registry.dirty_windows.lock().unwrap();
+        let mut dirty = registry.dirty_windows.lock_or_recover();
         dirty.insert("project-alpha".into(), true);
         dirty.insert("project-bravo".into(), true);
         drop(dirty);
@@ -133,7 +134,7 @@ mod quit_registry_tests {
     #[test]
     fn quit_ignores_dirty_windows_that_no_longer_exist() {
         let registry = QuitRegistry::default();
-        let mut dirty = registry.dirty_windows.lock().unwrap();
+        let mut dirty = registry.dirty_windows.lock_or_recover();
         dirty.insert("project-alpha".into(), true);
         dirty.insert("project-closed".into(), true);
         drop(dirty);
@@ -141,7 +142,7 @@ mod quit_registry_tests {
         let live = ["project-alpha".to_string()].into_iter().collect();
         assert_eq!(registry.begin_quit(&live), ["project-alpha".to_string()].into_iter().collect());
         assert!(registry.confirm("project-alpha"), "the only live dirty window completes the quit");
-        assert!(!registry.dirty_windows.lock().unwrap().contains_key("project-closed"), "the ghost entry is dropped");
+        assert!(!registry.dirty_windows.lock_or_recover().contains_key("project-closed"), "the ghost entry is dropped");
     }
 }
 
@@ -149,6 +150,7 @@ use acp_preflight::Preflight;
 use executor::{Envelope, ExecutorEvent, Harness, Sink};
 use serde::Serialize;
 use store::{palisade_home, Message, Project};
+use crate::locks::MutexExt;
 pub(crate) use store::{Res, ThreadMeta};
 
 #[derive(Debug, Clone, Serialize)]
@@ -337,7 +339,7 @@ fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, pr
     // stop the first window's watcher (#33). Retire first, so switching away
     // from a project no window still shows also stops its graphify process.
     project_windows::retire_unwatched(harness);
-    let mut watchers = harness.watch.lock().unwrap();
+    let mut watchers = harness.watch.lock_or_recover();
     if watchers.contains_key(&project.hash) {
         return;
     }
@@ -380,7 +382,7 @@ struct FsChanged {
 /// missing `graphify`.
 fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
     project_windows::retire_unwatched(harness);
-    let mut watchers = harness.fswatch.lock().unwrap();
+    let mut watchers = harness.fswatch.lock_or_recover();
     if watchers.contains_key(&project.hash) {
         return;
     }
@@ -721,7 +723,7 @@ impl Sink for AppSink {
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
-                let _ = harness.session_log_writer.lock().unwrap().flush();
+                let _ = harness.session_log_writer.lock_or_recover().flush();
                 // A turn made it to completion, so whatever auth problem
                 // blocked an earlier one no longer applies.
                 if thread_meta(&self.project_hash, &thread_id)
@@ -735,7 +737,7 @@ impl Sink for AppSink {
                     );
                     let _ = self.app.emit("thread-updated", &thread_id);
                 }
-                let watch = harness.pending_propose.lock().unwrap().take();
+                let watch = harness.pending_propose.lock_or_recover().take();
                 if let Some(watch) = watch {
                     let after = executor::openspec_changes(&harness.openspec_cache, &watch.project_root);
                     match executor::newly_added_change(&watch.before, &after) {
@@ -771,7 +773,7 @@ fn sink_for(app: &tauri::AppHandle, project_hash: &str) -> Arc<dyn Sink> {
 }
 
 fn preflight_for_harness(harness: &Harness, refresh: bool) -> Preflight {
-    let mut cached = harness.preflight.lock().unwrap();
+    let mut cached = harness.preflight.lock_or_recover();
     if refresh || cached.is_none() {
         *cached = Some(acp_preflight::preflight(
             &store::palisade_home(),
@@ -838,7 +840,7 @@ fn selected_executor(
     thread_id: Option<&str>,
 ) -> Res<(acp_preflight::AgentStatus, PathBuf)> {
     let mut flight = {
-        let mut cached = harness.preflight.lock().unwrap();
+        let mut cached = harness.preflight.lock_or_recover();
         if cached.is_none() {
             *cached = Some(acp_preflight::preflight(
                 &store::palisade_home(),
@@ -860,7 +862,7 @@ fn selected_executor(
     if let Some(id) = &override_id {
         if flight.agent(id).is_none_or(|a| a.path.is_none()) {
             flight = acp_preflight::preflight(&store::palisade_home(), &|bin| executor::find_on_path(bin));
-            *harness.preflight.lock().unwrap() = Some(flight.clone());
+            *harness.preflight.lock_or_recover() = Some(flight.clone());
         }
     }
     let (agent, warning) = resolve_executor(&flight, override_id)?;
@@ -902,7 +904,7 @@ fn resolve_agent(
 /// permissions, so without this a user pressing `/go` mid-run would be handed
 /// a node's session and start typing into the middle of a chain.
 fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode: &str) -> Option<String> {
-    let chain_owned = harness.chain_sessions.lock().unwrap();
+    let chain_owned = harness.chain_sessions.lock_or_recover();
     harness
         .acp_sessions
         .lock()
@@ -1071,7 +1073,7 @@ fn start_session_as(
         git.as_ref().and_then(|bin| git::rev_parse_head(bin, &root)).as_deref(),
         git.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)),
     )?;
-    harness.acp_sessions.lock().unwrap().insert(id.clone(), session);
+    harness.acp_sessions.lock_or_recover().insert(id.clone(), session);
     Ok(id)
 }
 
@@ -1172,14 +1174,14 @@ fn park_prefix(
         .ok()
         .and_then(|root| graph_nudge::nudge(agent_id, &root));
     if let Some(combined) = graph_nudge::compose(nudge, prefix) {
-        harness.pending_prefix.lock().unwrap().insert(session_id.to_string(), combined);
+        harness.pending_prefix.lock_or_recover().insert(session_id.to_string(), combined);
     }
 }
 
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
-    harness.pending_prefix.lock().unwrap().remove(session_id);
-    if let Some(mut session) = harness.acp_sessions.lock().unwrap().remove(session_id) {
+    harness.pending_prefix.lock_or_recover().remove(session_id);
+    if let Some(mut session) = harness.acp_sessions.lock_or_recover().remove(session_id) {
         session.terminate();
         let head_after = git_bin()
             .ok()
@@ -1405,7 +1407,7 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
 }
 
 fn model_title(harness: &Harness, prompt: &str) -> Option<String> {
-    let server = harness.completion_server.lock().unwrap();
+    let server = harness.completion_server.lock_or_recover();
     let server = server.as_ref()?;
     if !server.is_alive() {
         return None;
@@ -1425,7 +1427,7 @@ fn send_to(
 ) -> Res<()> {
     let prefixed = harness.with_pending_prefix(session_id, content);
     {
-        let sessions = harness.acp_sessions.lock().unwrap();
+        let sessions = harness.acp_sessions.lock_or_recover();
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
         acp_client::send_acp_prompt(session, &prefixed)?;
     }
@@ -1872,7 +1874,7 @@ async fn propose(
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
         let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
 
-        *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
+        *harness.pending_propose.lock_or_recover() = Some(executor::ProposeWatch {
             project_hash: project_hash.clone(),
             thread_id: thread_id.clone(),
             before: executor::openspec_changes(&harness.openspec_cache, &root),
@@ -2002,7 +2004,7 @@ async fn suggest_commit_message(
         let Some((_scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
             return Ok(String::new());
         };
-        let server = harness.completion_server.lock().unwrap();
+        let server = harness.completion_server.lock_or_recover();
         let Some(server) = server.as_ref().filter(|s| s.is_alive()) else {
             return Ok(String::new());
         };
@@ -2173,7 +2175,7 @@ async fn stop_executor(
             // "running" until the 20-minute turn timeout finally fired.
             // Release that watcher here, the same way the sink's Crashed arm
             // would have.
-            if let Some(watch) = harness.turn_watchers.lock().unwrap().get(&id).cloned() {
+            if let Some(watch) = harness.turn_watchers.lock_or_recover().get(&id).cloned() {
                 watch.finish(executor::TurnEnd::Crashed("Cancelled by user".into()));
             }
             end_session(&harness, &thread_id, &id, "cancelled");
@@ -2198,7 +2200,7 @@ async fn answer_permission_prompt(
         .ok_or_else(|| format!("unknown permission decision: {decision}"))?;
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        if let Some(session) = harness.acp_sessions.lock().unwrap().get(&session_id) {
+        if let Some(session) = harness.acp_sessions.lock_or_recover().get(&session_id) {
             session.answer_permission_prompt(&request_id, answer);
         }
         Ok(())
@@ -2593,7 +2595,7 @@ async fn list_sessions(
 ) -> Res<Vec<store::SessionRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live: Vec<String> = harness.acp_sessions.lock().unwrap().keys().cloned().collect();
+        let live: Vec<String> = harness.acp_sessions.lock_or_recover().keys().cloned().collect();
         store::close_stale_sessions(&palisade_home(), &project_hash, &thread_id, &live)
     })
     .await
@@ -2927,7 +2929,7 @@ async fn list_chain_runs(
 ) -> Res<Vec<chain_history::ChainRunRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let live = harness.chain_cancels.lock_or_recover().keys().cloned().collect::<Vec<_>>();
         let mut records = chain_history::close_stale_runs(&palisade_home(), &project_hash, &live)?;
         if let Some(name) = chain_name {
             records.retain(|record| record.chain_name == name);
@@ -2949,7 +2951,7 @@ async fn get_chain_run(
 ) -> Res<Option<chain_history::ChainRunRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let live = harness.chain_cancels.lock_or_recover().keys().cloned().collect::<Vec<_>>();
         let _ = chain_history::close_stale_runs(&palisade_home(), &project_hash, &live)?;
         chain_history::get_run(&palisade_home(), &project_hash, &run_id)
     })
@@ -3107,7 +3109,7 @@ fn launch_chain_run(
     // completions and `AcpNodeRunner` polls directly while a turn is
     // in-flight — one flag, not two mechanisms.
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    app.state::<Harness>().chain_cancels.lock().unwrap().insert(id.clone(), cancel.clone());
+    app.state::<Harness>().chain_cancels.lock_or_recover().insert(id.clone(), cancel.clone());
     tokio::task::spawn_blocking(move || {
         let mut run = chain_runner::ChainRun::new(id.clone(), chain.clone(), seed_input);
         // Shared with `run` (D12): a node's human turn and an approval gate
@@ -3139,7 +3141,7 @@ fn launch_chain_run(
         if let Err(err) = chain_history::end_run(&palisade_home(), &summary_hash, &id, outcome.clone()) {
             eprintln!("chain run {id}: could not persist terminal outcome: {err}");
         }
-        app.state::<Harness>().chain_cancels.lock().unwrap().remove(&id);
+        app.state::<Harness>().chain_cancels.lock_or_recover().remove(&id);
         chain_exec::post_thread_summary(
             &app,
             &summary_hash,
@@ -3181,7 +3183,7 @@ async fn rerun_chain_run(
     let requested_role = from_role.clone();
     let start = tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = history_app.state();
-        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let live = harness.chain_cancels.lock_or_recover().keys().cloned().collect::<Vec<_>>();
         let _ = chain_history::close_stale_runs(&palisade_home(), &history_hash, &live)?;
         let record = chain_history::get_run(&palisade_home(), &history_hash, &run_id)?
             .ok_or_else(|| format!("no chain run `{run_id}` in this project"))?;
@@ -3346,7 +3348,7 @@ async fn session_attribution(
 /// Starts the completion sidecar if it isn't already running.
 fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
     let harness = app.state::<Harness>();
-    let mut server_slot = harness.completion_server.lock().unwrap();
+    let mut server_slot = harness.completion_server.lock_or_recover();
     if let Some(server) = server_slot.as_ref() {
         if server.is_alive() {
             return Ok(());
@@ -3371,16 +3373,16 @@ fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
 }
 
 fn stop_completion_server(harness: &Harness) {
-    if let Some(server) = harness.completion_server.lock().unwrap().take() {
+    if let Some(server) = harness.completion_server.lock_or_recover().take() {
         drop(server);
     }
-    *harness.completion_crashes.lock().unwrap() = 0;
+    *harness.completion_crashes.lock_or_recover() = 0;
 }
 
 /// Ensures the completion sidecar is running before a request, applying the
 /// one-restart-then-disable policy from D33.
 fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()> {
-    let mut server_slot = harness.completion_server.lock().unwrap();
+    let mut server_slot = harness.completion_server.lock_or_recover();
 
     if let Some(server) = server_slot.as_ref() {
         if server.is_alive() {
@@ -3390,14 +3392,14 @@ fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()
 
     *server_slot = None;
 
-    let crashes = *harness.completion_crashes.lock().unwrap();
+    let crashes = *harness.completion_crashes.lock_or_recover();
     if crashes >= 2 {
         return Err("AI completion is disabled because the sidecar crashed twice.".into());
     }
 
     let (binary, model) = completion::resolve_sidecar_paths(app)?;
     if !binary.exists() || !model.exists() {
-        *harness.completion_crashes.lock().unwrap() = 2;
+        *harness.completion_crashes.lock_or_recover() = 2;
         let _ = app.emit(
             "harness-warning",
             "AI completion is unavailable: bundled sidecar or model is missing.",
@@ -3409,12 +3411,12 @@ fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()
     match server.spawn(&binary, &model) {
         Ok(()) => {
             *server_slot = Some(server);
-            *harness.completion_crashes.lock().unwrap() = 0;
+            *harness.completion_crashes.lock_or_recover() = 0;
             Ok(())
         }
         Err(err) => {
-            *harness.completion_crashes.lock().unwrap() += 1;
-            if *harness.completion_crashes.lock().unwrap() >= 2 {
+            *harness.completion_crashes.lock_or_recover() += 1;
+            if *harness.completion_crashes.lock_or_recover() >= 2 {
                 let _ = app.emit(
                     "harness-warning",
                     "AI completion disabled after the sidecar crashed twice.",
@@ -3435,13 +3437,13 @@ async fn complete_code(
 ) -> Res<completion::CompletionResponse> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        if !*harness.completion_enabled.lock().unwrap() {
+        if !*harness.completion_enabled.lock_or_recover() {
             return Err("AI completion is disabled.".into());
         }
 
         ensure_completion_server(&app, &harness)?;
 
-        let guard = harness.completion_server.lock().unwrap();
+        let guard = harness.completion_server.lock_or_recover();
         let server = guard
             .as_ref()
             .ok_or("completion server is not running")?;
@@ -3458,7 +3460,7 @@ async fn set_completion_enabled(
 ) -> Res<bool> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        *harness.completion_enabled.lock().unwrap() = enabled;
+        *harness.completion_enabled.lock_or_recover() = enabled;
         if enabled {
             if let Err(err) = start_completion_server(&app) {
                 eprintln!("completion: {err}");
@@ -3479,7 +3481,7 @@ async fn set_completion_keybinding(
 ) -> Res<String> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        *harness.completion_keybinding.lock().unwrap() = keybinding.clone();
+        *harness.completion_keybinding.lock_or_recover() = keybinding.clone();
         Ok(keybinding)
     })
     .await
@@ -3615,8 +3617,8 @@ fn os_release() -> String {
 async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::CompletionSettings> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        let enabled = *harness.completion_enabled.lock().unwrap();
-        let accept_keybinding = harness.completion_keybinding.lock().unwrap().clone();
+        let enabled = *harness.completion_enabled.lock_or_recover();
+        let accept_keybinding = harness.completion_keybinding.lock_or_recover().clone();
         Ok(completion::CompletionSettings {
             enabled,
             accept_keybinding,
@@ -3665,7 +3667,7 @@ pub fn run() {
                 let _ = app.emit("harness-warning", err);
             }
             let harness: tauri::State<'_, Harness> = app.state();
-            if *harness.completion_enabled.lock().unwrap() {
+            if *harness.completion_enabled.lock_or_recover() {
                 // Installing the model is a background job: copying it out of
                 // the installer bundle takes seconds and downloading it takes
                 // minutes, and neither should hold the window closed.
@@ -3682,7 +3684,7 @@ pub fn run() {
                     // is actually there, or AI completion stays off until the
                     // next launch.
                     let harness = handle.state::<Harness>();
-                    *harness.completion_crashes.lock().unwrap() = 0;
+                    *harness.completion_crashes.lock_or_recover() = 0;
                     if let Err(err) = start_completion_server(&handle) {
                         eprintln!("completion: {err}");
                         let _ = handle.emit("harness-warning", err);
@@ -3870,9 +3872,9 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit) {
                 release_idle_sessions_on_exit(&app.state::<Harness>());
-                let _ = app.state::<Harness>().session_log_writer.lock().unwrap().flush();
+                let _ = app.state::<Harness>().session_log_writer.lock_or_recover().flush();
                 stop_completion_server(&app.state::<Harness>());
-                for (_, kernel) in app.state::<Harness>().notebook_kernels.lock().unwrap().drain() {
+                for (_, kernel) in app.state::<Harness>().notebook_kernels.lock_or_recover().drain() {
                     kernel.terminate();
                 }
             }
@@ -3908,6 +3910,7 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
 
     mod chain_startup_reconciliation {
         use crate::chain_history::{self, ChainRunRecord, OutcomeSnapshot};
@@ -4092,6 +4095,7 @@ mod tests {
     /// showing something that has already moved on.
     mod chain_cancel {
         use crate::executor::Harness;
+        use crate::locks::MutexExt;
 
         #[test]
         fn cancelling_an_unknown_run_errors_rather_than_no_ops() {
@@ -4104,7 +4108,7 @@ mod tests {
         fn cancelling_a_tracked_run_flips_its_flag() {
             let harness = Harness::default();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            harness.chain_cancels.lock().unwrap().insert("run-1".into(), cancel.clone());
+            harness.chain_cancels.lock_or_recover().insert("run-1".into(), cancel.clone());
             assert!(crate::cancel_chain_run_impl(&harness, "run-1").is_ok());
             assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
         }
@@ -4117,8 +4121,8 @@ mod tests {
         fn cancelling_a_run_thats_already_finished_errors_the_same_as_unknown() {
             let harness = Harness::default();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            harness.chain_cancels.lock().unwrap().insert("run-1".into(), cancel);
-            harness.chain_cancels.lock().unwrap().remove("run-1");
+            harness.chain_cancels.lock_or_recover().insert("run-1".into(), cancel);
+            harness.chain_cancels.lock_or_recover().remove("run-1");
             let err = crate::cancel_chain_run_impl(&harness, "run-1").unwrap_err();
             assert!(err.contains("isn't running"), "{err}");
         }
@@ -4411,7 +4415,7 @@ mod tests {
         let (session, mut rx) = acp_client::stub_session(false);
         let harness = Harness::default();
         let id = session.id.clone();
-        harness.acp_sessions.lock().unwrap().insert(id.clone(), session);
+        harness.acp_sessions.lock_or_recover().insert(id.clone(), session);
         // What ensure_session parks when /go hands off to a new agent.
         harness
             .pending_prefix
@@ -4432,7 +4436,7 @@ mod tests {
         // next turn goes out bare. (A second send here would be rejected as
         // mid-turn — that is `send_acp_prompt`'s busy guard, not this path.)
         assert!(
-            harness.pending_prefix.lock().unwrap().is_empty(),
+            harness.pending_prefix.lock_or_recover().is_empty(),
             "a delivered transcript must not be re-sent on the next turn"
         );
     }

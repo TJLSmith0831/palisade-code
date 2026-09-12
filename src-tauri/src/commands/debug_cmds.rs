@@ -14,6 +14,7 @@ use tauri::{Emitter, Manager};
 use crate::dap::{self, Breakpoint, DebugSession, StoppedState, Variable, Watch};
 use crate::executor::Harness;
 use crate::{palisade_home, project_root, store, Res};
+use crate::locks::MutexExt;
 
 /// What the debug panel needs to render itself, in one shape.
 #[derive(Debug, Clone, Serialize)]
@@ -38,7 +39,7 @@ fn session(harness: &Harness) -> Res<Arc<DebugSession>> {
 }
 
 fn status_of(harness: &Harness, project_hash: &str) -> Res<DebugStatus> {
-    let live = harness.debug_session.lock().unwrap().clone();
+    let live = harness.debug_session.lock_or_recover().clone();
     Ok(DebugStatus {
         session_id: live.as_ref().map(|s| s.id.clone()),
         language: live.as_ref().map(|s| s.language.clone()),
@@ -209,7 +210,7 @@ pub async fn debug_start(
         let harness: tauri::State<'_, Harness> = app.state();
         // One session at a time. Replacing silently would leave an orphaned
         // adapter holding the debuggee, so the old one is stopped first.
-        if let Some(previous) = harness.debug_session.lock().unwrap().take() {
+        if let Some(previous) = harness.debug_session.lock_or_recover().take() {
             previous.stop();
         }
 
@@ -245,7 +246,7 @@ pub async fn debug_start(
             &adapter,
             move |event, body| {
                 if event == "initialized" {
-                    if let Some(tx) = initialized_tx.lock().unwrap().take() {
+                    if let Some(tx) = initialized_tx.lock_or_recover().take() {
                         let _ = tx.send(());
                     }
                 }
@@ -291,7 +292,7 @@ pub async fn debug_start(
             return Err(format!("launch failed: {message}"));
         }
 
-        *harness.debug_session.lock().unwrap() = Some(Arc::clone(&session));
+        *harness.debug_session.lock_or_recover() = Some(Arc::clone(&session));
         // The only "a session exists now" signal. `debug-stopped` means the
         // debuggee *paused*, so anything outside this panel that watched for
         // that missed every program that runs straight through.
@@ -311,7 +312,7 @@ pub async fn debug_start(
 pub async fn debug_stop(app: tauri::AppHandle) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live = harness.debug_session.lock().unwrap().take();
+        let live = harness.debug_session.lock_or_recover().take();
         if let Some(session) = live {
             session.stop();
         }
@@ -429,7 +430,7 @@ fn forward_event(app: &tauri::AppHandle, session_id: &str, event: &str, body: Va
     let harness: tauri::State<'_, Harness> = app.state();
     match event {
         "stopped" => {
-            let live = harness.debug_session.lock().unwrap().clone();
+            let live = harness.debug_session.lock_or_recover().clone();
             let state = match live {
                 Some(session) => session.on_stopped(&body),
                 // The stop arrived before `debug_start` finished storing the
@@ -449,7 +450,7 @@ fn forward_event(app: &tauri::AppHandle, session_id: &str, event: &str, body: Va
             let _ = app.emit("debug-stopped", state);
         }
         "continued" => {
-            if let Some(session) = harness.debug_session.lock().unwrap().clone() {
+            if let Some(session) = harness.debug_session.lock_or_recover().clone() {
                 session.on_continued();
             }
             let _ = app.emit("debug-continued", body);

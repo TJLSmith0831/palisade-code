@@ -22,6 +22,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::executor::find_on_path;
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 /// Forwarded to the frontend verbatim — `event` is whatever JSON object the
 /// driver wrote to stdout (see notebook_driver.py's docstring for the shape).
@@ -93,7 +94,7 @@ impl NotebookKernel {
         // re-identifies the child safely even after PID reuse.
         let pid_path = kernel_pid_path(notebook_id);
         crate::pidguard::reap_stale(&pid_path, &kernel_reap_token(driver_path));
-        *self.pid_path.lock().unwrap() = Some(pid_path.clone());
+        *self.pid_path.lock_or_recover() = Some(pid_path.clone());
 
         let mut cmd = Command::new(python);
         cmd.arg(driver_path);
@@ -156,10 +157,10 @@ impl NotebookKernel {
             }
         });
 
-        *self.child.lock().unwrap() = Some(child);
-        *self.stdin.lock().unwrap() = Some(stdin);
-        *self.reader_handle.lock().unwrap() = Some(reader);
-        *self.stderr_handle.lock().unwrap() = Some(stderr_reader);
+        *self.child.lock_or_recover() = Some(child);
+        *self.stdin.lock_or_recover() = Some(stdin);
+        *self.reader_handle.lock_or_recover() = Some(reader);
+        *self.stderr_handle.lock_or_recover() = Some(stderr_reader);
         self.alive.store(true, Ordering::SeqCst);
 
         match ready_rx.recv_timeout(Duration::from_secs(30)) {
@@ -179,7 +180,7 @@ impl NotebookKernel {
         if !self.is_alive() {
             return Err("notebook kernel is not running".into());
         }
-        let mut guard = self.stdin.lock().unwrap();
+        let mut guard = self.stdin.lock_or_recover();
         let stdin = guard.as_mut().ok_or("notebook driver stdin unavailable")?;
         let line = serde_json::to_string(&request).map_err(|err| err.to_string())?;
         writeln!(stdin, "{line}").map_err(|err| format!("write to notebook driver: {err}"))?;
@@ -208,7 +209,7 @@ impl NotebookKernel {
         self.stopping.store(true, Ordering::SeqCst);
         self.alive.store(false, Ordering::SeqCst);
 
-        if let Some(path) = self.pid_path.lock().unwrap().take() {
+        if let Some(path) = self.pid_path.lock_or_recover().take() {
             crate::pidguard::clear(&path);
         }
 
@@ -216,8 +217,8 @@ impl NotebookKernel {
         // before waiting on the process so its `finally` block can stop the
         // Jupyter kernel it owns; killing the driver first orphaned that
         // kernel whenever a notebook tab closed.
-        *self.stdin.lock().unwrap() = None;
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        *self.stdin.lock_or_recover() = None;
+        if let Some(mut child) = self.child.lock_or_recover().take() {
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             loop {
                 match child.try_wait() {
@@ -234,10 +235,10 @@ impl NotebookKernel {
             }
         }
 
-        if let Some(handle) = self.reader_handle.lock().unwrap().take() {
+        if let Some(handle) = self.reader_handle.lock_or_recover().take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self.stderr_handle.lock().unwrap().take() {
+        if let Some(handle) = self.stderr_handle.lock_or_recover().take() {
             let _ = handle.join();
         }
 

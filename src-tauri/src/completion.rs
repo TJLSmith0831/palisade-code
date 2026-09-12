@@ -24,6 +24,7 @@ use tauri::{Emitter, Manager};
 use sha2::{Digest, Sha256};
 
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 const FIM_PREFIX: &str = "<|fim_prefix|>";
 const FIM_SUFFIX: &str = "<|fim_suffix|>";
@@ -126,7 +127,7 @@ impl CompletionServer {
         self.terminate();
 
         let port = find_free_port()?;
-        *self.port.lock().unwrap() = port;
+        *self.port.lock_or_recover() = port;
 
         // The previous run's Drop may never have executed — a `tauri dev`
         // hard restart, a crash, a force quit. An audit found one of these
@@ -184,8 +185,8 @@ impl CompletionServer {
             }
         });
 
-        *self.child.lock().unwrap() = Some(child);
-        *self.reader_handle.lock().unwrap() = Some(reader);
+        *self.child.lock_or_recover() = Some(child);
+        *self.reader_handle.lock_or_recover() = Some(reader);
 
         wait_for_health(port, Duration::from_secs(45))
             .map_err(|err| {
@@ -197,7 +198,7 @@ impl CompletionServer {
     }
 
     pub fn is_alive(&self) -> bool {
-        let mut child = self.child.lock().unwrap();
+        let mut child = self.child.lock_or_recover();
         match child.as_mut() {
             None => false,
             Some(c) => match c.try_wait() {
@@ -208,7 +209,7 @@ impl CompletionServer {
     }
 
     pub fn port(&self) -> u16 {
-        *self.port.lock().unwrap()
+        *self.port.lock_or_recover()
     }
 
     /// Calls `GET /health` and returns once the endpoint responds 200 OK.
@@ -219,12 +220,12 @@ impl CompletionServer {
     pub fn terminate(&self) {
         self.stopping.store(true, Ordering::SeqCst);
 
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        if let Some(mut child) = self.child.lock_or_recover().take() {
             let _ = child.kill();
             let _ = child.wait();
         }
 
-        if let Some(handle) = self.reader_handle.lock().unwrap().take() {
+        if let Some(handle) = self.reader_handle.lock_or_recover().take() {
             let _ = handle.join();
         }
 
@@ -947,7 +948,7 @@ fn find_free_port() -> Res<u16> {
     const START: u16 = 18080;
     const END: u16 = 18180;
 
-    let mut claimed = CLAIMED_PORTS.lock().unwrap();
+    let mut claimed = CLAIMED_PORTS.lock_or_recover();
     for port in START..=END {
         if claimed.contains(&port) {
             continue;

@@ -356,6 +356,7 @@ mod vault {
 /// backends are exercised by running the app.
 #[cfg(test)]
 pub mod vault {
+    use crate::locks::MutexExt;
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
@@ -370,15 +371,15 @@ pub mod vault {
 
     /// Simulates a locked, refused, or absent credential store for one project.
     pub fn set_unavailable(hash: &str) {
-        store().lock().unwrap().0.insert(hash.to_string());
+        store().lock_or_recover().0.insert(hash.to_string());
     }
 
     pub fn set_available(hash: &str) {
-        store().lock().unwrap().0.remove(hash);
+        store().lock_or_recover().0.remove(hash);
     }
 
     pub fn has(hash: &str, id: &str) -> bool {
-        store().lock().unwrap().1.contains_key(&format!("{hash}:{id}"))
+        store().lock_or_recover().1.contains_key(&format!("{hash}:{id}"))
     }
 
     fn down(g: &(HashSet<String>, HashMap<String, String>), hash: &str) -> bool {
@@ -386,7 +387,7 @@ pub mod vault {
     }
 
     pub fn set(hash: &str, id: &str, url: &str) -> Result<(), String> {
-        let mut g = store().lock().unwrap();
+        let mut g = store().lock_or_recover();
         if down(&g, hash) {
             return Err("credential store unavailable".into());
         }
@@ -395,7 +396,7 @@ pub mod vault {
     }
 
     pub fn get(hash: &str, id: &str) -> Result<Option<String>, String> {
-        let g = store().lock().unwrap();
+        let g = store().lock_or_recover();
         if down(&g, hash) {
             return Err("credential store unavailable".into());
         }
@@ -403,7 +404,7 @@ pub mod vault {
     }
 
     pub fn delete(hash: &str, id: &str) -> Result<(), String> {
-        let mut g = store().lock().unwrap();
+        let mut g = store().lock_or_recover();
         if down(&g, hash) {
             return Err("credential store unavailable".into());
         }

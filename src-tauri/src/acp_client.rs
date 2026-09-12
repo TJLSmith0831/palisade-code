@@ -22,6 +22,7 @@ use serde::Serialize;
 
 use crate::executor::{Envelope, ExecutorEvent, Sink};
 use crate::permissions::{self, PermissionDecision, PermissionMode};
+use crate::locks::MutexExt;
 
 /// How long session startup (spawn + initialize + session/new) may take
 /// before Palisade gives up. Cold npx installs can't happen — availability
@@ -199,13 +200,13 @@ fn agent_logins() -> &'static Mutex<HashMap<String, Vec<AgentLogin>>> {
 }
 
 pub(crate) fn record_logins(agent_id: &str, logins: Vec<AgentLogin>) {
-    agent_logins().lock().unwrap().insert(agent_id.to_string(), logins);
+    agent_logins().lock_or_recover().insert(agent_id.to_string(), logins);
 }
 
 /// What the user can be offered to sign this agent in, or empty when the agent
 /// advertised no client-runnable login (or has not been reached yet).
 pub fn logins_for(agent_id: &str) -> Vec<AgentLogin> {
-    agent_logins().lock().unwrap().get(agent_id).cloned().unwrap_or_default()
+    agent_logins().lock_or_recover().get(agent_id).cloned().unwrap_or_default()
 }
 
 /// An advertised method's display name, falling back to its id.
@@ -444,14 +445,14 @@ impl AcpSession {
     /// prompt — reuses `pending_permissions` rather than tracking a
     /// separate flag (attention-routing D1).
     pub fn needs_attention(&self) -> bool {
-        !self.pending_permissions.lock().unwrap().is_empty()
+        !self.pending_permissions.lock_or_recover().is_empty()
     }
 
     /// Resolve a pending permission request from outside the bridge thread
     /// (the `answer_permission_prompt` Tauri command). A missing id is a
     /// no-op success — already resolved, or the session is gone.
     pub fn answer_permission_prompt(&self, request_id: &str, answer: PermissionAnswer) {
-        if let Some(tx) = self.pending_permissions.lock().unwrap().remove(request_id) {
+        if let Some(tx) = self.pending_permissions.lock_or_recover().remove(request_id) {
             let _ = tx.send(answer);
         }
     }
@@ -467,10 +468,10 @@ impl AcpSession {
         }
         self.cmd_tx = None;
         self.busy.store(false, Ordering::SeqCst);
-        for (_, tx) in self.pending_permissions.lock().unwrap().drain() {
+        for (_, tx) in self.pending_permissions.lock_or_recover().drain() {
             let _ = tx.send(PermissionAnswer::Deny);
         }
-        active_commands_registry().lock().unwrap().remove(&self.id);
+        active_commands_registry().lock_or_recover().remove(&self.id);
     }
 }
 
@@ -855,7 +856,7 @@ async fn answer_permission(
     let conflict = if kind == permissions::ToolKind::Execute {
         command.as_deref().and_then(|cmd| {
             let warning = {
-                let mut active = active_commands.lock().unwrap();
+                let mut active = active_commands.lock_or_recover();
                 active.insert(
                     session_id.to_string(),
                     ActiveCommand { project_hash: project_hash.to_string(), command: cmd.to_string() },
@@ -868,7 +869,7 @@ async fn answer_permission(
         None
     };
 
-    let decision = if session_allowed.lock().unwrap().contains(&kind) {
+    let decision = if session_allowed.lock_or_recover().contains(&kind) {
         PermissionDecision::Allow
     } else {
         let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
@@ -889,7 +890,7 @@ async fn answer_permission(
         PermissionDecision::Prompt => {
             let request_id = ulid::Ulid::new().to_string();
             let (tx, rx) = oneshot::channel();
-            pending.lock().unwrap().insert(request_id.clone(), tx);
+            pending.lock_or_recover().insert(request_id.clone(), tx);
             emit(
                 sink,
                 session_id,
@@ -910,7 +911,7 @@ async fn answer_permission(
     };
 
     if answer == PermissionAnswer::AllowSession {
-        session_allowed.lock().unwrap().insert(kind);
+        session_allowed.lock_or_recover().insert(kind);
     }
 
     match answer {
@@ -1135,9 +1136,9 @@ async fn run_bridge(
                             ));
                             // Clear the turn's buffers so the prompt response
                             // doesn't flush partial text as a "completed" turn.
-                            notif_text.lock().unwrap().clear();
-                            notif_think.lock().unwrap().clear();
-                            *notif_think_started.lock().unwrap() = None;
+                            notif_text.lock_or_recover().clear();
+                            notif_think.lock_or_recover().clear();
+                            *notif_think_started.lock_or_recover() = None;
                             emit(
                                 &notif_sink,
                                 &notif_session,
@@ -1156,7 +1157,7 @@ async fn run_bridge(
                 for event in crate::acp_events::file_edits(&notification.update) {
                     if let ExecutorEvent::FileEdit { id, path, after, .. } = &event {
                         let key = format!("{id}\0{path}\0{after}");
-                        if !notif_edits.lock().unwrap().insert(key) {
+                        if !notif_edits.lock_or_recover().insert(key) {
                             continue;
                         }
                     }
@@ -1167,12 +1168,12 @@ async fn run_bridge(
                 {
                     match &mut update {
                         crate::acp_events::AcpUpdate::TextDelta { text } => {
-                            notif_text.lock().unwrap().push_str(text)
+                            notif_text.lock_or_recover().push_str(text)
                         }
                         crate::acp_events::AcpUpdate::ReasoningDelta { text } => {
-                            let mut buf = notif_think.lock().unwrap();
+                            let mut buf = notif_think.lock_or_recover();
                             if buf.is_empty() {
-                                *notif_think_started.lock().unwrap() = Some(std::time::Instant::now());
+                                *notif_think_started.lock_or_recover() = Some(std::time::Instant::now());
                             }
                             buf.push_str(text);
                         }
@@ -1182,7 +1183,7 @@ async fn run_bridge(
                         // double-print (`dedup_tool_output`).
                         crate::acp_events::AcpUpdate::ToolOutputDelta { id, chunk } => {
                             *chunk = dedup_tool_output(
-                                &mut notif_tool_output.lock().unwrap(),
+                                &mut notif_tool_output.lock_or_recover(),
                                 id,
                                 chunk,
                             );
@@ -1194,7 +1195,7 @@ async fn run_bridge(
                             id, output, ..
                         } => {
                             *output = complete_tool_output(
-                                &mut notif_tool_output.lock().unwrap(),
+                                &mut notif_tool_output.lock_or_recover(),
                                 id,
                                 output,
                             );
@@ -1390,12 +1391,12 @@ async fn run_bridge(
                                     }
                                     // Flush the turn's accumulated chunks as the
                                     // complete events persist() records.
-                                    let full = std::mem::take(&mut *done_text.lock().unwrap());
+                                    let full = std::mem::take(&mut *done_text.lock_or_recover());
                                     if !full.trim().is_empty() {
                                         emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Text { text: full });
                                     }
-                                    let thought = std::mem::take(&mut *done_think.lock().unwrap());
-                                    let started = done_think_started.lock().unwrap().take();
+                                    let thought = std::mem::take(&mut *done_think.lock_or_recover());
+                                    let started = done_think_started.lock_or_recover().take();
                                     if !thought.trim().is_empty() {
                                         let elapsed_secs = started
                                             .map(|s| s.elapsed().as_secs())
@@ -1827,6 +1828,7 @@ pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::Unboun
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
 
     // ------------------------------------------------------- one-shot
@@ -2200,7 +2202,7 @@ mod tests {
         };
         assert!(warning.expect("conflict warning should be attached").contains("3000"));
 
-        let tx = second.pending.lock().unwrap().remove(&id).expect("pending entry should be registered");
+        let tx = second.pending.lock_or_recover().remove(&id).expect("pending entry should be registered");
         tx.send(PermissionAnswer::Allow).unwrap();
         fut.await;
     }
@@ -2248,7 +2250,7 @@ mod tests {
         assert_eq!(tool_kind, "execute");
         assert_eq!(command.as_deref(), Some("cargo build"));
 
-        let tx = rig.pending.lock().unwrap().remove(&id).expect("pending entry should be registered");
+        let tx = rig.pending.lock_or_recover().remove(&id).expect("pending entry should be registered");
         tx.send(PermissionAnswer::Allow).unwrap();
         let res = fut.await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
@@ -2266,7 +2268,7 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_millis(20), &mut fut).await;
             let event = rig.events.recv_timeout(Duration::from_millis(50)).unwrap();
             let ExecutorEvent::PermissionRequest { id, .. } = event.event else { panic!("expected PermissionRequest") };
-            let tx = rig.pending.lock().unwrap().remove(&id).unwrap();
+            let tx = rig.pending.lock_or_recover().remove(&id).unwrap();
             tx.send(answer).unwrap();
             let res = fut.await;
             assert_eq!(selected_option(res).is_some(), expect_allow);
@@ -2284,7 +2286,7 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_millis(20), &mut fut).await;
         let event = rig.events.recv_timeout(Duration::from_millis(50)).unwrap();
         let ExecutorEvent::PermissionRequest { id, .. } = event.event else { panic!("expected PermissionRequest") };
-        let tx = rig.pending.lock().unwrap().remove(&id).unwrap();
+        let tx = rig.pending.lock_or_recover().remove(&id).unwrap();
         tx.send(PermissionAnswer::AllowSession).unwrap();
         let res = fut.await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
@@ -2295,7 +2297,7 @@ mod tests {
         let res2 = rig.answer(&second, PermissionMode::Go).await;
         assert_eq!(selected_option(res2).as_deref(), Some("allow"));
         assert!(rig.events.try_recv().is_err(), "no second PermissionRequest should have been emitted");
-        assert!(rig.pending.lock().unwrap().is_empty());
+        assert!(rig.pending.lock_or_recover().is_empty());
     }
 
     /// RED→GREEN 3.1: draining a session's pending permissions on teardown
@@ -2304,12 +2306,12 @@ mod tests {
     async fn terminate_drains_pending_permissions_as_denied() {
         let (mut session, _cmd_rx) = stub_session(false);
         let (tx, rx) = oneshot::channel();
-        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        session.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
 
         session.terminate();
 
         assert_eq!(rx.await, Ok(PermissionAnswer::Deny));
-        assert!(session.pending_permissions.lock().unwrap().is_empty());
+        assert!(session.pending_permissions.lock_or_recover().is_empty());
     }
 
     /// RED→GREEN: `answer_permission_prompt` resolves a registered pending
@@ -2318,7 +2320,7 @@ mod tests {
     async fn answer_permission_prompt_resolves_or_no_ops() {
         let (session, _cmd_rx) = stub_session(false);
         let (tx, mut rx) = oneshot::channel();
-        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        session.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
 
         session.answer_permission_prompt("does-not-exist", PermissionAnswer::Allow);
         assert!(rx.try_recv().is_err(), "unknown id must not resolve the real pending entry");
@@ -2338,7 +2340,7 @@ mod tests {
         assert!(!session.needs_attention());
 
         let (tx, _rx) = oneshot::channel();
-        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        session.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
         assert!(session.needs_attention());
 
         session.answer_permission_prompt("req-1", PermissionAnswer::Allow);
@@ -2903,7 +2905,7 @@ mod tests {
             .expect("an already-authorized session should start");
 
         assert!(
-            fake.authenticate_requests.lock().unwrap().is_empty(),
+            fake.authenticate_requests.lock_or_recover().is_empty(),
             "opening a thread must not select or invoke an advertised login method"
         );
     }
@@ -3080,7 +3082,7 @@ mod tests {
 
         assert_eq!(models.current.as_deref(), Some("model-b"));
         assert_eq!(
-            *fake.set_config_requests.lock().unwrap(),
+            *fake.set_config_requests.lock_or_recover(),
             vec![("model".to_string(), "model-b".to_string())]
         );
     }

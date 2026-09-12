@@ -5,6 +5,7 @@ use tauri::{Emitter, Manager};
 use crate::executor::Harness;
 use crate::notebook::{self, KernelResolution, NotebookKernel};
 use crate::Res;
+use crate::locks::MutexExt;
 
 /// Emitted (non-fatally) when the notebook's own recorded kernel isn't
 /// installed and Palisade falls back to the default kernel (design.md D4).
@@ -96,7 +97,7 @@ pub async fn close_notebook_kernel(app: tauri::AppHandle, project_hash: String, 
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let id = notebook::notebook_id(&project_hash, &relative_path);
-        if let Some(kernel) = harness.notebook_kernels.lock().unwrap().remove(&id) {
+        if let Some(kernel) = harness.notebook_kernels.lock_or_recover().remove(&id) {
             kernel.terminate();
         }
         Ok(())
