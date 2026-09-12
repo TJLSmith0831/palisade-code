@@ -484,6 +484,32 @@ describe("EventList crash banner", () => {
     expect(onRetry).toHaveBeenCalledWith(42);
   });
 
+  // Regression for PR #47: the transient-provider banner used
+  // color="brand", which main.tsx's theme never registers — Mantine's
+  // palette lookup for an unknown name resolves to nothing, so the banner
+  // silently lost its intended tint. Asserting the actual CSS variable
+  // Mantine wires up (var(--mantine-color-blue-light), the slot main.tsx
+  // repoints at --accent) is what would have caught that; a snapshot of
+  // classNames would not, since Mantine's hashed classNames don't encode
+  // the colour name themselves — only the inline `--alert-bg` style does.
+  it("tints the transient-provider banner with the app's accent, not an unregistered colour", () => {
+    renderWithMantine(
+      <EventList
+        items={[
+          {
+            kind: "plain", role: "system", mode: "spec",
+            text: "Provider unavailable.",
+            failureClass: "transientProvider",
+          },
+        ]}
+        executor={null}
+      />
+    );
+    const style = screen.getByTestId("crash-banner").getAttribute("style") ?? "";
+    expect(style).toContain("var(--mantine-color-blue-light)");
+    expect(style).not.toContain("brand");
+  });
+
   it("omits Retry when no onRetry handler is wired up (read-only render paths)", () => {
     renderWithMantine(<EventList items={items} executor={null} />);
     expect(screen.getByTestId("crash-banner-auth-summary")).toBeDefined();

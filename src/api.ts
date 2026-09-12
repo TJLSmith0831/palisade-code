@@ -287,9 +287,12 @@ export const sendMessage = (
     model: null,
     bypass,
   });
-/** Retry an already-persisted user turn without adding a duplicate row. */
-export const retryMessage = (projectHash: string, threadId: string, messageSeq: number) =>
-  invoke<void>("retry_message", { projectHash, threadId, messageSeq });
+/** Retry an already-persisted user turn without adding a duplicate row.
+ *  `bypass` must come from the thread's current permission-mode preference,
+ *  the same source `sendMessage` reads — otherwise a retry that has to start
+ *  a fresh session silently drops back to Accept mode. */
+export const retryMessage = (projectHash: string, threadId: string, messageSeq: number, bypass: boolean) =>
+  invoke<void>("retry_message", { projectHash, threadId, messageSeq, bypass });
 export const goMode = (
   projectHash: string,
   threadId: string,

@@ -606,8 +606,7 @@ impl Sink for AppSink {
             .app
             .state::<Harness>()
             .chain.turn_watchers
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .get(session_id)
             .cloned()
         {
@@ -652,8 +651,7 @@ impl Sink for AppSink {
             .app
             .state::<Harness>()
             .agent.acp_sessions
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .get(&envelope_ref.session_id)
             .map(|s| s.mode.clone())
             .unwrap_or_else(|| "spec".to_string());
@@ -686,8 +684,7 @@ impl Sink for AppSink {
             .app
             .state::<Harness>()
             .chain.turn_watchers
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .get(&envelope_ref.session_id)
             .cloned()
         {
@@ -1285,7 +1282,7 @@ async fn send_message(
             return Ok(message);
             }
         };
-        let id = match ensure_session(
+        match ensure_session_or_queue_auth(
             &app,
             &harness,
             &project_hash,
@@ -1293,55 +1290,99 @@ async fn send_message(
             &mode,
             model,
             bypass,
-        ) {
-            Ok(id) => id,
-            Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
-                harness.queue_pending_auth_turn(
-                    &agent.id,
-                    executor::PendingAuthTurn {
-                        project_hash: project_hash.clone(),
-                        thread_id: thread_id.clone(),
-                        content: content.clone(),
-                        mode: mode.clone(),
-                        bypass,
-                    },
-                );
-                // A system row keeps the recovery action durable and gives
-                // EventView its existing sign-in controls once login methods
-                // have been learned during initialize.
-                let _ = store::append_message(
-                    &palisade_home(),
-                    &project_hash,
-                    &thread_id,
-                    "system",
-                    &mode,
-                    &format!(
-                        "Palisade is waiting for you to sign in. It will resume this message automatically once.\n\n{error}"
-                    ),
-                    None,
-                );
-                let _ = app.emit("agent-auth-required", &thread_id);
-                let _ = app.emit("thread-updated", &thread_id);
-                return Ok(message);
+            &agent.id,
+            &content,
+        )? {
+            SessionOrQueued::Queued => Ok(message),
+            SessionOrQueued::Session(id) => {
+                send_to(&harness, &project_hash, &id, &content)?;
+                Ok(message)
             }
-            Err(error) => return Err(error),
-        };
-        send_to(&harness, &project_hash, &id, &content)?;
-        Ok(message)
+        }
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// Either a live session, or confirmation that this turn was queued to
+/// replay automatically once the blocking agent signs in.
+enum SessionOrQueued {
+    Session(String),
+    Queued,
+}
+
+/// `ensure_session`, but a structured `AuthRequired` failure is recovered
+/// instead of propagated: the turn is parked on the agent (`#43`, delivered
+/// in order once `agent_authenticate` runs), a durable system row explains
+/// why nothing happened yet, and the frontend's existing sign-in affordance
+/// is woken via the same two events `send_message` always emitted for this.
+///
+/// Shared by `send_message` and `retry_message` so this recovery path — and
+/// the `bypass`/`model` carried into the session it eventually starts —
+/// cannot drift between a first send and a retry of the same turn.
+#[allow(clippy::too_many_arguments)]
+fn ensure_session_or_queue_auth(
+    app: &tauri::AppHandle,
+    harness: &tauri::State<'_, Harness>,
+    project_hash: &str,
+    thread_id: &str,
+    mode: &str,
+    model: Option<String>,
+    bypass: bool,
+    agent_id: &str,
+    content: &str,
+) -> Res<SessionOrQueued> {
+    match ensure_session(app, harness, project_hash, thread_id, mode, model, bypass) {
+        Ok(id) => Ok(SessionOrQueued::Session(id)),
+        Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
+            harness.queue_pending_auth_turn(
+                agent_id,
+                executor::PendingAuthTurn {
+                    project_hash: project_hash.to_string(),
+                    thread_id: thread_id.to_string(),
+                    content: content.to_string(),
+                    mode: mode.to_string(),
+                    bypass,
+                },
+            );
+            // A system row keeps the recovery action durable and gives
+            // EventView its existing sign-in controls once login methods
+            // have been learned during initialize.
+            let _ = store::append_message(
+                &palisade_home(),
+                project_hash,
+                thread_id,
+                "system",
+                mode,
+                &format!(
+                    "Palisade is waiting for you to sign in. It will resume this message automatically once.\n\n{error}"
+                ),
+                None,
+            );
+            let _ = app.emit("agent-auth-required", &thread_id);
+            let _ = app.emit("thread-updated", &thread_id);
+            Ok(SessionOrQueued::Queued)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Re-send a durable user turn after a failed prompt without appending a
 /// second copy. Prompt requests are intentionally never retried by the ACP
 /// bridge: a Go turn may have partially executed before its transport failed.
+///
+/// Mirrors `send_message`'s session setup exactly — `bypass` comes from the
+/// same per-thread preference the original send used, and a structured
+/// `AuthRequired` failure is recovered the same way (queued, explained,
+/// replayed automatically) rather than surfacing as a bare retry error with
+/// no path back.
 #[tauri::command]
 async fn retry_message(
     app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
     message_seq: u64,
+    bypass: bool,
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let home = palisade_home();
@@ -1350,8 +1391,21 @@ async fn retry_message(
             .find(|message| message.seq == message_seq && message.role == "user")
             .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
         let harness: tauri::State<'_, Harness> = app.state();
-        let id = ensure_session(&app, &harness, &project_hash, &thread_id, &message.mode, None, false)?;
-        send_to(&harness, &project_hash, &id, &message.content)
+        let (agent, _) = selected_executor(&app, &harness, &project_hash, Some(&thread_id))?;
+        match ensure_session_or_queue_auth(
+            &app,
+            &harness,
+            &project_hash,
+            &thread_id,
+            &message.mode,
+            None,
+            bypass,
+            &agent.id,
+            &message.content,
+        )? {
+            SessionOrQueued::Queued => Ok(()),
+            SessionOrQueued::Session(id) => send_to(&harness, &project_hash, &id, &message.content),
+        }
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -4554,5 +4608,51 @@ mod tests {
         assert!(result.is_some());
         let stripped = result.unwrap();
         assert_eq!(stripped, "Exploration complete.");
+    }
+
+    /// Regression for PR #47 review finding: `AppSink`'s `emit`/`emit_usage`
+    /// still locked `chain.turn_watchers` and `agent.acp_sessions` with
+    /// `.lock().unwrap()` after the rest of the file moved to
+    /// `lock_or_recover()` — a panic anywhere else while holding either
+    /// mutex would poison it and then crash *every* future turn's `emit`,
+    /// which is the one path no turn can run without.
+    ///
+    /// `AppSink::emit` itself needs a live `tauri::AppHandle` to exercise
+    /// directly, which nothing in this test module constructs (there is no
+    /// mock-app precedent in this crate's tests). Scanning the impl body is
+    /// what's practical here, matching the frontend's own source-invariant
+    /// tests (`designTokens.test.ts`) for the same kind of "this pattern
+    /// must never reappear" check.
+    #[test]
+    fn app_sink_never_locks_with_the_poison_panicking_pattern() {
+        let src = include_str!("lib.rs");
+        let start = src.find("impl Sink for AppSink").expect("AppSink's Sink impl moved or was renamed");
+        // Brace-matched rather than delimited by the next `impl`: this file
+        // has no other top-level `impl` after AppSink's, so that heuristic
+        // silently scanned to end-of-file (including this test's own source,
+        // which mentions the pattern it forbids) instead of just the block.
+        let open = src[start..].find('{').map(|i| start + i).expect("AppSink's Sink impl has no body");
+        let mut depth = 0usize;
+        let mut end = open;
+        for (i, ch) in src[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[start..end];
+
+        let unwrap_lock = regex::Regex::new(r"\.lock\(\)\s*\.unwrap\(\)").unwrap();
+        assert!(
+            !unwrap_lock.is_match(body),
+            "AppSink must use lock_or_recover(), not lock().unwrap() — a poisoned lock here would crash every future turn's emit()"
+        );
     }
 }

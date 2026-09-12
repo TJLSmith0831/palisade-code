@@ -607,10 +607,13 @@ export const EventList = memo(function EventList({
                   }
                 }
               }
+              // "blue" reaches the app's accent (main.tsx repoints Mantine's
+              // blue slot at --accent); there is no "brand" entry in the
+              // theme's colors registry, so that name rendered untinted.
               return (
                 <Alert
                   key={index}
-                  color={transient ? "brand" : "danger"}
+                  color={transient ? "blue" : "danger"}
                   variant="light"
                   data-testid="crash-banner"
                   className={authIssue ? "ds-crash-banner-auth" : undefined}

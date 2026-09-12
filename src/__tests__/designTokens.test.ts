@@ -371,6 +371,26 @@ describe("status colour goes through the theme, not Mantine's stock ramps", () =
       expect(main).toMatch(new RegExp(`${name}: statusTuple\\("--[a-z]+"\\)`));
     }
   });
+
+  // Regression for PR #47: EventView's transient-provider crash banner used
+  // color="brand", a name Mantine's palette lookup silently drops (unlike a
+  // stock name, this doesn't even paint a wrong colour — it renders
+  // untinted) because no "brand" entry exists in the colors registry above,
+  // nor in the blue-onto-accent remap the "blue is deliberately exempt" rule
+  // relies on.
+  it('never uses "brand" — no such colour is registered or remapped', () => {
+    const offenders: string[] = [];
+    const BRAND_COLOR = /(\bcolor\s*=\s*\{?"|\bc\s*=\s*\{?"|\?\s*"|:\s*")brand"/;
+    for (const file of readdirSync(resolve(root, "src"))) {
+      if (!/\.tsx$/.test(file)) continue;
+      readFileSync(resolve(root, "src", file), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (BRAND_COLOR.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("every custom interactive row can be seen to have focus", () => {

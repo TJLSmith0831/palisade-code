@@ -426,7 +426,6 @@ export function useAppCommands({
         run: () => window.dispatchEvent(new Event("palisade-feedback-action")),
       },
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       project,
       shell.centerShell,
@@ -441,10 +440,14 @@ export function useAppCommands({
       openTextSearch,
       shell.rightPanel.toggleCollapsed,
       shell.toggleChat,
+      // toggleSidePane's other branch: dropping this let a stale
+      // pre-switch closure answer "toggle side pane" in the editor shell.
+      shell.toggleEditor,
       shell.selectPanel,
       shell.activePanel,
       shell.toggleTerminal,
       shell.setCenterShell,
+      shell.setDiffOpen,
       shell.theme,
       shell.setTheme,
       newFileAtRoot,
@@ -463,6 +466,17 @@ export function useAppCommands({
       runCommand,
       liveSessionId,
       onStop,
+      onAddProject,
+      onOpenSettings,
+      selectedFile,
+      setCommandPaletteOpen,
+      setSettingsOpen,
+      // Ref containers are stable identities across renders — listing them
+      // costs nothing and documents that the `run`/`enabled` closures above
+      // reading `.current` are covered, not silently exempted.
+      activePathRef,
+      closeTabRef,
+      tabsRef,
     ]
   );
 }

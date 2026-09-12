@@ -1364,7 +1364,8 @@ export const ChatSurface = memo(
               onPermissionAnswered={onPermissionAnswered}
               onRetry={(message) => {
                 if (typeof message === "number" && project && thread) {
-                  void api.retryMessage(project.hash, thread.id, message).catch((err) => onError?.(describeError(err)));
+                  const prefs = resolvePrefs(project.hash, thread.id);
+                  void api.retryMessage(project.hash, thread.id, message, prefs.bypass).catch((err) => onError?.(describeError(err)));
                 } else if (typeof message === "string") {
                   // Legacy records lacked sequence ids. Preserve their old
                   // text retry behaviour; newly persisted failures use the

@@ -964,6 +964,7 @@ pub fn write_breakpoints(home: &Path, hash: &str, breakpoints: &BreakpointsByFil
 // --------------------------------------------------------- session storage
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Message {
     pub seq: u64,
     pub ts: String,
@@ -974,11 +975,14 @@ pub struct Message {
     pub content: String,
     /// Which session produced this message. Defaulted so rows written before
     /// sessions had identities still parse; `None` means "written by a build
-    /// that had no session id to record", never "no session".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// that had no session id to record", never "no session". The `alias`
+    /// keeps reading history written before this struct moved to
+    /// camelCase-on-the-wire — those lines are still on disk as `session_id`.
+    #[serde(default, alias = "session_id", skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// ACP failure classification, if the producing build had structured data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Same pre-camelCase alias as `session_id`, for the same reason.
+    #[serde(default, alias = "failure_class", skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<crate::acp_client::FailureClass>,
 }
 
@@ -1903,6 +1907,52 @@ mod tests {
         // The field is omitted rather than written as null, so old builds and
         // legacy rows stay byte-identical in shape.
         assert!(!serde_json::to_string(&message).unwrap().contains("sessionId"));
+    }
+
+    /// Regression for PR #47 review finding: `Message` serialized as
+    /// `session_id`/`failure_class` (snake_case) while `api.ts` on the
+    /// frontend only reads `sessionId`/`failureClass`, so both fields were
+    /// silently `undefined` for every message the IPC layer sent over —
+    /// the transient-provider crash banner in particular never appeared.
+    #[test]
+    fn message_serializes_ids_as_camel_case_for_the_frontend() {
+        let message = Message {
+            seq: 1,
+            ts: now(),
+            role: "assistant".into(),
+            mode: "go".into(),
+            content: "hi".into(),
+            session_id: Some("sess-1".into()),
+            failure_class: Some(crate::acp_client::FailureClass::TransientProvider),
+        };
+        let json: serde_json::Value = serde_json::to_value(&message).unwrap();
+        assert_eq!(json.get("sessionId").and_then(|v| v.as_str()), Some("sess-1"));
+        assert_eq!(
+            json.get("failureClass").and_then(|v| v.as_str()),
+            Some("transientProvider")
+        );
+        assert!(json.get("session_id").is_none(), "must not double-write the old key");
+        assert!(json.get("failure_class").is_none(), "must not double-write the old key");
+    }
+
+    /// Regression for PR #47: on-disk history written before the camelCase
+    /// migration still uses `session_id`/`failure_class`. Those lines must
+    /// keep loading, not silently drop the session/failure data.
+    #[test]
+    fn message_still_reads_pre_camel_case_history() {
+        let legacy = r#"{"seq":0,"ts":"2026-08-03T00:00:00+00:00","role":"assistant","mode":"go","content":"hi","session_id":"sess-old","failure_class":"authRequired"}"#;
+        let message: Message = serde_json::from_str(legacy).unwrap();
+        assert_eq!(message.session_id.as_deref(), Some("sess-old"));
+        assert_eq!(message.failure_class, Some(crate::acp_client::FailureClass::AuthRequired));
+    }
+
+    /// And newly-written camelCase lines must round-trip too.
+    #[test]
+    fn message_reads_camel_case_history() {
+        let current = r#"{"seq":0,"ts":"2026-08-03T00:00:00+00:00","role":"assistant","mode":"go","content":"hi","sessionId":"sess-new","failureClass":"other"}"#;
+        let message: Message = serde_json::from_str(current).unwrap();
+        assert_eq!(message.session_id.as_deref(), Some("sess-new"));
+        assert_eq!(message.failure_class, Some(crate::acp_client::FailureClass::Other));
     }
 
     fn append_message_fixture(session: &str) -> Message {

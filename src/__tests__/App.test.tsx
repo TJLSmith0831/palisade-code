@@ -5260,6 +5260,63 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     );
   });
 
+  // Regression for PR #47 review finding: retry_message used to hardcode
+  // bypass=false, so retrying a turn after the executor had to restart a
+  // session silently dropped back to Accept mode regardless of what the
+  // thread's own permission toggle said.
+  it("passes the thread's current bypass preference to retry_message", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    const priorUserMessage = {
+      seq: 1,
+      ts: "2026-08-06T00:00:00Z",
+      role: "user" as const,
+      mode: "spec" as const,
+      content: "hello",
+    };
+    const crashMessage = {
+      seq: 2,
+      ts: "2026-08-06T00:00:01Z",
+      role: "system" as const,
+      mode: "spec" as const,
+      content: "The provider is temporarily unavailable.",
+      failureClass: "transientProvider" as const,
+    };
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "read_thread")
+        return Promise.resolve([priorUserMessage, crashMessage]);
+      if (cmd === "retry_message") return Promise.resolve();
+      return baseImpl?.(cmd, args) ?? Promise.resolve([]);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+
+    // Enable bypass via the icon button + confirmation popover, same as the
+    // sendMessage test above.
+    fireEvent.click(await screen.findByTestId("permission-mode-btn"));
+    fireEvent.click(await screen.findByTestId("permission-mode-confirm-bypass"));
+    await waitFor(() =>
+      expect(screen.getByTestId("permission-mode-btn")).toHaveAttribute(
+        "aria-label",
+        "Bypass permissions"
+      )
+    );
+
+    fireEvent.click(await screen.findByTestId("crash-banner-retry"));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("retry_message", {
+        projectHash: "proj-1",
+        threadId: "t1",
+        messageSeq: 1,
+        bypass: true,
+      })
+    );
+  });
+
   it("renders the user's own message immediately, before the backend round-trip resolves", async () => {
     // `send_message` also spawns/waits on the executor session before it
     // resolves — a cold agent spawn can take seconds. The bubble used to
