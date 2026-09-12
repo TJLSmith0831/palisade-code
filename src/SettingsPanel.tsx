@@ -7,6 +7,7 @@ import {
   persistCompletionEnabled,
   COMPLETION_SETTINGS_CHANGED_EVENT,
 } from "./completion/GhostTextPlugin";
+import { describeError } from "./errors";
 
 export {
   COMPLETION_ENABLED_KEY,
@@ -494,7 +495,7 @@ export default function SettingsPanel({
         applyAppearance(mergeAppearance(globalAppearance, next));
       }
     } catch (error) {
-      setSaveError(`Could not save appearance. ${error instanceof Error ? error.message : String(error)}. Try again.`);
+      setSaveError(`${describeError(error, { action: "save that appearance" })}. Try again.`);
     } finally {
       saveInFlight.current = false;
       setSaving(false);

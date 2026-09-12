@@ -500,7 +500,14 @@ it("reports a failed project save and restores the persisted appearance", async 
   render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
   await waitFor(() => expect(invokeMock).toHaveBeenCalled());
   fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
-  expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
+  // Asserts the meaning, not the phrasing: the save is named as what failed,
+  // the underlying detail is still shown, and the retry is still offered.
+  // The lead-in itself now comes from describeError, which is what makes the
+  // whole app say this one way.
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(/save that appearance/i);
+  expect(alert).toHaveTextContent(/disk full/);
+  expect(alert).toHaveTextContent(/try again/i);
   expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe("");
 });
 
