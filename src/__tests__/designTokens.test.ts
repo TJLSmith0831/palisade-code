@@ -238,3 +238,86 @@ describe("type and radius stay on the declared scales", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the mode cards do not fight their own pointer handler", () => {
+  // App.tsx's mousemove handler writes card.style.transform every frame —
+  // perspective + tilt + the same translateY(-2px) — so the CSS :hover
+  // transform never survived to paint. The 3D tilt and glow are deliberate
+  // and stay; only the dead CSS rule is scoped away, to :focus-visible,
+  // where no pointer handler runs and the lift is the whole effect.
+
+  it("leaves transform to the pointer handler on hover", () => {
+    const shared = css.match(
+      /\.ds-mode-card:hover,\n\.ds-mode-card:focus-visible \{([^}]*)\}/
+    );
+    expect(shared, "the shared hover/focus rule is gone").not.toBeNull();
+    expect(shared![1]).not.toContain("transform:");
+  });
+
+  it("still lifts the card for keyboard focus", () => {
+    expect(css).toMatch(
+      /\n\.ds-mode-card:focus-visible \{\n {2}transform: translateY\(-2px\);\n\}/
+    );
+  });
+
+  it("keeps the tilt the pointer handler draws", () => {
+    const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
+    expect(app).toContain("perspective(1000px) rotateX(");
+  });
+});
+
+describe("every var() the app reads names a token the app defines", () => {
+  // --fg-dim was read with no fallback, so the rule painted nothing at all;
+  // --warning and --hover-bg were read with a hardcoded colour as the
+  // fallback, so six rules across App.css, breakpointGutter.ts and
+  // testGutter.ts had been quietly bypassing the theme since they were
+  // written. None of the three was ever declared anywhere.
+  //
+  // Scoped to var()s with no fallback, which is where an undeclared token is
+  // unambiguously a bug. A var() that does carry a fallback still cannot
+  // smuggle in an off-theme colour — the raw-black and hex rules above catch
+  // that — and a few tokens are deliberately reserved with a fallback
+  // standing in until something publishes them (--label-offset on a
+  // CodeMirror label row, --vibe-chat-w on the chat pane).
+  const DEFINED = new Set(
+    [...css.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1])
+  );
+
+  /** Tokens written at runtime by a component rather than declared in CSS. */
+  const RUNTIME = new Set<string>();
+  const walk = (dir: string, visit: (file: string, body: string) => void) => {
+    for (const entry of readdirSync(resolve(root, dir), { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name !== "__tests__") {
+        walk(`${dir}/${entry.name}`, visit);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        visit(entry.name, readFileSync(resolve(root, dir, entry.name), "utf8"));
+      }
+    }
+  };
+  // `setProperty("--x", …)` and inline `style={{ "--x": … }}` alike.
+  walk("src", (_f, body) => {
+    for (const m of body.matchAll(/"(--[a-z0-9-]+)"\s*[,:)]/g)) RUNTIME.add(m[1]);
+  });
+
+  /** `var(--x)` with nothing after the name — no fallback to fall back on. */
+  const BARE = /var\((--[a-z0-9-]+)\s*\)/g;
+  const undeclared = (name: string) =>
+    !name.startsWith("--mantine-") && !RUNTIME.has(name) && !DEFINED.has(name);
+
+  it("App.css reads no undeclared token without a fallback", () => {
+    const missing = new Set(
+      [...css.matchAll(BARE)].map((m) => m[1]).filter(undeclared)
+    );
+    expect([...missing]).toEqual([]);
+  });
+
+  it("no component reads an undeclared token without a fallback", () => {
+    const missing = new Set<string>();
+    walk("src", (file, body) => {
+      for (const m of body.matchAll(BARE)) {
+        if (undeclared(m[1])) missing.add(`${file}: ${m[1]}`);
+      }
+    });
+    expect([...missing]).toEqual([]);
+  });
+});

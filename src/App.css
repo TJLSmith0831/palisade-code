@@ -1191,11 +1191,11 @@ input[type="checkbox"] {
 }
 
 .ds-debug-frame:hover {
-  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+  background: var(--surface);
 }
 
 .ds-debug-frame.is-selected {
-  background: var(--hover-bg, rgba(127, 127, 127, 0.18));
+  background: var(--active-row);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -1242,7 +1242,7 @@ input[type="checkbox"] {
 }
 
 .ds-test-case.is-locatable:hover {
-  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+  background: var(--surface);
 }
 
 .ds-test-mark {
@@ -1300,7 +1300,7 @@ input[type="checkbox"] {
   appearance: none;
   background: none;
   border: none;
-  color: var(--fg-dim);
+  color: var(--muted);
   font: inherit;
   font-size: 11px;
   padding: 2px 6px;
@@ -2802,8 +2802,15 @@ details.graph-report-wrap > summary {
 .ds-mode-card:focus-visible {
   border-color: var(--accent);
   background: var(--surface-warm);
-  transform: translateY(-2px);
   box-shadow: var(--shadow-lift);
+}
+
+/* The lift is keyboard-only here. On hover the pointer handler in App.tsx
+   writes the whole transform every frame — perspective, tilt and the same
+   -2px — so a CSS transform on :hover was overwritten before it painted.
+   Keyboard focus never runs that handler, so it keeps its lift from CSS. */
+.ds-mode-card:focus-visible {
+  transform: translateY(-2px);
 }
 
 /* The card whose expanded input is showing below (#35): it stays visibly

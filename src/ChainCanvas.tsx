@@ -806,7 +806,7 @@ export default function ChainCanvas({
                 markerHeight="6"
                 orient="auto-start-reverse"
               >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border-strong, var(--border))" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border)" />
               </marker>
             </defs>
             {draft.edges.map((e, index) => {
