@@ -78,6 +78,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import { useAppShell } from "./hooks/useAppShell";
 import { useProjectManager } from "./hooks/useProjectManager";
+import { resolvePrefs, useThreadPrefs } from "./hooks/useThreadPrefs";
 import { useExecutor } from "./hooks/useExecutor";
 import type {
   Envelope,
@@ -2444,33 +2445,6 @@ const DEFAULT_PROJECT_SETTINGS = `{
 }
 `;
 const lastThreadKey = (hash: string) => `palisade:lastThread:${hash}`;
-const threadPrefsKey = (hash: string, threadId: string) =>
-  `palisade:thread-prefs:${hash}:${threadId}`;
-
-type ThreadPrefs = { bypass: boolean };
-
-const getThreadPrefs = (hash: string, threadId: string): ThreadPrefs | null => {
-  const raw = localStorage.getItem(threadPrefsKey(hash, threadId));
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<ThreadPrefs>;
-    if (typeof parsed.bypass === "boolean") {
-      return { bypass: parsed.bypass };
-    }
-  } catch {
-    // fall through to default
-  }
-  return null;
-};
-
-const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
-  localStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
-};
-
-// Every never-configured thread starts in Accept mode (D6) — no global
-// default a thread's own toggle could silently promote for every other one.
-const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
-  getThreadPrefs(hash, threadId) ?? { bypass: false };
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 /** Executor event kinds that are never persisted to the session store (same
  *  D-design comment as ExecutorEvent::TextDelta/ToolOutputDelta): a refresh
@@ -3007,10 +2981,16 @@ export default function App() {
   // Thread-level model/bypass preferences. The composer control reads and
   // writes these; the effective values are resolved before each session-starting
   // call so a live session keeps its original flags (design.md Decision 2).
-  const [threadPrefs, setThreadPrefsState] = useState<ThreadPrefs>({
-    bypass: false,
-  });
-  const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
+  const {
+    threadPrefs,
+    prefsMenuOpen,
+    setPrefsMenuOpen,
+    pendingWorktreeEnabled,
+    setPendingWorktreeEnabled,
+    loadFor: loadThreadPrefs,
+    toggleBypass,
+    createThreadWithPrefs,
+  } = useThreadPrefs();
   // Whether *this* thread has a live session right now, so the "Next session
   // will use X" hint only shows when switching would actually hand off an
   // in-progress conversation. Reads `busyThreads` directly — the same
@@ -3020,34 +3000,9 @@ export default function App() {
   // hint on a thread that had never sent a message, just because a
   // *previous* thread's stale `hasLiveSession` value was still in state.
   const hasLiveSession = thread ? busyThreads.has(thread.id) : false;
-  /** The worktree choice made in a composer that has no thread yet, handed to
-   *  whichever thread gets created next. Sticky for the session and always
-   *  reflected by the composer's badge, so it is never a hidden setting. */
-  const [pendingWorktreeEnabled, setPendingWorktreeEnabled] = useState(true);
-
-  /** Create a thread and apply that pending choice to it. Every creation path
-   *  goes through here so the choice cannot be dropped by whichever route the
-   *  user happened to take into a new thread. */
-  const createThreadWithPrefs = useCallback(
-    async (projectHash: string, title = "New thread") => {
-      const created = await api.createThread(projectHash, title);
-      if (pendingWorktreeEnabled) return created;
-      try {
-        return await api.setThreadWorktreeEnabled(projectHash, created.id, false);
-      } catch {
-        // A project that isn't a git repo has no isolation to turn off. The
-        // thread is still fine, so don't fail creation over it.
-        return created;
-      }
-    },
-    [pendingWorktreeEnabled]
-  );
-
   const onToggleBypass = () => {
     if (!project || !thread) return;
-    const prefs = { bypass: !threadPrefs.bypass };
-    setThreadPrefs(project.hash, thread.id, prefs);
-    setThreadPrefsState(prefs);
+    toggleBypass(project.hash, thread.id);
   };
   /** Flip this thread's worktree isolation. Only offered before the thread
    *  has run — the backend refuses once a worktree exists, so this can never
@@ -3472,7 +3427,7 @@ export default function App() {
       setMessages(await api.readThread(projectHash, next.id));
       // Load this thread's model/bypass preferences (per-thread override or
       // global default) so the composer control shows the right values.
-      setThreadPrefsState(resolvePrefs(projectHash, next.id));
+      loadThreadPrefs(projectHash, next.id);
       setPrefsMenuOpen(false);
     },
     []
