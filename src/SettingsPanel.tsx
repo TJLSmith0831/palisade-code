@@ -30,6 +30,22 @@ export const PROJECT_SETTINGS_FILE = ".palisade/project-settings.json";
 /* Accent colors                                                              */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Accent hues a user can pick for Agent Signal.
+ *
+ * --danger (25), --warn (65) and --success (160) own their hues, and an
+ * accent that lands on one stops reading as "the agent is acting" and starts
+ * reading as a status. Red sat at exactly 25 and Orange at 55, ten degrees
+ * off warn; in light mode, where the accent shares the semantics' lightness
+ * band, both were near-indistinguishable from the semantic they shadowed.
+ * They are replaced by two hues with real clearance. See DESIGN.md,
+ * "Reserved hues", for why the fix is hue and not lightness.
+ *
+ * Dragon Green stays at 145, fifteen degrees from --success, as a stated
+ * exception: it is the product's identity colour, and --success only ever
+ * draws as a thin chain-node border (DESIGN.md), never as a fill beside an
+ * accent fill.
+ */
 export const ACCENT_PRESETS = [
   { name: "Dragon Green", hue: 145 },
   { name: "Ocean Blue", hue: 250 },
@@ -37,8 +53,8 @@ export const ACCENT_PRESETS = [
   { name: "Amber", hue: 95 },
   { name: "Rose", hue: 350 },
   { name: "Teal", hue: 190 },
-  { name: "Red", hue: 25 },
-  { name: "Orange", hue: 55 },
+  { name: "Lime", hue: 120 },
+  { name: "Magenta", hue: 325 },
 ] as const;
 
 /* -------------------------------------------------------------------------- */

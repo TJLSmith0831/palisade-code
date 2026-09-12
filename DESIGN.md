@@ -148,6 +148,12 @@ The default dark palette begins with Workbench Charcoal and cool, near-neutral s
 
 **The Theme-by-Role Rule.** New colors must preserve their semantic role in dark, light, and user-customized themes instead of depending on one fixed hue.
 
+**The Reserved Hue Rule.** `--danger` (25), `--warn` (65) and `--success` (160) own their hues. An accent hue a user can select must clear every one of them by at least 30 degrees, so that Agent Signal never reads as a status.
+
+The rule is about hue rather than lightness because light mode has no room on the lightness axis. In dark, Agent Signal separates by sitting at 88% against a semantic band of 64-76%. Light mode's accent sits at 46%, inside its 42-48% band, and cannot move down: measured in the running app at 38% and again at 30%, the sRGB gamut collapses chroma across the warm quadrant and Amber, Rose, Red and Orange all converge on the same brown. It cannot move up either without inverting `--accent-on` from light ink to dark, which is a different change.
+
+So the presets clear the semantics instead. Red (25) sat on `--danger` exactly and Orange (55) ten degrees off `--warn`; both are replaced by Lime (120) and Magenta (325). Dragon Green stays at 145, fifteen degrees from `--success`, as a stated exception: it is the product's identity colour, and `--success` only ever draws as a thin chain-node border, never as a fill beside an accent fill.
+
 ## Typography
 
 **Display Font:** Geist Sans, Inter, then the system sans stack.

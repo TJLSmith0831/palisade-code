@@ -128,3 +128,57 @@ describe("the app's own chrome is painted from tokens, not literals", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("accent presets clear the hues the semantics own", () => {
+  // ACCENT_PRESETS shipped Red at hue 25 — identical to --danger — so picking
+  // it made Agent Signal indistinguishable from Danger. Orange at 55 sat ten
+  // degrees off --warn. See DESIGN.md, "The Reserved Hue Rule", for why the
+  // fix is hue rather than lightness.
+  const settings = readFileSync(resolve(root, "src/SettingsPanel.tsx"), "utf8");
+
+  /** `--danger: oklch(L% C H)` etc., read from the dark :root. */
+  const semanticHue = (token: string): number => {
+    const m = css.match(new RegExp(`${token}: oklch\\([\\d.]+% [\\d.]+ (\\d+)\\)`));
+    expect(m, `${token} not found in App.css`).not.toBeNull();
+    return Number(m![1]);
+  };
+
+  const presets = [...settings.matchAll(/\{ name: "([^"]+)", hue: (\d+) \}/g)].map(
+    (m) => ({ name: m[1], hue: Number(m[2]) })
+  );
+
+  /** Shortest distance between two hue angles, in degrees. */
+  const apart = (a: number, b: number) => {
+    const d = Math.abs(a - b) % 360;
+    return d > 180 ? 360 - d : d;
+  };
+
+  // Dragon Green is the product's identity colour and --success draws only as
+  // a thin chain-node border, never as a fill beside an accent fill. Stated in
+  // DESIGN.md as a knowing exception, not an oversight.
+  const GRANDFATHERED = new Set(["Dragon Green"]);
+
+  it("reads the eight presets and the three semantic hues", () => {
+    expect(presets).toHaveLength(8);
+    expect([semanticHue("--danger"), semanticHue("--warn"), semanticHue("--success")]).toEqual([
+      25, 65, 160,
+    ]);
+  });
+
+  it("keeps every selectable accent at least 30 degrees off every semantic", () => {
+    const semantics = {
+      "--danger": semanticHue("--danger"),
+      "--warn": semanticHue("--warn"),
+      "--success": semanticHue("--success"),
+    };
+    const collisions: string[] = [];
+    for (const preset of presets) {
+      if (GRANDFATHERED.has(preset.name)) continue;
+      for (const [token, hue] of Object.entries(semantics)) {
+        const gap = apart(preset.hue, hue);
+        if (gap < 30) collisions.push(`${preset.name} (${preset.hue}) is ${gap}° from ${token}`);
+      }
+    }
+    expect(collisions).toEqual([]);
+  });
+});

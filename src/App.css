@@ -35,6 +35,13 @@
   /* The accent's lightness and chroma, named so the settings swatches can
      paint the colour the theme will actually ship instead of guessing at it.
      --accent is derived from them, so the preview cannot drift again. */
+  /* Agent Signal separates from the semantic band by lightness in dark (88%
+     against 64-76%) but cannot in light: below ~46% the sRGB gamut collapses
+     chroma in the warm quadrant and Amber, Rose, Red and Orange all converge
+     on brown. Measured at 30% and 38% in the running app — both unusable. So
+     in light the separation has to come from hue instead, which is why
+     ACCENT_PRESETS reserves the semantic hues. See DESIGN.md, "Reserved
+     hues". */
   --accent-l: 88%;
   --accent-c: 0.21;
   --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
