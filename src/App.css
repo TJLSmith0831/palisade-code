@@ -2564,6 +2564,12 @@ details.graph-report-wrap > summary {
   outline-color: var(--accent);
 }
 
+/* Three different states used to share this one treatment: nothing here,
+   still loading, and can't show you this. A stalled load was pixel-identical
+   to an empty pane, so "Loading…" that never resolved read as "there is
+   nothing". The modifiers below keep them apart — `.is-loading` also carries
+   role="status" and a spinner at its call sites, and `.is-blocked` is a
+   condition to fix rather than an absence. */
 .empty {
   margin: auto;
   max-width: 46ch;
@@ -2573,6 +2579,24 @@ details.graph-report-wrap > summary {
   line-height: 1.5;
   text-align: center;
   text-wrap: balance;
+}
+
+.empty.is-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Not an absence — something the reader can act on. It keeps the muted
+   voice but takes the warning hue and an icon, since colour never travels
+   alone here. */
+.empty.is-blocked {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--warn);
 }
 
 .ds-onboarding-empty {
@@ -5913,6 +5937,39 @@ button.ds-onboarding-status {
 .ds-chain-node:hover .ds-chain-node-port,
 .ds-chain-node-port:focus-visible {
   opacity: 1;
+}
+
+/* The chat is the surface users open most, and it used to greet a new
+   thread with four words. Same shape as the chain canvas's empty state,
+   which is the one in this app that actually teaches something. */
+.ds-thread-empty {
+  margin: auto;
+  max-width: 46ch;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ds-thread-empty strong {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ds-thread-empty p {
+  margin: 0;
+}
+
+.ds-thread-empty code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg);
 }
 
 .ds-chain-empty {

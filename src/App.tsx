@@ -1339,7 +1339,20 @@ export const ChatSurface = memo(
           data-autoscroll={autoScroll}
         >
           <>
-            {items.length === 0 && <p className="empty">No messages yet.</p>}
+            {items.length === 0 && (
+              <div className="ds-thread-empty" data-testid="thread-empty">
+                <strong>Nothing said yet</strong>
+                <p>
+                  Describe what you want built. <b>Spec</b> works the problem
+                  out with you first and writes it down; <b>Go</b> builds
+                  against a spec that already exists.
+                </p>
+                <p>
+                  Type <code>/</code> for commands, or <code>@</code> to point
+                  at a file in this project.
+                </p>
+              </div>
+            )}
             <EventList
               items={items}
               executor={executor}

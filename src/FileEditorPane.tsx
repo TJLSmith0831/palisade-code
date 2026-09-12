@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActionIcon, Alert, Button, Group } from "@mantine/core";
+import { ActionIcon, Alert, Button, Group, Loader } from "@mantine/core";
 import { IconMinus, IconPlus } from "@tabler/icons-react";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
@@ -1104,7 +1104,12 @@ export default function FileEditorPane({
   }
   const mediaKind = mediaKindFor(path);
   if (mediaKind) {
-    if (!mediaSrc) return <p className="empty">Loading…</p>;
+    if (!mediaSrc)
+      return (
+        <p className="empty is-loading" role="status" data-testid="file-editor-loading">
+          <Loader size="xs" /> Loading…
+        </p>
+      );
     return (
       <div className="ds-media-preview" data-testid="file-editor-media">
         <div className="ds-editor-toolbar">
@@ -1189,7 +1194,11 @@ export default function FileEditorPane({
   }
 
   if (viewSeq === 0) {
-    return <p className="empty">Loading…</p>;
+    return (
+      <p className="empty is-loading" role="status" data-testid="file-editor-loading">
+        <Loader size="xs" /> Loading…
+      </p>
+    );
   }
 
   return (

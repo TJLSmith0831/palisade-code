@@ -158,3 +158,51 @@ describe("VerifyPane — long histories", () => {
     expect(screen.queryByTestId("verify-show-older")).toBeNull();
   });
 });
+
+// The one surface whose entire purpose is stating what evidence exists showed
+// buttons and blank space when there was none.
+describe("VerifyPane — nothing verified yet", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    listenMock.mockClear();
+  });
+
+  it("says so, and names the command that would change it", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "verify_commands") return Promise.resolve([["test", "cargo test"]]);
+      if (cmd === "list_verifications") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderPane();
+
+    const empty = await screen.findByTestId("verify-empty");
+    expect(empty.textContent).toContain("Nothing verified yet");
+    // It restates the pane's own refusal rather than inventing a verdict.
+    expect(empty.textContent).toMatch(/never because an agent reported/i);
+    expect(empty.textContent).toContain("test");
+    // And still no aggregate.
+    expect(empty.textContent).not.toMatch(/\d+\s*\/\s*\d+/);
+  });
+
+  it("stays out of the way once there is a run to show", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "verify_commands") return Promise.resolve([["test", "cargo test"]]);
+      if (cmd === "list_verifications") return Promise.resolve([run()]);
+      return Promise.resolve(undefined);
+    });
+    renderPane();
+    await screen.findByTestId("verification-run");
+    expect(screen.queryByTestId("verify-empty")).toBeNull();
+  });
+
+  it("does not claim nothing is verified when no command is configured", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "verify_commands") return Promise.resolve([]);
+      if (cmd === "list_verifications") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderPane();
+    await screen.findByText(/No verify commands configured/i);
+    expect(screen.queryByTestId("verify-empty")).toBeNull();
+  });
+});

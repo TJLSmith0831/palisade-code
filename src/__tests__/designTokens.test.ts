@@ -407,3 +407,38 @@ describe("every custom interactive row can be seen to have focus", () => {
     }
   });
 });
+
+describe("loading, empty and blocked do not look like each other", () => {
+  // One `.empty` treatment carried three different states across twenty call
+  // sites: nothing here, still loading, and can't show you this. A stalled
+  // load was pixel-identical to an empty pane — "Loading…" that never
+  // resolved read as "there is nothing here".
+  const sources = readdirSync(resolve(root, "src"))
+    .filter((f) => /\.tsx$/.test(f))
+    .map((f) => [f, readFileSync(resolve(root, "src", f), "utf8")] as const);
+
+  it("marks every loading message as a live region with a spinner", () => {
+    const offenders: string[] = [];
+    for (const [file, body] of sources) {
+      body.split("\n").forEach((line, i) => {
+        if (!/className="empty[^"]*"/.test(line)) return;
+        // The message may run onto following lines; take the element's block.
+        const block = body.split("\n").slice(i, i + 6).join(" ");
+        if (!/Loading|Preparing/i.test(block)) return;
+        if (!/role="status"/.test(block) || !/<Loader/.test(block)) {
+          offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("gives loading and blocked their own modifiers in the stylesheet", () => {
+    expect(css).toContain(".empty.is-loading");
+    expect(css).toContain(".empty.is-blocked");
+    // Blocked is a condition to act on, not an absence, so it does not wear
+    // the same muted voice as an empty pane.
+    const blocked = css.slice(css.indexOf(".empty.is-blocked"));
+    expect(blocked.slice(0, blocked.indexOf("}"))).toContain("var(--warn)");
+  });
+});

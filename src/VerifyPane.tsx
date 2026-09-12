@@ -147,6 +147,26 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
         ))}
       </Group>
 
+      {/* This pane's whole purpose is stating what evidence exists, and with
+          no runs recorded it used to show buttons and blank space — the one
+          surface where "nothing here" is itself the finding, left unsaid. */}
+      {!loading && commands.length > 0 && latest.length === 0 && (
+        <Stack gap={4} py="sm" data-testid="verify-empty">
+          <Text size="sm" fw={600}>
+            Nothing verified yet
+          </Text>
+          <Text size="xs" c="dimmed">
+            A command is green here because it exited <Code>0</Code> at a named
+            commit — never because an agent reported it finished. Until one of
+            these has run, there is no evidence either way.
+          </Text>
+          <Text size="xs" c="dimmed">
+            Run{" "}
+            <Code>{commands[0][0]}</Code> above to record the first.
+          </Text>
+        </Stack>
+      )}
+
       {shown.map((entry) => (
         <Stack key={entry.id} gap={2} data-testid="verification-run">
           <Group gap="xs" wrap="nowrap">
