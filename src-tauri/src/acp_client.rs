@@ -376,6 +376,7 @@ pub(crate) fn reads_as_auth_failure(text: &str) -> bool {
         "log in",
         "login required",
         "sign in",
+        "signed in",
         "session expired",
         "token expired",
         "credentials",
