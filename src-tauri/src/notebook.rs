@@ -22,6 +22,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::executor::find_on_path;
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 /// Forwarded to the frontend verbatim — `event` is whatever JSON object the
 /// driver wrote to stdout (see notebook_driver.py's docstring for the shape).
@@ -48,6 +49,10 @@ pub struct NotebookKernel {
     stderr_handle: Mutex<Option<thread::JoinHandle<()>>>,
     stopping: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
+    /// Where this kernel's PID is recorded between runs, once it has been
+    /// spawned and so has a notebook id to key it by. Mirrors `Watcher`'s
+    /// field in integrations.rs.
+    pid_path: Mutex<Option<PathBuf>>,
 }
 
 impl NotebookKernel {
@@ -59,6 +64,7 @@ impl NotebookKernel {
             stderr_handle: Mutex::new(None),
             stopping: Arc::new(AtomicBool::new(false)),
             alive: Arc::new(AtomicBool::new(false)),
+            pid_path: Mutex::new(None),
         }
     }
 
@@ -82,6 +88,14 @@ impl NotebookKernel {
 
         let python = find_on_path("python3").ok_or("python3 not found on PATH")?;
 
+        // A hard restart never runs Drop, so the previous run's driver — and
+        // the Jupyter kernel it owns — outlive the app that started them.
+        // notebook_driver.py is an absolute path unique to this app, so it
+        // re-identifies the child safely even after PID reuse.
+        let pid_path = kernel_pid_path(notebook_id);
+        crate::pidguard::reap_stale(&pid_path, &kernel_reap_token(driver_path));
+        *self.pid_path.lock_or_recover() = Some(pid_path.clone());
+
         let mut cmd = Command::new(python);
         cmd.arg(driver_path);
         if let Some(name) = kernelspec_name {
@@ -91,7 +105,8 @@ impl NotebookKernel {
 
         let mut child = cmd
             .spawn()
-            .map_err(|err| format!("failed to spawn notebook driver: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("failed to spawn notebook driver: {err}")))?;
+        crate::pidguard::record(&pid_path, child.id());
 
         let stdin = child.stdin.take().ok_or("notebook driver stdin unavailable")?;
         let stdout = child.stdout.take().ok_or("notebook driver stdout unavailable")?;
@@ -142,17 +157,17 @@ impl NotebookKernel {
             }
         });
 
-        *self.child.lock().unwrap() = Some(child);
-        *self.stdin.lock().unwrap() = Some(stdin);
-        *self.reader_handle.lock().unwrap() = Some(reader);
-        *self.stderr_handle.lock().unwrap() = Some(stderr_reader);
+        *self.child.lock_or_recover() = Some(child);
+        *self.stdin.lock_or_recover() = Some(stdin);
+        *self.reader_handle.lock_or_recover() = Some(reader);
+        *self.stderr_handle.lock_or_recover() = Some(stderr_reader);
         self.alive.store(true, Ordering::SeqCst);
 
         match ready_rx.recv_timeout(Duration::from_secs(30)) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(message)) => {
                 self.terminate();
-                Err(message)
+                Err(message.into())
             }
             Err(_) => {
                 self.terminate();
@@ -165,11 +180,11 @@ impl NotebookKernel {
         if !self.is_alive() {
             return Err("notebook kernel is not running".into());
         }
-        let mut guard = self.stdin.lock().unwrap();
+        let mut guard = self.stdin.lock_or_recover();
         let stdin = guard.as_mut().ok_or("notebook driver stdin unavailable")?;
-        let line = serde_json::to_string(&request).map_err(|err| err.to_string())?;
-        writeln!(stdin, "{line}").map_err(|err| format!("write to notebook driver: {err}"))?;
-        stdin.flush().map_err(|err| err.to_string())
+        let line = serde_json::to_string(&request).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+        writeln!(stdin, "{line}").map_err(|err| crate::PalisadeError::from(format!("write to notebook driver: {err}")))?;
+        stdin.flush().map_err(|err| crate::PalisadeError::from(err.to_string()))
     }
 
     pub fn execute(&self, cell_id: &str, source: &str) -> Res<()> {
@@ -194,12 +209,16 @@ impl NotebookKernel {
         self.stopping.store(true, Ordering::SeqCst);
         self.alive.store(false, Ordering::SeqCst);
 
+        if let Some(path) = self.pid_path.lock_or_recover().take() {
+            crate::pidguard::clear(&path);
+        }
+
         // Closing stdin tells the driver's request loop to return. Do this
         // before waiting on the process so its `finally` block can stop the
         // Jupyter kernel it owns; killing the driver first orphaned that
         // kernel whenever a notebook tab closed.
-        *self.stdin.lock().unwrap() = None;
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        *self.stdin.lock_or_recover() = None;
+        if let Some(mut child) = self.child.lock_or_recover().take() {
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             loop {
                 match child.try_wait() {
@@ -216,10 +235,10 @@ impl NotebookKernel {
             }
         }
 
-        if let Some(handle) = self.reader_handle.lock().unwrap().take() {
+        if let Some(handle) = self.reader_handle.lock_or_recover().take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self.stderr_handle.lock().unwrap().take() {
+        if let Some(handle) = self.stderr_handle.lock_or_recover().take() {
             let _ = handle.join();
         }
 
@@ -237,6 +256,24 @@ impl Drop for NotebookKernel {
     fn drop(&mut self) {
         self.terminate();
     }
+}
+
+/// Where one notebook's kernel PID is recorded between runs. A notebook id is
+/// `"{project_hash}::{relative_path}"` (D18), which contains separators a
+/// filename cannot, so it is folded to a flat token rather than used raw.
+pub(crate) fn kernel_pid_path(notebook_id: &str) -> PathBuf {
+    let flat: String = notebook_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    crate::store::palisade_home().join("kernels").join(format!("{flat}.pid"))
+}
+
+/// What has to appear in a process's command line before it is recognised as
+/// one of our kernel drivers. The absolute driver path — `python3` alone
+/// would match every Python the user is running.
+pub(crate) fn kernel_reap_token(driver_path: &Path) -> String {
+    driver_path.display().to_string()
 }
 
 /// Every open notebook's kernel, keyed by notebook id (decisions.md D18:
@@ -284,11 +321,11 @@ pub fn list_kernelspecs() -> Res<Vec<String>> {
     let output = Command::new("jupyter")
         .args(["kernelspec", "list", "--json"])
         .output()
-        .map_err(|err| format!("jupyter kernelspec list: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("jupyter kernelspec list: {err}")))?;
     if !output.status.success() {
         return Err("jupyter kernelspec list exited non-zero".into());
     }
-    let parsed: Value = serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())?;
+    let parsed: Value = serde_json::from_slice(&output.stdout).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
     let names = parsed
         .get("kernelspecs")
         .and_then(Value::as_object)
@@ -317,7 +354,7 @@ pub fn resolve_driver_path(app: &AppHandle) -> Res<PathBuf> {
         use tauri::Manager;
         app.path()
             .resolve("driver/notebook_driver.py", BaseDirectory::Resource)
-            .map_err(|err| format!("failed to resolve bundled notebook driver: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("failed to resolve bundled notebook driver: {err}")))
     }
 }
 

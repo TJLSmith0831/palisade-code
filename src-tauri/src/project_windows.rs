@@ -7,7 +7,7 @@ use std::path::Path;
 /// project (#33), so watchers are keyed by project, not by window.
 pub fn track(harness: &Harness, window_label: &str, hash: &str) {
     harness
-        .window_projects
+        .workspace.window_projects
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(window_label.to_string(), hash.to_string());
@@ -17,7 +17,7 @@ pub fn track(harness: &Harness, window_label: &str, hash: &str) {
 /// still showing it.
 pub fn untrack(harness: &Harness, window_label: &str) {
     harness
-        .window_projects
+        .workspace.window_projects
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(window_label);
@@ -32,7 +32,7 @@ pub fn untrack(harness: &Harness, window_label: &str) {
 /// accidental duplicate from the recents list.
 pub fn window_showing(harness: &Harness, hash: &str) -> Option<String> {
     harness
-        .window_projects
+        .workspace.window_projects
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
@@ -43,7 +43,7 @@ pub fn window_showing(harness: &Harness, hash: &str) -> Option<String> {
 /// Every project some window is currently showing.
 pub fn open_project_hashes(harness: &Harness) -> HashSet<String> {
     harness
-        .window_projects
+        .workspace.window_projects
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .values()
@@ -57,12 +57,12 @@ pub fn open_project_hashes(harness: &Harness) -> HashSet<String> {
 pub fn retire_unwatched(harness: &Harness) {
     let open = open_project_hashes(harness);
     harness
-        .watch
+        .workspace.watch
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|hash, _| open.contains(hash));
     harness
-        .fswatch
+        .workspace.fswatch
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|hash, _| open.contains(hash));
@@ -88,7 +88,7 @@ pub fn window_config(home: &Path, hash: &str) -> Res<tauri::utils::config::Windo
 
 pub fn remove_saved_project(home: &Path, harness: &Harness, hash: &str) -> Res<()> {
     {
-        let sessions = harness.acp_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let sessions = harness.agent.acp_sessions.lock().unwrap_or_else(|e| e.into_inner());
         if sessions.values().any(|s| s.project_hash == hash && s.is_busy()) {
             return Err("This project has a turn in progress. Wait for it to finish before removing it.".into());
         }
@@ -98,6 +98,7 @@ pub fn remove_saved_project(home: &Path, harness: &Harness, hash: &str) -> Res<(
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
 
     #[test]
@@ -108,12 +109,12 @@ mod tests {
         let harness = Harness::default();
         let (mut session, _receiver) = crate::acp_client::stub_session(true);
         session.project_hash = project.hash.clone();
-        harness.acp_sessions.lock().unwrap().insert(session.id.clone(), session);
+        harness.agent.acp_sessions.lock_or_recover().insert(session.id.clone(), session);
         assert!(remove_saved_project(home.path(), &harness, &project.hash).unwrap_err().contains("turn in progress"));
         assert_eq!(store::list_projects(home.path()).unwrap().len(), 1);
-        harness.acp_sessions.lock().unwrap().clear();
+        harness.agent.acp_sessions.lock_or_recover().clear();
         let (session, _receiver) = crate::acp_client::stub_session(true);
-        harness.acp_sessions.lock().unwrap().insert(session.id.clone(), session);
+        harness.agent.acp_sessions.lock_or_recover().insert(session.id.clone(), session);
         remove_saved_project(home.path(), &harness, &project.hash).unwrap();
         assert!(store::list_projects(home.path()).unwrap().is_empty());
     }
@@ -125,16 +126,16 @@ mod tests {
         let harness = Harness::default();
         track(&harness, "main", "aaa");
         track(&harness, "project-1", "bbb");
-        harness.fswatch.lock().unwrap().insert("aaa".into(), stub_fs_watcher());
-        harness.fswatch.lock().unwrap().insert("bbb".into(), stub_fs_watcher());
+        harness.workspace.fswatch.lock_or_recover().insert("aaa".into(), stub_fs_watcher());
+        harness.workspace.fswatch.lock_or_recover().insert("bbb".into(), stub_fs_watcher());
 
         retire_unwatched(&harness);
-        assert_eq!(harness.fswatch.lock().unwrap().len(), 2);
+        assert_eq!(harness.workspace.fswatch.lock_or_recover().len(), 2);
 
         // Closing the second window retires only that window's watcher.
         untrack(&harness, "project-1");
         retire_unwatched(&harness);
-        let watching = harness.fswatch.lock().unwrap();
+        let watching = harness.workspace.fswatch.lock_or_recover();
         assert!(watching.contains_key("aaa"));
         assert!(!watching.contains_key("bbb"));
     }
@@ -146,15 +147,15 @@ mod tests {
         let harness = Harness::default();
         track(&harness, "main", "aaa");
         track(&harness, "project-1", "aaa");
-        harness.fswatch.lock().unwrap().insert("aaa".into(), stub_fs_watcher());
+        harness.workspace.fswatch.lock_or_recover().insert("aaa".into(), stub_fs_watcher());
 
         untrack(&harness, "project-1");
         retire_unwatched(&harness);
-        assert!(harness.fswatch.lock().unwrap().contains_key("aaa"));
+        assert!(harness.workspace.fswatch.lock_or_recover().contains_key("aaa"));
 
         untrack(&harness, "main");
         retire_unwatched(&harness);
-        assert!(harness.fswatch.lock().unwrap().is_empty());
+        assert!(harness.workspace.fswatch.lock_or_recover().is_empty());
     }
 
     /// VS Code focuses the window a project is already open in rather than

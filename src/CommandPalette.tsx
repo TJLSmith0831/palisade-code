@@ -201,7 +201,7 @@ export default function CommandPalette({ commands, onClose }: Props) {
                   border: "1px solid var(--border)",
                   borderBottomColor: "var(--border)",
                   borderRadius: 5,
-                  boxShadow: "0 1px 0 rgba(0,0,0,.25)",
+                  boxShadow: "var(--shadow-keycap)",
                   fontFamily: "inherit",
                   fontSize: 11,
                   fontWeight: 500,

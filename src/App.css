@@ -15,6 +15,14 @@
      this value; they just spelled it two different ways inline, so it read
      as a one-off in each file instead of the convention it is. */
   --scrim: rgba(0, 0, 0, 0.68);
+  /* Elevation. Every floating layer picks one of these four — nothing in the
+     app spells a shadow inline any more. They are tokens rather than literals
+     because black at 0.35 reads as soot on a near-white ground: the light
+     blocks below redefine all five at the alphas light UI actually wants. */
+  --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.25);
   --chrome-bg: var(--app-shell-dark-override, oklch(15% 0.004 250));
   --bg: var(--app-shell-dark-override, oklch(18% 0.005 250));
   --surface: var(--shell-accent-dark-override, oklch(22% 0.006 250));
@@ -24,7 +32,19 @@
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
   --border: oklch(30% 0.01 250);
-  --accent: oklch(88% 0.21 var(--accent-hue, 145));
+  /* The accent's lightness and chroma, named so the settings swatches can
+     paint the colour the theme will actually ship instead of guessing at it.
+     --accent is derived from them, so the preview cannot drift again. */
+  /* Agent Signal separates from the semantic band by lightness in dark (88%
+     against 64-76%) but cannot in light: below ~46% the sRGB gamut collapses
+     chroma in the warm quadrant and Amber, Rose, Red and Orange all converge
+     on brown. Measured at 30% and 38% in the running app — both unusable. So
+     in light the separation has to come from hue instead, which is why
+     ACCENT_PRESETS reserves the semantic hues. See DESIGN.md, "Reserved
+     hues". */
+  --accent-l: 88%;
+  --accent-c: 0.21;
+  --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
   --accent-on: oklch(20% 0.03 var(--accent-hue, 145));
   --twilight-glow: oklch(18% 0.03 var(--accent-hue, 145));
   --success: oklch(72% 0.15 160);
@@ -77,7 +97,9 @@
     --fg: oklch(20% 0.006 250);
     --muted: oklch(46% 0.012 250);
     --border: oklch(85% 0.01 250);
-    --accent: oklch(46% 0.16 var(--accent-hue, 145));
+    --accent-l: 46%;
+    --accent-c: 0.16;
+    --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
     --accent-on: oklch(98% 0.02 var(--accent-hue, 145));
     --twilight-glow: oklch(90% 0.05 var(--accent-hue, 145));
     --success: oklch(42% 0.13 160);
@@ -98,6 +120,11 @@
     --code-function: oklch(45% 0.11 95);
     --code-meta: oklch(46% 0.01 250);
     --code-invalid: oklch(46% 0.22 25);
+    --scrim: rgba(0, 0, 0, 0.32);
+    --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.12);
+    --shadow-lift: 0 8px 24px rgba(0, 0, 0, 0.14);
+    --shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.1);
+    --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.15);
     color-scheme: light;
   }
 }
@@ -116,7 +143,9 @@
   --fg: oklch(20% 0.006 250);
   --muted: oklch(46% 0.012 250);
   --border: oklch(85% 0.01 250);
-  --accent: oklch(46% 0.16 var(--accent-hue, 145));
+  --accent-l: 46%;
+  --accent-c: 0.16;
+  --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
   --accent-on: oklch(98% 0.02 var(--accent-hue, 145));
   --twilight-glow: oklch(90% 0.05 var(--accent-hue, 145));
   --success: oklch(42% 0.13 160);
@@ -137,6 +166,11 @@
   --code-function: oklch(45% 0.11 95);
   --code-meta: oklch(46% 0.01 250);
   --code-invalid: oklch(46% 0.22 25);
+  --scrim: rgba(0, 0, 0, 0.32);
+  --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.12);
+  --shadow-lift: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.1);
+  --shadow-keycap: 0 1px 0 rgba(0, 0, 0, 0.15);
   color-scheme: light;
 }
 
@@ -373,7 +407,7 @@ input[type="checkbox"] {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -448,7 +482,7 @@ input[type="checkbox"] {
   display: grid;
   place-items: center;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   transition: all 120ms ease-out;
 }
 
@@ -603,7 +637,7 @@ input[type="checkbox"] {
   margin-top: 4px;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--muted);
   font-size: 11px;
@@ -870,7 +904,7 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 9px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -947,6 +981,7 @@ input[type="checkbox"] {
 .ds-search-hit:focus-visible,
 .ds-sc-file:focus-visible,
 .ds-run-row:focus-visible,
+.ds-debug-frame:focus-visible,
 .ds-db-cell:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
@@ -1086,7 +1121,7 @@ input[type="checkbox"] {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
   font-size: 12px;
   list-style: none;
   margin: 0;
@@ -1151,17 +1186,17 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   min-width: 0;
 }
 
 .ds-debug-frame:hover {
-  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+  background: var(--surface);
 }
 
 .ds-debug-frame.is-selected {
-  background: var(--hover-bg, rgba(127, 127, 127, 0.18));
+  background: var(--active-row);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -1199,7 +1234,7 @@ input[type="checkbox"] {
   align-items: baseline;
   gap: 6px;
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   min-width: 0;
 }
 
@@ -1208,7 +1243,7 @@ input[type="checkbox"] {
 }
 
 .ds-test-case.is-locatable:hover {
-  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+  background: var(--surface);
 }
 
 .ds-test-mark {
@@ -1266,7 +1301,7 @@ input[type="checkbox"] {
   appearance: none;
   background: none;
   border: none;
-  color: var(--fg-dim);
+  color: var(--muted);
   font: inherit;
   font-size: 11px;
   padding: 2px 6px;
@@ -1305,7 +1340,7 @@ input[type="checkbox"] {
   font-family: var(--mono);
   font-size: 11px;
   padding: 5px 10px;
-  border-radius: 5px 5px 0 0;
+  border-radius: 6px 6px 0 0;
   color: var(--muted);
   cursor: pointer;
   border: none;
@@ -1557,7 +1592,7 @@ input[type="checkbox"] {
   color: var(--fg);
   /* Matches .cm-tooltip's elevation in FileEditorPane.tsx — one popup
      family, one shadow value. */
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
 }
 
 .cm-tooltip-autocomplete ul li {
@@ -2401,7 +2436,7 @@ details.graph-report-wrap > summary {
   gap: 2px;
   font-size: 12px;
   max-width: 280px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-float);
 }
 
 .graph-tooltip span {
@@ -2427,7 +2462,7 @@ details.graph-report-wrap > summary {
   border-radius: 8px;
   background: var(--surface);
   padding: 10px 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lift);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -2529,6 +2564,12 @@ details.graph-report-wrap > summary {
   outline-color: var(--accent);
 }
 
+/* Three different states used to share this one treatment: nothing here,
+   still loading, and can't show you this. A stalled load was pixel-identical
+   to an empty pane, so "Loading…" that never resolved read as "there is
+   nothing". The modifiers below keep them apart — `.is-loading` also carries
+   role="status" and a spinner at its call sites, and `.is-blocked` is a
+   condition to fix rather than an absence. */
 .empty {
   margin: auto;
   max-width: 46ch;
@@ -2538,6 +2579,24 @@ details.graph-report-wrap > summary {
   line-height: 1.5;
   text-align: center;
   text-wrap: balance;
+}
+
+.empty.is-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Not an absence — something the reader can act on. It keeps the muted
+   voice but takes the warning hue and an icon, since colour never travels
+   alone here. */
+.empty.is-blocked {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--warn);
 }
 
 .ds-onboarding-empty {
@@ -2768,8 +2827,15 @@ details.graph-report-wrap > summary {
 .ds-mode-card:focus-visible {
   border-color: var(--accent);
   background: var(--surface-warm);
+  box-shadow: var(--shadow-lift);
+}
+
+/* The lift is keyboard-only here. On hover the pointer handler in App.tsx
+   writes the whole transform every frame — perspective, tilt and the same
+   -2px — so a CSS transform on :hover was overwritten before it painted.
+   Keyboard focus never runs that handler, so it keeps its lift from CSS. */
+.ds-mode-card:focus-visible {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 /* The card whose expanded input is showing below (#35): it stays visibly
@@ -3630,7 +3696,7 @@ details.graph-report-wrap > summary {
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
-  border-radius: 9px;
+  border-radius: 9999px;
   background: var(--danger);
   color: var(--bg);
   font-size: 11px;
@@ -3783,7 +3849,7 @@ details.graph-report-wrap > summary {
 }
 
 .ds-sc-target small {
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.3;
 }
 
@@ -3865,14 +3931,13 @@ details.graph-report-wrap > summary {
 
 .ds-sc-commit {
   display: flex;
-  align-items: center;
   gap: 2px;
   width: 100%;
-  /* Exactly 24px, no vertical padding: each row's lane SVG is also 24px
-     tall and stretches edge-to-edge (.ds-sc-graph-lanes below), so adjacent
-     rows' paths meet with no seam. The 1px top/bottom padding this used to
-     carry left a 2px gap between rows where the connecting lane line broke. */
-  height: 24px;
+  /* Height comes from commitRowHeight() as an inline style, and the row's
+     lane SVG is rendered at exactly the same number, so adjacent rows' paths
+     still meet with no seam. No vertical padding, for the same reason: the
+     1px top/bottom this used to carry left a 2px gap where the lane broke. */
+  align-items: flex-start;
   padding: 0 4px;
   border-radius: 4px;
   color: inherit;
@@ -3947,28 +4012,44 @@ details.graph-report-wrap > summary {
   font-style: italic;
 }
 
+/* Subject, refs and metadata used to share one nowrap line, and the subject
+   is the one that yielded: measured live, it rendered 91px of a 469px string.
+   Scrolling did not help either — this row's ellipsis happens inside the
+   content box, so the panel's overflow-x had nothing to scroll to and the
+   text was unreachable rather than merely clipped. Each part gets its own
+   row now, and the subject gets the full width. */
 .ds-sc-commit-text {
   display: flex;
-  align-items: baseline;
-  gap: 5px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   min-width: 0;
   flex: 1;
 }
 
+/* Three lines is roughly 90 characters at this panel's resting width, which
+   covers a conventional subject with room to spare. Past that it clamps and
+   the title attribute carries the rest. */
 .ds-sc-commit-msg {
   font-size: 11px;
+  line-height: 15px;
   font-weight: 500;
   color: var(--fg);
+  align-self: stretch;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .ds-sc-commit-meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 4px;
+  height: 14px;
   min-width: 0;
+  max-width: 100%;
   font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
@@ -3976,8 +4057,12 @@ details.graph-report-wrap > summary {
 
 /* The author is the same name on every row of a personal repo; the age is
    the row's only varying fact. So the author is what truncates. */
+/* The one part of a commit row allowed to truncate. Subject, refs, age and
+   hash each have room to render whole; when the row is still short, the
+   author yields, because it is the field a reader is least likely to be
+   scanning for and the only one whose full value is also on hover. */
 .ds-sc-commit-author {
-  flex-shrink: 0;
+  flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4002,18 +4087,20 @@ details.graph-report-wrap > summary {
 }
 
 /* Marks the commit HEAD is on. Branch names are generated — a worktree's can
-   run to fifty characters — and unbounded it starved the commit subject
-   beside it down to two letters. It is the annotation, not the content: it
-   yields first and truncates, with the full name on hover. */
+   run to fifty characters — so this used to cap at 42% of the row and yield
+   to the subject beside it. That left it showing 6px of an 87px name: a lone
+   letter, which distinguishes nothing. On its own row it can take the full
+   width without costing the subject anything, and two branches that differ
+   only in their last segment stay tellable apart. */
 .ds-sc-branch-badge {
   display: flex;
   align-items: center;
   gap: 3px;
+  height: 16px;
   flex-shrink: 1;
   min-width: 0;
-  max-width: 42%;
-  margin-left: auto;
-  font-size: 9px;
+  max-width: 100%;
+  font-size: 10px;
   font-family: var(--mono);
   text-transform: none;
   color: var(--fg);
@@ -4027,6 +4114,10 @@ details.graph-report-wrap > summary {
   flex-shrink: 0;
 }
 
+/* The name arrives already shortened by shortRef(), which drops characters
+   off the *front*. CSS ellipsis is the backstop for a narrowed panel only —
+   it cuts the tail, which is the half that tells two generated branch names
+   apart, so it should rarely be what the reader sees. */
 .ds-sc-branch-badge-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4276,7 +4367,7 @@ button.ds-onboarding-status {
   gap: 6px;
   min-width: 0;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4337,7 +4428,7 @@ button.ds-onboarding-status {
   flex: 1;
   min-width: 0;
   color: var(--warn);
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.35;
   overflow-wrap: break-word;
   display: -webkit-box;
@@ -4384,7 +4475,7 @@ button.ds-onboarding-status {
   padding: 6px 6px 0;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.4;
   text-wrap: pretty;
 }
@@ -5025,7 +5116,7 @@ button.ds-onboarding-status {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--surface);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -5272,7 +5363,7 @@ button.ds-onboarding-status {
      line, which sits lower once the row's padding is shared with it. */
   margin-top: 1px;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: 9999px;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -5604,6 +5695,26 @@ button.ds-onboarding-status {
   flex-wrap: wrap;
 }
 
+/* The vertical rules between the toolbar's four groups. A Mantine vertical
+   Divider sizes itself from its parent's cross axis, which a wrapping flex
+   row does not give it, so it needs a height of its own. */
+.ds-chain-toolbar > .mantine-Divider-root[data-orientation="vertical"] {
+  align-self: stretch;
+  min-height: 20px;
+}
+
+/* State that used to sit between the buttons, reading as something to click.
+   Its own line, above the canvas and below the controls. */
+.ds-chain-statusbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
 .ds-chain-surface {
   position: relative;
   flex: 1;
@@ -5826,6 +5937,39 @@ button.ds-onboarding-status {
 .ds-chain-node:hover .ds-chain-node-port,
 .ds-chain-node-port:focus-visible {
   opacity: 1;
+}
+
+/* The chat is the surface users open most, and it used to greet a new
+   thread with four words. Same shape as the chain canvas's empty state,
+   which is the one in this app that actually teaches something. */
+.ds-thread-empty {
+  margin: auto;
+  max-width: 46ch;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ds-thread-empty strong {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ds-thread-empty p {
+  margin: 0;
+}
+
+.ds-thread-empty code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg);
 }
 
 .ds-chain-empty {

@@ -105,7 +105,7 @@ export default function SpecChangeTab({
         const content = await api.readFileContent(projectHash, relativePath);
         setter({ content, loading: false, error: null });
       } catch (err) {
-        setter({ content: null, loading: false, error: describeError(err) });
+        setter({ content: null, loading: false, error: describeError(err, { loading: "that file" }) });
       }
     },
     [projectHash]
@@ -133,7 +133,7 @@ export default function SpecChangeTab({
         setSpecLoading(false);
       })
       .catch((err) => {
-        setSpecError(describeError(err));
+        setSpecError(describeError(err, { loading: "this change's spec deltas" }));
         setSpecLoading(false);
       });
   }, [projectHash, specName]);
@@ -388,7 +388,7 @@ export default function SpecChangeTab({
                   <Group gap="xs" wrap="nowrap">
                     <Badge
                       size="xs"
-                      color={entry.exitCode === 0 ? "green" : "red"}
+                      color={entry.exitCode === 0 ? "success" : "danger"}
                       variant="light"
                     >
                       exit {entry.exitCode}
@@ -540,7 +540,7 @@ function SpecDeltasView({
               <Badge
                 size="xs"
                 variant="light"
-                color={delta.operation === "ADDED" ? "green" : "orange"}
+                color={delta.operation === "ADDED" ? "success" : "warn"}
               >
                 {delta.operation}
               </Badge>

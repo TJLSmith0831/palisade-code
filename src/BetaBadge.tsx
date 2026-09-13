@@ -27,6 +27,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import * as api from "./api";
 import { sendFeedback } from "./feedback";
+import { describeError } from "./errors";
 
 /** Re-check this often while the app stays open. */
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
@@ -121,7 +122,7 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
       setTitle("");
       setBody("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err, { action: "send that report" }));
     } finally {
       setSending(false);
     }

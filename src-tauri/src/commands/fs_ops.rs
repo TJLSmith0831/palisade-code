@@ -1,10 +1,12 @@
 use crate::executor::Harness;
 use crate::settings;
+use crate::project_path::ProjectPath;
 use crate::{project_root, DirEntry, Res};
 use tauri::Manager;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use crate::locks::MutexExt;
 
 /// Shared by `list_directory` and `list_all_files` so the two entry points
 /// can't drift on which dirs/files they hide. `.git` is always hidden (huge,
@@ -45,19 +47,10 @@ pub async fn list_directory(
 ) -> Res<Vec<DirEntry>> {
     tokio::task::spawn_blocking(move || {
         let root = project_root(&project_hash)?;
-        let target = if relative_path.is_empty() {
-            root.clone()
-        } else {
-            let joined = root.join(&relative_path);
-            std::fs::canonicalize(&joined)
-                .map_err(|err| format!("no such directory: {} ({err})", joined.display()))?
-        };
-        if !target.starts_with(&root) {
-            return Err("path must stay inside the project".into());
-        }
+        let target = ProjectPath::existing(&root, &relative_path)?.into_path_buf();
         let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(&target).map_err(|e| format!("cannot read directory: {e}"))? {
-            let entry = entry.map_err(|e| format!("cannot read entry: {e}"))?;
+        for entry in std::fs::read_dir(&target).map_err(|e| crate::PalisadeError::from(format!("cannot read directory: {e}")))? {
+            let entry = entry.map_err(|e| crate::PalisadeError::from(format!("cannot read entry: {e}")))?;
             let name = entry.file_name().to_string_lossy().to_string();
             if should_skip_entry(&name, include_hidden) {
                 continue;
@@ -75,7 +68,7 @@ pub async fn list_directory(
         Ok(entries)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Recursive file listing for the fuzzy file-open palette (task 5.2). Applies
@@ -125,7 +118,7 @@ pub async fn list_all_files(project_hash: String) -> Res<Vec<String>> {
         Ok(files)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,7 +185,7 @@ impl Matcher {
             // The user is mid-typing a regex most of the time this fires,
             // so it reports as a normal error rather than panicking.
             .map(Matcher::Pattern)
-            .map_err(|err| format!("invalid search pattern: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("invalid search pattern: {err}")))
     }
 
     fn is_match(&self, line: &str, case_sensitive: bool) -> bool {
@@ -273,19 +266,13 @@ pub async fn search_text(
         search_text_in(&root, &query, options.unwrap_or_default())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Resolves `relative_path` against `root`, requiring it to already exist
 /// and stay inside the project.
 pub(crate) fn resolve_existing_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
-    let target = root.join(relative_path);
-    let resolved = std::fs::canonicalize(&target)
-        .map_err(|err| format!("no such file: {} ({err})", target.display()))?;
-    if !resolved.starts_with(root) {
-        return Err("path must stay inside the project".into());
-    }
-    Ok(resolved)
+    Ok(ProjectPath::existing(root, relative_path)?.into_path_buf())
 }
 
 /// Above this, a file is refused rather than loaded. The whole document
@@ -327,20 +314,20 @@ pub async fn read_file_content(
         let resolved = resolve_existing_path(&root, &relative_path)?;
 
         let size = std::fs::metadata(&resolved)
-            .map_err(|err| format!("cannot read file: {err}"))?
+            .map_err(|err| crate::PalisadeError::from(format!("cannot read file: {err}")))?
             .len();
         if size > MAX_EDITABLE_BYTES {
-            return Err(format!("{TOO_LARGE_PREFIX} {size}"));
+            return Err(format!("{TOO_LARGE_PREFIX} {size}").into());
         }
         if looks_binary(&resolved) {
-            return Err(BINARY_PREFIX.to_string());
+            return Err(BINARY_PREFIX.to_string().into());
         }
 
         std::fs::read_to_string(&resolved)
-            .map_err(|err| format!("cannot read file: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("cannot read file: {err}")))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Reads a file as base64 for binary previews (images/video/gif) the editor
@@ -351,11 +338,11 @@ pub async fn read_file_base64(project_hash: String, relative_path: String) -> Re
         use base64::prelude::*;
         let root = project_root(&project_hash)?;
         let resolved = resolve_existing_path(&root, &relative_path)?;
-        let bytes = std::fs::read(&resolved).map_err(|err| format!("cannot read file: {err}"))?;
+        let bytes = std::fs::read(&resolved).map_err(|err| crate::PalisadeError::from(format!("cannot read file: {err}")))?;
         Ok(BASE64_STANDARD.encode(&bytes))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Resolves `relative_path` against `root` for creating a file or directory
@@ -366,27 +353,9 @@ pub async fn read_file_base64(project_hash: String, relative_path: String) -> Re
 /// just that — catching a symlink escape planted partway down an existing
 /// subtree — before creating whatever's missing beneath it.
 pub(crate) fn resolve_creatable_path(root: &Path, relative_path: &str) -> Res<PathBuf> {
-    let rel = Path::new(relative_path);
-    if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err("path must stay inside the project".into());
-    }
-    let target = root.join(rel);
-
-    let mut existing = target.clone();
-    while !existing.exists() {
-        match existing.parent() {
-            Some(parent) => existing = parent.to_path_buf(),
-            None => break,
-        }
-    }
-    let resolved_existing = std::fs::canonicalize(&existing)
-        .map_err(|err| format!("cannot resolve {}: {err}", existing.display()))?;
-    if !resolved_existing.starts_with(root) {
-        return Err("path must stay inside the project".into());
-    }
-
+    let target = ProjectPath::creatable(root, relative_path)?.into_path_buf();
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("create directory: {err}"))?;
+        std::fs::create_dir_all(parent).map_err(|err| crate::PalisadeError::from(format!("create directory: {err}")))?;
     }
     Ok(target)
 }
@@ -403,7 +372,7 @@ pub(crate) fn note_self_write(harness: &tauri::State<'_, Harness>, resolved: &Pa
     // Every open project's watcher (#33). The path is absolute, so only the
     // watcher that actually owns it can see the event this suppresses; the
     // others are told about a path they will never report.
-    for watcher in harness.fswatch.lock().unwrap().values() {
+    for watcher in harness.workspace.fswatch.lock_or_recover().values() {
         watcher.note_self_write(resolved);
     }
 }
@@ -439,13 +408,13 @@ pub async fn write_file_content(
 
         // Recorded before the write so the event can't beat us to the watcher.
         note_self_write(&harness, &resolved);
-        std::fs::write(&resolved, content).map_err(|err| format!("cannot write file: {err}"))?;
+        std::fs::write(&resolved, content).map_err(|err| crate::PalisadeError::from(format!("cannot write file: {err}")))?;
 
         let (settings, _) = settings::load(&root);
         Ok(settings::run_format_on_save(&settings, &root, &relative_path))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Refuses a delete that would take the whole project with it. An empty
@@ -479,7 +448,7 @@ pub(crate) fn check_not_stale(resolved: &Path, expected_previous: Option<&str>, 
     }
     Err(format!(
         "{CONFLICT_PREFIX} {relative_path} changed on disk since you opened it"
-    ))
+    ).into())
 }
 
 /// Renames or moves a file or directory within the project (the file
@@ -499,14 +468,14 @@ pub async fn rename_path(
         let source = resolve_existing_path(&root, &from)?;
         let target = resolve_creatable_path(&root, &to)?;
         if target.exists() {
-            return Err(format!("{to} already exists"));
+            return Err(format!("{to} already exists").into());
         }
         note_self_write(&harness, &source);
         note_self_write(&harness, &target);
-        std::fs::rename(&source, &target).map_err(|err| format!("rename: {err}"))
+        std::fs::rename(&source, &target).map_err(|err| crate::PalisadeError::from(format!("rename: {err}")))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Deletes a file or directory (recursively) from the project.
@@ -523,13 +492,13 @@ pub async fn delete_path(
         check_not_project_root(&root, &target)?;
         note_self_write(&harness, &target);
         if target.is_dir() {
-            std::fs::remove_dir_all(&target).map_err(|err| format!("delete directory: {err}"))
+            std::fs::remove_dir_all(&target).map_err(|err| crate::PalisadeError::from(format!("delete directory: {err}")))
         } else {
-            std::fs::remove_file(&target).map_err(|err| format!("delete file: {err}"))
+            std::fs::remove_file(&target).map_err(|err| crate::PalisadeError::from(format!("delete file: {err}")))
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Creates a directory (and any missing parents) — the file tree's "New
@@ -539,10 +508,10 @@ pub async fn create_directory(project_hash: String, relative_path: String) -> Re
     tokio::task::spawn_blocking(move || {
         let root = project_root(&project_hash)?;
         let target = resolve_creatable_path(&root, &relative_path)?;
-        std::fs::create_dir_all(&target).map_err(|err| format!("create directory: {err}"))
+        std::fs::create_dir_all(&target).map_err(|err| crate::PalisadeError::from(format!("create directory: {err}")))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[cfg(test)]

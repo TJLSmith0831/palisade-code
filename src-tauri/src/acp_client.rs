@@ -18,10 +18,12 @@ use tokio::sync::oneshot;
 use agent_client_protocol::schema::v1;
 use agent_client_protocol::{self as acp, ConnectTo};
 use agent_client_protocol::schema::ProtocolVersion;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::executor::{Envelope, ExecutorEvent, Sink};
 use crate::permissions::{self, PermissionDecision, PermissionMode};
+use crate::locks::MutexExt;
+use crate::Res;
 
 /// How long session startup (spawn + initialize + session/new) may take
 /// before Palisade gives up. Cold npx installs can't happen — availability
@@ -32,6 +34,13 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long an interactive sign-in may take. Longer than startup on purpose:
 /// the agent's own flow can send the user to a browser and wait for them.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Backoff before each retry of a `session/new` that failed with Claude
+/// Code's transient OAuth-refresh-race `server_error` (see
+/// `is_transient_server_error`). The per-agent spawn lock already prevents
+/// This is intentionally not paired with a process-local mutex: other
+/// Palisade instances and terminal agents share the provider credentials.
+const SESSION_NEW_RETRY_DELAYS: [Duration; 3] = [Duration::from_secs(1), Duration::from_secs(3), Duration::from_secs(7)];
 
 // ------------------------------------------------------------- models
 
@@ -199,13 +208,27 @@ fn agent_logins() -> &'static Mutex<HashMap<String, Vec<AgentLogin>>> {
 }
 
 pub(crate) fn record_logins(agent_id: &str, logins: Vec<AgentLogin>) {
-    agent_logins().lock().unwrap().insert(agent_id.to_string(), logins);
+    agent_logins().lock_or_recover().insert(agent_id.to_string(), logins);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FailureClass { AuthRequired, TransientProvider, Other }
+
+impl FailureClass {
+    pub fn error_kind(self) -> crate::error::ErrorKind {
+        match self {
+            Self::AuthRequired => crate::error::ErrorKind::AuthRequired,
+            Self::TransientProvider => crate::error::ErrorKind::TransientProvider,
+            Self::Other => crate::error::ErrorKind::Unknown,
+        }
+    }
 }
 
 /// What the user can be offered to sign this agent in, or empty when the agent
 /// advertised no client-runnable login (or has not been reached yet).
 pub fn logins_for(agent_id: &str) -> Vec<AgentLogin> {
-    agent_logins().lock().unwrap().get(agent_id).cloned().unwrap_or_default()
+    agent_logins().lock_or_recover().get(agent_id).cloned().unwrap_or_default()
 }
 
 /// An advertised method's display name, falling back to its id.
@@ -299,21 +322,53 @@ pub(crate) fn logins_from(
 /// wording; the prose check is a fallback for agents that only say it in text
 /// (#19), not the contract.
 pub(crate) fn is_auth_required(err: &acp::Error) -> bool {
-    if matches!(err.code, acp::ErrorCode::AuthRequired) {
-        return true;
+    classify_acp_error(err) == FailureClass::AuthRequired
+}
+
+/// Structured ACP fields take precedence over error prose. In particular, a
+/// provider's `server_error` is never upgraded to a login requirement merely
+/// because its troubleshooting text says “sign in again”.
+pub(crate) fn classify_acp_error(err: &acp::Error) -> FailureClass {
+    if matches!(err.code, acp::ErrorCode::AuthRequired) { return FailureClass::AuthRequired; }
+    if let Some(data) = err.data.as_ref().and_then(|value| value.as_object()) {
+        if data.get("reason").and_then(|value| value.as_str()) == Some("auth_required") {
+            return FailureClass::AuthRequired;
+        }
+        if let Some(kind) = data.get("errorKind").and_then(|value| value.as_str()) {
+            return match kind {
+                "authentication_failed" => FailureClass::AuthRequired,
+                "server_error" => FailureClass::TransientProvider,
+                _ => FailureClass::Other,
+            };
+        }
     }
-    let reason = err.data.as_ref().and_then(|d| d.get("reason")).and_then(|r| r.as_str());
-    if reason == Some("auth_required") {
-        return true;
-    }
-    reads_as_auth_failure(&err.to_string())
+    if reads_as_auth_failure(&err.to_string()) { FailureClass::AuthRequired } else { FailureClass::Other }
+}
+
+/// Whether `err` is Claude Code's known-transient OAuth-refresh race
+/// (anthropics/claude-code#27933, #25609, #24317): the refresh token is
+/// single-use, so a process that loses the race to another one gets this
+/// `errorKind` rather than `authentication_failed`. Retryable, not a real
+/// logout.
+fn is_transient_server_error(err: &acp::Error) -> bool {
+    classify_acp_error(err) == FailureClass::TransientProvider
 }
 
 /// Mirror of the frontend's `isAuthError` (src/errors.ts): agents report an
 /// expired or missing login in prose, with no shared error code between them.
 pub(crate) fn reads_as_auth_failure(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
+    // Claude Code's OAuth refresh token is single-use (anthropics/claude-code
+    // #27933, #25609, #24317): two processes racing to refresh it produce
+    // "errorKind: server_error" and a message that suggests "sign in again"
+    // as a last resort, even though the agent itself calls this transient.
+    // Without this guard the keyword scan below treats every such race as a
+    // real logout.
+    if text.contains("errorkind") && text.contains("server_error") {
+        return false;
+    }
     [
+        "auth_required",
         "authenticate",
         "authentication",
         "unauthoriz",
@@ -321,6 +376,7 @@ pub(crate) fn reads_as_auth_failure(text: &str) -> bool {
         "log in",
         "login required",
         "sign in",
+        "signed in",
         "session expired",
         "token expired",
         "credentials",
@@ -444,14 +500,14 @@ impl AcpSession {
     /// prompt — reuses `pending_permissions` rather than tracking a
     /// separate flag (attention-routing D1).
     pub fn needs_attention(&self) -> bool {
-        !self.pending_permissions.lock().unwrap().is_empty()
+        !self.pending_permissions.lock_or_recover().is_empty()
     }
 
     /// Resolve a pending permission request from outside the bridge thread
     /// (the `answer_permission_prompt` Tauri command). A missing id is a
     /// no-op success — already resolved, or the session is gone.
     pub fn answer_permission_prompt(&self, request_id: &str, answer: PermissionAnswer) {
-        if let Some(tx) = self.pending_permissions.lock().unwrap().remove(request_id) {
+        if let Some(tx) = self.pending_permissions.lock_or_recover().remove(request_id) {
             let _ = tx.send(answer);
         }
     }
@@ -467,10 +523,10 @@ impl AcpSession {
         }
         self.cmd_tx = None;
         self.busy.store(false, Ordering::SeqCst);
-        for (_, tx) in self.pending_permissions.lock().unwrap().drain() {
+        for (_, tx) in self.pending_permissions.lock_or_recover().drain() {
             let _ = tx.send(PermissionAnswer::Deny);
         }
-        active_commands_registry().lock().unwrap().remove(&self.id);
+        active_commands_registry().lock_or_recover().remove(&self.id);
     }
 }
 
@@ -855,7 +911,7 @@ async fn answer_permission(
     let conflict = if kind == permissions::ToolKind::Execute {
         command.as_deref().and_then(|cmd| {
             let warning = {
-                let mut active = active_commands.lock().unwrap();
+                let mut active = active_commands.lock_or_recover();
                 active.insert(
                     session_id.to_string(),
                     ActiveCommand { project_hash: project_hash.to_string(), command: cmd.to_string() },
@@ -868,7 +924,7 @@ async fn answer_permission(
         None
     };
 
-    let decision = if session_allowed.lock().unwrap().contains(&kind) {
+    let decision = if session_allowed.lock_or_recover().contains(&kind) {
         PermissionDecision::Allow
     } else {
         let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
@@ -889,7 +945,7 @@ async fn answer_permission(
         PermissionDecision::Prompt => {
             let request_id = ulid::Ulid::new().to_string();
             let (tx, rx) = oneshot::channel();
-            pending.lock().unwrap().insert(request_id.clone(), tx);
+            pending.lock_or_recover().insert(request_id.clone(), tx);
             emit(
                 sink,
                 session_id,
@@ -910,7 +966,7 @@ async fn answer_permission(
     };
 
     if answer == PermissionAnswer::AllowSession {
-        session_allowed.lock().unwrap().insert(kind);
+        session_allowed.lock_or_recover().insert(kind);
     }
 
     match answer {
@@ -950,8 +1006,7 @@ fn write_guard_input(
         v1::SessionUpdate::ToolCall(call) => {
             let kind = tool_kind(Some(&call.kind));
             kinds
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .insert(call.tool_call_id.to_string(), kind);
             Some((
                 kind,
@@ -967,8 +1022,7 @@ fn write_guard_input(
             let kind = match update.fields.kind.as_ref() {
                 Some(k) => tool_kind(Some(k)),
                 None => *kinds
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .get(&update.tool_call_id.to_string())?,
             };
             Some((
@@ -1047,13 +1101,13 @@ async fn run_bridge(
     busy: Arc<AtomicBool>,
     pending_permissions: PendingPermissions,
     active_commands: ActiveCommands,
-    ready_tx: mpsc::Sender<Result<ReadyReport, String>>,
+    ready_tx: mpsc::Sender<Result<ReadyReport, crate::PalisadeError>>,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BridgeCommand>,
     probe_only: bool,
     // Set to run one `authenticate` for this method and stop — the sign-in
     // path for an agent whose login the protocol drives (#19).
     auth_only: Option<String>,
-) -> Result<(), String> {
+) -> Res<()> {
     let notif_sink = sink.clone();
     let notif_session = palisade_session_id.clone();
     let notif_thread = spawn.thread_id.clone();
@@ -1135,9 +1189,9 @@ async fn run_bridge(
                             ));
                             // Clear the turn's buffers so the prompt response
                             // doesn't flush partial text as a "completed" turn.
-                            notif_text.lock().unwrap().clear();
-                            notif_think.lock().unwrap().clear();
-                            *notif_think_started.lock().unwrap() = None;
+                            notif_text.lock_or_recover().clear();
+                            notif_think.lock_or_recover().clear();
+                            *notif_think_started.lock_or_recover() = None;
                             emit(
                                 &notif_sink,
                                 &notif_session,
@@ -1156,7 +1210,7 @@ async fn run_bridge(
                 for event in crate::acp_events::file_edits(&notification.update) {
                     if let ExecutorEvent::FileEdit { id, path, after, .. } = &event {
                         let key = format!("{id}\0{path}\0{after}");
-                        if !notif_edits.lock().unwrap().insert(key) {
+                        if !notif_edits.lock_or_recover().insert(key) {
                             continue;
                         }
                     }
@@ -1167,12 +1221,12 @@ async fn run_bridge(
                 {
                     match &mut update {
                         crate::acp_events::AcpUpdate::TextDelta { text } => {
-                            notif_text.lock().unwrap().push_str(text)
+                            notif_text.lock_or_recover().push_str(text)
                         }
                         crate::acp_events::AcpUpdate::ReasoningDelta { text } => {
-                            let mut buf = notif_think.lock().unwrap();
+                            let mut buf = notif_think.lock_or_recover();
                             if buf.is_empty() {
-                                *notif_think_started.lock().unwrap() = Some(std::time::Instant::now());
+                                *notif_think_started.lock_or_recover() = Some(std::time::Instant::now());
                             }
                             buf.push_str(text);
                         }
@@ -1182,7 +1236,7 @@ async fn run_bridge(
                         // double-print (`dedup_tool_output`).
                         crate::acp_events::AcpUpdate::ToolOutputDelta { id, chunk } => {
                             *chunk = dedup_tool_output(
-                                &mut notif_tool_output.lock().unwrap(),
+                                &mut notif_tool_output.lock_or_recover(),
                                 id,
                                 chunk,
                             );
@@ -1194,7 +1248,7 @@ async fn run_bridge(
                             id, output, ..
                         } => {
                             *output = complete_tool_output(
-                                &mut notif_tool_output.lock().unwrap(),
+                                &mut notif_tool_output.lock_or_recover(),
                                 id,
                                 output,
                             );
@@ -1291,7 +1345,7 @@ async fn run_bridge(
                         acp_session_id: String::new(),
                         models: ModelState::default(),
                     }),
-                    Err(e) => Err(format!("{e}")),
+                    Err(e) => Err(crate::PalisadeError::new(classify_acp_error(&e).error_kind(), e.to_string())),
                 });
                 return Ok(());
             }
@@ -1310,20 +1364,34 @@ async fn run_bridge(
                 v1::NewSessionRequest::new(spawn.project_root.clone())
                     .mcp_servers(mcp_servers.clone())
             };
-            let started = cx.send_request(new_request()).block_task().await;
+            let mut started = cx.send_request(new_request()).block_task().await;
+            for delay in SESSION_NEW_RETRY_DELAYS {
+                match &started {
+                    Err(e) if is_transient_server_error(e) => {
+                        tokio::time::sleep(delay).await;
+                        started = cx.send_request(new_request()).block_task().await;
+                    }
+                    _ => break,
+                }
+            }
             // Authentication is demand-driven. Picking the first advertised
             // method here was both surprising (Codex advertises API-key before
             // ChatGPT) and could launch a sign-in while merely opening a
             // thread. Surface `auth_required` to the UI instead; the user
             // chooses a method and a later retry creates the session.
-            let new_session = started.map_err(|e| {
-                let detail = if is_auth_required(&e) {
-                    auth_help(&spawn.agent_name, &launch, &e.to_string())
-                } else {
-                    format!("session/new failed: {e}")
-                };
-                acp::Error::internal_error().data(detail)
-            })?;
+            let new_session = match started {
+                Ok(session) => session,
+                Err(e) => {
+                    let failure_class = classify_acp_error(&e);
+                    let detail = if failure_class == FailureClass::AuthRequired {
+                        auth_help(&spawn.agent_name, &launch, &e.to_string())
+                    } else {
+                        format!("session/new failed: {e}")
+                    };
+                    let _ = ready_tx.send(Err(crate::PalisadeError::new(failure_class.error_kind(), detail)));
+                    return Ok(());
+                }
+            };
 
             let session_id = new_session.session_id;
             let mut models = extract_models(new_session.config_options.as_deref().unwrap_or(&[]));
@@ -1390,12 +1458,12 @@ async fn run_bridge(
                                     }
                                     // Flush the turn's accumulated chunks as the
                                     // complete events persist() records.
-                                    let full = std::mem::take(&mut *done_text.lock().unwrap());
+                                    let full = std::mem::take(&mut *done_text.lock_or_recover());
                                     if !full.trim().is_empty() {
                                         emit(&done_sink, &done_session, &done_thread, ExecutorEvent::Text { text: full });
                                     }
-                                    let thought = std::mem::take(&mut *done_think.lock().unwrap());
-                                    let started = done_think_started.lock().unwrap().take();
+                                    let thought = std::mem::take(&mut *done_think.lock_or_recover());
+                                    let started = done_think_started.lock_or_recover().take();
                                     if !thought.trim().is_empty() {
                                         let elapsed_secs = started
                                             .map(|s| s.elapsed().as_secs())
@@ -1414,13 +1482,14 @@ async fn run_bridge(
                                         // which is where `authenticate` is
                                         // called.
                                         Err(e) => {
-                                            let message = if is_auth_required(&e) {
+                                            let failure_class = classify_acp_error(&e);
+                                            let message = if failure_class == FailureClass::AuthRequired {
                                                 auth_help(&done_agent, &done_launch, &e.to_string())
                                             } else {
                                                 format!("prompt failed: {e}")
                                             };
                                             emit(&done_sink, &done_session, &done_thread,
-                                                ExecutorEvent::turn_failed(message))
+                                                ExecutorEvent::turn_failed_classified(message, Some(failure_class)))
                                         }
                                     }
                                     Ok(())
@@ -1448,7 +1517,7 @@ async fn run_bridge(
             // If startup never completed, the caller is still waiting on the
             // ready channel; otherwise the receiver is dropped and the
             // session died mid-flight — surface it as a Crashed event.
-            if tail_ready_tx.send(Err(message.clone())).is_err() {
+            if tail_ready_tx.send(Err(crate::PalisadeError::from(message.clone()))).is_err() {
                 emit(
                     &tail_sink,
                     &tail_session,
@@ -1456,7 +1525,7 @@ async fn run_bridge(
                     ExecutorEvent::agent_died(None, message.clone()),
                 );
             }
-            Err(message)
+            Err(message.into())
         }
     }
 }
@@ -1482,14 +1551,17 @@ fn start_with_transport(
         String,
         PendingPermissions,
     ),
-    String,
+    crate::PalisadeError,
 > {
+    // Held for this whole function: blocks a second spawn of the same agent
+    // from starting its handshake until this one is ready or has failed, so
+    // the two never race to refresh the same OAuth token.
     let palisade_session_id = ulid::Ulid::new().to_string();
     let busy = Arc::new(AtomicBool::new(false));
     let bridge_busy = busy.clone();
     let pending_permissions: PendingPermissions = Arc::new(Mutex::new(HashMap::new()));
     let bridge_pending = pending_permissions.clone();
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<ReadyReport, String>>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<ReadyReport, crate::PalisadeError>>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<BridgeCommand>();
 
     let thread_session = palisade_session_id.clone();
@@ -1501,7 +1573,7 @@ fn start_with_transport(
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = ready_tx.send(Err(format!("tokio runtime: {e}")));
+                let _ = ready_tx.send(Err(crate::PalisadeError::from(format!("tokio runtime: {e}"))));
                 return;
             }
         };
@@ -1533,7 +1605,7 @@ fn start_with_transport(
             pending_permissions,
         )),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(format!("agent did not answer within {deadline:?}")),
+        Err(_) => Err(format!("agent did not answer within {deadline:?}").into()),
     }
 }
 
@@ -1543,7 +1615,7 @@ fn start_with_transport(
 /// handshake, creates a session (applying the thread's model choice), and
 /// bridges notifications to the sync `Sink`. Blocks until the session is
 /// ready or startup fails.
-pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Result<AcpSession, String> {
+pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Res<AcpSession> {
     let agent = agent_config(&spawn);
     let identity = SessionIdentity::from(&spawn);
     let (id, models, cmd_tx, busy, acp_session_id, pending_permissions) =
@@ -1562,7 +1634,7 @@ pub fn probe_models(
     bin: PathBuf,
     args: Vec<String>,
     project_root: PathBuf,
-) -> Result<ModelState, String> {
+) -> Res<ModelState> {
     let spawn = AcpSpawn {
         // Named, not blank: the probe completes a real `initialize`, which is
         // where an agent's advertised logins are learned — recording them
@@ -1601,7 +1673,7 @@ pub fn authenticate_agent(
     args: Vec<String>,
     project_root: PathBuf,
     method_id: String,
-) -> Result<(), String> {
+) -> Res<()> {
     let spawn = AcpSpawn {
         agent_id,
         agent_name: String::new(),
@@ -1664,9 +1736,7 @@ struct CollectingSink(Arc<Mutex<Collected>>);
 
 impl Sink for CollectingSink {
     fn emit(&self, envelope: &Envelope) {
-        if let Ok(mut collected) = self.0.lock() {
-            collected.accept(&envelope.event);
-        }
+        self.0.lock_or_recover().accept(&envelope.event);
     }
 }
 
@@ -1674,7 +1744,7 @@ impl Sink for CollectingSink {
 ///
 /// The session is terminated either way — this is not a thread the user can
 /// see or resume, so leaving it live would leak a child process per click.
-pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result<String, String> {
+pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<String> {
     let collected = Arc::new(Mutex::new(Collected::default()));
     let sink = Arc::new(CollectingSink(collected.clone()));
     let agent = agent_config(&spawn);
@@ -1685,11 +1755,11 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result
     busy.store(true, Ordering::SeqCst);
     cmd_tx
         .send(BridgeCommand::Prompt(prompt.to_string()))
-        .map_err(|_| "agent connection is closed".to_string())?;
+        .map_err(|_| crate::PalisadeError::from("agent connection is closed"))?;
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if collected.lock().map(|c| c.finished).unwrap_or(true) {
+        if collected.lock_or_recover().finished {
             break;
         }
         if std::time::Instant::now() >= deadline {
@@ -1700,9 +1770,9 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Result
     }
     let _ = cmd_tx.send(BridgeCommand::Shutdown);
 
-    let collected = collected.lock().map_err(|_| "collector poisoned")?;
+    let collected = collected.lock_or_recover();
     if let Some(error) = &collected.error {
-        return Err(error.clone());
+        return Err(error.clone().into());
     }
     Ok(collected.text.trim().to_string())
 }
@@ -1770,7 +1840,7 @@ impl SessionIdentity {
 
 /// Send a user message to a live ACP session. The prompt response arrives
 /// on the bridge thread, which emits `Done` (or `Crashed`) and clears busy.
-pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Result<(), String> {
+pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Res<()> {
     if session.is_busy() {
         return Err("executor is mid-turn".into());
     }
@@ -1781,7 +1851,7 @@ pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Result<(), String
     // into the user's project. One-shot metadata requests bypass this path.
     let preview = include_str!("../skills/palisade-preview.md");
     tx.send(BridgeCommand::Prompt(format!("{preview}\n\n{message}")))
-        .map_err(|_| "agent connection is closed".to_string())
+        .map_err(|_| crate::PalisadeError::from("agent connection is closed"))
 }
 
 fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
@@ -1827,6 +1897,7 @@ pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::Unboun
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
 
     // ------------------------------------------------------- one-shot
@@ -2200,7 +2271,7 @@ mod tests {
         };
         assert!(warning.expect("conflict warning should be attached").contains("3000"));
 
-        let tx = second.pending.lock().unwrap().remove(&id).expect("pending entry should be registered");
+        let tx = second.pending.lock_or_recover().remove(&id).expect("pending entry should be registered");
         tx.send(PermissionAnswer::Allow).unwrap();
         fut.await;
     }
@@ -2248,7 +2319,7 @@ mod tests {
         assert_eq!(tool_kind, "execute");
         assert_eq!(command.as_deref(), Some("cargo build"));
 
-        let tx = rig.pending.lock().unwrap().remove(&id).expect("pending entry should be registered");
+        let tx = rig.pending.lock_or_recover().remove(&id).expect("pending entry should be registered");
         tx.send(PermissionAnswer::Allow).unwrap();
         let res = fut.await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
@@ -2266,7 +2337,7 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_millis(20), &mut fut).await;
             let event = rig.events.recv_timeout(Duration::from_millis(50)).unwrap();
             let ExecutorEvent::PermissionRequest { id, .. } = event.event else { panic!("expected PermissionRequest") };
-            let tx = rig.pending.lock().unwrap().remove(&id).unwrap();
+            let tx = rig.pending.lock_or_recover().remove(&id).unwrap();
             tx.send(answer).unwrap();
             let res = fut.await;
             assert_eq!(selected_option(res).is_some(), expect_allow);
@@ -2284,7 +2355,7 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_millis(20), &mut fut).await;
         let event = rig.events.recv_timeout(Duration::from_millis(50)).unwrap();
         let ExecutorEvent::PermissionRequest { id, .. } = event.event else { panic!("expected PermissionRequest") };
-        let tx = rig.pending.lock().unwrap().remove(&id).unwrap();
+        let tx = rig.pending.lock_or_recover().remove(&id).unwrap();
         tx.send(PermissionAnswer::AllowSession).unwrap();
         let res = fut.await;
         assert_eq!(selected_option(res).as_deref(), Some("allow"));
@@ -2295,7 +2366,7 @@ mod tests {
         let res2 = rig.answer(&second, PermissionMode::Go).await;
         assert_eq!(selected_option(res2).as_deref(), Some("allow"));
         assert!(rig.events.try_recv().is_err(), "no second PermissionRequest should have been emitted");
-        assert!(rig.pending.lock().unwrap().is_empty());
+        assert!(rig.pending.lock_or_recover().is_empty());
     }
 
     /// RED→GREEN 3.1: draining a session's pending permissions on teardown
@@ -2304,12 +2375,12 @@ mod tests {
     async fn terminate_drains_pending_permissions_as_denied() {
         let (mut session, _cmd_rx) = stub_session(false);
         let (tx, rx) = oneshot::channel();
-        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        session.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
 
         session.terminate();
 
         assert_eq!(rx.await, Ok(PermissionAnswer::Deny));
-        assert!(session.pending_permissions.lock().unwrap().is_empty());
+        assert!(session.pending_permissions.lock_or_recover().is_empty());
     }
 
     /// RED→GREEN: `answer_permission_prompt` resolves a registered pending
@@ -2318,7 +2389,7 @@ mod tests {
     async fn answer_permission_prompt_resolves_or_no_ops() {
         let (session, _cmd_rx) = stub_session(false);
         let (tx, mut rx) = oneshot::channel();
-        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        session.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
 
         session.answer_permission_prompt("does-not-exist", PermissionAnswer::Allow);
         assert!(rx.try_recv().is_err(), "unknown id must not resolve the real pending entry");
@@ -2338,7 +2409,7 @@ mod tests {
         assert!(!session.needs_attention());
 
         let (tx, _rx) = oneshot::channel();
-        session.pending_permissions.lock().unwrap().insert("req-1".into(), tx);
+        session.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
         assert!(session.needs_attention());
 
         session.answer_permission_prompt("req-1", PermissionAnswer::Allow);
@@ -2903,7 +2974,7 @@ mod tests {
             .expect("an already-authorized session should start");
 
         assert!(
-            fake.authenticate_requests.lock().unwrap().is_empty(),
+            fake.authenticate_requests.lock_or_recover().is_empty(),
             "opening a thread must not select or invoke an advertised login method"
         );
     }
@@ -3080,7 +3151,7 @@ mod tests {
 
         assert_eq!(models.current.as_deref(), Some("model-b"));
         assert_eq!(
-            *fake.set_config_requests.lock().unwrap(),
+            *fake.set_config_requests.lock_or_recover(),
             vec![("model".to_string(), "model-b".to_string())]
         );
     }
@@ -3182,6 +3253,43 @@ mod tests {
             let err = acp::Error::internal_error().data(serde_json::json!(detail));
             assert!(!is_auth_required(&err), "should not read as auth: {detail}");
         }
+    }
+
+    /// The exact failure from the bug report: Claude Code's OAuth refresh
+    /// token is single-use, so a losing process's own suggestion to "sign in
+    /// again" must not be read as an actual expired login — the agent's
+    /// `errorKind` says this one is a retryable `server_error`, not
+    /// `authentication_failed`.
+    #[test]
+    fn a_transient_oauth_refresh_race_is_not_mistaken_for_an_auth_failure() {
+        let detail = "Failed to refresh OAuth token: another Claude Code process is \
+            refreshing it or exited mid-refresh. This is usually transient; retry in a \
+            minute, and if it persists close other Claude Code processes or sign in \
+            again: { \"errorKind\": \"server_error\" }";
+        let err = acp::Error::internal_error().data(serde_json::json!(detail));
+        assert!(!is_auth_required(&err), "a transient race must not read as auth: {detail}");
+        assert!(!reads_as_auth_failure(detail));
+        assert!(is_transient_server_error(
+            &acp::Error::internal_error().data(serde_json::json!({ "errorKind": "server_error" }))
+        ));
+        assert!(!is_transient_server_error(
+            &acp::Error::internal_error()
+                .data(serde_json::json!({ "errorKind": "authentication_failed" }))
+        ));
+    }
+
+    #[test]
+    fn structured_failure_classification_overrides_misleading_prose() {
+        let transient = acp::Error::internal_error().data(serde_json::json!({
+            "errorKind": "server_error",
+            "detail": "please sign in again"
+        }));
+        assert_eq!(classify_acp_error(&transient), FailureClass::TransientProvider);
+        assert_eq!(classify_acp_error(&acp::Error::auth_required()), FailureClass::AuthRequired);
+        assert_eq!(
+            classify_acp_error(&acp::Error::internal_error().data(serde_json::json!({ "errorKind": "authentication_failed" }))),
+            FailureClass::AuthRequired
+        );
     }
 
     /// #19's actual finding: the thing Palisade launched is not necessarily

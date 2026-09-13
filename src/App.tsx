@@ -78,6 +78,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import { useAppShell } from "./hooks/useAppShell";
 import { useProjectManager } from "./hooks/useProjectManager";
+import { resolvePrefs, useThreadPrefs } from "./hooks/useThreadPrefs";
+import { useNewThreadFlow } from "./hooks/useNewThreadFlow";
+import { useThreadActions } from "./hooks/useThreadActions";
+import { useAppCommands } from "./hooks/useAppCommands";
 import { useExecutor } from "./hooks/useExecutor";
 import type {
   Envelope,
@@ -88,7 +92,7 @@ import type {
   ThreadMeta,
 } from "./api";
 import { onActivateKey } from "./a11y";
-import { describeError, isAuthError } from "./errors";
+import { describeError, errorKind, isAuthError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
 import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
 import { applyMention, mentionAt, rankMentions } from "./mentions";
@@ -127,7 +131,7 @@ import { useDevServerPreview } from "./useDevServerPreview";
 import { isMarkdownPath, tabKey, useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
-import { matchesChord, type Command } from "./commands";
+import { matchesChord } from "./commands";
 import { createCommandBridge, type CommandHandler } from "./nativeMenu";
 
 import FilePalette from "./FilePalette";
@@ -1065,7 +1069,7 @@ export const ChatSurface = memo(
                 been asked for. */}
             <p
               className="hint"
-              style={{ marginBottom: 12, fontSize: 11.5 }}
+              style={{ marginBottom: 12, fontSize: 11 }}
               data-testid="spec-type-note"
             >
               Pick how to frame it, say what you want, and the agent opens the
@@ -1326,23 +1330,47 @@ export const ChatSurface = memo(
             </Button>
           </Alert>
         )}
+        {/* Polite, not assertive: agent output streams continuously, and an
+            assertive region would interrupt the screen reader on every token.
+            A permission prompt carries its own labelled group inside. */}
         <div
           className="messages"
           data-testid="messages"
           ref={messagesRef}
           onScroll={handleScroll}
+          aria-live="polite"
+          aria-relevant="additions text"
           data-autoscroll={autoScroll}
         >
           <>
-            {items.length === 0 && <p className="empty">No messages yet.</p>}
+            {items.length === 0 && (
+              <div className="ds-thread-empty" data-testid="thread-empty">
+                <strong>Nothing said yet</strong>
+                <p>
+                  Describe what you want built. <b>Spec</b> works the problem
+                  out with you first and writes it down; <b>Go</b> builds
+                  against a spec that already exists.
+                </p>
+                <p>
+                  Type <code>/</code> for commands, or <code>@</code> to point
+                  at a file in this project.
+                </p>
+              </div>
+            )}
             <EventList
               items={items}
               executor={executor}
               sessionId={sessionId}
               onPermissionAnswered={onPermissionAnswered}
-              onRetry={(text) => {
-                setDraft(text);
-                handleSend();
+              onRetry={(message) => {
+                if (typeof message === "number" && project && thread) {
+                  void api.retryMessage(project.hash, thread.id, message).catch((err) => onError?.(describeError(err)));
+                } else if (typeof message === "string") {
+                  // Legacy records lacked sequence ids. Preserve their old
+                  // text retry behaviour; newly persisted failures use the
+                  // sequence-keyed path above and cannot duplicate a row.
+                  setDraft(message);
+                }
               }}
               agentLogins={agentLogins}
               agentLoginsFor={agentLoginsFor}
@@ -1381,7 +1409,7 @@ export const ChatSurface = memo(
                 style={{
                   margin: 0,
                   paddingLeft: 18,
-                  fontSize: 12.5,
+                  fontSize: 12,
                   lineHeight: 1.5,
                   color: "var(--muted)",
                 }}
@@ -1501,7 +1529,7 @@ export const ChatSurface = memo(
                   <ActionIcon
                     size="sm"
                     variant="subtle"
-                    color="gray"
+                    color="neutral"
                     data-testid="queued-remove"
                     aria-label={`Remove queued message: ${message.text}`}
                     onClick={() => onRemoveQueued?.(message.id)}
@@ -1878,7 +1906,7 @@ export const ChatSurface = memo(
                     background: "transparent",
                     boxShadow: "none",
                     resize: "none",
-                    fontSize: 14,
+                    fontSize: 13,
                     lineHeight: 1.5,
                   },
                 }}
@@ -1992,7 +2020,7 @@ export const ChatSurface = memo(
                   background: "transparent",
                   boxShadow: "none",
                   resize: "none",
-                  fontSize: 14,
+                  fontSize: 13,
                   lineHeight: 1.5,
                 },
               }}
@@ -2426,33 +2454,6 @@ const DEFAULT_PROJECT_SETTINGS = `{
 }
 `;
 const lastThreadKey = (hash: string) => `palisade:lastThread:${hash}`;
-const threadPrefsKey = (hash: string, threadId: string) =>
-  `palisade:thread-prefs:${hash}:${threadId}`;
-
-type ThreadPrefs = { bypass: boolean };
-
-const getThreadPrefs = (hash: string, threadId: string): ThreadPrefs | null => {
-  const raw = localStorage.getItem(threadPrefsKey(hash, threadId));
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<ThreadPrefs>;
-    if (typeof parsed.bypass === "boolean") {
-      return { bypass: parsed.bypass };
-    }
-  } catch {
-    // fall through to default
-  }
-  return null;
-};
-
-const setThreadPrefs = (hash: string, threadId: string, prefs: ThreadPrefs) => {
-  localStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
-};
-
-// Every never-configured thread starts in Accept mode (D6) — no global
-// default a thread's own toggle could silently promote for every other one.
-const resolvePrefs = (hash: string, threadId: string): ThreadPrefs =>
-  getThreadPrefs(hash, threadId) ?? { bypass: false };
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 /** Executor event kinds that are never persisted to the session store (same
  *  D-design comment as ExecutorEvent::TextDelta/ToolOutputDelta): a refresh
@@ -2714,7 +2715,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                     <Menu.Target>
                       <ActionIcon
                         variant="subtle"
-                        color="gray"
+                        color="neutral"
                         size="sm"
                         aria-label={`Actions for ${p.displayName}`}
                         data-testid="recent-project-menu"
@@ -2735,7 +2736,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                         Open in new window
                       </Menu.Item>
                       <Menu.Item
-                        color="red"
+                        color="danger"
                         leftSection={<IconTrash size={14} />}
                         data-testid="recent-project-remove"
                         onClick={(event) => {
@@ -2818,6 +2819,42 @@ function buildReviewRunView(record: api.ChainRunRecord): ChainRunCardView {
   };
 }
 
+/**
+ * A one-line prompt, confirm, or picker, rendered as the app's own command
+ * bar. `window.prompt` and `window.confirm` do nothing in Tauri's WKWebView —
+ * they return null without ever showing a dialog — so anything needing a line
+ * of text, or a yes/no, has to go through this.
+ *
+ * Hoisted out of App so the hooks that raise one can name it.
+ */
+export type CommandBarRequest =
+    | {
+        kind: "input";
+        label: string;
+        value: string;
+        placeholder?: string;
+        submit: (value: string) => void;
+      }
+    | {
+        kind: "confirm";
+        label: string;
+        confirmLabel?: string;
+        onConfirm: () => void;
+        onCancel?: () => void;
+      }
+    | {
+        kind: "select";
+        label: string;
+        /** "branch" keeps the create/delete/DWIM-worktree extras that only
+         *  make sense for branches; "list" is a plain switcher (working
+         *  trees today) that just picks a row. One modal, one look, for
+         *  both — only the row extras differ. */
+        variant: "branch" | "list";
+        options: { value: string; label: string; secondary?: string }[];
+        submit: (value: string) => void;
+      }
+    | null;
+
 export default function App() {
   const pm = useProjectManager();
   const project = pm.project;
@@ -2857,45 +2894,24 @@ export default function App() {
   // Tauri's WKWebView — they return null without ever showing a dialog —
   // so anything that needs a line of text, or a yes/no from the user, has
   // to go through this.
-  const [bar, setBar] = useState<
-    | {
-        kind: "input";
-        label: string;
-        value: string;
-        placeholder?: string;
-        submit: (value: string) => void;
-      }
-    | {
-        kind: "confirm";
-        label: string;
-        confirmLabel?: string;
-        onConfirm: () => void;
-        onCancel?: () => void;
-      }
-    | {
-        kind: "select";
-        label: string;
-        /** "branch" keeps the create/delete/DWIM-worktree extras that only
-         *  make sense for branches; "list" is a plain switcher (working
-         *  trees today) that just picks a row. One modal, one look, for
-         *  both — only the row extras differ. */
-        variant: "branch" | "list";
-        options: { value: string; label: string; secondary?: string }[];
-        submit: (value: string) => void;
-      }
-    | null
-  >(null);
-  // Shows the inline Vibe/Spec picker in the chat surface in place of the
-  // thread view — not part of `bar` since it isn't an overlay (spec:
-  // new-thread-mode-picker requires it inline, not a modal dialog).
-  const [newThreadPicker, setNewThreadPicker] = useState(false);
-  // D19/D20: deferred thread creation — picking a mode from the Vibe/Spec
-  // picker no longer creates a thread immediately. For "go", an empty composer
-  // appears; the thread is created on first send. For "spec", the framing menu
-  // appears (Group 7); the thread is created on spec-type commit (Group 8).
-  const [pendingMode, setPendingMode] = useState<api.Mode | null>(null);
-  // D21: executor/model selected in the framing menu — stored before the
-  // thread exists, then persisted on the thread when it's created.
+  const [bar, setBar] = useState<CommandBarRequest>(null);
+  const {
+    newThreadPicker,
+    setNewThreadPicker,
+    pendingMode,
+    setPendingMode,
+    framingExecutor,
+    setFramingExecutor,
+    framingModel,
+    setFramingModel,
+    specTypePicker,
+    setSpecTypePicker,
+    composerSpecTypePicker,
+    setComposerSpecTypePicker,
+    transitioning,
+    setTransitioning,
+    reset: resetNewThreadFlow,
+  } = useNewThreadFlow();
   // The project being opened, if any — drives the onboarding row's spinner.
   const [openingProject, setOpeningProject] = useState<string | null>(null);
   /** Branch → the worktree path that holds it, for every worktree but the
@@ -2904,20 +2920,6 @@ export default function App() {
   const [worktreeBranches, setWorktreeBranches] = useState<Map<string, string>>(
     new Map()
   );
-  const [framingExecutor, setFramingExecutor] = useState<string | null>(null);
-  const [framingModel, setFramingModel] = useState<string | null>(null);
-  // D1: spec-type framing menu — shown after picking "Spec" from the Vibe/Spec
-  // picker. The user picks Feature/Bugfix/Other before the agent runs (D2/D3).
-  const [specTypePicker, setSpecTypePicker] = useState(false);
-  // D9: composer-toggle spec-type framing menu — shown when toggling an
-  // existing thread to spec mode with no open change and no stored spec_type.
-  // Separate from `specTypePicker` because the thread already exists — the
-  // spec-type handler calls specMode(thread.id, specType) directly.
-  const [composerSpecTypePicker, setComposerSpecTypePicker] = useState(false);
-  // D19/D20: transitioning — true during the async gap between clearing
-  // picker state and the thread being selected. Prevents the Vibe shell's
-  // showEmptyModePicker from re-rendering the mode picker mid-transition.
-  const [transitioning, setTransitioning] = useState(false);
   const [selectQuery, setSelectQuery] = useState("");
   useEffect(() => {
     if (!bar) setSelectQuery("");
@@ -2989,10 +2991,16 @@ export default function App() {
   // Thread-level model/bypass preferences. The composer control reads and
   // writes these; the effective values are resolved before each session-starting
   // call so a live session keeps its original flags (design.md Decision 2).
-  const [threadPrefs, setThreadPrefsState] = useState<ThreadPrefs>({
-    bypass: false,
-  });
-  const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
+  const {
+    threadPrefs,
+    prefsMenuOpen,
+    setPrefsMenuOpen,
+    pendingWorktreeEnabled,
+    setPendingWorktreeEnabled,
+    loadFor: loadThreadPrefs,
+    toggleBypass,
+    createThreadWithPrefs,
+  } = useThreadPrefs();
   // Whether *this* thread has a live session right now, so the "Next session
   // will use X" hint only shows when switching would actually hand off an
   // in-progress conversation. Reads `busyThreads` directly — the same
@@ -3002,34 +3010,9 @@ export default function App() {
   // hint on a thread that had never sent a message, just because a
   // *previous* thread's stale `hasLiveSession` value was still in state.
   const hasLiveSession = thread ? busyThreads.has(thread.id) : false;
-  /** The worktree choice made in a composer that has no thread yet, handed to
-   *  whichever thread gets created next. Sticky for the session and always
-   *  reflected by the composer's badge, so it is never a hidden setting. */
-  const [pendingWorktreeEnabled, setPendingWorktreeEnabled] = useState(true);
-
-  /** Create a thread and apply that pending choice to it. Every creation path
-   *  goes through here so the choice cannot be dropped by whichever route the
-   *  user happened to take into a new thread. */
-  const createThreadWithPrefs = useCallback(
-    async (projectHash: string, title = "New thread") => {
-      const created = await api.createThread(projectHash, title);
-      if (pendingWorktreeEnabled) return created;
-      try {
-        return await api.setThreadWorktreeEnabled(projectHash, created.id, false);
-      } catch {
-        // A project that isn't a git repo has no isolation to turn off. The
-        // thread is still fine, so don't fail creation over it.
-        return created;
-      }
-    },
-    [pendingWorktreeEnabled]
-  );
-
   const onToggleBypass = () => {
     if (!project || !thread) return;
-    const prefs = { bypass: !threadPrefs.bypass };
-    setThreadPrefs(project.hash, thread.id, prefs);
-    setThreadPrefsState(prefs);
+    toggleBypass(project.hash, thread.id);
   };
   /** Flip this thread's worktree isolation. Only offered before the thread
    *  has run — the backend refuses once a worktree exists, so this can never
@@ -3454,7 +3437,7 @@ export default function App() {
       setMessages(await api.readThread(projectHash, next.id));
       // Load this thread's model/bypass preferences (per-thread override or
       // global default) so the composer control shows the right values.
-      setThreadPrefsState(resolvePrefs(projectHash, next.id));
+      loadThreadPrefs(projectHash, next.id);
       setPrefsMenuOpen(false);
     },
     []
@@ -4113,10 +4096,7 @@ export default function App() {
     // the chat's render condition, so leaving one set made every "New
     // thread" button silently do nothing — pick Go, don't send, and the
     // app had no way back to the picker.
-    setPendingMode(null);
-    setSpecTypePicker(false);
-    setComposerSpecTypePicker(false);
-    setTransitioning(false);
+    resetNewThreadFlow();
     // Deselect the thread you were reading. The picker renders *over* the
     // chat, so leaving it selected meant picking Go fell straight through
     // to that thread's history — the new draft vanished and an older
@@ -4226,83 +4206,6 @@ export default function App() {
     } finally {
       setTransitioning(false);
     }
-  };
-
-  const onRenameThread = (target: ThreadMeta) => {
-    if (!project) return;
-    setBar({
-      kind: "input",
-      label: "Thread title",
-      value: target.title,
-      submit: async (title) => {
-        try {
-          const renamed = await api.renameThread(
-            project.hash,
-            target.id,
-            title
-          );
-          if (thread?.id === target.id) setThread(renamed);
-          setThreads(await api.listThreads(project.hash));
-        } catch (err) {
-          fail(err);
-        }
-      },
-    });
-  };
-
-  const onArchiveThread = (target: ThreadMeta) => {
-    if (!project) return;
-    const archiving = !target.archived;
-    const worktree = worktrees.get(target.id);
-    // Archiving is reversible and must stay that way, so it never discards
-    // work on its own: the backend's sweep only prunes a worktree whose
-    // commits the base branch already has. Unmerged work is the one case the
-    // user has to answer for, and it is offered as its own destructive
-    // choice — the same confirm bar deleting a thread uses.
-    const unmerged =
-      archiving && worktree && (!worktree.clean || worktree.ahead > 0);
-    pm.setThreadArchived(project.hash, target.id, archiving)
-      .then(() => {
-        loadWorktrees();
-        if (!unmerged) return;
-        setBar({
-          kind: "confirm",
-          label: `"${target.title}" still has work that ${worktree.baseBranch} doesn't. Delete its worktree and branch anyway?`,
-          confirmLabel: "Clean up",
-          onConfirm: async () => {
-            setBar(null);
-            try {
-              await api.pruneThreadWorktree(project.hash, target.id, true);
-              loadWorktrees();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        });
-      })
-      .catch(fail);
-  };
-
-  const onDeleteThread = (target: ThreadMeta) => {
-    if (!project) return;
-    setBar({
-      kind: "confirm",
-      label: `Delete "${target.title}"? This can't be undone.`,
-      onConfirm: async () => {
-        setBar(null);
-        try {
-          await api.deleteThread(project.hash, target.id);
-          const found = await api.listThreads(project.hash);
-          setThreads(found);
-          // Only reselect if the deleted thread was the one open (D22) —
-          // mirrors selectProject's found[0] ?? null fallback.
-          if (thread?.id === target.id)
-            await selectThread(project.hash, found[0] ?? null);
-        } catch (err) {
-          fail(err);
-        }
-      },
-    });
   };
 
   // Keeps the event listener (registered once) pointed at the current thread.
@@ -4420,6 +4323,20 @@ export default function App() {
       () => setWorktrees(new Map())
     );
   }, []);
+
+  const { onRenameThread, onArchiveThread, onDeleteThread } = useThreadActions({
+    projectHash: project?.hash ?? null,
+    activeThread: thread,
+    setThread,
+    setThreads,
+    setBar,
+    fail,
+    worktrees,
+    loadWorktrees,
+    setThreadArchived: pm.setThreadArchived,
+    selectThread,
+  });
+
   // Polled only while an agent is actually working — the stat is otherwise
   // static, and a timer running against an idle app buys nothing. The diff
   // pane rides the same tick, so watching chat and watching the code stay in
@@ -4902,9 +4819,17 @@ export default function App() {
       const state = await api.listModels(project?.hash ?? null, agentId);
       modelsRef.current = { ...modelsRef.current, [agentId]: state };
     } catch (err) {
+      const kind = errorKind(err);
+      // Readiness runs before a user has attempted a turn. Keep ACP's raw
+      // provider diagnostic out of that first experience.
+      const error = kind === "transientProvider"
+        ? "Temporarily unavailable — retry in a moment."
+        : kind === "authRequired"
+          ? "Sign in required."
+          : describeError(err);
       modelsRef.current = {
         ...modelsRef.current,
-        [agentId]: { error: describeError(err) },
+        [agentId]: { error },
       };
     }
     setModelsByAgent(modelsRef.current);
@@ -5367,380 +5292,38 @@ export default function App() {
   // Every action, declared once. The palette lists these and the keyboard
   // handler below dispatches them, so a shortcut can't be bound in one
   // place and described differently in another.
-  const commands = useMemo<Command[]>(
-    () => [
-      // Listed first and listed at all so the palette documents its own way
-      // in: this chord used to live only in the keyboard handler, which made
-      // it the single shortcut the shortcut list didn't mention.
-      {
-        id: "file.new",
-        group: "File",
-        label: "New file…",
-        chord: "Mod+N",
-        enabled: !!project,
-        run: newFileAtRoot,
-      },
-      {
-        id: "thread.new",
-        group: "File",
-        label: "New thread…",
-        enabled: !!project,
-        run: onNewThread,
-      },
-      {
-        id: "project.open",
-        group: "File",
-        label: "Open project…",
-        chord: "Mod+O",
-        run: () => void onAddProject(),
-      },
-      {
-        id: "project.clone",
-        group: "File",
-        label: "Clone repository…",
-        run: onCloneRepository,
-      },
-      {
-        id: "project.newWindow",
-        group: "File",
-        label: "Open current project in new window",
-        enabled: !!project,
-        run: () => { if (project) void onOpenProjectWindow(project); },
-      },
-      ...projects.slice(0, 10).map((recent, slot) => ({
-        id: `project.recent.${slot}`,
-        group: "File",
-        label: recent.displayName,
-        run: () => void selectProject(recent),
-      })),
-      {
-        id: "project.recent.clear",
-        group: "File",
-        label: "Clear Menu",
-        enabled: projects.some((entry) => entry.hash !== project?.hash),
-        run: clearRecentProjects,
-      },
-      {
-        id: "window.close",
-        group: "File",
-        label: "Close window",
-        chord: "Mod+Shift+W",
-        run: closeWindow,
-      },
-      {
-        id: "app.quit",
-        group: "App",
-        label: "Quit Palisade",
-        chord: "Mod+Q",
-        run: quitApplication,
-      },
-      {
-        id: "app.checkUpdates",
-        group: "App",
-        label: updateReady ? "Restart to Update" : "Check for Updates…",
-        run: () => window.dispatchEvent(new Event("palisade-update-action")),
-      },
-      {
-        id: "help.commands",
-        group: "Help",
-        label: "Command palette (all shortcuts)",
-        chord: "Mod+Shift+P",
-        keywords: "help keyboard shortcuts commands keys",
-        run: () => setCommandPaletteOpen(true),
-      },
-      {
-        id: "file.open",
-        group: "Go",
-        label: "Go to file…",
-        chord: "Mod+P",
-        keywords: "open quick jump",
-        enabled: !!project,
-        run: () => void openFilePalette(),
-      },
-      {
-        id: "file.search",
-        group: "Go",
-        label: "Find in files…",
-        chord: "Mod+Shift+F",
-        keywords: "search grep text",
-        enabled: !!project,
-        run: () => void openTextSearch(),
-      },
-      {
-        id: "editor.find",
-        group: "Edit",
-        label: "Find…",
-        chord: "Mod+F",
-        enabled: codeEditorActive,
-        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "find" })),
-      },
-      {
-        id: "editor.findNext",
-        group: "Edit",
-        label: "Find next",
-        chord: "Mod+G",
-        enabled: codeEditorActive,
-        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "findNext" })),
-      },
-      {
-        id: "editor.findPrevious",
-        group: "Edit",
-        label: "Find previous",
-        chord: "Mod+Shift+G",
-        enabled: codeEditorActive,
-        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "findPrevious" })),
-      },
-      {
-        id: "editor.goToLine",
-        group: "Go",
-        label: "Go to line…",
-        chord: "Ctrl+G",
-        enabled: codeEditorActive,
-        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "goToLine" })),
-      },
-      {
-        id: "editor.goToDefinition",
-        group: "Go",
-        label: "Go to definition",
-        chord: "F12",
-        enabled: codeEditorActive,
-        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "goToDefinition" })),
-      },
-      {
-        id: "tab.close",
-        group: "Tabs",
-        label: "Close tab",
-        chord: "Mod+W",
-        enabled: !!activePathRef.current,
-        run: () => {
-          const path = activePathRef.current;
-          if (path) closeTabRef.current(path);
-        },
-      },
-      {
-        id: "tab.reopen",
-        group: "Tabs",
-        label: "Reopen closed tab",
-        chord: "Mod+Shift+T",
-        run: () => tabsRef.current.reopenLast(),
-      },
-      {
-        id: "tab.next",
-        group: "Tabs",
-        label: "Next tab",
-        chord: "Ctrl+Tab",
-        run: () => tabsRef.current.cycle(1),
-      },
-      {
-        id: "tab.previous",
-        group: "Tabs",
-        label: "Previous tab",
-        chord: "Ctrl+Shift+Tab",
-        run: () => tabsRef.current.cycle(-1),
-      },
-      {
-        id: "file.save",
-        group: "File",
-        label: "Save",
-        // Honest on both counts: offered only when there is something to
-        // save, and routed through the pane that owns the buffer rather than
-        // by clicking whatever save button happens to be in the DOM (there
-        // is none on a notebook, an image, or a binary file).
-        enabled: tabs.activeIsDirty,
-        run: () => window.dispatchEvent(new CustomEvent("palisade-editor-command", { detail: "save" })),
-      },
-      {
-        id: "run.last",
-        group: "Run",
-        label: "Run last configuration",
-        enabled: !!project && runList.length > 0,
-        run: () => {
-          const selected = runList.find(([name]) => name === runLast) ?? runList[0];
-          if (selected) runCommand(...selected);
-        },
-      },
-      ...runList.slice(0, 10).map(([name, command], slot) => ({
-        id: `run.config.${slot}`,
-        group: "Run",
-        label: name,
-        run: () => runCommand(name, command),
-      })),
-      {
-        id: "run.configure",
-        group: "Run",
-        label: "Configure run commands…",
-        enabled: !!project,
-        run: () => shell.selectPanel("run"),
-      },
-      {
-        id: "debug.start",
-        group: "Run",
-        label: "Start debugging",
-        enabled: !!project && !!selectedFile && runList.length > 0,
-        chord: "F5",
-        run: () => {
-          shell.selectPanel("run");
-          window.setTimeout(() => window.dispatchEvent(new Event("palisade-debug-start")), 0);
-        },
-      },
-      {
-        id: "debug.stop",
-        group: "Run",
-        label: "Stop debugging",
-        enabled: debugLive,
-        chord: "Shift+F5",
-        run: () => window.dispatchEvent(new Event("palisade-debug-stop")),
-      },
-      {
-        id: "agent.stop",
-        group: "Run",
-        label: "Stop active agent session",
-        enabled: !!liveSessionId,
-        run: onStop,
-      },
-      {
-        id: "view.diff",
-        group: "View",
-        label: "Toggle changes view",
-        keywords: "diff git review",
-        run: () => shell.setDiffOpen((open) => !open),
-      },
-      {
-        id: "view.shell",
-        group: "View",
-        label: "Switch between Vibe and Editor",
-        keywords: "shell layout agent",
-        run: () =>
-          shell.setCenterShell(
-            shell.centerShell === "vibe" ? "editor" : "vibe"
-          ),
-      },
-      {
-        id: "view.layout.editor",
-        group: "View",
-        label: "Editor layout",
-        checked: shell.centerShell === "editor",
-        run: () => shell.setCenterShell("editor"),
-      },
-      {
-        id: "view.layout.vibe",
-        group: "View",
-        label: "Vibe layout",
-        checked: shell.centerShell === "vibe",
-        run: () => shell.setCenterShell("vibe"),
-      },
-      {
-        id: "view.theme.auto",
-        group: "View",
-        label: "System appearance",
-        checked: shell.theme === "auto",
-        run: () => shell.setTheme("auto"),
-      },
-      {
-        id: "view.theme.light",
-        group: "View",
-        label: "Light appearance",
-        checked: shell.theme === "light",
-        run: () => shell.setTheme("light"),
-      },
-      {
-        id: "view.theme.dark",
-        group: "View",
-        label: "Dark appearance",
-        checked: shell.theme === "dark",
-        run: () => shell.setTheme("dark"),
-      },
-      {
-        id: "view.rightPanel",
-        group: "View",
-        // The chord means "hide the pane that isn't the subject", which is
-        // chat in Editor and the editor column in Vibe.
-        label:
-          shell.centerShell === "vibe"
-            ? "Toggle editor panel"
-            : "Toggle chat panel",
-        chord: "Mod+J",
-        run: () => toggleSidePane(),
-      },
-      {
-        // One state, two entry points: this and the rail icon both drive
-        // `activePanel` — a separate "collapsed" flag would be a second
-        // source of truth for the same thing.
-        id: "view.leftRail",
-        group: "View",
-        label: "Toggle side panel",
-        chord: "Mod+Backslash",
-        keywords: "explorer sidebar files",
-        run: () => shell.selectPanel(shell.activePanel ?? "explorer"),
-      },
-      {
-        id: "view.terminal",
-        group: "View",
-        label: "Toggle terminal",
-        chord: "Ctrl+Backtick",
-        run: () => shell.toggleTerminal(),
-      },
-      {
-        id: "app.settings",
-        group: "App",
-        label: "Open settings",
-        keywords: "preferences font shell.theme wrap",
-        run: () => setSettingsOpen(true),
-      },
-      {
-        id: "app.projectSettings",
-        group: "App",
-        label: "Edit .palisade/project-settings.json",
-        keywords: "format on save executor",
-        enabled: !!project,
-        run: () => void onOpenSettings(),
-      },
-      {
-        id: "help.feedback",
-        group: "Help",
-        label: "Report a bug / request a feature…",
-        run: () => window.dispatchEvent(new Event("palisade-feedback-action")),
-      },
-    ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      project,
-      shell.centerShell,
-      // Recomputed as tabs come and go: "Close tab" is only offered when
-      // there is one, and a stale memo would keep hiding it.
-      tabs.activePath,
-      // ...and as the buffer goes dirty/clean, which is what File > Save and
-      // the native menu's enabled state hang on.
-      tabs.activeIsDirty,
-      codeEditorActive,
-      openFilePalette,
-      openTextSearch,
-      shell.rightPanel.toggleCollapsed,
-      shell.toggleChat,
-      shell.selectPanel,
-      shell.activePanel,
-      shell.toggleTerminal,
-      shell.setCenterShell,
-      shell.theme,
-      shell.setTheme,
-      newFileAtRoot,
-      onNewThread,
-      onCloneRepository,
-      onOpenProjectWindow,
-      projects,
-      clearRecentProjects,
-      closeWindow,
-      quitApplication,
-      updateReady,
-      debugLive,
-      selectProject,
-      runList,
-      runLast,
-      runCommand,
-      liveSessionId,
-      onStop,
-    ]
-  );
+  const commands = useAppCommands({
+    project,
+    projects,
+    shell,
+    tabs,
+    codeEditorActive,
+    updateReady,
+    debugLive,
+    liveSessionId,
+    runList,
+    runLast,
+    openFilePalette,
+    openTextSearch,
+    newFileAtRoot,
+    onNewThread,
+    onCloneRepository,
+    onOpenProjectWindow,
+    clearRecentProjects,
+    closeWindow,
+    quitApplication,
+    selectProject,
+    runCommand,
+    onStop,
+    onAddProject,
+    onOpenSettings,
+    selectedFile,
+    setCommandPaletteOpen,
+    setSettingsOpen,
+    activePathRef,
+    closeTabRef,
+    tabsRef,
+  });
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
@@ -5835,9 +5418,6 @@ export default function App() {
   // away is the editor column. Same affordance, same chord, other side.
   const editorCollapsed =
     shell.centerShell === "vibe" && shell.editorCollapsed;
-  /** Whichever pane the current preset lets you collapse. */
-  const toggleSidePane =
-    shell.centerShell === "vibe" ? shell.toggleEditor : shell.toggleChat;
 
   // The strip shows opened threads, not every thread the project has ever
   // had — a hundred threads is a hundred tabs otherwise. The active thread

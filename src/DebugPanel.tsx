@@ -284,7 +284,7 @@ export default function DebugPanel({
             <ActionIcon
               variant="subtle"
               size="sm"
-              color="red"
+              color="danger"
               aria-label="Stop debugging"
               onClick={stop}
               data-testid="debug-stop"
@@ -370,7 +370,7 @@ export default function DebugPanel({
       )}
 
       {adapter && !adapter.installed && (
-        <Alert color="yellow" variant="light">
+        <Alert color="warn" variant="light">
           {/* "Unavailable" with no reason is a dead end; the binary is the
               actionable part. Palisade finds a debugger, it never installs one. */}
           <Text size="xs">
@@ -416,7 +416,7 @@ export default function DebugPanel({
       {stopped && (
         <>
           <Group gap="xs">
-            <Badge size="xs" color="orange" variant="light">
+            <Badge size="xs" color="warn" variant="light">
               {stopped.reason}
             </Badge>
             {stopped.description && (
@@ -532,7 +532,7 @@ export default function DebugPanel({
                 {result?.error ? (
                   // The reason replaces the value; a stale number beside a
                   // failed evaluation is worse than no number.
-                  <Text span size="10px" c="orange">
+                  <Text span size="10px" c="warn">
                     {result.error}
                   </Text>
                 ) : (

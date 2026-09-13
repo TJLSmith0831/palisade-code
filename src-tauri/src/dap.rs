@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 /// How long a single DAP request may take before the caller gives up.
 ///
@@ -118,13 +119,13 @@ impl DapConnection {
             // The stream ended: the adapter exited, cleanly or otherwise.
             // Every caller still waiting has to be told, or they block until
             // their timeout with no idea why.
-            let orphaned: Vec<_> = waiters.lock().unwrap().drain().collect();
+            let orphaned: Vec<_> = waiters.lock_or_recover().drain().collect();
             for (_, tx) in orphaned {
-                let _ = tx.send(Err("debug adapter disconnected".to_string()));
+                let _ = tx.send(Err("debug adapter disconnected".into()));
             }
             let _ = dispatch.send(("__closed".to_string(), Value::Null));
         });
-        *connection.reader.lock().unwrap() = Some(handle);
+        *connection.reader.lock_or_recover() = Some(handle);
         connection
     }
 
@@ -145,7 +146,7 @@ impl DapConnection {
     ) -> Res<Value> {
         let seq = self.seq.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
-        self.waiters.lock().unwrap().insert(seq, tx);
+        self.waiters.lock_or_recover().insert(seq, tx);
 
         let envelope = json!({
             "seq": seq,
@@ -154,7 +155,7 @@ impl DapConnection {
             "arguments": arguments,
         });
         if let Err(err) = self.write(&envelope) {
-            self.waiters.lock().unwrap().remove(&seq);
+            self.waiters.lock_or_recover().remove(&seq);
             return Err(err);
         }
 
@@ -163,8 +164,8 @@ impl DapConnection {
             Err(_) => {
                 // Drop the waiter so a late response is discarded rather than
                 // delivered to a channel nobody is listening on.
-                self.waiters.lock().unwrap().remove(&seq);
-                Err(format!("debug adapter did not answer `{command}` within {timeout:?}"))
+                self.waiters.lock_or_recover().remove(&seq);
+                Err(format!("debug adapter did not answer `{command}` within {timeout:?}").into())
             }
         }
     }
@@ -181,12 +182,12 @@ impl DapConnection {
     }
 
     fn write(&self, envelope: &Value) -> Res<()> {
-        let body = serde_json::to_string(envelope).map_err(|err| format!("encode: {err}"))?;
-        let mut writer = self.writer.lock().unwrap();
+        let body = serde_json::to_string(envelope).map_err(|err| crate::PalisadeError::from(format!("encode: {err}")))?;
+        let mut writer = self.writer.lock_or_recover();
         writer
             .write_all(crate::lsp::frame(&body).as_bytes())
-            .map_err(|err| format!("write to debug adapter: {err}"))?;
-        writer.flush().map_err(|err| format!("flush debug adapter: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("write to debug adapter: {err}")))?;
+        writer.flush().map_err(|err| crate::PalisadeError::from(format!("flush debug adapter: {err}")))
     }
 
     /// Answers a reverse request. The adapter blocks on these.
@@ -223,13 +224,15 @@ fn pump(
             let Some(incoming) = classify(&body) else { continue };
             match incoming {
                 Incoming::Response { request_seq, success, body, message } => {
-                    let waiter = waiters.lock().unwrap().remove(&request_seq);
+                    let waiter = waiters.lock_or_recover().remove(&request_seq);
                     // No waiter means the caller already timed out — dropping
                     // it is correct, and must not be mistaken for an event.
                     if let Some(tx) = waiter {
                         let _ = tx.send(match success {
                             true => Ok(body),
-                            false => Err(message.unwrap_or_else(|| "request failed".into())),
+                            false => Err(message
+                                .map(crate::PalisadeError::from)
+                                .unwrap_or_else(|| crate::PalisadeError::from("request failed"))),
                         });
                     }
                 }
@@ -411,7 +414,7 @@ pub fn configure_with(
             Err(message) => {
                 for breakpoint in breakpoints.iter_mut() {
                     breakpoint.verified = Some(false);
-                    breakpoint.message = Some(message.clone());
+                    breakpoint.message = Some(message.message.clone());
                 }
             }
         }
@@ -724,7 +727,7 @@ impl DebugSession {
             return Err(format!(
                 "no debug adapter for {language}: `{}` is not on PATH",
                 adapter.command
-            ));
+            ).into());
         }
         let executable = crate::executor::find_on_path(&adapter.command)
             .unwrap_or_else(|| std::path::PathBuf::from(&adapter.command));
@@ -736,7 +739,7 @@ impl DebugSession {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|err| format!("start {}: {err}", adapter.command))?;
+            .map_err(|err| crate::PalisadeError::from(format!("start {}: {err}", adapter.command)))?;
 
         let stdout = child.stdout.take().ok_or("debug adapter has no stdout")?;
         let stdin = child.stdin.take().ok_or("debug adapter has no stdin")?;
@@ -764,7 +767,7 @@ impl DebugSession {
         });
 
         let capabilities = session.connection.request("initialize", initialize_arguments())?;
-        *session.capabilities.lock().unwrap() = capabilities;
+        *session.capabilities.lock_or_recover() = capabilities;
         Ok(session)
     }
 
@@ -821,7 +824,7 @@ impl DebugSession {
                 .map(str::to_string),
             frames,
         };
-        *self.stopped.lock().unwrap() = Some(state.clone());
+        *self.stopped.lock_or_recover() = Some(state.clone());
         state
     }
 
@@ -829,18 +832,18 @@ impl DebugSession {
     /// invalid, and holding them would let a watch evaluate against a frame
     /// that no longer exists.
     pub fn on_continued(&self) {
-        *self.stopped.lock().unwrap() = None;
+        *self.stopped.lock_or_recover() = None;
     }
 
     pub fn stopped(&self) -> Option<StoppedState> {
-        self.stopped.lock().unwrap().clone()
+        self.stopped.lock_or_recover().clone()
     }
 
     /// The frame a watch evaluates in: the caller's choice, else the topmost
     /// frame of the current stop, else none (and the adapter uses globals).
     pub fn frame_for(&self, requested: Option<i64>) -> Option<i64> {
         requested.or_else(|| {
-            self.stopped.lock().unwrap().as_ref().and_then(|s| s.frames.first().map(|f| f.id))
+            self.stopped.lock_or_recover().as_ref().and_then(|s| s.frames.first().map(|f| f.id))
         })
     }
 
@@ -864,7 +867,7 @@ impl DebugSession {
             json!({"terminateDebuggee": true}),
             Duration::from_secs(3),
         );
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        if let Some(mut child) = self.child.lock_or_recover().take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -873,7 +876,7 @@ impl DebugSession {
 
 impl Drop for DebugSession {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        if let Some(mut child) = self.child.lock_or_recover().take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -884,6 +887,7 @@ impl Drop for DebugSession {
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
     use std::path::Path;
     use std::io::BufRead;
@@ -1122,14 +1126,14 @@ mod tests {
             if event != "stopped" {
                 return;
             }
-            let connection = for_handler.lock().unwrap().clone().expect("connection");
+            let connection = for_handler.lock_or_recover().clone().expect("connection");
             let _ = tx.send(connection.request_with_timeout(
                 "stackTrace",
                 json!({"threadId": 1}),
                 Duration::from_secs(3),
             ));
         });
-        *holder.lock().unwrap() = Some(Arc::clone(&connection));
+        *holder.lock_or_recover() = Some(Arc::clone(&connection));
 
         adapter.send(json!({
             "seq": 1,

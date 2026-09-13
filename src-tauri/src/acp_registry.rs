@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
+use crate::Res;
 
 // ------------------------------------------------------------- data types
 
@@ -265,22 +266,22 @@ fn fallback_agents() -> Vec<RegistryAgent> {
 
 /// Fetch agent directory listing from the GitHub API, then fetch each
 /// agent's manifest. Returns the parsed manifests or an error.
-fn fetch_and_cache(_cache_dir: &Path, cache_file: &Path) -> Result<Vec<RegistryAgent>, String> {
+fn fetch_and_cache(_cache_dir: &Path, cache_file: &Path) -> Res<Vec<RegistryAgent>> {
     let agent_ids = fetch_agent_list()?;
     let agents = fetch_manifests(&agent_ids);
     write_cache(cache_file, &agents);
     Ok(agents)
 }
 
-fn fetch_agent_list() -> Result<Vec<String>, String> {
+fn fetch_agent_list() -> Res<Vec<String>> {
     let response = ureq::get(REGISTRY_API)
         .set("Accept", "application/vnd.github.v3+json")
         .set("User-Agent", "palisade-code")
         .call()
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
-    let body = response.into_string().map_err(|e| format!("read response: {e}"))?;
+        .map_err(|e| crate::PalisadeError::from(format!("GitHub API request failed: {e}")))?;
+    let body = response.into_string().map_err(|e| crate::PalisadeError::from(format!("read response: {e}")))?;
     let entries: Vec<serde_json::Value> =
-        serde_json::from_str(&body).map_err(|e| format!("parse directory listing: {e}"))?;
+        serde_json::from_str(&body).map_err(|e| crate::PalisadeError::from(format!("parse directory listing: {e}")))?;
     Ok(entries
         .iter()
         .filter_map(|entry| entry.get("name").and_then(|n| n.as_str()).map(String::from))
@@ -304,13 +305,13 @@ fn fetch_manifests(agent_ids: &[String]) -> Vec<RegistryAgent> {
         .collect()
 }
 
-fn fetch_manifest(url: &str) -> Result<RegistryAgent, String> {
+fn fetch_manifest(url: &str) -> Res<RegistryAgent> {
     let response = ureq::get(url)
         .set("User-Agent", "palisade-code")
         .call()
-        .map_err(|e| format!("fetch {url}: {e}"))?;
-    let body = response.into_string().map_err(|e| format!("read {url}: {e}"))?;
-    serde_json::from_str(&body).map_err(|e| format!("parse {url}: {e}"))
+        .map_err(|e| crate::PalisadeError::from(format!("fetch {url}: {e}")))?;
+    let body = response.into_string().map_err(|e| crate::PalisadeError::from(format!("read {url}: {e}")))?;
+    serde_json::from_str(&body).map_err(|e| crate::PalisadeError::from(format!("parse {url}: {e}")))
 }
 
 // ------------------------------------------------------------- PATH resolution

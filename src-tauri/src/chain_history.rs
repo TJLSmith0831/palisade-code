@@ -33,8 +33,8 @@ use crate::chain_runner::{NodeState, Outcome};
 use crate::chains::Chain;
 use crate::store::{project_dir, Res};
 
-fn e(ctx: &str, err: impl std::fmt::Display) -> String {
-    format!("{ctx}: {err}")
+fn e(ctx: &str, err: impl std::fmt::Display) -> crate::PalisadeError {
+    crate::PalisadeError::from(format!("{ctx}: {err}"))
 }
 
 fn now() -> String {

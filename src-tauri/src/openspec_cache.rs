@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use crate::locks::MutexExt;
 
 /// Why an `openspec` call produced no answer. Distinct variants because the
 /// callers genuinely treat them differently: `validate` reports "invalid" for
@@ -244,7 +245,7 @@ impl OpenSpecCache {
     where
         F: FnOnce(&mut Entry) -> R,
     {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock_or_recover();
         let current = openspec_dir_mtime(project_root);
         let entry = cache.entry(project_root.to_path_buf()).or_insert_with(|| Entry::new(current));
         if entry.mtime != current {

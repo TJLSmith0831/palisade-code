@@ -14,7 +14,9 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
-pub type Res<T> = Result<T, String>;
+/// The same alias as `store::Res`, restated here so this module reads
+/// standalone. One error type across the backend.
+pub type Res<T> = Result<T, crate::error::PalisadeError>;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,10 +49,10 @@ fn run_git_res(root: &Path, args: &[&str]) -> Res<String> {
         .current_dir(root)
         .env("PATH", crate::executor::child_path_env())
         .output()
-        .map_err(|err| format!("could not run git: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("could not run git: {err}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git {} failed:\n{}", args.join(" "), stderr.trim()));
+        return Err(format!("git {} failed:\n{}", args.join(" "), stderr.trim()).into());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

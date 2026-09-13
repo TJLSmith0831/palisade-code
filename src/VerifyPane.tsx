@@ -38,6 +38,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
   const [commands, setCommands] = useState<[string, string][]>([]);
   const [runs, setRuns] = useState<VerificationRun[]>([]);
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -52,7 +53,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
       setRuns(history);
       setError(null);
     } catch (err) {
-      setError(describeError(err));
+      setError(describeError(err, { loading: "this project's verification history" }));
     } finally {
       setLoading(false);
     }
@@ -85,7 +86,7 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
   const run = (name: string) => {
     setRunning((previous) => new Set(previous).add(name));
     api.runVerify(projectHash, name, threadId).catch((err) => {
-      setError(describeError(err));
+      setError(describeError(err, { action: `run ${name}` }));
       setRunning((previous) => {
         const next = new Set(previous);
         next.delete(name);
@@ -97,6 +98,16 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
   // Newest first — the last run of a command is the one that still means
   // something; the earlier ones are history, not a score.
   const latest = [...runs].reverse();
+
+  /**
+   * Every run ever recorded used to render, each as a Code block carrying an
+   * output tail, with no windowing anywhere in the app to fall back on. A cap
+   * is enough here and costs no dependency: the rows this pane exists for are
+   * the newest ones, and the older ones are reachable in one click.
+   */
+  const PAGE = 20;
+  const shown = showAll ? latest : latest.slice(0, PAGE);
+  const older = latest.length - shown.length;
 
   return (
     <Stack gap="xs" p="xs">
@@ -136,12 +147,32 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
         ))}
       </Group>
 
-      {latest.map((entry) => (
+      {/* This pane's whole purpose is stating what evidence exists, and with
+          no runs recorded it used to show buttons and blank space — the one
+          surface where "nothing here" is itself the finding, left unsaid. */}
+      {!loading && commands.length > 0 && latest.length === 0 && (
+        <Stack gap={4} py="sm" data-testid="verify-empty">
+          <Text size="sm" fw={600}>
+            Nothing verified yet
+          </Text>
+          <Text size="xs" c="dimmed">
+            A command is green here because it exited <Code>0</Code> at a named
+            commit — never because an agent reported it finished. Until one of
+            these has run, there is no evidence either way.
+          </Text>
+          <Text size="xs" c="dimmed">
+            Run{" "}
+            <Code>{commands[0][0]}</Code> above to record the first.
+          </Text>
+        </Stack>
+      )}
+
+      {shown.map((entry) => (
         <Stack key={entry.id} gap={2} data-testid="verification-run">
           <Group gap="xs" wrap="nowrap">
             <Badge
               size="xs"
-              color={entry.exitCode === 0 ? "green" : "red"}
+              color={entry.exitCode === 0 ? "success" : "danger"}
               variant="light"
             >
               exit {entry.exitCode}
@@ -160,6 +191,17 @@ export default function VerifyPane({ projectHash, threadId }: Props) {
           </Code>
         </Stack>
       ))}
+
+      {older > 0 && (
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          onClick={() => setShowAll(true)}
+          data-testid="verify-show-older"
+        >
+          Show {older} older run{older === 1 ? "" : "s"}
+        </Button>
+      )}
     </Stack>
   );
 }

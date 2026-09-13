@@ -22,6 +22,7 @@ use notify_debouncer_full::{
     new_debouncer, DebounceEventResult, Debouncer, RecommendedCache,
 };
 use notify::RecommendedWatcher;
+use crate::locks::MutexExt;
 
 /// How long coalesced filesystem events are batched before firing. Long
 /// enough that macOS's rename-as-delete+create arrives as one batch, short
@@ -140,7 +141,7 @@ impl FsWatcher {
     /// path; it's canonicalized here to match what FSEvents will report.
     pub fn note_self_write(&self, path: &Path) {
         let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let mut writes = self.self_writes.lock().unwrap();
+        let mut writes = self.self_writes.lock_or_recover();
         writes.retain(|_, at| at.elapsed() < SELF_WRITE_WINDOW);
         writes.insert(key, Instant::now());
     }
@@ -177,7 +178,7 @@ fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
 /// entry is consumed on match so a genuine external write to the same path a
 /// moment later still reports.
 fn was_self_write(writes: &SelfWrites, path: &Path) -> bool {
-    let mut writes = writes.lock().unwrap();
+    let mut writes = writes.lock_or_recover();
     match writes.get(path) {
         Some(at) if at.elapsed() < SELF_WRITE_WINDOW => {
             writes.remove(path);

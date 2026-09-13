@@ -132,7 +132,7 @@ export function testMarkerGutter(): Extension {
       ".ds-test-gutter-col": { minWidth: "12px" },
       ".ds-test-gutter": { fontWeight: "bold", cursor: "default" },
       ".ds-test-gutter.is-failed": { color: "var(--danger, #e5484d)" },
-      ".ds-test-gutter.is-errored": { color: "var(--warning, #ffb224)" },
+      ".ds-test-gutter.is-errored": { color: "var(--warn)" },
     }),
   ];
 }

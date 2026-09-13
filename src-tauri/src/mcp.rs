@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1;
 use serde::{Deserialize, Serialize};
+use crate::Res;
 
 /// Disabled servers are parked under this top-level key rather than flagged
 /// in place. A `"disabled": true` field inside `mcpServers` is a convention
@@ -154,9 +155,9 @@ pub fn list(project_root: &Path) -> Vec<McpServer> {
     servers
 }
 
-fn write_doc(project_root: &Path, doc: &serde_json::Value) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
-    std::fs::write(config_path(project_root), format!("{text}\n")).map_err(|e| e.to_string())
+fn write_doc(project_root: &Path, doc: &serde_json::Value) -> Res<()> {
+    let text = serde_json::to_string_pretty(doc).map_err(|e| crate::PalisadeError::from(e.to_string()))?;
+    std::fs::write(config_path(project_root), format!("{text}\n")).map_err(|e| crate::PalisadeError::from(e.to_string()))
 }
 
 /// Remove `name` from both the enabled and disabled maps, and prune either
@@ -182,7 +183,7 @@ fn detach(doc: &mut serde_json::Value, name: &str) {
 /// Add or replace a server. Upsert by name, which is the key `.mcp.json`
 /// itself uses — installing the same registry entry twice updates it rather
 /// than producing a duplicate.
-pub fn save(project_root: &Path, server: &McpServer) -> Result<(), String> {
+pub fn save(project_root: &Path, server: &McpServer) -> Res<()> {
     if server.name.trim().is_empty() {
         return Err("an MCP server needs a name".into());
     }
@@ -200,7 +201,7 @@ pub fn save(project_root: &Path, server: &McpServer) -> Result<(), String> {
 }
 
 /// Delete a server outright.
-pub fn remove(project_root: &Path, name: &str) -> Result<(), String> {
+pub fn remove(project_root: &Path, name: &str) -> Res<()> {
     let mut doc = read_doc(project_root);
     detach(&mut doc, name);
     write_doc(project_root, &doc)
@@ -208,7 +209,7 @@ pub fn remove(project_root: &Path, name: &str) -> Result<(), String> {
 
 /// Flip a server between the enabled and disabled maps, carrying its config
 /// across unchanged. A no-op if the server isn't configured.
-pub fn set_enabled(project_root: &Path, name: &str, enabled: bool) -> Result<(), String> {
+pub fn set_enabled(project_root: &Path, name: &str, enabled: bool) -> Res<()> {
     let Some(mut server) = list(project_root).into_iter().find(|s| s.name == name) else {
         return Ok(());
     };
@@ -525,7 +526,7 @@ pub fn search_registry(
     query: &str,
     limit: u32,
     cursor: Option<&str>,
-) -> Result<RegistryPage, String> {
+) -> Res<RegistryPage> {
     let limit = limit.clamp(1, 100).to_string();
     let mut request = ureq::get(REGISTRY_API)
         .set("User-Agent", "palisade-code")
@@ -538,11 +539,11 @@ pub fn search_registry(
     }
     let body = request
         .call()
-        .map_err(|e| format!("MCP registry request failed: {e}"))?
+        .map_err(|e| crate::PalisadeError::from(format!("MCP registry request failed: {e}")))?
         .into_string()
-        .map_err(|e| format!("read MCP registry response: {e}"))?;
+        .map_err(|e| crate::PalisadeError::from(format!("read MCP registry response: {e}")))?;
     let doc: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("parse MCP registry response: {e}"))?;
+        serde_json::from_str(&body).map_err(|e| crate::PalisadeError::from(format!("parse MCP registry response: {e}")))?;
     let servers = doc
         .get("servers")
         .and_then(|v| v.as_array())

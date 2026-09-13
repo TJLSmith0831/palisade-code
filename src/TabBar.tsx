@@ -11,6 +11,7 @@ import {
   IconWorld,
 } from "@tabler/icons-react";
 import { isMarkdownPath, tabKey, type OpenTab } from "./openTabs";
+import { onActivateKey } from "./a11y";
 
 type Props = {
   tabs: OpenTab[];
@@ -145,11 +146,21 @@ export default function TabBar({
                       data-testid="file-tab-close"
                       // The tab is a button; a nested button would be invalid
                       // markup, so this is a span that stops the click from
-                      // also selecting the tab it's closing.
+                      // also selecting the tab it's closing. Being a span, it
+                      // also needs the role and tabIndex a button would have
+                      // given it for free — without them the only way to close
+                      // a file tab was with a mouse. Same shape as the thread
+                      // tab's close in App.tsx.
+                      role="button"
+                      tabIndex={0}
                       onClick={(event) => {
                         event.stopPropagation();
                         onClose(key);
                       }}
+                      onKeyDown={onActivateKey((event) => {
+                        event.stopPropagation();
+                        onClose(key);
+                      })}
                     />
                   }
                 >

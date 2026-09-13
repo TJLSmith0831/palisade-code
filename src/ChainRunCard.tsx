@@ -5,6 +5,7 @@ import * as api from "./api";
 import { useElapsed } from "./useElapsed";
 import { outcomeText, type RunView } from "./ChainCanvas";
 import ChainRunHistory from "./ChainRunHistory";
+import { describeError } from "./errors";
 
 /**
  * The chat-side run view: `RunView` plus the two fields the card needs that
@@ -111,7 +112,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       await api.resolveChainGate(run.runId, decision, decision === "sendBack" ? note : undefined);
       onGateResolved?.(decision);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setPending(null);
     }
@@ -122,7 +123,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     try {
       await api.cancelChainRun(run.runId);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setStopping(false);
     }
@@ -133,7 +134,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     try {
       await api.rerunChainRun(projectHash, run.runId, fromRole, run.threadId);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     } finally {
       setRerunning(null);
     }
@@ -147,7 +148,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
     try {
       await api.rerunChainRun(projectHash, runId, fromRole, run.threadId);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err));
     }
   };
 
@@ -279,7 +280,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
               </Button>
               <Button
                 size="xs"
-                color="red"
+                color="danger"
                 variant="light"
                 loading={pending === "reject"}
                 disabled={!!pending}
@@ -311,7 +312,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       {!run.outcome && (
         <Button
           size="xs"
-          color="red"
+          color="danger"
           variant="light"
           mt={4}
           leftSection={<IconPlayerStop size={14} />}
@@ -323,7 +324,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       )}
 
       {error && (
-        <Alert variant="light" color="red" icon={<IconAlertTriangle size={14} />} mt={4} withCloseButton onClose={() => setError(null)}>
+        <Alert variant="light" color="danger" icon={<IconAlertTriangle size={14} />} mt={4} withCloseButton onClose={() => setError(null)}>
           <Text size="xs">{error}</Text>
         </Alert>
       )}
@@ -333,7 +334,7 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       <Button
         size="compact-xs"
         variant="subtle"
-        color="gray"
+        color="neutral"
         mt={4}
         leftSection={historyOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
         onClick={() => setHistoryOpen((v) => !v)}

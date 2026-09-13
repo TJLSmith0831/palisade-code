@@ -85,7 +85,7 @@ pub fn ensure_file(project_root: &Path) -> Res<()> {
     if path.exists() {
         return Ok(());
     }
-    write_file(project_root, DEFAULT_CONTENTS).map_err(|err| format!("create {FILE_NAME}: {err}"))
+    write_file(project_root, DEFAULT_CONTENTS).map_err(|err| crate::PalisadeError::from(format!("create {FILE_NAME}: {err}")))
 }
 
 /// Writes the settings file, lazily creating `.palisade/` first — every
@@ -94,9 +94,9 @@ pub fn ensure_file(project_root: &Path) -> Res<()> {
 fn write_file(project_root: &Path, body: &str) -> Res<()> {
     let path = project_root.join(FILE_NAME);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|err| crate::PalisadeError::from(format!("create {}: {err}", parent.display())))?;
     }
-    std::fs::write(&path, body).map_err(|err| err.to_string())
+    std::fs::write(&path, body).map_err(|err| crate::PalisadeError::from(err.to_string()))
 }
 
 /// If `relative_path` matches one of `settings.format_on_save`'s regex keys,
@@ -162,8 +162,8 @@ fn read_doc(project_root: &Path) -> serde_json::Value {
 }
 
 fn write_doc(project_root: &Path, doc: serde_json::Value) -> Res<()> {
-    let body = serde_json::to_string_pretty(&doc).map_err(|err| err.to_string())?;
-    write_file(project_root, &(body + "\n")).map_err(|err| format!("write {FILE_NAME}: {err}"))
+    let body = serde_json::to_string_pretty(&doc).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+    write_file(project_root, &(body + "\n")).map_err(|err| crate::PalisadeError::from(format!("write {FILE_NAME}: {err}")))
 }
 
 /// Replaces the `run` map, leaving every other setting in the file alone.
@@ -171,7 +171,7 @@ fn write_doc(project_root: &Path, doc: serde_json::Value) -> Res<()> {
 /// be hand-edited, so anything changed since load must survive the write.
 pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<()> {
     let mut doc = read_doc(project_root);
-    doc["run"] = serde_json::to_value(commands).map_err(|err| err.to_string())?;
+    doc["run"] = serde_json::to_value(commands).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
     write_doc(project_root, doc)
 }
 
@@ -181,7 +181,7 @@ pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<(
 /// writing the file itself.
 pub fn save_verify_pins(project_root: &Path, pins: HashMap<String, Vec<String>>) -> Res<()> {
     let mut doc = read_doc(project_root);
-    doc["verifyPins"] = serde_json::to_value(pins).map_err(|err| err.to_string())?;
+    doc["verifyPins"] = serde_json::to_value(pins).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
     write_doc(project_root, doc)
 }
 
@@ -270,7 +270,7 @@ pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -
         .current_dir(project_root)
         .stdin(Stdio::null())
         .output()
-        .map_err(|err| format!("{command} failed to start: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("{command} failed to start: {err}")))?;
 
     let mut body = String::from_utf8_lossy(&output.stdout).into_owned();
     body.push_str(&String::from_utf8_lossy(&output.stderr));

@@ -4,6 +4,7 @@ import {
   Alert,
   Badge,
   Button,
+  Divider,
   Drawer,
   Group,
   Modal,
@@ -27,11 +28,13 @@ import {
   IconMaximize,
   IconMinus,
   IconPlayerStop,
+  IconPencil,
   IconSettings,
 } from "@tabler/icons-react";
 import * as api from "./api";
 import { useElapsed } from "./useElapsed";
 import { announceChainsChanged } from "./ChainsPanel";
+import { describeError } from "./errors";
 
 // The chain builder canvas and its live run view — one surface in two states,
 // per the design brief: run mode is the same graph "watching", not a
@@ -260,7 +263,42 @@ export default function ChainCanvas({
   run,
   onGateResolved,
 }: Props) {
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [draft, setDraftNow] = useState<Draft>(emptyDraft);
+
+  /**
+   * The last few drafts, newest last, for Mod+Z.
+   *
+   * Delete and Backspace on a focused node removed it and every edge attached
+   * to it immediately, with no undo, no confirm and no beforeunload — and
+   * nodes are tabIndex={0}, so a stray Backspace while tabbing was a live way
+   * to lose the most expensive thing a user builds by hand here.
+   *
+   * One mechanism rather than three: snapshotting inside the setter means
+   * node deletes, edge deletes and accidental drags are all covered by the
+   * same undo without a single call site opting in, and without a confirm
+   * dialog in front of an action that is now cheap to reverse.
+   */
+  const undoStack = useRef<Draft[]>([]);
+  const UNDO_DEPTH = 10;
+
+  const setDraft = useCallback<React.Dispatch<React.SetStateAction<Draft>>>((update) => {
+    setDraftNow((prev) => {
+      const next = typeof update === "function" ? (update as (d: Draft) => Draft)(prev) : update;
+      if (next === prev) return prev;
+      // StrictMode invokes this updater twice with the same `prev`; the
+      // identity check keeps the second pass from stacking a duplicate.
+      if (undoStack.current[undoStack.current.length - 1] !== prev) {
+        undoStack.current.push(prev);
+        if (undoStack.current.length > UNDO_DEPTH) undoStack.current.shift();
+      }
+      return next;
+    });
+  }, []);
+
+  const undo = useCallback(() => {
+    const previous = undoStack.current.pop();
+    if (previous) setDraftNow(previous);
+  }, []);
   const [editing, setEditing] = useState<string | null>(null);
   const [editingEdge, setEditingEdge] = useState<number | null>(null);
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
@@ -283,6 +321,17 @@ export default function ChainCanvas({
   const [showSettings, setShowSettings] = useState(false);
   const [stopping, setStopping] = useState(false);
   const surface = useRef<HTMLDivElement>(null);
+  /**
+   * Whether the viewport is where the user put it.
+   *
+   * fit() ran only from the toolbar button and a double-click, so opening a
+   * chain left nodes wherever the last session's pan happened to leave them —
+   * observed at 1280px with the `reviewer` node entirely outside the pane.
+   * Fitting on load and on resize fixes that, but it must not yank a viewport
+   * the user has deliberately zoomed or panned, so anything that moves the
+   * view by hand claims it and only fit() gives it back.
+   */
+  const viewIsUsers = useRef(false);
   // addNode's uniqueness check has to see additions that haven't committed
   // yet — two adds fired before React re-renders both used to read the same
   // stale `draft.nodes` and pick the same "step" role, so the second silently
@@ -296,8 +345,11 @@ export default function ChainCanvas({
   const watching = !!run && !run.outcome;
 
   useEffect(() => {
+    // Switching chains is not an edit. Undoing across it would drop the user
+    // into a chain they were never editing, so the history starts over.
+    undoStack.current = [];
     if (!chainName) {
-      setDraft(emptyDraft());
+      setDraftNow(emptyDraft());
       return;
     }
     let live = true;
@@ -306,7 +358,7 @@ export default function ChainCanvas({
       .then((chains) => {
         const found = chains.find((c) => c.name === chainName);
         if (live && found) {
-          setDraft(found);
+          setDraftNow(found);
           persisted.current = found.name;
           savedSnapshot.current = JSON.stringify(found);
           // History is advisory here: a missing or unreadable record never
@@ -319,7 +371,7 @@ export default function ChainCanvas({
           }).catch(() => undefined);
         }
       })
-      .catch((err) => live && setError(String(err)));
+      .catch((err) => live && setError(describeError(err, { loading: "this chain" })));
     return () => {
       live = false;
     };
@@ -479,7 +531,7 @@ export default function ChainCanvas({
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err, { action: "save this chain" }));
     }
   };
 
@@ -491,6 +543,7 @@ export default function ChainCanvas({
     // Clicking empty canvas abandons a half-drawn connection. Esc does the
     // same, but a mouse-only user should never need the keyboard to back out.
     setConnectFrom(null);
+    viewIsUsers.current = true;
     panning.current = { x: event.clientX - view.x, y: event.clientY - view.y };
     surface.current?.setPointerCapture(event.pointerId);
   };
@@ -513,6 +566,7 @@ export default function ChainCanvas({
       const rect = surface.current?.getBoundingClientRect();
       const cursorX = rect ? event.clientX - rect.left : 0;
       const cursorY = rect ? event.clientY - rect.top : 0;
+      viewIsUsers.current = true;
       setView((v) => {
         const zoom = clampZoom(v.zoom - event.deltaY * 0.002);
         // Anchor on the point under the cursor, not the plane origin: hold
@@ -523,18 +577,22 @@ export default function ChainCanvas({
       });
       return;
     }
+    viewIsUsers.current = true;
     setView((v) => ({ ...v, x: v.x - event.deltaX, y: v.y - event.deltaY }));
   };
 
   /** Toolbar zoom, for a mouse with no modifier keys in reach. */
-  const zoomBy = (delta: number) =>
+  const zoomBy = (delta: number) => {
+    viewIsUsers.current = true;
     setView((v) => ({ ...v, zoom: clampZoom(v.zoom + delta) }));
+  };
 
   /** Frames every node — the double-click gesture the codebase map already
    *  uses. A fixed zoom of 1 parked the top-left node at (40, 40) regardless
    *  of the graph's actual extent, so half a wide chain rendered off-screen;
    *  this scales to the surface's real measured size instead. */
   const fit = useCallback(() => {
+    viewIsUsers.current = false;
     const points = Object.values(positions);
     if (points.length === 0) {
       setView({ x: 0, y: 0, zoom: 1 });
@@ -550,7 +608,11 @@ export default function ChainCanvas({
     const viewW = rect?.width || graphW;
     const viewH = rect?.height || graphH;
     const padding = 40;
-    const zoom = clampZoom(Math.min((viewW - padding * 2) / graphW, (viewH - padding * 2) / graphH));
+    // Fit, but never magnify: a one-node chain in a wide pane should sit at
+    // its natural size rather than blowing up to fill the space.
+    const zoom = clampZoom(
+      Math.min(1, (viewW - padding * 2) / graphW, (viewH - padding * 2) / graphH)
+    );
     setView({
       x: (viewW - graphW * zoom) / 2 - minX * zoom,
       y: (viewH - graphH * zoom) / 2 - minY * zoom,
@@ -616,11 +678,69 @@ export default function ChainCanvas({
     dragging.current = null;
   };
 
+  /**
+   * Fit the graph when a chain opens, and again whenever the pane resizes.
+   *
+   * Keyed on the set of node roles rather than on `positions`, which changes
+   * on every drag — refitting mid-drag would fight the hand that is moving
+   * the node. Both paths defer to viewIsUsers: once someone has zoomed or
+   * panned, the canvas stops repositioning their view behind them.
+   */
+  const nodeRoles = Object.keys(draft.nodes).sort().join("\u0000");
+  useEffect(() => {
+    if (!nodeRoles) return;
+    fit();
+    // fit is recreated whenever positions change; depending on it here would
+    // refit on every drag, which is exactly what this must not do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeRoles]);
+
+  useEffect(() => {
+    const el = surface.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!viewIsUsers.current) fit();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fit]);
+
+  /**
+   * Mod+Z anywhere in the canvas.
+   *
+   * On the window rather than the canvas element because the thing a user
+   * most wants to undo — a node deleted with Backspace — also removes the
+   * element that had focus, so by the time the keystroke for the undo
+   * arrives there is nothing inside the canvas holding it.
+   */
+  useEffect(() => {
+    if (watching) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "z" || !(e.metaKey || e.ctrlKey) || e.shiftKey) return;
+      // A text field has its own undo, and taking Mod+Z away from a half
+      // typed guideline would be its own kind of data loss.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      e.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, watching]);
+
   const node = editing ? draft.nodes[editing] : null;
   const edge = editingEdge !== null ? draft.edges[editingEdge] : null;
 
   return (
     <div className="ds-chain-canvas-wrap" data-testid="chain-canvas">
+      {/* Ten controls in one wrapping row, every button variant="default",
+          so "Test run" — which spends money — looked exactly like "Save",
+          which writes a file. Four categories are now four groups, split by
+          dividers: identity, authoring, execution, viewport. The status
+          strings that used to sit between the buttons moved to their own
+          line below, where they read as state rather than as something to
+          click. */}
       <div className="ds-chain-toolbar">
         <TextInput
           size="xs"
@@ -632,108 +752,151 @@ export default function ChainCanvas({
           data-testid="chain-name"
           style={{ width: 200 }}
         />
-        <Button
-          size="xs"
-          variant="default"
-          leftSection={<IconPlus size={14} />}
-          onClick={addNode}
-          disabled={watching}
-          data-testid="chain-add-node"
-        >
-          Node
-        </Button>
-        <Button
-          size="xs"
-          variant="default"
-          leftSection={<IconDeviceFloppy size={14} />}
-          onClick={() => void save()}
-          disabled={watching}
-          data-testid="chain-save"
-        >
-          {saved ? "Saved" : "Save"}
-        </Button>
-        {dirty && !watching && (
-          <Text size="xs" c="dimmed" data-testid="chain-dirty">
-            Unsaved changes
-          </Text>
-        )}
-        {/* D13: states how wide the chain actually runs, so a user can tell
-            sequential from parallel without running it. Scoped to this one
-            line — no tier layout, no run-time grouping treatment. */}
-        {nodeCount > 0 && (
-          <Text size="xs" c="dimmed" data-testid="chain-width">
-            Runs {width === 1 ? "1 node" : `up to ${width} nodes`} at once
-            {!!draft.maxParallel && ` (capped at ${draft.maxParallel})`}
-          </Text>
-        )}
-        {onRun && persisted.current && (
-          <Tooltip
-            label={
-              persisted.current === draft.name
-                ? `Test run ${draft.name}`
-                : "Save this chain before starting a test run"
-            }
+
+        <Divider orientation="vertical" />
+
+        <Group gap={6} wrap="nowrap" data-testid="chain-authoring-group">
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<IconPlus size={14} />}
+            onClick={addNode}
+            disabled={watching}
+            data-testid="chain-add-node"
           >
+            Node
+          </Button>
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<IconDeviceFloppy size={14} />}
+            onClick={() => void save()}
+            disabled={watching}
+            data-testid="chain-save"
+          >
+            {saved ? "Saved" : "Save"}
+          </Button>
+          {!watching && (
             <Button
               size="xs"
-              variant="default"
-              leftSection={<IconPlayerPlay size={14} />}
-              onClick={() => setSeedComposer(true)}
-              disabled={watching || persisted.current !== draft.name}
+              variant="subtle"
+              leftSection={<IconSettings size={14} />}
+              onClick={() => setShowSettings((open) => !open)}
             >
-              Test run
+              Run settings
             </Button>
-          </Tooltip>
-        )}
-        <Tooltip label="Zoom out">
-          <ActionIcon
-            size="sm"
-            variant="subtle"
-            color="gray"
-            onClick={() => zoomBy(-0.2)}
-            aria-label="Zoom out"
-          >
-            <IconMinus size={14} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Zoom in">
-          <ActionIcon
-            size="sm"
-            variant="subtle"
-            color="gray"
-            onClick={() => zoomBy(0.2)}
-            aria-label="Zoom in"
-            data-testid="chain-zoom-in"
-          >
-            <IconPlus size={14} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Fit to view">
-          <ActionIcon size="sm" variant="subtle" color="gray" onClick={fit} aria-label="Fit to view">
-            <IconMaximize size={14} />
-          </ActionIcon>
-        </Tooltip>
-        {connectFrom && (
-          <Group gap={6}>
-            <Text size="xs" c="dimmed">
-              Click a node to connect from <b>{connectFrom}</b>
-            </Text>
-            <Button size="compact-xs" variant="subtle" onClick={() => setConnectFrom(null)}>
-              Cancel
-            </Button>
-          </Group>
-        )}
-        {watching && (
-          <Group gap="xs">
-            <Badge size="sm" variant="light">Running · {elapsed}s · turn up to {ceiling}</Badge>
-            <Button size="xs" color="red" variant="light" leftSection={<IconPlayerStop size={14} />} loading={stopping}
-              onClick={async () => { setStopping(true); try { await api.cancelChainRun(run!.runId); } catch (err) { setError(String(err)); } finally { setStopping(false); } }}>
+          )}
+        </Group>
+
+        {(onRun && persisted.current) || watching ? <Divider orientation="vertical" /> : null}
+
+        <Group gap={6} wrap="nowrap" data-testid="chain-execution-group">
+          {onRun && persisted.current && !watching && (
+            <Tooltip
+              label={
+                persisted.current === draft.name
+                  ? `Test run ${draft.name}`
+                  : "Save this chain before starting a test run"
+              }
+            >
+              {/* The one action here that spends money and takes time. It is
+                  the dominant action in this local decision, so it carries
+                  the accent fill and nothing else in the row does. */}
+              <Button
+                size="xs"
+                variant="filled"
+                leftSection={<IconPlayerPlay size={14} />}
+                onClick={() => setSeedComposer(true)}
+                disabled={persisted.current !== draft.name}
+                data-testid="chain-test-run"
+              >
+                Test run
+              </Button>
+            </Tooltip>
+          )}
+          {watching && (
+            <Button
+              size="xs"
+              color="danger"
+              variant="light"
+              leftSection={<IconPlayerStop size={14} />}
+              loading={stopping}
+              onClick={async () => { setStopping(true); try { await api.cancelChainRun(run!.runId); } catch (err) { setError(describeError(err, { action: "stop this run" })); } finally { setStopping(false); } }}
+            >
               Stop
             </Button>
-          </Group>
-        )}
-        {!watching && <Button size="xs" variant="subtle" leftSection={<IconSettings size={14} />} onClick={() => setShowSettings((open) => !open)}>Run settings</Button>}
+          )}
+        </Group>
+
+        <Group gap={2} wrap="nowrap" ml="auto" data-testid="chain-viewport-group">
+          <Tooltip label="Zoom out">
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              color="neutral"
+              onClick={() => zoomBy(-0.2)}
+              aria-label="Zoom out"
+            >
+              <IconMinus size={14} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Zoom in">
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              color="neutral"
+              onClick={() => zoomBy(0.2)}
+              aria-label="Zoom in"
+              data-testid="chain-zoom-in"
+            >
+              <IconPlus size={14} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Fit to view">
+            <ActionIcon size="sm" variant="subtle" color="neutral" onClick={fit} aria-label="Fit to view">
+              <IconMaximize size={14} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       </div>
+
+      {/* State, not actions. "Unsaved changes" in particular used to be the
+          quietest type treatment in the system, sitting on the one thing a
+          user can actually lose. */}
+      {(dirty || nodeCount > 0 || connectFrom || watching) && (
+        <div className="ds-chain-statusbar" data-testid="chain-statusbar">
+          {watching && (
+            <Badge size="sm" variant="light">
+              Running · {elapsed}s · turn up to {ceiling}
+            </Badge>
+          )}
+          {dirty && !watching && (
+            <Text size="xs" c="warn" fw={500} data-testid="chain-dirty">
+              <IconPencil size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+              Unsaved changes
+            </Text>
+          )}
+          {/* D13: states how wide the chain actually runs, so a user can tell
+              sequential from parallel without running it. Scoped to this one
+              line — no tier layout, no run-time grouping treatment. */}
+          {nodeCount > 0 && (
+            <Text size="xs" c="dimmed" data-testid="chain-width">
+              Runs {width === 1 ? "1 node" : `up to ${width} nodes`} at once
+              {!!draft.maxParallel && ` (capped at ${draft.maxParallel})`}
+            </Text>
+          )}
+          {connectFrom && (
+            <Group gap={6}>
+              <Text size="xs" c="dimmed">
+                Click a node to connect from <b>{connectFrom}</b>
+              </Text>
+              <Button size="compact-xs" variant="subtle" onClick={() => setConnectFrom(null)}>
+                Cancel
+              </Button>
+            </Group>
+          )}
+        </div>
+      )}
 
       {showSettings && !watching && (
         <Group className="ds-chain-settings" gap="sm" px="sm" pb="sm">
@@ -779,7 +942,7 @@ export default function ChainCanvas({
         {(error || problem) && (!watching || !!error) && (
           <Alert
             variant="light"
-            color={error ? "red" : "yellow"}
+            color={error ? "danger" : "warn"}
             icon={<IconAlertTriangle size={14} />}
             className="ds-chain-problem-overlay"
             withCloseButton={!!error}
@@ -806,7 +969,7 @@ export default function ChainCanvas({
                 markerHeight="6"
                 orient="auto-start-reverse"
               >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border-strong, var(--border))" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border)" />
               </marker>
             </defs>
             {draft.edges.map((e, index) => {
@@ -1063,7 +1226,7 @@ export default function ChainCanvas({
               )}
               <Button
                 size="xs"
-                color="red"
+                color="danger"
                 variant="light"
                 leftSection={<IconTrash size={14} />}
                 onClick={() => removeNode(editing)}
@@ -1087,7 +1250,7 @@ export default function ChainCanvas({
         {edge && editingEdge !== null && (
           <Stack gap="sm">
             {loops.has(editingEdge) && (
-              <Alert variant="light" color="yellow" icon={<IconAlertTriangle size={14} />}>
+              <Alert variant="light" color="warn" icon={<IconAlertTriangle size={14} />}>
                 <Text size="xs">
                   This edge loops back. It needs a gate and an iteration cap
                   before the chain can be saved.
@@ -1167,7 +1330,7 @@ export default function ChainCanvas({
             )}
             <Button
               size="xs"
-              color="red"
+              color="danger"
               variant="light"
               leftSection={<IconTrash size={14} />}
               onClick={() => {
@@ -1199,7 +1362,7 @@ function ApprovalBar({ run, onError, onTranscript, onResolved }: { run: RunView;
       await api.resolveChainGate(run.runId, decision, decision === "sendBack" ? note : undefined);
       onResolved?.(decision);
     } catch (err) {
-      onError(String(err));
+      onError(describeError(err));
     } finally {
       setPending(null);
     }
@@ -1232,7 +1395,7 @@ function ApprovalBar({ run, onError, onTranscript, onResolved }: { run: RunView;
       </Button>
       <Button
         size="xs"
-        color="red"
+        color="danger"
         variant="light"
         loading={pending === "reject"} disabled={!!pending} onClick={() => void decide("reject")}
       >
@@ -1255,7 +1418,7 @@ function OutcomeBar({ outcome }: { outcome: api.ChainOutcome }) {
   return (
     <Alert
       variant="light"
-      color={good ? "green" : "red"}
+      color={good ? "success" : "danger"}
       icon={good ? <IconCheck size={14} /> : <IconAlertTriangle size={14} />}
       m="xs"
       data-testid="chain-outcome"

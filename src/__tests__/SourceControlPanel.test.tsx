@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import SourceControlPanel, { isStaged, layoutGraph, statusChip, splitPath } from "../SourceControlPanel";
+import SourceControlPanel, { commitRowHeight, isStaged, layoutGraph, shortRef, statusChip, splitPath, subjectLines } from "../SourceControlPanel";
 import * as api from "../api";
 
 vi.mock("../api", () => ({
@@ -147,11 +147,16 @@ describe("SourceControlPanel staging", () => {
     await screen.findByText("merge feature");
     const lane = screen.getAllByTestId("sc-graph-lane")[0];
     expect(lane.getAttribute("width")).toBe("26");
-    // Bug #1: rows used to carry 1px of vertical padding around this 24px
-    // SVG, leaving a 2px seam between adjacent rows where the connecting
-    // lane line broke. Locking the SVG's own height to the row's exact
-    // height is what makes rows butt together with no gap.
-    expect(lane.getAttribute("height")).toBe("24");
+    // Bug #1: rows used to carry 1px of vertical padding around this SVG,
+    // leaving a 2px seam between adjacent rows where the connecting lane line
+    // broke. Locking the SVG's own height to the row's exact height is what
+    // makes rows butt together with no gap. The height is no longer a flat 24
+    // — a row is as tall as its subject and refs need — so the invariant is
+    // the agreement between the two, not the constant it used to be.
+    expect(lane.getAttribute("height")).toBe(
+      String(parseInt(screen.getAllByTestId("sc-commit-row")[0].style.height, 10))
+    );
+    expect(lane.getAttribute("height")).toBe(String(commitRowHeight("merge feature", 1)));
     // The filter box sits above the scrollable commit list, not inside it —
     // scrolling a long history must not scroll the filter out of reach.
     expect(screen.getByTestId("sc-graph-body").contains(screen.getByLabelText("Filter commit graph"))).toBe(false);
@@ -439,16 +444,23 @@ describe("SourceControlPanel staging", () => {
   });
 
   // GIT-20/GIT-21: opening a non-git folder as a project made gitStatus and
+  /**
+   * What the backend actually sends now: `{ kind, message }`. These used to
+   * reject with a bare Error whose text the panel matched by regex; the
+   * classification moved into Rust, so the fixture moves with it.
+   */
+  const notARepo = (message: string) => ({ kind: "notAGitRepo" as const, message });
+
   // gitLog both reject with the same "not a git repository" error on every
   // reload, and each rejection called onError separately — a burst of
   // identical toasts with no way to stop them. A non-repo project should
   // show one graceful init prompt instead, not a toast at all.
   it("shows a graceful init prompt instead of an error toast for a non-git folder", async () => {
     mocked.gitStatus.mockRejectedValue(
-      new Error("git status --porcelain=v1 -uall failed: fatal: not a git repository (or any of the parent directories): .git")
+      notARepo("git status --porcelain=v1 -uall failed: fatal: not a git repository (or any of the parent directories): .git")
     );
-    mocked.gitLog.mockRejectedValue(new Error("fatal: not a git repository"));
-    mocked.gitAheadBehind.mockRejectedValue(new Error("fatal: not a git repository"));
+    mocked.gitLog.mockRejectedValue(notARepo("fatal: not a git repository"));
+    mocked.gitAheadBehind.mockRejectedValue(notARepo("fatal: not a git repository"));
 
     render(<SourceControlPanel {...props} />);
 
@@ -458,10 +470,10 @@ describe("SourceControlPanel staging", () => {
 
   it("initializes the repo from the prompt and reloads status", async () => {
     mocked.gitStatus
-      .mockRejectedValueOnce(new Error("fatal: not a git repository"))
+      .mockRejectedValueOnce(notARepo("fatal: not a git repository"))
       .mockResolvedValueOnce([]);
-    mocked.gitLog.mockRejectedValue(new Error("fatal: not a git repository"));
-    mocked.gitAheadBehind.mockRejectedValue(new Error("fatal: not a git repository"));
+    mocked.gitLog.mockRejectedValue(notARepo("fatal: not a git repository"));
+    mocked.gitAheadBehind.mockRejectedValue(notARepo("fatal: not a git repository"));
     mocked.gitInit = vi.fn().mockResolvedValue(undefined);
 
     render(<SourceControlPanel {...props} />);
@@ -562,4 +574,140 @@ describe("layoutGraph", () => {
       ],
     });
   });
+});
+
+describe("a commit row shows the whole commit", () => {
+  // Measured live before this changed: the graph rendered 103 overflowing
+  // elements — 340 by the time the branch had a long name — with an 89-char
+  // subject showing 91px of 469 and a branch badge showing 6px of 87. The
+  // detail that made it a defect rather than a density choice is that the
+  // ellipsis happened inside the content box, so the panel's own overflow-x
+  // had nothing to scroll to. The text was unreachable, not merely clipped.
+  const EIGHTY = "fix: make the source control graph show an entire commit subject at last";
+  const LONG_REF = "origin/claude/impeccable-critique-agent-chain-0bf99b";
+
+  beforeEach(() => {
+    mocked.gitStatus.mockResolvedValue([]);
+    mocked.gitGraph.mockResolvedValue([
+      { hash: "c2", parents: ["c1"], subject: EIGHTY, author: "TJLSmith0831", date: "2026-09-11", refs: [LONG_REF, "origin/main"] },
+      { hash: "c1", parents: [], subject: "short one", author: "TJLSmith0831", date: "2026-09-10", refs: [] },
+    ]);
+  });
+
+  it("gives an 80-character subject enough lines to render whole", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText(EIGHTY);
+    // Four lines at the measured 25 characters a line covers 100 characters.
+    expect(subjectLines(EIGHTY)).toBe(3);
+    expect(subjectLines(EIGHTY) * 25).toBeGreaterThanOrEqual(EIGHTY.length);
+    // The row is tall enough to hold those lines plus its metadata and both
+    // ref badges — and nothing is asked to share a line with the subject.
+    expect(commitRowHeight(EIGHTY, 2)).toBe(15 * 3 + 14 + 16 * 2);
+  });
+
+  it("keeps the half of a branch name that tells two branches apart", () => {
+    // origin/claude/…-0bf99b and origin/claude/…-0bf9aa differ only at the
+    // end, which is precisely what an ordinary end-ellipsis would eat.
+    const shortened = shortRef(LONG_REF);
+    expect(shortened.startsWith("…")).toBe(true);
+    expect(LONG_REF.endsWith(shortened.slice(1))).toBe(true);
+    expect(shortRef("origin/main")).toBe("origin/main");
+    expect(shortRef("origin/claude/foo")).not.toBe(shortRef("origin/claude/bar"));
+  });
+
+  it("renders one badge per ref rather than one badge holding them all", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText(EIGHTY);
+    // Joined into a single nowrap string, four refs on one commit measured
+    // 699px inside a 138px row and none of them was readable.
+    expect(screen.getByText(shortRef(LONG_REF))).toBeDefined();
+    expect(screen.getByText("origin/main")).toBeDefined();
+  });
+
+  it("sizes each lane SVG to its own row so the graph still joins up", async () => {
+    render(<SourceControlPanel {...props} />);
+    await screen.findByText(EIGHTY);
+    const lanes = screen.getAllByTestId("sc-graph-lane");
+    const rows = screen.getAllByTestId("sc-commit-row");
+    // The lane SVG has to be exactly as tall as its row or adjacent rows'
+    // paths meet with a seam — the reason row height is computed rather than
+    // measured.
+    rows.forEach((row, i) => {
+      expect(lanes[i].getAttribute("height")).toBe(String(parseInt(row.style.height, 10)));
+    });
+    expect(parseInt(rows[0].style.height, 10)).toBe(commitRowHeight(EIGHTY, 2));
+    expect(parseInt(rows[1].style.height, 10)).toBe(commitRowHeight("short one", 0));
+  });
+});
+
+// The graph asked for a flat 80 commits and said nothing about it, so a
+// repository with five thousand commits was indistinguishable from a shallow
+// clone: the list just stopped.
+describe("the graph says how much history it is showing", () => {
+  const page = (n: number, offset = 0) =>
+    Array.from({ length: n }, (_, i) => ({
+      hash: `h${offset + i}`,
+      parents: offset + i + 1 < offset + n ? [`h${offset + i + 1}`] : [],
+      subject: `commit ${offset + i}`,
+      author: "T",
+      date: "2026-09-11",
+      refs: [],
+    }));
+
+  it("offers more when a commit past the page is actually seen", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    // Asked for 81 (graphLimit + 1); getting 81 back means there's more.
+    mocked.gitGraph.mockResolvedValue(page(81));
+    render(<SourceControlPanel {...props} />);
+
+    await screen.findByTestId("sc-graph-load-more");
+    expect(screen.getByTestId("sc-graph-footer").textContent).toContain("80 commits");
+
+    mocked.gitGraph.mockResolvedValue(page(120));
+    fireEvent.click(screen.getByTestId("sc-graph-load-more"));
+
+    await waitFor(() => expect(mocked.gitGraph).toHaveBeenCalledWith("p1", 161));
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-graph-footer").textContent).toContain("120 commits")
+    );
+  });
+
+  it("says so, and stops offering, once the whole history is in", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    mocked.gitGraph.mockResolvedValue(page(12));
+    render(<SourceControlPanel {...props} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-graph-footer").textContent).toContain("all of them")
+    );
+    expect(screen.queryByTestId("sc-graph-load-more")).toBeNull();
+  });
+
+  it("does not offer more when the history ends exactly on a page boundary", async () => {
+    mocked.gitStatus.mockResolvedValue([]);
+    // Asked for 81, only 80 exist — that's all of history, not a full page.
+    mocked.gitGraph.mockResolvedValue(page(80));
+    render(<SourceControlPanel {...props} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-graph-footer").textContent).toContain("all of them")
+    );
+    expect(screen.queryByTestId("sc-graph-load-more")).toBeNull();
+  });
+});
+
+it("does not label a graphic it also hides from the reader", async () => {
+  mocked.gitStatus.mockResolvedValue([]);
+  mocked.gitGraph.mockResolvedValue([
+    { hash: "c1", parents: [], subject: "only", author: "T", date: "2026-09-11", refs: [] },
+  ]);
+  render(<SourceControlPanel {...props} />);
+  await screen.findByText("only");
+  // aria-hidden wins when both sit on the same element, so the aria-label was
+  // dead. The lanes are decoration — the commit row beside them already
+  // carries the commit's accessible name.
+  const lane = screen.getAllByTestId("sc-graph-lane")[0];
+  expect(lane.getAttribute("aria-hidden")).toBe("true");
+  expect(lane.getAttribute("aria-label")).toBeNull();
+  expect(screen.getAllByTestId("sc-commit-row")[0].getAttribute("aria-label")).toContain("only");
 });

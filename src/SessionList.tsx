@@ -59,15 +59,15 @@ export const READINESS: Record<
   clean: null,
   ahead: {
     label: (w) => (w.ahead > 0 ? `${w.ahead} ahead` : "uncommitted"),
-    color: "green",
+    color: "success",
     tip: "Merges cleanly into its base branch",
   },
   conflict: {
     label: (w) => `conflicts w/ ${w.baseBranch}`,
-    color: "red",
+    color: "danger",
     tip: "A trial merge into the base branch hit conflicts",
   },
-  merged: { label: () => "merged", color: "gray", tip: "Palisade merged this branch into its base" },
+  merged: { label: () => "merged", color: "neutral", tip: "Palisade merged this branch into its base" },
 };
 
 export function threadState(

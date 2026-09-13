@@ -500,7 +500,14 @@ it("reports a failed project save and restores the persisted appearance", async 
   render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
   await waitFor(() => expect(invokeMock).toHaveBeenCalled());
   fireEvent.click(screen.getAllByTestId("app-shell-swatches-light-swatch")[2]);
-  expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
+  // Asserts the meaning, not the phrasing: the save is named as what failed,
+  // the underlying detail is still shown, and the retry is still offered.
+  // The lead-in itself now comes from describeError, which is what makes the
+  // whole app say this one way.
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(/save that appearance/i);
+  expect(alert).toHaveTextContent(/disk full/);
+  expect(alert).toHaveTextContent(/try again/i);
   expect(document.documentElement.style.getPropertyValue("--app-shell-light-override")).toBe("");
 });
 
@@ -525,4 +532,30 @@ it("saving appearance no longer depends on the project settings file parsing cle
     )
   );
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// The Mantine close button was the app's only genuinely unnamed focusable
+// control: SVG-only content, no aria-label, no title. It was also the only
+// place in the app's own chrome painting a non-theme hex (#9ca3ab).
+it("names its close button and paints it from the theme", async () => {
+  invokeMock.mockReset().mockResolvedValue(undefined);
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  const close = screen.getByRole("button", { name: "Close settings" });
+  expect(close.style.color).toBe("var(--muted)");
+});
+
+// The swatches painted oklch(65% 0.18 hue) — a colour the app never ships.
+// The real accent is 88%/0.21 dark and 46%/0.16 light, so every preview was
+// wrong in both themes. They now read the same two tokens --accent derives
+// from, which is what makes them unable to drift again.
+it("previews the accent the active theme will actually use", async () => {
+  invokeMock.mockReset().mockResolvedValue(undefined);
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  for (const swatch of screen.getAllByTestId("accent-swatch")) {
+    expect(swatch.style.background).toMatch(
+      /^oklch\(var\(--accent-l\) var\(--accent-c\) \d+\)$/
+    );
+  }
 });

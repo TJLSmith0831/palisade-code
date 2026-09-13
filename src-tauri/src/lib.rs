@@ -8,6 +8,7 @@ mod chains;
 mod chain_history;
 mod completion;
 mod db;
+mod error;
 mod executor;
 mod graph_nudge;
 mod grill_inject;
@@ -17,6 +18,7 @@ mod fswatch;
 mod git;
 mod git_repo;
 mod integrations;
+mod locks;
 mod lsp;
 mod mcp;
 mod native_menu;
@@ -26,6 +28,7 @@ mod session_log_writer;
 mod openspec_cache;
 mod settings;
 mod store;
+mod project_path;
 mod project_windows;
 mod dap;
 mod terminal;
@@ -116,7 +119,7 @@ mod quit_registry_tests {
     #[test]
     fn quit_waits_for_every_dirty_window_before_exiting() {
         let registry = QuitRegistry::default();
-        let mut dirty = registry.dirty_windows.lock().unwrap();
+        let mut dirty = registry.dirty_windows.lock_or_recover();
         dirty.insert("project-alpha".into(), true);
         dirty.insert("project-bravo".into(), true);
         drop(dirty);
@@ -132,7 +135,7 @@ mod quit_registry_tests {
     #[test]
     fn quit_ignores_dirty_windows_that_no_longer_exist() {
         let registry = QuitRegistry::default();
-        let mut dirty = registry.dirty_windows.lock().unwrap();
+        let mut dirty = registry.dirty_windows.lock_or_recover();
         dirty.insert("project-alpha".into(), true);
         dirty.insert("project-closed".into(), true);
         drop(dirty);
@@ -140,7 +143,7 @@ mod quit_registry_tests {
         let live = ["project-alpha".to_string()].into_iter().collect();
         assert_eq!(registry.begin_quit(&live), ["project-alpha".to_string()].into_iter().collect());
         assert!(registry.confirm("project-alpha"), "the only live dirty window completes the quit");
-        assert!(!registry.dirty_windows.lock().unwrap().contains_key("project-closed"), "the ghost entry is dropped");
+        assert!(!registry.dirty_windows.lock_or_recover().contains_key("project-closed"), "the ghost entry is dropped");
     }
 }
 
@@ -148,6 +151,8 @@ use acp_preflight::Preflight;
 use executor::{Envelope, ExecutorEvent, Harness, Sink};
 use serde::Serialize;
 use store::{palisade_home, Message, Project};
+use crate::locks::MutexExt;
+pub(crate) use error::PalisadeError;
 pub(crate) use store::{Res, ThreadMeta};
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,7 +171,7 @@ pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
         .into_iter()
         .find(|p| p.hash == hash)
         .map(|p| PathBuf::from(p.root))
-        .ok_or_else(|| format!("unknown project: {hash}"))
+        .ok_or_else(|| crate::PalisadeError::not_found(format!("unknown project: {hash}")))
 }
 
 /// A fresh Palisade process owns no chain workers. Sweep every persisted
@@ -194,7 +199,7 @@ pub(crate) fn git_bin() -> Res<PathBuf> {
 async fn list_projects() -> Res<Vec<Project>> {
     tokio::task::spawn_blocking(|| store::list_projects(&palisade_home()))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -205,7 +210,7 @@ async fn add_project(app: tauri::AppHandle, path: String) -> Res<Project> {
         Ok(project)
     })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Open a separate native window with its own frontend project state.
@@ -226,8 +231,9 @@ async fn open_project_window(app: tauri::AppHandle, hash: String) -> Res<String>
     let config = project_windows::window_config(&palisade_home(), &hash)?;
     let label = config.label.clone();
     tauri::WebviewWindowBuilder::from_config(&app, &config)
-        .map_err(|e| format!("configure project window: {e}"))?
-        .build().map_err(|e| format!("open project window: {e}"))?;
+        .map_err(|e| crate::PalisadeError::from(format!("configure project window: {e}")))?
+        .build()
+        .map_err(|e| crate::PalisadeError::from(format!("open project window: {e}")))?;
     Ok(label)
 }
 
@@ -237,7 +243,7 @@ async fn remove_project(app: tauri::AppHandle, hash: String) -> Res<()> {
         project_windows::remove_saved_project(&palisade_home(), &app.state::<Harness>(), &hash)?;
         let _ = app.emit("projects-changed", &hash);
         Ok(())
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Amendment 8's Clone Repository card: clone, then register the result as
@@ -251,7 +257,7 @@ async fn clone_repository(app: tauri::AppHandle, url: String, parent: String) ->
         Ok(project)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -289,7 +295,7 @@ async fn switch_project(window: tauri::Window, app: tauri::AppHandle, hash: Stri
         Ok(project)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Idempotently registers Graphify's MCP server (D9/D21) with whichever
@@ -336,7 +342,7 @@ fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, pr
     // stop the first window's watcher (#33). Retire first, so switching away
     // from a project no window still shows also stops its graphify process.
     project_windows::retire_unwatched(harness);
-    let mut watchers = harness.watch.lock().unwrap();
+    let mut watchers = harness.workspace.watch.lock_or_recover();
     if watchers.contains_key(&project.hash) {
         return;
     }
@@ -379,7 +385,7 @@ struct FsChanged {
 /// missing `graphify`.
 fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
     project_windows::retire_unwatched(harness);
-    let mut watchers = harness.fswatch.lock().unwrap();
+    let mut watchers = harness.workspace.fswatch.lock_or_recover();
     if watchers.contains_key(&project.hash) {
         return;
     }
@@ -409,21 +415,21 @@ async fn rename_project(app: tauri::AppHandle, hash: String, display_name: Strin
         Ok(project)
     })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn create_thread(project_hash: String, title: String) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || store::create_thread(&palisade_home(), &project_hash, &title))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn list_threads(project_hash: String) -> Res<Vec<ThreadMeta>> {
     tokio::task::spawn_blocking(move || store::list_threads(&palisade_home(), &project_hash))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -436,7 +442,7 @@ async fn rename_thread(
         store::rename_thread(&palisade_home(), &project_hash, &thread_id, &title)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -449,7 +455,7 @@ async fn set_thread_mode(
         store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, &mode)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Refused while this thread has an executor turn in flight — deleting the
@@ -470,7 +476,7 @@ async fn set_thread_archived(
         Ok(meta)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -501,7 +507,7 @@ async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: S
         store::delete_thread(&palisade_home(), &project_hash, &thread_id)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -526,14 +532,14 @@ async fn append_message(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
     tokio::task::spawn_blocking(move || store::read_thread(&palisade_home(), &project_hash, &thread_id))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------- executor handoff
@@ -599,7 +605,7 @@ impl Sink for AppSink {
         if let Some(watch) = self
             .app
             .state::<Harness>()
-            .turn_watchers
+            .chain.turn_watchers
             .lock()
             .unwrap()
             .get(session_id)
@@ -645,7 +651,7 @@ impl Sink for AppSink {
         let mode = self
             .app
             .state::<Harness>()
-            .acp_sessions
+            .agent.acp_sessions
             .lock()
             .unwrap()
             .get(&envelope_ref.session_id)
@@ -679,7 +685,7 @@ impl Sink for AppSink {
         if let Some(watch) = self
             .app
             .state::<Harness>()
-            .turn_watchers
+            .chain.turn_watchers
             .lock()
             .unwrap()
             .get(&envelope_ref.session_id)
@@ -696,7 +702,7 @@ impl Sink for AppSink {
         }
 
         match &envelope_ref.event {
-            ExecutorEvent::Crashed { message, .. } => {
+            ExecutorEvent::Crashed { message, failure_class, .. } => {
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
                 // #18: only a dead agent drops the thread back to spec. A
                 // retryable turn failure (expired auth, a cancelled turn)
@@ -708,7 +714,7 @@ impl Sink for AppSink {
                 // Persist an auth-shaped failure on the thread so the
                 // composer can warn before the *next* message is even typed,
                 // not just after it fails the same way again.
-                if acp_client::reads_as_auth_failure(message) {
+                if *failure_class == Some(acp_client::FailureClass::AuthRequired) {
                     let _ = store::set_thread_auth_blocked(
                         &palisade_home(),
                         &self.project_hash,
@@ -720,7 +726,7 @@ impl Sink for AppSink {
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
-                let _ = harness.session_log_writer.lock().unwrap().flush();
+                let _ = harness.workspace.session_log_writer.lock_or_recover().flush();
                 // A turn made it to completion, so whatever auth problem
                 // blocked an earlier one no longer applies.
                 if thread_meta(&self.project_hash, &thread_id)
@@ -734,9 +740,9 @@ impl Sink for AppSink {
                     );
                     let _ = self.app.emit("thread-updated", &thread_id);
                 }
-                let watch = harness.pending_propose.lock().unwrap().take();
+                let watch = harness.agent.pending_propose.lock_or_recover().take();
                 if let Some(watch) = watch {
-                    let after = executor::openspec_changes(&harness.openspec_cache, &watch.project_root);
+                    let after = executor::openspec_changes(&harness.workspace.openspec_cache, &watch.project_root);
                     match executor::newly_added_change(&watch.before, &after) {
                         executor::ProposeOutcome::One(name) => {
                             let _ = store::set_open_spec_change(
@@ -770,7 +776,7 @@ fn sink_for(app: &tauri::AppHandle, project_hash: &str) -> Arc<dyn Sink> {
 }
 
 fn preflight_for_harness(harness: &Harness, refresh: bool) -> Preflight {
-    let mut cached = harness.preflight.lock().unwrap();
+    let mut cached = harness.agent.preflight.lock_or_recover();
     if refresh || cached.is_none() {
         *cached = Some(acp_preflight::preflight(
             &store::palisade_home(),
@@ -789,7 +795,7 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
         preflight_for_harness(&*harness, refresh)
     })
     .await
-    .map_err(|e| e.to_string())?)
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
 }
 
 /// Pure decision: which executor a project should use, given a preflight
@@ -837,7 +843,7 @@ fn selected_executor(
     thread_id: Option<&str>,
 ) -> Res<(acp_preflight::AgentStatus, PathBuf)> {
     let mut flight = {
-        let mut cached = harness.preflight.lock().unwrap();
+        let mut cached = harness.agent.preflight.lock_or_recover();
         if cached.is_none() {
             *cached = Some(acp_preflight::preflight(
                 &store::palisade_home(),
@@ -859,7 +865,7 @@ fn selected_executor(
     if let Some(id) = &override_id {
         if flight.agent(id).is_none_or(|a| a.path.is_none()) {
             flight = acp_preflight::preflight(&store::palisade_home(), &|bin| executor::find_on_path(bin));
-            *harness.preflight.lock().unwrap() = Some(flight.clone());
+            *harness.agent.preflight.lock_or_recover() = Some(flight.clone());
         }
     }
     let (agent, warning) = resolve_executor(&flight, override_id)?;
@@ -901,9 +907,9 @@ fn resolve_agent(
 /// permissions, so without this a user pressing `/go` mid-run would be handed
 /// a node's session and start typing into the middle of a chain.
 fn find_live_session(harness: &tauri::State<'_, Harness>, thread_id: &str, mode: &str) -> Option<String> {
-    let chain_owned = harness.chain_sessions.lock().unwrap();
+    let chain_owned = harness.chain.chain_sessions.lock_or_recover();
     harness
-        .acp_sessions
+        .agent.acp_sessions
         .lock()
         .unwrap()
         .values()
@@ -1070,7 +1076,7 @@ fn start_session_as(
         git.as_ref().and_then(|bin| git::rev_parse_head(bin, &root)).as_deref(),
         git.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)),
     )?;
-    harness.acp_sessions.lock().unwrap().insert(id.clone(), session);
+    harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
     Ok(id)
 }
 
@@ -1097,7 +1103,7 @@ fn ensure_session(
     let (agent, _) = selected_executor(app, harness, project_hash, Some(thread_id))?;
     if let Some(id) = find_live_session(harness, thread_id, mode) {
         let matches = harness
-            .acp_sessions
+            .agent.acp_sessions
             .lock()
             .unwrap()
             .get(&id)
@@ -1171,14 +1177,14 @@ fn park_prefix(
         .ok()
         .and_then(|root| graph_nudge::nudge(agent_id, &root));
     if let Some(combined) = graph_nudge::compose(nudge, prefix) {
-        harness.pending_prefix.lock().unwrap().insert(session_id.to_string(), combined);
+        harness.agent.pending_prefix.lock_or_recover().insert(session_id.to_string(), combined);
     }
 }
 
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
-    harness.pending_prefix.lock().unwrap().remove(session_id);
-    if let Some(mut session) = harness.acp_sessions.lock().unwrap().remove(session_id) {
+    harness.agent.pending_prefix.lock_or_recover().remove(session_id);
+    if let Some(mut session) = harness.agent.acp_sessions.lock_or_recover().remove(session_id) {
         session.terminate();
         let head_after = git_bin()
             .ok()
@@ -1203,7 +1209,7 @@ fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &s
 /// an authentication boundary.
 fn release_idle_sessions_on_exit(harness: &Harness) {
     let idle: Vec<(String, String)> = harness
-        .acp_sessions
+        .agent.acp_sessions
         .lock()
         .unwrap()
         .values()
@@ -1234,7 +1240,7 @@ async fn leave_thread(_app: tauri::AppHandle, _thread_id: String) -> Res<()> {
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Record the user's turn, then forward it to the executor if one is live.
@@ -1289,7 +1295,7 @@ async fn send_message(
             bypass,
         ) {
             Ok(id) => id,
-            Err(error) if is_auth_failure(&error) => {
+            Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
                 harness.queue_pending_auth_turn(
                     &agent.id,
                     executor::PendingAuthTurn {
@@ -1324,28 +1330,36 @@ async fn send_message(
         Ok(message)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// Re-send a durable user turn after a failed prompt without appending a
+/// second copy. Prompt requests are intentionally never retried by the ACP
+/// bridge: a Go turn may have partially executed before its transport failed.
+#[tauri::command]
+async fn retry_message(
+    app: tauri::AppHandle,
+    project_hash: String,
+    thread_id: String,
+    message_seq: u64,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let home = palisade_home();
+        let message = store::read_thread(&home, &project_hash, &thread_id)?
+            .into_iter()
+            .find(|message| message.seq == message_seq && message.role == "user")
+            .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
+        let harness: tauri::State<'_, Harness> = app.state();
+        let id = ensure_session(&app, &harness, &project_hash, &thread_id, &message.mode, None, false)?;
+        send_to(&harness, &project_hash, &id, &message.content)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// ACP agents use a structured `auth_required` error when they can, but a few
 /// adapters still surface only provider prose. Keep this mirror intentionally
 /// narrow and aligned with the frontend's auth error classification.
-fn is_auth_failure(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    [
-        "auth_required",
-        "authentication required",
-        "failed to authenticate",
-        "not logged in",
-        "session expired",
-        "token expired",
-        "unauthorized",
-        "needs to be signed in",
-    ]
-    .iter()
-    .any(|needle| error.contains(needle))
-}
-
 /// A thread title written by the bundled local model, or `None` if it isn't
 /// up yet or didn't return anything usable.
 ///
@@ -1404,7 +1418,7 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
 }
 
 fn model_title(harness: &Harness, prompt: &str) -> Option<String> {
-    let server = harness.completion_server.lock().unwrap();
+    let server = harness.completion.completion_server.lock_or_recover();
     let server = server.as_ref()?;
     if !server.is_alive() {
         return None;
@@ -1424,7 +1438,7 @@ fn send_to(
 ) -> Res<()> {
     let prefixed = harness.with_pending_prefix(session_id, content);
     {
-        let sessions = harness.acp_sessions.lock().unwrap();
+        let sessions = harness.agent.acp_sessions.lock_or_recover();
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
         acp_client::send_acp_prompt(session, &prefixed)?;
     }
@@ -1473,7 +1487,7 @@ async fn go_mode(
         Ok(meta)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Wrap the spec_type in a sentence so the agent knows it is the starting
@@ -1659,7 +1673,7 @@ async fn spec_mode(
         Ok(meta)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The thread's executor picker choice (D9/D18). `None` reverts to the
@@ -1683,7 +1697,7 @@ async fn set_thread_executor(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The models an installed agent actually offers, learned by spawning it for
@@ -1718,7 +1732,7 @@ async fn list_models(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// One interactive login an agent advertised, as the frontend can offer it.
@@ -1777,7 +1791,7 @@ async fn agent_logins(
             .collect())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Run one of an agent's advertised logins that the protocol drives.
@@ -1833,7 +1847,7 @@ async fn agent_authenticate(
                     &session_id,
                     &pending.content,
                 )?,
-                Err(error) if is_auth_failure(&error) => {
+                Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
                     let mut remaining = vec![pending];
                     remaining.extend(queued);
                     harness.requeue_pending_auth_turns(&agent.id, remaining);
@@ -1845,7 +1859,7 @@ async fn agent_authenticate(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The user's home directory, or the current directory if it can't be read.
@@ -1871,10 +1885,10 @@ async fn propose(
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
         let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
 
-        *harness.pending_propose.lock().unwrap() = Some(executor::ProposeWatch {
+        *harness.agent.pending_propose.lock_or_recover() = Some(executor::ProposeWatch {
             project_hash: project_hash.clone(),
             thread_id: thread_id.clone(),
-            before: executor::openspec_changes(&harness.openspec_cache, &root),
+            before: executor::openspec_changes(&harness.workspace.openspec_cache, &root),
             project_root: root,
         });
 
@@ -1892,7 +1906,7 @@ async fn propose(
         send_to(&harness, &project_hash, &id, &prompt)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Which diff Generate should describe: whatever is staged, or — when
@@ -2001,14 +2015,14 @@ async fn suggest_commit_message(
         let Some((_scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
             return Ok(String::new());
         };
-        let server = harness.completion_server.lock().unwrap();
+        let server = harness.completion.completion_server.lock_or_recover();
         let Some(server) = server.as_ref().filter(|s| s.is_alive()) else {
             return Ok(String::new());
         };
         Ok(server.commit_subject(&diff).unwrap_or_default())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -2060,7 +2074,7 @@ async fn draft_commit_message(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Build the grill-apply prompt for a one-shot injection in spec-mode.
@@ -2107,7 +2121,7 @@ async fn apply_skill(
         send_to(&harness, &project_hash, &id, &prompt)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// `change_status`: whether a change's planning artifacts are all complete.
@@ -2119,13 +2133,13 @@ async fn change_status(
     project_hash: String,
     change_name: String,
 ) -> Res<Option<bool>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         let root = project_root(&project_hash)?;
         Ok(executor::openspec_change_status(&cache, &root, &change_name))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Stop one session by id. With no id, stop the named thread's sessions —
@@ -2142,7 +2156,7 @@ async fn stop_executor(
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let targets: Vec<(String, String)> = harness
-            .acp_sessions
+            .agent.acp_sessions
             .lock()
             .unwrap()
             .values()
@@ -2172,7 +2186,7 @@ async fn stop_executor(
             // "running" until the 20-minute turn timeout finally fired.
             // Release that watcher here, the same way the sink's Crashed arm
             // would have.
-            if let Some(watch) = harness.turn_watchers.lock().unwrap().get(&id).cloned() {
+            if let Some(watch) = harness.chain.turn_watchers.lock_or_recover().get(&id).cloned() {
                 watch.finish(executor::TurnEnd::Crashed("Cancelled by user".into()));
             }
             end_session(&harness, &thread_id, &id, "cancelled");
@@ -2180,7 +2194,7 @@ async fn stop_executor(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Resolve a pending tool-call approval prompt (D7, D-design-2). A missing
@@ -2197,13 +2211,13 @@ async fn answer_permission_prompt(
         .ok_or_else(|| format!("unknown permission decision: {decision}"))?;
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        if let Some(session) = harness.acp_sessions.lock().unwrap().get(&session_id) {
+        if let Some(session) = harness.agent.acp_sessions.lock_or_recover().get(&session_id) {
             session.answer_permission_prompt(&request_id, answer);
         }
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What each live session is doing.
@@ -2225,7 +2239,7 @@ async fn executor_status(app: tauri::AppHandle) -> Res<Vec<SessionStatus>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let mut statuses: Vec<SessionStatus> = harness
-            .acp_sessions
+            .agent.acp_sessions
             .lock()
             .unwrap()
             .values()
@@ -2242,7 +2256,7 @@ async fn executor_status(app: tauri::AppHandle) -> Res<Vec<SessionStatus>> {
         Ok(statuses)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// A thread's isolated worktree, and what has changed inside it.
@@ -2324,7 +2338,7 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
         Ok(out)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Turn this thread's worktree isolation on or off.
@@ -2362,7 +2376,7 @@ async fn set_thread_worktree_enabled(
         store::set_thread_worktree_enabled(&home, &project_hash, &thread_id, enabled)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What a merge-back attempt did, as the gate card renders it.
@@ -2414,7 +2428,7 @@ async fn merge_thread_worktree(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Push the thread's branch and open a pull request for it, returning the URL
@@ -2438,7 +2452,7 @@ async fn open_thread_pr(project_hash: String, thread_id: String) -> Res<String> 
                 .current_dir(&path)
                 .env("PATH", executor::child_path_env())
                 .output()
-                .map_err(|err| format!("could not run gh: {err}"))?;
+                .map_err(|err| crate::PalisadeError::from(format!("could not run gh: {err}")))?;
             if out.status.success() {
                 if let Some(url) = String::from_utf8_lossy(&out.stdout)
                     .lines()
@@ -2466,7 +2480,7 @@ async fn open_thread_pr(project_hash: String, thread_id: String) -> Res<String> 
         compare_url(&bin, &root, &base, &branch)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The thread's worktree path, branch, and base branch — the trio every
@@ -2479,7 +2493,7 @@ fn thread_branch(
     thread_id: &str,
 ) -> Res<(PathBuf, String, String)> {
     let meta = thread_meta(project_hash, thread_id)
-        .ok_or_else(|| "This thread no longer exists.".to_string())?;
+        .ok_or_else(|| crate::PalisadeError::from("This thread no longer exists."))?;
     let (Some(path), Some(branch)) = (meta.worktree_path, meta.worktree_branch) else {
         return Err(
             "This thread has no worktree of its own, so there is nothing separate to merge back."
@@ -2489,7 +2503,7 @@ fn thread_branch(
     let base = meta
         .worktree_base_branch
         .or_else(|| git::current_branch_name(bin, root).ok())
-        .ok_or_else(|| "Could not tell which branch to merge into.".to_string())?;
+        .ok_or_else(|| crate::PalisadeError::from("Could not tell which branch to merge into."))?;
     Ok((PathBuf::from(path), branch, base))
 }
 
@@ -2534,7 +2548,7 @@ async fn prune_thread_worktree(
             if !ready.clean || ready.ahead > 0 {
                 return Err(format!(
                     "`{branch}` still has work that `{base}` does not — merge it first, or clean up anyway to discard it."
-                ));
+                ).into());
             }
         }
         git::remove_worktree(&bin, &root, &path, Some(&branch))?;
@@ -2542,7 +2556,7 @@ async fn prune_thread_worktree(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Drop the worktrees of archived threads whose work has provably landed.
@@ -2592,11 +2606,11 @@ async fn list_sessions(
 ) -> Res<Vec<store::SessionRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live: Vec<String> = harness.acp_sessions.lock().unwrap().keys().cloned().collect();
+        let live: Vec<String> = harness.agent.acp_sessions.lock_or_recover().keys().cloned().collect();
         store::close_stale_sessions(&palisade_home(), &project_hash, &thread_id, &live)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------ verification
@@ -2620,7 +2634,7 @@ async fn run_verify(
         // Fail fast on an unknown name, before spawning a thread that can only
         // report the same error later and less visibly.
         if !settings.verify.contains_key(&name) {
-            return Err(format!("no verify command named `{name}` in .palisade/project-settings.json"));
+            return Err(format!("no verify command named `{name}` in .palisade/project-settings.json").into());
         }
 
         std::thread::spawn(move || {
@@ -2629,7 +2643,7 @@ async fn run_verify(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Runs one named verify command to completion, persists the run, emits
@@ -2679,7 +2693,7 @@ pub(crate) fn record_verification(
             name: name.to_string(),
             command: String::new(),
             exit_code: -1,
-            output_tail: message,
+            output_tail: message.message,
             git_head: head,
             at: chrono::Utc::now().to_rfc3339(),
             tests: None,
@@ -2700,7 +2714,7 @@ pub(crate) fn record_verification(
 async fn list_verifications(project_hash: String) -> Res<Vec<store::VerificationRun>> {
     tokio::task::spawn_blocking(move || store::read_verifications(&palisade_home(), &project_hash))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // -------------------------------------------------------- language servers
@@ -2716,7 +2730,7 @@ async fn lsp_start(
 ) -> Res<lsp::LspStatus> {
     tokio::task::spawn_blocking(move || start_language_server(&app, &project_hash, &language))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Spawns the server and wires its two callbacks. Recursive by design: the
@@ -2769,7 +2783,7 @@ fn start_language_server(
                         state: lsp::LspState::Disabled,
                         server: None,
                         restarts: status.restarts,
-                        detail: Some(err),
+                        detail: Some(err.message),
                     }),
                 );
             });
@@ -2788,7 +2802,7 @@ async fn lsp_send(
     let servers = app.state::<lsp::SharedLsp>().inner().clone();
     tokio::task::spawn_blocking(move || servers.send(&project_hash, &language, &body))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -2816,7 +2830,7 @@ async fn lsp_install_command(language: String) -> Res<Option<String>> {
 async fn lsp_install(language: String) -> Res<()> {
     tokio::task::spawn_blocking(move || lsp::install(&language))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Kills every server for a project — the frontend calls this on project
@@ -2826,7 +2840,7 @@ async fn lsp_shutdown(app: tauri::AppHandle, project_hash: String) -> Res<()> {
     let servers = app.state::<lsp::SharedLsp>().inner().clone();
     tokio::task::spawn_blocking(move || servers.shutdown_project(&project_hash))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))
 }
 
 // ------------------------------------------------------------ run commands
@@ -2842,7 +2856,7 @@ async fn run_commands(project_hash: String) -> Res<Vec<(String, String)>> {
         Ok(commands)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Replaces the project's `run` map. The whole map, not one entry: the panel
@@ -2854,7 +2868,7 @@ async fn save_run_commands(project_hash: String, commands: Vec<(String, String)>
         settings::save_run(&root, commands.into_iter().collect())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Replaces the project's `verifyPins` map. The whole map, not one entry:
@@ -2870,7 +2884,7 @@ async fn save_verify_pins(
         settings::save_verify_pins(&root, pins)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Replaces the project's `appearance` object. Opaque to Palisade — see
@@ -2882,7 +2896,7 @@ async fn save_appearance(project_hash: String, appearance: serde_json::Value) ->
         settings::save_appearance(&root, appearance)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2895,7 +2909,7 @@ async fn save_appearance(project_hash: String, appearance: serde_json::Value) ->
 async fn list_chains(project_hash: String) -> Res<Vec<chains::Chain>> {
     tokio::task::spawn_blocking(move || Ok(chains::list(&project_root(&project_hash)?)))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Writes a chain, keyed by its own `name`. Validation lives in
@@ -2905,14 +2919,14 @@ async fn list_chains(project_hash: String) -> Res<Vec<chains::Chain>> {
 async fn save_chain(project_hash: String, chain: chains::Chain) -> Res<()> {
     tokio::task::spawn_blocking(move || chains::save(&project_root(&project_hash)?, &chain))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn delete_chain(project_hash: String, name: String) -> Res<()> {
     tokio::task::spawn_blocking(move || chains::delete(&project_root(&project_hash)?, &name))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Past chain runs for this project. Reading is also startup reconciliation:
@@ -2926,7 +2940,7 @@ async fn list_chain_runs(
 ) -> Res<Vec<chain_history::ChainRunRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let live = harness.chain.chain_cancels.lock_or_recover().keys().cloned().collect::<Vec<_>>();
         let mut records = chain_history::close_stale_runs(&palisade_home(), &project_hash, &live)?;
         if let Some(name) = chain_name {
             records.retain(|record| record.chain_name == name);
@@ -2934,7 +2948,7 @@ async fn list_chain_runs(
         Ok(records)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Retrieves one past run. Like the list endpoint it first reconciles a
@@ -2948,12 +2962,12 @@ async fn get_chain_run(
 ) -> Res<Option<chain_history::ChainRunRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let live = harness.chain.chain_cancels.lock_or_recover().keys().cloned().collect::<Vec<_>>();
         let _ = chain_history::close_stale_runs(&palisade_home(), &project_hash, &live)?;
         chain_history::get_run(&palisade_home(), &project_hash, &run_id)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// D17: every node's bound agent must be installed before the run starts —
@@ -2981,7 +2995,7 @@ fn unavailable_agents(chain: &chains::Chain, installed: impl Fn(&str) -> bool) -
         "This chain can't run — {} not installed or not on PATH: {}.",
         if missing.len() == 1 { "its agent is" } else { "some of its agents are" },
         missing.join(", ")
-    ))
+    ).into())
 }
 
 /// The portion of a persisted run definition that is safe to replay. Kept
@@ -3003,7 +3017,7 @@ fn rerun_start(record: &chain_history::ChainRunRecord, from_role: Option<&str>) 
     let chain = record.chain_snapshot.clone();
     let role = from_role.unwrap_or(&chain.entry).to_string();
     if !chain.nodes.contains_key(&role) {
-        return Err(format!("chain run `{}` has no role `{role}`", record.id));
+        return Err(format!("chain run `{}` has no role `{role}`", record.id).into());
     }
     if from_role.is_none() {
         return Ok(RerunStart { chain, seed: record.seed.clone(), role, inputs: vec![] });
@@ -3052,7 +3066,7 @@ async fn run_chain(
             Ok::<_, String>(chain)
         })
         .await
-        .map_err(|e| e.to_string())??
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))??
     };
 
     launch_chain_run(app, project_hash, chain, seed_input, thread_id, None)
@@ -3106,7 +3120,7 @@ fn launch_chain_run(
     // completions and `AcpNodeRunner` polls directly while a turn is
     // in-flight — one flag, not two mechanisms.
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    app.state::<Harness>().chain_cancels.lock().unwrap().insert(id.clone(), cancel.clone());
+    app.state::<Harness>().chain.chain_cancels.lock_or_recover().insert(id.clone(), cancel.clone());
     tokio::task::spawn_blocking(move || {
         let mut run = chain_runner::ChainRun::new(id.clone(), chain.clone(), seed_input);
         // Shared with `run` (D12): a node's human turn and an approval gate
@@ -3138,7 +3152,7 @@ fn launch_chain_run(
         if let Err(err) = chain_history::end_run(&palisade_home(), &summary_hash, &id, outcome.clone()) {
             eprintln!("chain run {id}: could not persist terminal outcome: {err}");
         }
-        app.state::<Harness>().chain_cancels.lock().unwrap().remove(&id);
+        app.state::<Harness>().chain.chain_cancels.lock_or_recover().remove(&id);
         chain_exec::post_thread_summary(
             &app,
             &summary_hash,
@@ -3180,7 +3194,7 @@ async fn rerun_chain_run(
     let requested_role = from_role.clone();
     let start = tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = history_app.state();
-        let live = harness.chain_cancels.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let live = harness.chain.chain_cancels.lock_or_recover().keys().cloned().collect::<Vec<_>>();
         let _ = chain_history::close_stale_runs(&palisade_home(), &history_hash, &live)?;
         let record = chain_history::get_run(&palisade_home(), &history_hash, &run_id)?
             .ok_or_else(|| format!("no chain run `{run_id}` in this project"))?;
@@ -3189,7 +3203,7 @@ async fn rerun_chain_run(
         Ok::<_, String>(start)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))??;
 
     launch_chain_run(
         app,
@@ -3215,7 +3229,7 @@ async fn cancel_chain_run(app: tauri::AppHandle, run_id: String) -> Res<()> {
 
 fn cancel_chain_run_impl(harness: &Harness, run_id: &str) -> Res<()> {
     let cancel = harness
-        .chain_cancels
+        .chain.chain_cancels
         .lock()
         .unwrap()
         .get(run_id)
@@ -3239,17 +3253,17 @@ async fn resolve_chain_gate(
         "approve" => chain_runner::Approval::Approve,
         "reject" => chain_runner::Approval::Reject,
         "sendBack" => chain_runner::Approval::SendBack(note.unwrap_or_default()),
-        other => return Err(format!("unknown gate decision `{other}`")),
+        other => return Err(format!("unknown gate decision `{other}`").into()),
     };
     let harness: tauri::State<'_, Harness> = app.state();
     let sender = harness
-        .chain_gates
+        .chain.chain_gates
         .lock()
         .unwrap()
         .get(&run_id)
         .cloned()
         .ok_or("that chain run isn't waiting at an approval gate")?;
-    sender.send(approval).map_err(|_| "that chain run is no longer listening".to_string())
+    sender.send(approval).map_err(|_| crate::PalisadeError::from("that chain run is no longer listening"))
 }
 
 /// What the project root suggests running. A proposal the user confirms —
@@ -3261,7 +3275,7 @@ async fn detect_run_commands(project_hash: String) -> Res<Vec<(String, String)>>
         Ok(settings::detect_run(&root))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// The names a project has configured, so the UI can offer them.
@@ -3275,7 +3289,7 @@ async fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
         Ok(commands)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------ attribution
@@ -3337,7 +3351,7 @@ async fn session_attribution(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // --------------------------------------------------------------- completion
@@ -3345,7 +3359,7 @@ async fn session_attribution(
 /// Starts the completion sidecar if it isn't already running.
 fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
     let harness = app.state::<Harness>();
-    let mut server_slot = harness.completion_server.lock().unwrap();
+    let mut server_slot = harness.completion.completion_server.lock_or_recover();
     if let Some(server) = server_slot.as_ref() {
         if server.is_alive() {
             return Ok(());
@@ -3358,28 +3372,28 @@ fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
             "completion sidecar or model missing: binary={}, model={}",
             binary.display(),
             model.display()
-        ));
+        ).into());
     }
 
     let server = completion::CompletionServer::default();
     if let Err(err) = server.spawn(&binary, &model) {
-        return Err(format!("failed to start completion sidecar: {err}"));
+        return Err(format!("failed to start completion sidecar: {err}").into());
     }
     *server_slot = Some(server);
     Ok(())
 }
 
 fn stop_completion_server(harness: &Harness) {
-    if let Some(server) = harness.completion_server.lock().unwrap().take() {
+    if let Some(server) = harness.completion.completion_server.lock_or_recover().take() {
         drop(server);
     }
-    *harness.completion_crashes.lock().unwrap() = 0;
+    *harness.completion.completion_crashes.lock_or_recover() = 0;
 }
 
 /// Ensures the completion sidecar is running before a request, applying the
 /// one-restart-then-disable policy from D33.
 fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()> {
-    let mut server_slot = harness.completion_server.lock().unwrap();
+    let mut server_slot = harness.completion.completion_server.lock_or_recover();
 
     if let Some(server) = server_slot.as_ref() {
         if server.is_alive() {
@@ -3389,14 +3403,14 @@ fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()
 
     *server_slot = None;
 
-    let crashes = *harness.completion_crashes.lock().unwrap();
+    let crashes = *harness.completion.completion_crashes.lock_or_recover();
     if crashes >= 2 {
         return Err("AI completion is disabled because the sidecar crashed twice.".into());
     }
 
     let (binary, model) = completion::resolve_sidecar_paths(app)?;
     if !binary.exists() || !model.exists() {
-        *harness.completion_crashes.lock().unwrap() = 2;
+        *harness.completion.completion_crashes.lock_or_recover() = 2;
         let _ = app.emit(
             "harness-warning",
             "AI completion is unavailable: bundled sidecar or model is missing.",
@@ -3408,12 +3422,12 @@ fn ensure_completion_server(app: &tauri::AppHandle, harness: &Harness) -> Res<()
     match server.spawn(&binary, &model) {
         Ok(()) => {
             *server_slot = Some(server);
-            *harness.completion_crashes.lock().unwrap() = 0;
+            *harness.completion.completion_crashes.lock_or_recover() = 0;
             Ok(())
         }
         Err(err) => {
-            *harness.completion_crashes.lock().unwrap() += 1;
-            if *harness.completion_crashes.lock().unwrap() >= 2 {
+            *harness.completion.completion_crashes.lock_or_recover() += 1;
+            if *harness.completion.completion_crashes.lock_or_recover() >= 2 {
                 let _ = app.emit(
                     "harness-warning",
                     "AI completion disabled after the sidecar crashed twice.",
@@ -3434,20 +3448,20 @@ async fn complete_code(
 ) -> Res<completion::CompletionResponse> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        if !*harness.completion_enabled.lock().unwrap() {
+        if !*harness.completion.completion_enabled.lock_or_recover() {
             return Err("AI completion is disabled.".into());
         }
 
         ensure_completion_server(&app, &harness)?;
 
-        let guard = harness.completion_server.lock().unwrap();
+        let guard = harness.completion.completion_server.lock_or_recover();
         let server = guard
             .as_ref()
             .ok_or("completion server is not running")?;
         server.complete(&file_path, &prefix, &suffix)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3457,7 +3471,7 @@ async fn set_completion_enabled(
 ) -> Res<bool> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        *harness.completion_enabled.lock().unwrap() = enabled;
+        *harness.completion.completion_enabled.lock_or_recover() = enabled;
         if enabled {
             if let Err(err) = start_completion_server(&app) {
                 eprintln!("completion: {err}");
@@ -3468,7 +3482,7 @@ async fn set_completion_enabled(
         Ok(enabled)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3478,11 +3492,11 @@ async fn set_completion_keybinding(
 ) -> Res<String> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        *harness.completion_keybinding.lock().unwrap() = keybinding.clone();
+        *harness.completion.completion_keybinding.lock_or_recover() = keybinding.clone();
         Ok(keybinding)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------------ mcp
@@ -3496,21 +3510,21 @@ async fn set_completion_keybinding(
 async fn list_mcp_servers(project_hash: String) -> Res<Vec<mcp::McpServer>> {
     tokio::task::spawn_blocking(move || Ok(mcp::list(&project_root(&project_hash)?)))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn save_mcp_server(project_hash: String, server: mcp::McpServer) -> Res<()> {
     tokio::task::spawn_blocking(move || mcp::save(&project_root(&project_hash)?, &server))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
 async fn remove_mcp_server(project_hash: String, name: String) -> Res<()> {
     tokio::task::spawn_blocking(move || mcp::remove(&project_root(&project_hash)?, &name))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3523,7 +3537,7 @@ async fn set_mcp_server_enabled(
         mcp::set_enabled(&project_root(&project_hash)?, &name, enabled)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3534,7 +3548,7 @@ async fn search_mcp_registry(
 ) -> Res<mcp::RegistryPage> {
     tokio::task::spawn_blocking(move || mcp::search_registry(&query, limit, cursor.as_deref()))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3543,7 +3557,7 @@ async fn flush_completion_telemetry(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || completion::flush_telemetry(&telemetry))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// What a bug report needs attached that a tester cannot be asked to find.
@@ -3564,7 +3578,7 @@ async fn collect_diagnostics(app: tauri::AppHandle) -> Res<Diagnostics> {
         // per project and thread, and a bug report has neither.
         let harness = app.state::<Harness>();
         let agents = harness
-            .preflight
+            .agent.preflight
             .lock()
             .unwrap()
             .as_ref()
@@ -3594,7 +3608,7 @@ async fn collect_diagnostics(app: tauri::AppHandle) -> Res<Diagnostics> {
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// `sw_vers -productVersion`, or a placeholder. A diagnostic that fails must
@@ -3614,15 +3628,15 @@ fn os_release() -> String {
 async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::CompletionSettings> {
     tokio::task::spawn_blocking(move || {
         let harness = app.state::<Harness>();
-        let enabled = *harness.completion_enabled.lock().unwrap();
-        let accept_keybinding = harness.completion_keybinding.lock().unwrap().clone();
+        let enabled = *harness.completion.completion_enabled.lock_or_recover();
+        let accept_keybinding = harness.completion.completion_keybinding.lock_or_recover().clone();
         Ok(completion::CompletionSettings {
             enabled,
             accept_keybinding,
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity// ------------------------------------------------------------- graphify
@@ -3664,7 +3678,7 @@ pub fn run() {
                 let _ = app.emit("harness-warning", err);
             }
             let harness: tauri::State<'_, Harness> = app.state();
-            if *harness.completion_enabled.lock().unwrap() {
+            if *harness.completion.completion_enabled.lock_or_recover() {
                 // Installing the model is a background job: copying it out of
                 // the installer bundle takes seconds and downloading it takes
                 // minutes, and neither should hold the window closed.
@@ -3681,7 +3695,7 @@ pub fn run() {
                     // is actually there, or AI completion stays off until the
                     // next launch.
                     let harness = handle.state::<Harness>();
-                    *harness.completion_crashes.lock().unwrap() = 0;
+                    *harness.completion.completion_crashes.lock_or_recover() = 0;
                     if let Err(err) = start_completion_server(&handle) {
                         eprintln!("completion: {err}");
                         let _ = handle.emit("harness-warning", err);
@@ -3730,6 +3744,7 @@ pub fn run() {
             read_thread,
             preflight,
             send_message,
+            retry_message,
             go_mode,
             spec_mode,
             propose,
@@ -3869,9 +3884,9 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit) {
                 release_idle_sessions_on_exit(&app.state::<Harness>());
-                let _ = app.state::<Harness>().session_log_writer.lock().unwrap().flush();
+                let _ = app.state::<Harness>().workspace.session_log_writer.lock_or_recover().flush();
                 stop_completion_server(&app.state::<Harness>());
-                for (_, kernel) in app.state::<Harness>().notebook_kernels.lock().unwrap().drain() {
+                for (_, kernel) in app.state::<Harness>().tooling.notebook_kernels.lock_or_recover().drain() {
                     kernel.terminate();
                 }
             }
@@ -3907,6 +3922,7 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
 
     mod chain_startup_reconciliation {
         use crate::chain_history::{self, ChainRunRecord, OutcomeSnapshot};
@@ -3946,16 +3962,16 @@ mod tests {
     }
 
     #[test]
-    fn auth_failures_include_acp_and_executor_login_messages() {
+    fn legacy_untyped_auth_messages_remain_compatible() {
         for error in [
             "auth_required",
             "Authentication required",
             "Codex needs to be signed in",
             "session expired",
         ] {
-            assert!(crate::is_auth_failure(error), "should classify as auth: {error}");
+            assert!(crate::acp_client::reads_as_auth_failure(error), "should classify as auth: {error}");
         }
-        assert!(!crate::is_auth_failure("context window exceeded"));
+        assert!(!crate::acp_client::reads_as_auth_failure("context window exceeded"));
     }
 
     /// D17: a chain whose bound agent isn't installed is blocked before it
@@ -4091,6 +4107,7 @@ mod tests {
     /// showing something that has already moved on.
     mod chain_cancel {
         use crate::executor::Harness;
+        use crate::locks::MutexExt;
 
         #[test]
         fn cancelling_an_unknown_run_errors_rather_than_no_ops() {
@@ -4103,7 +4120,7 @@ mod tests {
         fn cancelling_a_tracked_run_flips_its_flag() {
             let harness = Harness::default();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            harness.chain_cancels.lock().unwrap().insert("run-1".into(), cancel.clone());
+            harness.chain.chain_cancels.lock_or_recover().insert("run-1".into(), cancel.clone());
             assert!(crate::cancel_chain_run_impl(&harness, "run-1").is_ok());
             assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
         }
@@ -4116,8 +4133,8 @@ mod tests {
         fn cancelling_a_run_thats_already_finished_errors_the_same_as_unknown() {
             let harness = Harness::default();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            harness.chain_cancels.lock().unwrap().insert("run-1".into(), cancel);
-            harness.chain_cancels.lock().unwrap().remove("run-1");
+            harness.chain.chain_cancels.lock_or_recover().insert("run-1".into(), cancel);
+            harness.chain.chain_cancels.lock_or_recover().remove("run-1");
             let err = crate::cancel_chain_run_impl(&harness, "run-1").unwrap_err();
             assert!(err.contains("isn't running"), "{err}");
         }
@@ -4385,7 +4402,7 @@ mod tests {
     fn parked_handoff_prefix_rides_along_with_the_next_turn() {
         let harness = Harness::default();
         harness
-            .pending_prefix
+            .agent.pending_prefix
             .lock()
             .unwrap()
             .insert("s1".into(), "TRANSCRIPT".into());
@@ -4410,10 +4427,10 @@ mod tests {
         let (session, mut rx) = acp_client::stub_session(false);
         let harness = Harness::default();
         let id = session.id.clone();
-        harness.acp_sessions.lock().unwrap().insert(id.clone(), session);
+        harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
         // What ensure_session parks when /go hands off to a new agent.
         harness
-            .pending_prefix
+            .agent.pending_prefix
             .lock()
             .unwrap()
             .insert(id.clone(), "This conversation was handed off. Transcript:\n\nUser: use notes_index.py".into());
@@ -4431,7 +4448,7 @@ mod tests {
         // next turn goes out bare. (A second send here would be rejected as
         // mid-turn — that is `send_acp_prompt`'s busy guard, not this path.)
         assert!(
-            harness.pending_prefix.lock().unwrap().is_empty(),
+            harness.agent.pending_prefix.lock_or_recover().is_empty(),
             "a delivered transcript must not be re-sent on the next turn"
         );
     }

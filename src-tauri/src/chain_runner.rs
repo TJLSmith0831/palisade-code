@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::chains::{Chain, ChainEdge, Gate};
+use crate::locks::MutexExt;
+use crate::Res;
 
 /// A run's wall clock, pause-aware (D12/design §1). `elapsed()` excludes time
 /// spent paused, so a run blocked on a human — a human-in-the-loop node or an
@@ -52,7 +54,7 @@ impl Budget {
     /// `started.elapsed()` minus every pause's duration, including one
     /// currently open.
     pub fn elapsed(&self) -> Duration {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_or_recover();
         let mut paused = inner.paused;
         if let Some(start) = inner.pause_started {
             paused += start.elapsed();
@@ -63,7 +65,7 @@ impl Budget {
     /// Opens a pause, closed when the returned guard drops (including on
     /// panic — `Drop` still runs during unwind).
     pub fn pause(self: &Arc<Self>) -> PauseGuard {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         inner.depth += 1;
         if inner.depth == 1 {
             inner.pause_started = Some(Instant::now());
@@ -79,7 +81,7 @@ pub struct PauseGuard {
 
 impl Drop for PauseGuard {
     fn drop(&mut self) {
-        let mut inner = self.budget.inner.lock().unwrap();
+        let mut inner = self.budget.inner.lock_or_recover();
         inner.depth -= 1;
         if inner.depth == 0 {
             if let Some(start) = inner.pause_started.take() {
@@ -113,7 +115,7 @@ pub trait NodeRunner: Send + Sync {
 /// this stays `&mut self` — no concurrency to guard against.
 pub trait GateEvaluator {
     /// `Ok(true)` when the named command exited 0.
-    fn verify(&mut self, command: &str) -> Result<bool, String>;
+    fn verify(&mut self, command: &str) -> Res<bool>;
 
     /// Blocks until the human decides, or the run is torn down. `output` is
     /// `from_role`'s actual text, carried so the deciding surface can show the
@@ -123,7 +125,7 @@ pub trait GateEvaluator {
         from_role: &str,
         to_role: &str,
         output: &str,
-    ) -> Result<Approval, String>;
+    ) -> Res<Approval>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -566,7 +568,7 @@ impl ChainRun {
                     at: edge.from.clone(),
                     command: command.clone(),
                 }),
-                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err }),
+                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err.message }),
             },
             Gate::Approval => match gates.approval(&edge.from, &edge.to, output) {
                 Ok(Approval::Approve) if is_loop => Crossing::ExitLoop,
@@ -583,7 +585,7 @@ impl ChainRun {
                     if is_loop { edge.to.clone() } else { edge.from.clone() },
                     note,
                 ),
-                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err }),
+                Err(err) => Crossing::Stop(Outcome::Blocked { reason: err.message }),
             },
         }
     }
@@ -750,6 +752,7 @@ pub fn describe(outcome: &Outcome) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
     use crate::chains::{ChainNode, RetryPolicy};
     use std::collections::HashMap;
@@ -777,27 +780,27 @@ mod tests {
             Self { script: Mutex::new(HashMap::new()), calls: Mutex::new(Vec::new()), states: Mutex::new(Vec::new()) }
         }
         fn calls(&self) -> Vec<(String, String, u32)> {
-            self.calls.lock().unwrap().clone()
+            self.calls.lock_or_recover().clone()
         }
         fn states(&self) -> Vec<(String, NodeState)> {
-            self.states.lock().unwrap().clone()
+            self.states.lock_or_recover().clone()
         }
     }
 
     impl NodeRunner for FakeRunner {
         fn run_turn(&self, role: &str, instruction: &str, attempt: u32) -> TurnResult {
-            let mut calls = self.calls.lock().unwrap();
+            let mut calls = self.calls.lock_or_recover();
             calls.push((role.into(), instruction.into(), attempt));
             let taken = calls.iter().filter(|(r, _, _)| r == role).count();
             drop(calls);
-            let script = self.script.lock().unwrap();
+            let script = self.script.lock_or_recover();
             match script.get(role) {
                 Some(results) if !results.is_empty() => results[(taken - 1).min(results.len() - 1)].clone(),
                 _ => Ok(format!("{role} output")),
             }
         }
         fn on_state(&self, role: &str, state: NodeState) {
-            self.states.lock().unwrap().push((role.into(), state));
+            self.states.lock_or_recover().push((role.into(), state));
         }
     }
 
@@ -827,7 +830,7 @@ mod tests {
                 // Only the first caller actually waits; a retry (not
                 // exercised by the tests that use this fake) would otherwise
                 // block on an already-drained receiver.
-                if let Some(rx) = self.release.lock().unwrap().take() {
+                if let Some(rx) = self.release.lock_or_recover().take() {
                     rx.recv().ok();
                 }
             }
@@ -882,15 +885,15 @@ mod tests {
     impl NodeRunner for SiblingAbortRunner {
         fn run_turn(&self, role: &str, instruction: &str, attempt: u32) -> TurnResult {
             if role == "auditor" && attempt == 1 {
-                if let Some(tx) = self.auditor_started.lock().unwrap().take() {
+                if let Some(tx) = self.auditor_started.lock_or_recover().take() {
                     let _ = tx.send(());
                 }
-                if let Some(rx) = self.auditor_proceed.lock().unwrap().take() {
+                if let Some(rx) = self.auditor_proceed.lock_or_recover().take() {
                     rx.recv().ok();
                 }
             }
             if role == "reviewer" {
-                if let Some(rx) = self.reviewer_proceed.lock().unwrap().take() {
+                if let Some(rx) = self.reviewer_proceed.lock_or_recover().take() {
                     rx.recv().ok();
                 }
             }
@@ -924,19 +927,19 @@ mod tests {
     }
 
     impl GateEvaluator for FakeGates {
-        fn verify(&mut self, command: &str) -> Result<bool, String> {
+        fn verify(&mut self, command: &str) -> Res<bool> {
             self.verify_calls.push(command.into());
             if self.verify.is_empty() {
                 return Ok(true);
             }
             Ok(self.verify.remove(0)?)
         }
-        fn approval(&mut self, from: &str, _to: &str, output: &str) -> Result<Approval, String> {
+        fn approval(&mut self, from: &str, _to: &str, output: &str) -> Res<Approval> {
             self.approval_outputs.push((from.into(), output.into()));
             if self.approval.is_empty() {
                 return Ok(Approval::Approve);
             }
-            self.approval.remove(0)
+            self.approval.remove(0).map_err(crate::PalisadeError::from)
         }
     }
 
@@ -1668,14 +1671,14 @@ mod tests {
     impl<'a> NodeRunner for CancelAwareRunner<'a> {
         fn run_turn(&self, role: &str, _instruction: &str, _attempt: u32) -> TurnResult {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(tx) = self.started.lock().unwrap().take() {
+            if let Some(tx) = self.started.lock_or_recover().take() {
                 let _ = tx.send(());
             }
-            if let Some(rx) = self.proceed.lock().unwrap().take() {
+            if let Some(rx) = self.proceed.lock_or_recover().take() {
                 rx.recv().ok();
             }
             if self.cancel.load(Ordering::SeqCst) {
-                return Err(format!("`{role}` cancelled"));
+                return Err(format!("`{role}` cancelled").into());
             }
             Ok(format!("{role} output"))
         }

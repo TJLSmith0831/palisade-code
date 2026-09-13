@@ -52,8 +52,18 @@ describe("CSS token system (merged-design.json)", () => {
   // picker) — either form with the same literal hue satisfies the check.
   // Chroma is matched by value, not spelling: Prettier drops trailing zeros
   // (`0.020` -> `0.02`), which CSS treats as the same number.
+  // --accent's lightness and chroma moved into --accent-l/--accent-c so the
+  // settings swatches could preview the colour the theme actually ships
+  // (SettingsPanel.tsx). Substituting them back reads the same value the
+  // browser resolves, so the assertion still measures the shipped accent
+  // rather than the spelling of its declaration.
+  const resolveAccentParts = (val: string) =>
+    val
+      .replace("var(--accent-l)", rootVar("--accent-l"))
+      .replace("var(--accent-c)", rootVar("--accent-c"));
+
   const ok = (name: string, l: string, c: string, h: string) => {
-    const val = rootVar(name);
+    const val = resolveAccentParts(rootVar(name));
     const cEsc = c.replace(/0+$/, "").replace(/\./g, "\\.") + "0*";
     const hueEsc = `(?:${h}|var\\(--accent-hue,\\s*${h}\\))`;
     expect(val).toMatch(new RegExp(`oklch\\(${l}%\\s*${cEsc}\\s+${hueEsc}\\)`));

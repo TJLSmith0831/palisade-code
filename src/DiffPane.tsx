@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Group,
+  Loader,
   Modal as MantineModal,
   Progress,
   SegmentedControl,
@@ -13,6 +14,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import {
+  IconAlertTriangle,
   IconChevronRight,
   IconFoldDown,
   IconFoldUp,
@@ -309,7 +311,7 @@ export default function DiffPane({
       setStagedFiles(parseFilePatches(staged));
       setError(null);
     } catch (err) {
-      setError(describeError(err));
+      setError(describeError(err, { loading: "the working diff" }));
     }
   }, [projectHash, threadId]);
 
@@ -334,7 +336,7 @@ export default function DiffPane({
         if (!cancelled) setCommitFiles(parseFilePatches(diff));
       })
       .catch((err) => {
-        if (!cancelled) setCommitError(describeError(err));
+        if (!cancelled) setCommitError(describeError(err, { loading: "that commit" }));
       })
       .finally(() => {
         if (!cancelled) setCommitLoading(false);
@@ -351,7 +353,7 @@ export default function DiffPane({
         await action();
         await refresh();
       } catch (err) {
-        setError(describeError(err));
+        setError(describeError(err, { action: "apply that change" }));
       } finally {
         setBusy(false);
       }
@@ -380,7 +382,9 @@ export default function DiffPane({
             {error}
           </Alert>
         )}
-        <p className="empty">This project isn't a git repository yet.</p>
+        <p className="empty is-blocked" data-testid="diff-blocked">
+          <IconAlertTriangle size={14} /> This project isn&apos;t a git repository yet.
+        </p>
         <Button
           size="xs"
           variant="default"
@@ -436,7 +440,11 @@ export default function DiffPane({
             {commitError}
           </Alert>
         )}
-        {commitLoading && !commitError && <p className="empty">Loading commit…</p>}
+        {commitLoading && !commitError && (
+          <p className="empty is-loading" role="status" data-testid="diff-loading">
+            <Loader size="xs" /> Loading commit…
+          </p>
+        )}
         {!commitLoading && !commitError && commitFiles.length === 0 && (
           <p className="empty">This commit made no file changes.</p>
         )}

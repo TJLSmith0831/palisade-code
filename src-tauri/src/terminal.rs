@@ -16,6 +16,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 use crate::executor::child_path_env;
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 pub struct Terminal {
     writer: Mutex<Box<dyn Write + Send>>,
@@ -33,7 +34,7 @@ impl Terminal {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
-            .map_err(|err| format!("open pty: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("open pty: {err}")))?;
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let mut cmd = CommandBuilder::new(&shell);
@@ -49,14 +50,14 @@ impl Terminal {
         // not set"). xterm.js speaks the xterm-256color terminfo dialect.
         cmd.env("TERM", "xterm-256color");
 
-        let child = pair.slave.spawn_command(cmd).map_err(|err| format!("spawn shell: {err}"))?;
+        let child = pair.slave.spawn_command(cmd).map_err(|err| crate::PalisadeError::from(format!("spawn shell: {err}")))?;
         // The child holds its own fd for the slave side; drop our copy so we
         // don't keep an extra reference alive past the child's lifetime.
         drop(pair.slave);
 
         let mut reader =
-            pair.master.try_clone_reader().map_err(|err| format!("clone pty reader: {err}"))?;
-        let writer = pair.master.take_writer().map_err(|err| format!("take pty writer: {err}"))?;
+            pair.master.try_clone_reader().map_err(|err| crate::PalisadeError::from(format!("clone pty reader: {err}")))?;
+        let writer = pair.master.take_writer().map_err(|err| crate::PalisadeError::from(format!("take pty writer: {err}")))?;
 
         let stopping = Arc::new(AtomicBool::new(false));
         let reader_handle = thread::spawn(move || {
@@ -79,15 +80,15 @@ impl Terminal {
     }
 
     pub fn write(&self, bytes: &[u8]) -> Res<()> {
-        let mut writer = self.writer.lock().unwrap();
-        writer.write_all(bytes).map_err(|err| format!("write to pty: {err}"))?;
-        writer.flush().map_err(|err| format!("flush pty: {err}"))
+        let mut writer = self.writer.lock_or_recover();
+        writer.write_all(bytes).map_err(|err| crate::PalisadeError::from(format!("write to pty: {err}")))?;
+        writer.flush().map_err(|err| crate::PalisadeError::from(format!("flush pty: {err}")))
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Res<()> {
         self.master
             .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|err| format!("resize pty: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("resize pty: {err}")))
     }
 
     pub fn terminate(&mut self) {
@@ -148,7 +149,7 @@ impl TerminalRegistry {
         project_root: &Path,
         on_output: impl Fn(Vec<u8>) + Send + 'static,
     ) -> Res<bool> {
-        let mut tabs = self.tabs.lock().unwrap();
+        let mut tabs = self.tabs.lock_or_recover();
         if tabs.contains_key(id) {
             return Ok(false);
         }
@@ -157,7 +158,7 @@ impl TerminalRegistry {
         if open_for_project >= MAX_TERMINALS_PER_PROJECT {
             return Err(format!(
                 "at the limit of {MAX_TERMINALS_PER_PROJECT} terminal tabs for this project — close one first"
-            ));
+            ).into());
         }
         let terminal = Terminal::spawn(project_root, on_output)?;
         tabs.insert(id.to_string(), Tab { project_hash: project_hash.to_string(), terminal });
@@ -165,13 +166,13 @@ impl TerminalRegistry {
     }
 
     pub fn write(&self, id: &str, bytes: &[u8]) -> Res<()> {
-        let tabs = self.tabs.lock().unwrap();
+        let tabs = self.tabs.lock_or_recover();
         let tab = tabs.get(id).ok_or_else(|| format!("no terminal running for tab `{id}`"))?;
         tab.terminal.write(bytes)
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Res<()> {
-        let tabs = self.tabs.lock().unwrap();
+        let tabs = self.tabs.lock_or_recover();
         let tab = tabs.get(id).ok_or_else(|| format!("no terminal running for tab `{id}`"))?;
         tab.terminal.resize(cols, rows)
     }
@@ -182,7 +183,7 @@ impl TerminalRegistry {
         // Dropped outside the lock: `Terminal::drop` waits on the reader
         // thread, and holding the registry lock through that would block
         // every other tab's I/O for the duration.
-        let tab = self.tabs.lock().unwrap().remove(id);
+        let tab = self.tabs.lock_or_recover().remove(id);
         drop(tab);
     }
 
@@ -190,7 +191,7 @@ impl TerminalRegistry {
     /// tabs alone.
     pub fn kill_project(&self, project_hash: &str) {
         let doomed: Vec<Tab> = {
-            let mut tabs = self.tabs.lock().unwrap();
+            let mut tabs = self.tabs.lock_or_recover();
             let ids: Vec<String> = tabs
                 .iter()
                 .filter(|(_, tab)| tab.project_hash == project_hash)

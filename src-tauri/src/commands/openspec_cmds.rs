@@ -21,12 +21,12 @@ pub async fn list_spec_changes(
     project_hash: String,
     thread_id: Option<String>,
 ) -> Res<Vec<executor::SpecChange>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         Ok(executor::openspec_list(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -36,12 +36,12 @@ pub async fn show_spec_change(
     thread_id: Option<String>,
     name: String,
 ) -> Res<Option<serde_json::Value>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         Ok(executor::openspec_show(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// `None` when `openspec` isn't installed — "we can't tell", which is a
@@ -52,12 +52,12 @@ pub async fn validate_spec_changes(
     project_hash: String,
     thread_id: Option<String>,
 ) -> Res<Option<bool>> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         Ok(executor::openspec_validate(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -67,12 +67,12 @@ pub async fn archive_spec_change(
     thread_id: Option<String>,
     name: String,
 ) -> Res<String> {
-    let cache = app.state::<Harness>().openspec_cache.clone();
+    let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         executor::openspec_archive(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Set the thread's spec link by hand — how the user resolves the ambiguity
@@ -87,5 +87,5 @@ pub async fn set_spec_change(
         store::set_open_spec_change(&store::palisade_home(), &project_hash, &thread_id, name.as_deref())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }

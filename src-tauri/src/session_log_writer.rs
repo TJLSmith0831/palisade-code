@@ -12,6 +12,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use crate::Res;
 
 /// In-memory buffer per log path. All writes are buffered; call `flush()` to
 /// make them durable.
@@ -26,7 +27,7 @@ impl SessionLogWriter {
 
     /// Append one already-serialized JSON line to `path`. The line is buffered
     /// in memory; call `flush()` to write it to disk.
-    pub fn append(&mut self, path: &Path, line: &[u8]) -> Result<(), String> {
+    pub fn append(&mut self, path: &Path, line: &[u8]) -> Res<()> {
         let buf = self.buffers.entry(path.to_path_buf()).or_default();
         buf.extend_from_slice(line);
         buf.push(b'\n');
@@ -54,7 +55,7 @@ impl SessionLogWriter {
     /// failing; this only happens when a temporary directory (e.g. in tests)
     /// was dropped while its buffered bytes were still held, and it keeps one
     /// flush from aborting every other pending write.
-    pub fn flush(&mut self) -> Result<(), String> {
+    pub fn flush(&mut self) -> Res<()> {
         let mut last_err: Option<String> = None;
         for (path, buf) in self.buffers.iter() {
             if buf.is_empty() {
@@ -87,7 +88,7 @@ impl SessionLogWriter {
             }
         }
         self.buffers.clear();
-        last_err.map_or(Ok(()), Err)
+        last_err.map_or(Ok(()), |err| Err(err.into()))
     }
 }
 

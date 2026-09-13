@@ -773,3 +773,170 @@ describe("applyNodePatch", () => {
     expect(base.nodes.scout.agent).toBe("claude");
   });
 });
+
+// Delete or Backspace on a focused node removed it and every edge attached to
+// it immediately: no undo, no confirm, no beforeunload. Nodes are
+// tabIndex={0}, so a stray Backspace while tabbing was a live way to lose the
+// most expensive artifact a user builds by hand here.
+describe("ChainCanvas — undo", () => {
+  const renderCanvas = () =>
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+
+  const modZ = () =>
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+
+  it("restores a deleted node along with the edges that died with it", async () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const before = screen.queryAllByTestId(/^chain-node-/).map((n) => n.getAttribute("data-testid"));
+    expect(before).toHaveLength(2);
+
+    const [first, second] = before as string[];
+    const firstRole = first.replace("chain-node-", "");
+    const secondRole = second.replace("chain-node-", "");
+
+    // Actually wire them together, so the delete has an edge to take with it.
+    fireEvent.click(screen.getByLabelText(`Connect from ${firstRole}`));
+    fireEvent.click(screen.getByTestId(second));
+    const edges = () => document.querySelectorAll(".ds-chain-edge").length;
+    expect(edges()).toBe(1);
+
+    fireEvent.keyDown(screen.getByTestId(second), { key: "Backspace" });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(1);
+    // The edge died with the node it pointed at.
+    expect(edges()).toBe(0);
+
+    act(() => { modZ(); });
+
+    const after = screen.queryAllByTestId(/^chain-node-/).map((n) => n.getAttribute("data-testid"));
+    expect(after).toHaveLength(2);
+    expect(after).toContain(`chain-node-${firstRole}`);
+    expect(after).toContain(`chain-node-${secondRole}`);
+    // And came back with it — one undo, not two.
+    expect(edges()).toBe(1);
+  });
+
+  it("walks back more than one step", async () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(3);
+
+    act(() => { modZ(); });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(2);
+    act(() => { modZ(); });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(1);
+  });
+
+  it("leaves Mod+Z alone inside a text field, which has its own undo", async () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const name = screen.getByPlaceholderText("Chain name");
+    fireEvent.change(name, { target: { value: "my chain" } });
+
+    act(() => { fireEvent.keyDown(name, { key: "z", metaKey: true }); });
+
+    // The node count is untouched: the keystroke belonged to the input.
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(2);
+  });
+
+  it("does nothing when there is nothing to undo", async () => {
+    renderCanvas();
+    act(() => { modZ(); });
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(0);
+  });
+});
+
+// Ten controls sat in one wrapping flex row with no dividers and every button
+// at variant="default", so "Test run" — which spends money and takes time —
+// was indistinguishable from "Save", which writes a file. Two status strings
+// sat among them, reading as things to click.
+describe("ChainCanvas — toolbar hierarchy", () => {
+  const renderCanvas = () =>
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+
+  it("splits the controls into authoring, execution and viewport groups", () => {
+    renderCanvas();
+    expect(screen.getByTestId("chain-authoring-group")).toBeDefined();
+    expect(screen.getByTestId("chain-execution-group")).toBeDefined();
+    expect(screen.getByTestId("chain-viewport-group")).toBeDefined();
+    // The groups are separated, not merely adjacent.
+    expect(
+      document.querySelectorAll(
+        '.ds-chain-toolbar > .mantine-Divider-root[data-orientation="vertical"]'
+      ).length
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the status strings out of the button row", () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const toolbar = document.querySelector(".ds-chain-toolbar")!;
+    const width = screen.getByTestId("chain-width");
+    const dirty = screen.getByTestId("chain-dirty");
+    expect(toolbar.contains(width)).toBe(false);
+    expect(toolbar.contains(dirty)).toBe(false);
+    expect(screen.getByTestId("chain-statusbar").contains(width)).toBe(true);
+    expect(screen.getByTestId("chain-statusbar").contains(dirty)).toBe(true);
+  });
+
+  it("says unsaved changes in something louder than the quietest voice available", () => {
+    renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const dirty = screen.getByTestId("chain-dirty");
+    // It was <Text size="xs" c="dimmed">, the quietest treatment in the
+    // system, on the one thing a user can actually lose. Colour is paired
+    // with an icon, per DESIGN.md's "never colour alone".
+    expect(dirty.className).not.toMatch(/dimmed/);
+    expect(dirty.querySelector("svg")).not.toBeNull();
+  });
+});
+
+// fit() ran only from the toolbar button and a double-click, so opening a
+// chain left the viewport wherever the previous session's pan had put it —
+// observed live at 1280px with the `reviewer` node entirely outside the pane.
+describe("ChainCanvas — the canvas fits its content", () => {
+  it("fits once the chain's nodes are in, and does not refit on a drag", () => {
+    render(
+      <MantineProvider>
+        <ChainCanvas
+          projectHash="proj-1"
+          chainName={null}
+          agents={[{ id: "claude", name: "Claude Agent" }]}
+          verifyCommands={[]}
+        />
+      </MantineProvider>
+    );
+    mockSurfaceRect({ width: 900, height: 600 });
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const afterFirst = planeTransform();
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const afterSecond = planeTransform();
+    // Adding a node changes the set of roles, so the view is refitted.
+    expect(afterSecond).not.toEqual(afterFirst);
+    // Never magnified past natural size.
+    expect(afterSecond.zoom).toBeLessThanOrEqual(1);
+    expect(afterSecond.zoom).toBeGreaterThanOrEqual(0.4);
+  });
+});

@@ -7,6 +7,7 @@ import {
   persistCompletionEnabled,
   COMPLETION_SETTINGS_CHANGED_EVENT,
 } from "./completion/GhostTextPlugin";
+import { describeError } from "./errors";
 
 export {
   COMPLETION_ENABLED_KEY,
@@ -30,6 +31,22 @@ export const PROJECT_SETTINGS_FILE = ".palisade/project-settings.json";
 /* Accent colors                                                              */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Accent hues a user can pick for Agent Signal.
+ *
+ * --danger (25), --warn (65) and --success (160) own their hues, and an
+ * accent that lands on one stops reading as "the agent is acting" and starts
+ * reading as a status. Red sat at exactly 25 and Orange at 55, ten degrees
+ * off warn; in light mode, where the accent shares the semantics' lightness
+ * band, both were near-indistinguishable from the semantic they shadowed.
+ * They are replaced by two hues with real clearance. See DESIGN.md,
+ * "Reserved hues", for why the fix is hue and not lightness.
+ *
+ * Dragon Green stays at 145, fifteen degrees from --success, as a stated
+ * exception: it is the product's identity colour, and --success only ever
+ * draws as a thin chain-node border (DESIGN.md), never as a fill beside an
+ * accent fill.
+ */
 export const ACCENT_PRESETS = [
   { name: "Dragon Green", hue: 145 },
   { name: "Ocean Blue", hue: 250 },
@@ -37,8 +54,8 @@ export const ACCENT_PRESETS = [
   { name: "Amber", hue: 95 },
   { name: "Rose", hue: 350 },
   { name: "Teal", hue: 190 },
-  { name: "Red", hue: 25 },
-  { name: "Orange", hue: 55 },
+  { name: "Lime", hue: 120 },
+  { name: "Magenta", hue: 325 },
 ] as const;
 
 /* -------------------------------------------------------------------------- */
@@ -478,7 +495,7 @@ export default function SettingsPanel({
         applyAppearance(mergeAppearance(globalAppearance, next));
       }
     } catch (error) {
-      setSaveError(`Could not save appearance. ${error instanceof Error ? error.message : String(error)}. Try again.`);
+      setSaveError(`${describeError(error, { action: "save that appearance" })}. Try again.`);
     } finally {
       saveInFlight.current = false;
       setSaving(false);
@@ -618,6 +635,7 @@ export default function SettingsPanel({
         transition: "fade",
       }}
       data-testid="settings-panel"
+      closeButtonProps={{ "aria-label": "Close settings" }}
       styles={{
         overlay: {
           background: "var(--scrim)",
@@ -626,7 +644,7 @@ export default function SettingsPanel({
         content: {
           background: panel,
           border: `1px solid ${border}`,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+          boxShadow: "var(--shadow-lift)",
           overflow: "hidden",
         },
         header: {
@@ -637,14 +655,14 @@ export default function SettingsPanel({
         },
         title: {
           color: text,
-          fontSize: 17,
+          fontSize: 16,
           fontWeight: 500,
           letterSpacing: "-0.025em",
         },
         close: {
           width: 32,
           height: 32,
-          color: "#9ca3ab",
+          color: "var(--muted)",
           borderRadius: 6,
         },
         body: {
@@ -703,7 +721,7 @@ export default function SettingsPanel({
                       : "2px solid transparent",
                     outline: active ? `2px solid ${accent}` : "none",
                     outlineOffset: 1,
-                    background: `oklch(65% 0.18 ${preset.hue})`,
+                    background: `oklch(var(--accent-l) var(--accent-c) ${preset.hue})`,
                     cursor: "pointer",
                     boxSizing: "border-box",
                   }}
@@ -717,7 +735,7 @@ export default function SettingsPanel({
         {/* App shell                                                         */}
         {/* ---------------------------------------------------------------- */}
 
-        {saveError && <Alert color="red" role="alert" mb="sm">{saveError}</Alert>}
+        {saveError && <Alert color="danger" role="alert" mb="sm">{saveError}</Alert>}
         <SegmentedControl
           aria-label="Appearance scope"
           value={scope}
@@ -1096,7 +1114,7 @@ export default function SettingsPanel({
           }}
         >
           Edit .palisade/project-settings.json
-          <span style={{ fontSize: 14 }}>→</span>
+          <span style={{ fontSize: 13 }}>→</span>
         </button>
 
         {/* ---------------------------------------------------------------- */}

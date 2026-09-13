@@ -24,6 +24,7 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 
 use crate::store::Res;
+use crate::locks::MutexExt;
 
 /// After this many crashes a language is disabled for the session (D14) —
 /// an editor that keeps respawning a broken server is worse than one that
@@ -130,17 +131,17 @@ pub fn install(language: &str) -> Res<()> {
         .args(&argv[1..])
         .env("PATH", crate::executor::child_path_env())
         .output()
-        .map_err(|err| format!("{}: {err}", argv[0]))?;
+        .map_err(|err| crate::PalisadeError::from(format!("{}: {err}", argv[0])))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let detail = stderr.trim();
-    Err(if detail.is_empty() {
+    Err(crate::PalisadeError::from(if detail.is_empty() {
         format!("{} exited with {}", argv.join(" "), output.status)
     } else {
         detail.to_string()
-    })
+    }))
 }
 
 /// The server command for a language, if Palisade knows one.
@@ -263,7 +264,7 @@ impl LspServers {
         on_exit: impl Fn() + Send + 'static,
     ) -> Res<LspStatus> {
         let key = (project_hash.to_string(), language.to_string());
-        let mut servers = self.0.lock().unwrap();
+        let mut servers = self.0.lock_or_recover();
 
         if let Some(existing) = servers.get(&key) {
             if existing.state == LspState::Disabled {
@@ -313,7 +314,7 @@ impl LspServers {
             // the status bar could not report while this was /dev/null.
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| format!("start {binary}: {err}"))?;
+            .map_err(|err| crate::PalisadeError::from(format!("start {binary}: {err}")))?;
 
         let mut stderr = child.stderr.take();
         let last_error = Arc::new(Mutex::new(String::new()));
@@ -342,7 +343,7 @@ impl LspServers {
                 let mut text = String::new();
                 let _ = BufReader::new(stderr).read_to_string(&mut text);
                 if !text.trim().is_empty() {
-                    *error_sink.lock().unwrap() = first_line(text.trim());
+                    *error_sink.lock_or_recover() = first_line(text.trim());
                 }
             }
             on_exit();
@@ -363,7 +364,7 @@ impl LspServers {
 
     /// Writes one framed JSON-RPC body to the server's stdin.
     pub fn send(&self, project_hash: &str, language: &str, body: &str) -> Res<()> {
-        let mut servers = self.0.lock().unwrap();
+        let mut servers = self.0.lock_or_recover();
         let server = servers
             .get_mut(&(project_hash.to_string(), language.to_string()))
             .ok_or_else(|| format!("no language server running for {language}"))?;
@@ -371,20 +372,20 @@ impl LspServers {
         stdin
             .write_all(frame(body).as_bytes())
             .and_then(|_| stdin.flush())
-            .map_err(|err| format!("write to {language} server: {err}"))
+            .map_err(|err| crate::PalisadeError::from(format!("write to {language} server: {err}")))
     }
 
     /// Records a server exit and applies D14's restart policy: the caller
     /// restarts while this returns `Crashed`, and stops once it returns
     /// `Disabled`.
     pub fn record_exit(&self, project_hash: &str, language: &str) -> LspState {
-        let mut servers = self.0.lock().unwrap();
+        let mut servers = self.0.lock_or_recover();
         let Some(server) = servers.get_mut(&(project_hash.to_string(), language.to_string()))
         else {
             return LspState::Disabled;
         };
         server.restarts += 1;
-        let reason = server.last_error.lock().unwrap().clone();
+        let reason = server.last_error.lock_or_recover().clone();
         let because = if reason.is_empty() {
             String::new()
         } else {
@@ -413,7 +414,7 @@ impl LspServers {
     }
 
     pub fn status(&self, project_hash: &str, language: &str) -> LspStatus {
-        let servers = self.0.lock().unwrap();
+        let servers = self.0.lock_or_recover();
         match servers.get(&(project_hash.to_string(), language.to_string())) {
             Some(server) => status_of(language, server),
             None => {
@@ -458,6 +459,7 @@ pub type SharedLsp = Arc<LspServers>;
 
 #[cfg(test)]
 mod tests {
+    use crate::locks::MutexExt;
     use super::*;
 
     #[test]
@@ -541,7 +543,7 @@ mod tests {
         let last_error = Arc::new(Mutex::new(
             "error: Unknown binary 'rust-analyzer' in official toolchain".to_string(),
         ));
-        servers.0.lock().unwrap().insert(
+        servers.0.lock_or_recover().insert(
             ("p".into(), "rust".into()),
             Server {
                 child,
@@ -570,7 +572,7 @@ mod tests {
         // A server that exits immediately is the crash case, without needing
         // a real language server installed.
         let child = Command::new("true").spawn().unwrap();
-        servers.0.lock().unwrap().insert(
+        servers.0.lock_or_recover().insert(
             ("p".into(), "rust".into()),
             Server {
                 child,
@@ -596,7 +598,7 @@ mod tests {
     fn shutting_down_a_project_leaves_other_projects_running() {
         let servers = LspServers::new();
         for hash in ["p1", "p2"] {
-            servers.0.lock().unwrap().insert(
+            servers.0.lock_or_recover().insert(
                 (hash.into(), "rust".into()),
                 Server {
                     child: Command::new("sleep").arg("30").spawn().unwrap(),

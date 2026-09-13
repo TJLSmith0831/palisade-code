@@ -5,6 +5,7 @@ use tauri::{Emitter, Manager};
 use crate::executor::Harness;
 use crate::notebook::{self, KernelResolution, NotebookKernel};
 use crate::Res;
+use crate::locks::MutexExt;
 
 /// Emitted (non-fatally) when the notebook's own recorded kernel isn't
 /// installed and Palisade falls back to the default kernel (design.md D4).
@@ -19,7 +20,7 @@ struct NotebookWarning {
 /// registry, returning the shared handle used for both spawn and send.
 fn kernel_for(harness: &Harness, notebook_id: &str) -> Arc<NotebookKernel> {
     harness
-        .notebook_kernels
+        .tooling.notebook_kernels
         .lock()
         .unwrap()
         .entry(notebook_id.to_string())
@@ -63,7 +64,7 @@ pub async fn run_notebook_cell(
         kernel.execute(&cell_id, &source)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -74,7 +75,7 @@ pub async fn interrupt_notebook_kernel(app: tauri::AppHandle, project_hash: Stri
         kernel_for(&harness, &id).interrupt()
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]
@@ -85,7 +86,7 @@ pub async fn restart_notebook_kernel(app: tauri::AppHandle, project_hash: String
         kernel_for(&harness, &id).restart()
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 /// Stops and drops a notebook's kernel entirely — called on tab close
@@ -96,11 +97,11 @@ pub async fn close_notebook_kernel(app: tauri::AppHandle, project_hash: String, 
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let id = notebook::notebook_id(&project_hash, &relative_path);
-        if let Some(kernel) = harness.notebook_kernels.lock().unwrap().remove(&id) {
+        if let Some(kernel) = harness.tooling.notebook_kernels.lock_or_recover().remove(&id) {
             kernel.terminate();
         }
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }

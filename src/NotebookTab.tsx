@@ -38,6 +38,7 @@ import {
   setCellSource,
   setCellType,
 } from "./notebook";
+import { describeError } from "./errors";
 
 /** One code cell's CodeMirror instance — mounted once, mirrors
  *  SqlQueryTab's single-editor pattern (basicSetup + the app's shared
@@ -184,7 +185,7 @@ export default function NotebookTab({
         }
       })
       .catch((err) => {
-        if (!cancelled) setLoadError(String(err));
+        if (!cancelled) setLoadError(describeError(err, { loading: "this notebook" }));
       });
     return () => {
       cancelled = true;
@@ -340,7 +341,7 @@ export default function NotebookTab({
         .catch((err) => {
           setRunningCellId(null);
           setKernelStarting(false);
-          setWarning(String(err));
+          setWarning(describeError(err));
         });
     },
     [doc, path, projectHash, runningCellId]
@@ -356,7 +357,7 @@ export default function NotebookTab({
 
   if (loadError) {
     return (
-      <Alert color="red" icon={<IconAlertTriangle size={16} />} m="md" title="Couldn't open notebook">
+      <Alert color="danger" icon={<IconAlertTriangle size={16} />} m="md" title="Couldn't open notebook">
         {loadError}
       </Alert>
     );
@@ -379,7 +380,7 @@ export default function NotebookTab({
           <Button size="xs" leftSection={<IconPlus size={14} />} onClick={() => markDirty(insertCell(doc, doc.cells.length, newCell()))}>
             Add cell
           </Button>
-          {dirty && <Badge color="yellow">Unsaved</Badge>}
+          {dirty && <Badge color="warn">Unsaved</Badge>}
           {kernelStarting && (
             <Badge color="blue" leftSection={<Loader size={10} color="white" />}>
               Starting kernel…
@@ -400,7 +401,7 @@ export default function NotebookTab({
       </Group>
 
       {warning && (
-        <Alert color="yellow" icon={<IconAlertTriangle size={16} />} withCloseButton onClose={() => setWarning(null)}>
+        <Alert color="warn" icon={<IconAlertTriangle size={16} />} withCloseButton onClose={() => setWarning(null)}>
           {warning}
         </Alert>
       )}
@@ -447,7 +448,7 @@ export default function NotebookTab({
                     <Menu.Item onClick={() => markDirty(setCellType(doc, cell.id, "markdown"))}>Markdown</Menu.Item>
                   </Menu.Dropdown>
                 </Menu>
-                <ActionIcon size="sm" variant="subtle" color="red" aria-label={`Delete cell ${index + 1}`} onClick={() => markDirty(deleteCell(doc, cell.id))}>
+                <ActionIcon size="sm" variant="subtle" color="danger" aria-label={`Delete cell ${index + 1}`} onClick={() => markDirty(deleteCell(doc, cell.id))}>
                   <IconTrash size={14} />
                 </ActionIcon>
               </Group>

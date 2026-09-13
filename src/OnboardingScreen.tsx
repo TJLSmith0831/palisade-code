@@ -557,7 +557,7 @@ export default function OnboardingScreen({
                       <Menu.Target>
                         <ActionIcon
                           variant="subtle"
-                          color="gray"
+                          color="neutral"
                           size="sm"
                           aria-label={`Actions for ${p.displayName}`}
                           data-testid="recent-project-menu"
@@ -581,7 +581,7 @@ export default function OnboardingScreen({
                         )}
                         {onRemoveProject && (
                           <Menu.Item
-                            color="red"
+                            color="danger"
                             leftSection={<IconTrash size={14} />}
                             data-testid="recent-project-remove"
                             onClick={(event) => {

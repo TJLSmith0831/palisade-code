@@ -52,7 +52,7 @@ pub async fn db_list_connections(
     let (connections, warning) =
         tokio::task::spawn_blocking(move || db::list_connections(&palisade_home(), &project_hash))
             .await
-            .map_err(|err| err.to_string())??;
+            .map_err(crate::PalisadeError::from)??;
     warn(&app, warning);
     Ok(connections)
 }
@@ -80,7 +80,7 @@ pub async fn db_add_connection(
         db::add_connection(&palisade_home(), &project_hash, &name, details, password.as_deref())
     })
     .await
-    .map_err(|err| err.to_string())??;
+    .map_err(crate::PalisadeError::from)??;
     warn(&app, warning);
     record(&app, &hash, AuditEntry::new("connection.add", &conn));
     Ok(conn)
@@ -101,7 +101,7 @@ pub async fn db_remove_connection(
         db::remove_connection(&palisade_home(), &project_hash, &connection_id)
     })
     .await
-    .map_err(|err| err.to_string())?
+    .map_err(crate::PalisadeError::from)?
 }
 
 #[tauri::command]

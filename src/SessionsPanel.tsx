@@ -35,10 +35,10 @@ function WorktreeLine({ worktree }: { worktree: WorktreeStatus }) {
       </Text>
       {worktree.added + worktree.removed > 0 && (
         <Text span size="xs" data-testid="sessions-thread-diff">
-          <Text span c="teal" size="xs">
+          <Text span c="success" size="xs">
             +{worktree.added}
           </Text>{" "}
-          <Text span c="red" size="xs">
+          <Text span c="danger" size="xs">
             −{worktree.removed}
           </Text>
         </Text>
@@ -160,7 +160,7 @@ function SessionRow({
         </>
       }
       rightSection={
-        <Badge size="xs" variant="light" color={status === "busy" ? "blue" : "gray"}>
+        <Badge size="xs" variant="light" color={status === "busy" ? "blue" : "neutral"}>
           {status}
         </Badge>
       }

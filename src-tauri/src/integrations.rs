@@ -114,7 +114,7 @@ pub fn default_out_dir(project_root: &Path) -> PathBuf {
 /// still renders if the graph is missing or unreadable.
 pub fn read_run(out_dir: &Path) -> Res<GraphifyRun> {
     let report = std::fs::read_to_string(out_dir.join("GRAPH_REPORT.md"))
-        .map_err(|err| format!("no GRAPH_REPORT.md in {}: {err}", out_dir.display()))?;
+        .map_err(|err| crate::PalisadeError::from(format!("no GRAPH_REPORT.md in {}: {err}", out_dir.display())))?;
     Ok(GraphifyRun {
         out_dir: out_dir.to_string_lossy().to_string(),
         summary: summarize_report(&report, out_dir),
@@ -131,14 +131,14 @@ fn run_step(bin: &Path, args: Vec<String>) -> Res<()> {
     let output = Command::new(bin)
         .args(args)
         .output()
-        .map_err(|err| format!("could not run graphify: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("could not run graphify: {err}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "graphify exited with {}:\n{}",
             output.status.code().unwrap_or(-1),
             if stderr.trim().is_empty() { "(no stderr output)" } else { stderr.trim() }
-        ));
+        ).into());
     }
     Ok(())
 }
@@ -180,13 +180,13 @@ pub fn graphify_query(bin: &Path, subcommand: &str, args: &[&str], out_dir: &Pat
     let expected = match subcommand {
         "query" | "explain" => 1,
         "path" => 2,
-        _ => return Err(format!("unsupported graphify subcommand: {subcommand}")),
+        _ => return Err(format!("unsupported graphify subcommand: {subcommand}").into()),
     };
     if args.len() != expected {
         return Err(format!(
             "graphify {subcommand} needs {expected} argument(s), got {}",
             args.len()
-        ));
+        ).into());
     }
     let mut cmd_args: Vec<String> = vec![subcommand.to_string()];
     cmd_args.extend(args.iter().map(|a| a.to_string()));
@@ -196,12 +196,12 @@ pub fn graphify_query(bin: &Path, subcommand: &str, args: &[&str], out_dir: &Pat
     let output = Command::new(bin)
         .args(&cmd_args)
         .output()
-        .map_err(|err| format!("could not run graphify {subcommand}: {err}"))?;
+        .map_err(|err| crate::PalisadeError::from(format!("could not run graphify {subcommand}: {err}")))?;
     if !output.status.success() {
         return Err(format!(
             "graphify {subcommand} failed:\n{}",
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        ).into());
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -217,8 +217,8 @@ pub fn ensure_claude_mcp(project_root: &Path, mcp_bin: &Path, graph_path: &Path)
     let config_path = project_root.join(".mcp.json");
     let mut doc: Value = if config_path.exists() {
         let raw = std::fs::read_to_string(&config_path)
-            .map_err(|err| format!("read {}: {err}", config_path.display()))?;
-        serde_json::from_str(&raw).map_err(|err| format!("parse {}: {err}", config_path.display()))?
+            .map_err(|err| crate::PalisadeError::from(format!("read {}: {err}", config_path.display())))?;
+        serde_json::from_str(&raw).map_err(|err| crate::PalisadeError::from(format!("parse {}: {err}", config_path.display())))?
     } else {
         json!({})
     };
@@ -239,9 +239,9 @@ pub fn ensure_claude_mcp(project_root: &Path, mcp_bin: &Path, graph_path: &Path)
     servers.insert("graphify".to_string(), entry);
 
     let pretty =
-        serde_json::to_string_pretty(&doc).map_err(|err| format!("encode {}: {err}", config_path.display()))?;
+        serde_json::to_string_pretty(&doc).map_err(|err| crate::PalisadeError::from(format!("encode {}: {err}", config_path.display())))?;
     std::fs::write(&config_path, pretty + "\n")
-        .map_err(|err| format!("write {}: {err}", config_path.display()))
+        .map_err(|err| crate::PalisadeError::from(format!("write {}: {err}", config_path.display())))
 }
 
 /// Idempotently merges Graphify's MCP server into a Codex project's
@@ -314,15 +314,15 @@ fn read_toml(path: &Path) -> Res<DocumentMut> {
     if !path.exists() {
         return Ok(DocumentMut::new());
     }
-    let raw = std::fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
-    raw.parse::<DocumentMut>().map_err(|err| format!("parse {}: {err}", path.display()))
+    let raw = std::fs::read_to_string(path).map_err(|err| crate::PalisadeError::from(format!("read {}: {err}", path.display())))?;
+    raw.parse::<DocumentMut>().map_err(|err| crate::PalisadeError::from(format!("parse {}: {err}", path.display())))
 }
 
 fn write_toml(path: &Path, doc: &DocumentMut) -> Res<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|err| crate::PalisadeError::from(format!("create {}: {err}", parent.display())))?;
     }
-    std::fs::write(path, doc.to_string()).map_err(|err| format!("write {}: {err}", path.display()))
+    std::fs::write(path, doc.to_string()).map_err(|err| crate::PalisadeError::from(format!("write {}: {err}", path.display())))
 }
 
 // -------------------------------------------------------------- always-on
@@ -390,7 +390,7 @@ pub fn ensure_graph_ignored(git_bin: &Path, project_root: &Path) -> Res<()> {
     let separator = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
     let addition =
         format!("{separator}\n# Palisade Code's code graph — machine-local, rebuilt on demand.\n{GRAPH_DIR}/\n");
-    std::fs::write(&path, existing + &addition).map_err(|err| format!("update .gitignore: {err}"))
+    std::fs::write(&path, existing + &addition).map_err(|err| crate::PalisadeError::from(format!("update .gitignore: {err}")))
 }
 
 /// The last thing `graphify watch` said before dying, for the crash banner.

@@ -8,6 +8,7 @@ import {
 import Palette from "./Palette";
 import { fuzzyMatch } from "./fuzzyMatch";
 import type { SearchOptions, TextMatch } from "./api";
+import { describeError } from "./errors";
 
 const MAX_FILE_RESULTS = 20;
 
@@ -94,7 +95,7 @@ export default function TextSearchPalette({
           if (cancelled) return;
           setTextMatches([]);
           setTruncated(false);
-          setSearchError(String(err).replace(/^Error:\s*/, ""));
+          setSearchError(describeError(err, { action: "run that search" }));
         })
         .finally(() => {
           if (!cancelled) setBusy(false);

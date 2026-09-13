@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "./errors";
 
 export type Mode = "spec" | "go";
 
@@ -58,6 +59,8 @@ export type Message = {
   content: string;
   /** Absent on messages written before sessions had identities. */
   sessionId?: string | null;
+  /** Present only for structured ACP failures; absent records use legacy UI fallback. */
+  failureClass?: "authRequired" | "transientProvider" | "other" | null;
 };
 
 /** Open an independent native window, initialized to this project. */
@@ -284,6 +287,9 @@ export const sendMessage = (
     model: null,
     bypass,
   });
+/** Retry an already-persisted user turn without adding a duplicate row. */
+export const retryMessage = (projectHash: string, threadId: string, messageSeq: number) =>
+  invoke<void>("retry_message", { projectHash, threadId, messageSeq });
 export const goMode = (
   projectHash: string,
   threadId: string,
@@ -1247,7 +1253,7 @@ export type FsChanged = { projectHash: string; paths: string[] };
 export const CONFLICT_PREFIX = "CONFLICT:";
 
 export const isConflictError = (err: unknown) =>
-  String(err).includes(CONFLICT_PREFIX);
+  errorMessage(err).includes(CONFLICT_PREFIX);
 
 /** Files the editor deliberately won't open. Both carry a prefix so the UI
  * can explain the reason rather than showing a raw read failure. */
@@ -1255,11 +1261,11 @@ export const TOO_LARGE_PREFIX = "TOO_LARGE:";
 export const BINARY_PREFIX = "BINARY:";
 
 export const isBinaryError = (err: unknown) =>
-  String(err).includes(BINARY_PREFIX);
+  errorMessage(err).includes(BINARY_PREFIX);
 
 /** Size in bytes of a file refused for being too large, or `null`. */
 export function tooLargeBytes(err: unknown): number | null {
-  const match = String(err).match(new RegExp(`${TOO_LARGE_PREFIX}\\s*(\\d+)`));
+  const match = errorMessage(err).match(new RegExp(`${TOO_LARGE_PREFIX}\\s*(\\d+)`));
   return match ? Number(match[1]) : null;
 }
 
