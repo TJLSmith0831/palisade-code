@@ -280,6 +280,11 @@ input::placeholder {
   color: var(--muted);
 }
 
+.ds-sc-commit-box textarea::placeholder {
+  color: color-mix(in oklab, var(--muted), var(--bg) 35%);
+  opacity: 1;
+}
+
 select {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238e939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");

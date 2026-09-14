@@ -33,6 +33,8 @@ const worktree = (over: Partial<WorktreeStatus> = {}): WorktreeStatus => ({
   added: 0,
   removed: 0,
   baseBranch: "main",
+  baseState: "clean",
+  baseChangeCount: null,
   ahead: 2,
   clean: true,
   mergeable: true,
@@ -87,19 +89,40 @@ describe("MergeGate", () => {
     expect(screen.queryByTestId("gate-check-verify")).toBeNull();
   });
 
-  it("offers Merge on uncommitted agent work", () => {
+  it("requires an explicit commit for uncommitted agent work", () => {
     mount(dirty);
     expand();
-    expect(screen.getByTestId("merge-thread")).not.toBeDisabled();
+    expect(screen.getByTestId("commit-thread-changes")).toBeDisabled();
+    expect(screen.getByTestId("merge-thread")).toBeDisabled();
+    expect(screen.getByTestId("open-thread-pr")).toBeDisabled();
   });
 
-  it("blocks the merge only on a conflict or an empty thread", () => {
+  it("blocks the merge on a conflict, a dirty base, or an empty thread", () => {
     mount(worktree({ mergeable: false, state: "conflict" }));
     expand();
     expect(screen.getByTestId("merge-thread")).toBeDisabled();
 
     mount(worktree({ ahead: 0, clean: true }));
     expect(screen.getAllByTestId("merge-thread")[1]).toBeDisabled();
+
+    mount(worktree({ baseState: "dirty", baseChangeCount: 14 }));
+    fireEvent.click(screen.getAllByTestId("merge-gate-toggle")[2]);
+    expect(screen.getAllByTestId("gate-check-mergeable")[2]).toHaveTextContent(
+      "main has 14 uncommitted changes"
+    );
+    expect(screen.getAllByTestId("merge-thread")[2]).toBeDisabled();
+    expect(screen.getAllByTestId("open-thread-pr")[2]).not.toBeDisabled();
+  });
+
+  it("blocks only the local merge when the target safety check is unavailable", () => {
+    mount(worktree({ baseState: "unavailable", baseChangeCount: null }));
+    expand();
+
+    expect(screen.getByTestId("gate-check-mergeable")).toHaveTextContent(
+      "Cannot check whether main is safe to update",
+    );
+    expect(screen.getByTestId("merge-thread")).toBeDisabled();
+    expect(screen.getByTestId("open-thread-pr")).not.toBeDisabled();
   });
 
   it("pre-fills the commit message from the local model", async () => {
@@ -130,18 +153,20 @@ describe("MergeGate", () => {
     );
   });
 
-  it("commits what is uncommitted on the way through the merge", async () => {
-    mount(dirty);
+  it("commits explicitly, refreshes, and never makes Merge commit again", async () => {
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    mount(dirty, { onChanged });
     expand();
     await waitFor(() =>
       expect(screen.getByTestId("gate-commit-message")).toHaveValue("Add retry helper"),
     );
-    fireEvent.click(screen.getByTestId("merge-thread"));
+    fireEvent.click(screen.getByTestId("commit-thread-changes"));
     await waitFor(() =>
       expect(api.gitCommit).toHaveBeenCalledWith("p", "Add retry helper", "t1"),
     );
     expect(api.gitStageFile).toHaveBeenCalledWith("p", "a.rs", "t1");
-    expect(api.mergeThreadWorktree).toHaveBeenCalledWith("p", "t1");
+    expect(api.mergeThreadWorktree).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });
 
   it("offers to archive the thread once the work has landed", async () => {
@@ -172,12 +197,12 @@ describe("MergeGate", () => {
     );
   });
 
-  it("commits before opening a PR, then opens the url", async () => {
+  it("opens a PR without trying to commit a clean thread again", async () => {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
-    mount(dirty);
+    mount(worktree());
     expand();
     fireEvent.click(screen.getByTestId("open-thread-pr"));
     await waitFor(() => expect(openUrl).toHaveBeenCalledWith("https://example.test/pr/1"));
-    expect(api.gitCommit).toHaveBeenCalled();
+    expect(api.gitCommit).not.toHaveBeenCalled();
   });
 });

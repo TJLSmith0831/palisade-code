@@ -285,6 +285,35 @@ pub struct MergeReadiness {
     pub mergeable: bool,
 }
 
+/// Whether the worktree that currently has the base branch checked out can
+/// accept a fast-forward. A branch checked out nowhere is safe to update by
+/// moving its ref directly.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BaseWorktreeState {
+    Clean,
+    Dirty(u32),
+}
+
+fn base_worktree_path(bin: &Path, root: &Path, base: &str) -> Res<Option<std::path::PathBuf>> {
+    if current_branch_name(bin, root).ok().as_deref() == Some(base) {
+        Ok(Some(root.to_path_buf()))
+    } else {
+        Ok(worktree_holding(bin, root, base))
+    }
+}
+
+/// The same target-worktree check used by a real merge, exposed for the merge
+/// gate so it does not promise a merge that Git will immediately refuse.
+pub fn base_worktree_state(bin: &Path, root: &Path, base: &str) -> Res<BaseWorktreeState> {
+    match base_worktree_path(bin, root, base)? {
+        Some(path) => match status(bin, &path)?.len() as u32 {
+            0 => Ok(BaseWorktreeState::Clean),
+            count => Ok(BaseWorktreeState::Dirty(count)),
+        },
+        None => Ok(BaseWorktreeState::Clean),
+    }
+}
+
 /// Commits on `branch` that `base` does not have yet.
 pub fn ahead_of(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<u32> {
     let raw = run(bin, root, &["rev-list", "--count", &format!("{base}..{branch}")])?;
@@ -382,16 +411,14 @@ pub fn merge_into_base(bin: &Path, root: &Path, base: &str, branch: &str) -> Res
     // for nothing. Check first.
     // `worktree_holding` only knows about *linked* worktrees; the project
     // root is the common case and it has to be checked separately.
-    let host = if current_branch_name(bin, root).as_deref() == Ok(base) {
-        Some(root.to_path_buf())
-    } else {
-        worktree_holding(bin, root, base)
-    };
+    let host = base_worktree_path(bin, root, base)?;
     if let Some(path) = &host {
-        if !status(bin, path)?.is_empty() {
+        let changes = status(bin, path)?;
+        if !changes.is_empty() {
             return Err(format!(
-                "`{base}` is checked out at {} with uncommitted changes — commit or stash them before merging.",
-                path.display()
+                "Cannot merge into `{base}` because it has {} uncommitted {}. Commit or stash them before merging.",
+                changes.len(),
+                if changes.len() == 1 { "change" } else { "changes" },
             ).into());
         }
     }
@@ -1490,6 +1517,22 @@ world
         assert_eq!(current_branch_name(git(), root).unwrap(), "free");
         // And the root's own branch is never reported as "held elsewhere".
         assert!(worktree_holding(git(), root, "free").is_none());
+    }
+
+    #[test]
+    fn base_worktree_state_counts_tracked_and_untracked_changes() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let base = current_branch_name(git(), root).unwrap();
+
+        assert_eq!(base_worktree_state(git(), root, &base).unwrap(), BaseWorktreeState::Clean);
+
+        fs::write(root.join(&tracked), "changed\n").unwrap();
+        fs::write(root.join("artifact.txt"), "untracked\n").unwrap();
+        assert_eq!(base_worktree_state(git(), root, &base).unwrap(), BaseWorktreeState::Dirty(2));
+
+        run(git(), root, &["checkout", "-b", "other"]).unwrap();
+        assert_eq!(base_worktree_state(git(), root, &base).unwrap(), BaseWorktreeState::Clean);
     }
 
     #[test]

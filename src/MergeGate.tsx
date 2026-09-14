@@ -45,7 +45,7 @@ type Props = {
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
   /** The worktree changed (a commit, a merge): re-poll. */
-  onChanged?: () => void;
+  onChanged?: () => Promise<void> | void;
   /** Archive this thread — offered once its work has landed. */
   onArchive?: () => void;
   onError?: (message: string) => void;
@@ -68,7 +68,7 @@ export default function MergeGate({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<"suggest" | "generate" | "merge" | "pr" | null>(null);
+  const [busy, setBusy] = useState<"suggest" | "generate" | "commit" | "merge" | "pr" | null>(null);
   const [merged, setMerged] = useState(false);
   const fail = useCallback(
     (err: unknown) => onError?.(describeError(err)),
@@ -86,19 +86,23 @@ export default function MergeGate({
     setBusy("suggest");
     api
       .suggestCommitMessage(projectHash, threadId)
-      .then((subject) => subject && setMessage(subject))
+      .then((subject) => typeof subject === "string" && subject && setMessage(subject))
       .catch(() => undefined)
       .finally(() => setBusy((b) => (b === "suggest" ? null : b)));
   }, [projectHash, threadId, worktree.clean, worktree.head, message]);
 
   const workToLand = hasWorkToLand(worktree);
-  const canLand = workToLand && worktree.mergeable;
+  const baseState = worktree.baseState ?? "unavailable";
+  const baseBlocked = baseState !== "clean";
+  const canMerge = workToLand && worktree.clean && worktree.mergeable && !baseBlocked;
+  const canOpenPr = workToLand && worktree.clean;
 
   /** Commit whatever is uncommitted, so what lands is everything on screen.
    *  Staged one file at a time: concurrent index writes collide on
    *  `.git/index.lock` (the same reason SourceControlPanel does it in turn). */
-  const commitIfDirty = async () => {
-    if (worktree.clean) return;
+  const commit = async () => {
+    setBusy("commit");
+    try {
     const files = await api.gitStatus(projectHash, threadId);
     for (const file of files) {
       await api.gitStageFile(projectHash, file.path, threadId);
@@ -108,6 +112,13 @@ export default function MergeGate({
       message.trim() || "Agent changes from this thread",
       threadId,
     );
+      await onChanged?.();
+      setMessage("");
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const generate = async () => {
@@ -124,7 +135,6 @@ export default function MergeGate({
   const merge = async () => {
     setBusy("merge");
     try {
-      await commitIfDirty();
       const result = await api.mergeThreadWorktree(projectHash, threadId);
       if (result.merged) {
         setMerged(true);
@@ -138,7 +148,7 @@ export default function MergeGate({
             : result.detail,
         );
       }
-      onChanged?.();
+      await onChanged?.();
     } catch (err) {
       fail(err);
     } finally {
@@ -149,9 +159,8 @@ export default function MergeGate({
   const openPr = async () => {
     setBusy("pr");
     try {
-      await commitIfDirty();
       const url = await api.openThreadPr(projectHash, threadId);
-      onChanged?.();
+      await onChanged?.();
       await openUrl(url);
     } catch (err) {
       fail(err);
@@ -215,9 +224,9 @@ export default function MergeGate({
             </Text>
           </Text>
           <div style={{ flex: 1 }} />
-          {!worktree.mergeable && (
+          {(!worktree.mergeable || baseBlocked) && (
             <Badge size="xs" variant="light" color="danger">
-              conflicts
+              {baseState === "dirty" ? "base changes" : baseState === "unavailable" ? "check needed" : "conflicts"}
             </Badge>
           )}
           <IconChevronDown
@@ -234,14 +243,18 @@ export default function MergeGate({
               size={16}
               radius="xl"
               variant="light"
-              color={worktree.mergeable ? "success" : "warn"}
+              color={baseState === "clean" && worktree.mergeable ? "success" : "warn"}
             >
-              {worktree.mergeable ? <IconCheck size={10} /> : <IconAlertTriangle size={10} />}
+              {baseState === "clean" && worktree.mergeable ? <IconCheck size={10} /> : <IconAlertTriangle size={10} />}
             </ThemeIcon>
             <Text size="xs" style={{ flex: 1 }}>
-              {worktree.mergeable
-                ? `Merges cleanly into ${worktree.baseBranch}`
-                : `Conflicts with ${worktree.baseBranch}`}
+              {baseState === "dirty"
+                ? `${worktree.baseBranch} has ${worktree.baseChangeCount ?? "uncommitted"} uncommitted ${worktree.baseChangeCount === 1 ? "change" : "changes"}. Commit or stash them before merging locally.`
+                : baseState === "unavailable"
+                  ? `Cannot check whether ${worktree.baseBranch} is safe to update.`
+                  : worktree.mergeable
+                    ? `Merges cleanly into ${worktree.baseBranch}`
+                    : `Conflicts with ${worktree.baseBranch}`}
             </Text>
             <Text size="xs" c="dimmed" ff="monospace">
               {worktree.ahead > 0 && `${worktree.ahead} ahead`}
@@ -252,19 +265,23 @@ export default function MergeGate({
 
           {!worktree.clean && (
             <Group gap={6} mt={8} wrap="nowrap" data-testid="gate-commit-row">
+              <div style={{ flex: 1 }}>
+              <Text size="xs" component="label" htmlFor="gate-commit-message">Commit message</Text>
               <TextInput
+                id="gate-commit-message"
                 size="xs"
-                style={{ flex: 1 }}
                 placeholder={
                   busy === "suggest"
                     ? "Drafting a message…"
-                    : "Describe what this thread changed…"
+                    : "e.g. fix: prevent duplicate sends"
                 }
                 value={message}
                 onChange={(e) => setMessage(e.currentTarget.value)}
                 aria-label="Commit message"
                 data-testid="gate-commit-message"
               />
+              <Text size="xs" c="dimmed">⌘↵ commits staged changes</Text>
+              </div>
               <Tooltip label="Ask this thread's agent for a better message" openDelay={400}>
                 <Button
                   size="compact-xs"
@@ -276,6 +293,15 @@ export default function MergeGate({
                   Generate
                 </Button>
               </Tooltip>
+              <Button
+                size="compact-xs"
+                onClick={commit}
+                disabled={!message.trim()}
+                loading={busy === "commit"}
+                data-testid="commit-thread-changes"
+              >
+                Commit changes
+              </Button>
             </Group>
           )}
 
@@ -299,18 +325,22 @@ export default function MergeGate({
               label={
                 !workToLand
                   ? "Nothing to merge yet"
+                  : !worktree.clean
+                    ? "Commit this thread's changes before merging"
+                  : baseState === "dirty"
+                    ? `${worktree.baseBranch} has uncommitted changes. Commit or stash them before merging locally.`
+                  : baseState === "unavailable"
+                    ? `Cannot check whether ${worktree.baseBranch} is safe to update`
                   : !worktree.mergeable
                     ? "Resolve the conflicts with the base branch first"
-                    : worktree.clean
-                      ? `Merge into ${worktree.baseBranch}`
-                      : `Commit these changes and merge into ${worktree.baseBranch}`
+                    : `Merge into ${worktree.baseBranch}`
               }
             >
               <div>
                 <Button
                   size="compact-xs"
                   leftSection={<IconGitMerge size={13} />}
-                  disabled={!canLand}
+                  disabled={!canMerge}
                   loading={busy === "merge"}
                   onClick={merge}
                   data-testid="merge-thread"
@@ -323,7 +353,7 @@ export default function MergeGate({
               size="compact-xs"
               variant="default"
               leftSection={<IconGitPullRequest size={13} />}
-              disabled={!workToLand}
+              disabled={!canOpenPr}
               loading={busy === "pr"}
               onClick={openPr}
               data-testid="open-thread-pr"

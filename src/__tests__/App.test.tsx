@@ -1666,7 +1666,7 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
   // once at project-open, so an agent turn that switches branches leaves the
   // UI naming the wrong branch on a write action. The branch has to ride the
   // same refresh the dirty dot does.
-  it("renames the commit target when the branch changes under it", async () => {
+  it("keeps the commit-message example independent of the branch name", async () => {
     let current = "main";
     invokeMock.mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
@@ -1680,21 +1680,16 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
     render(<App />);
     await openProject();
     fireEvent.click(screen.getByTestId("rail-git"));
-    const box = () =>
-      screen
-        .getAllByRole("textbox")
-        .find((el) => /commit on/.test(el.getAttribute("placeholder") ?? ""))!;
+    const box = () => screen.getByTestId("sc-commit-message");
     await waitFor(() =>
-      expect(box().getAttribute("placeholder")).toContain("commit on main")
+      expect(box()).toHaveAttribute("placeholder", "e.g. fix: prevent duplicate sends")
     );
 
     current = "dogfood-branch";
     act(() => emit("fs-changed", { projectHash: "proj-1", paths: ["a.ts"] }));
 
     await waitFor(() =>
-      expect(box().getAttribute("placeholder")).toContain(
-        "commit on dogfood-branch"
-      )
+      expect(box()).toHaveAttribute("placeholder", "e.g. fix: prevent duplicate sends")
     );
   });
 

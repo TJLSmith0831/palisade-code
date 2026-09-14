@@ -2269,6 +2269,11 @@ struct WorktreeStatus {
     removed: u32,
     /// The branch this thread merges back into.
     base_branch: String,
+    /// Whether the checked-out base branch can accept a local merge. This is
+    /// distinct from `mergeable`, which only answers whether commits conflict.
+    base_state: String,
+    /// Uncommitted files in the checked-out base worktree when it is dirty.
+    base_change_count: Option<u32>,
     /// Commits on the thread's branch that the base does not have.
     ahead: u32,
     /// Nothing uncommitted or untracked in the worktree.
@@ -2313,6 +2318,11 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
             // can't answer for reports as "nothing to land", not as an error.
             let ready = git::merge_readiness(&bin, &root, &path, &base, &branch)
                 .unwrap_or(git::MergeReadiness { ahead: 0, clean: true, mergeable: true });
+            let (base_state, base_change_count) = match git::base_worktree_state(&bin, &root, &base) {
+                Ok(git::BaseWorktreeState::Clean) => ("clean".into(), None),
+                Ok(git::BaseWorktreeState::Dirty(count)) => ("dirty".into(), Some(count)),
+                Err(_) => ("unavailable".into(), None),
+            };
             let state = if !ready.mergeable {
                 "conflict"
             } else if ready.ahead > 0 || !ready.clean {
@@ -2328,6 +2338,8 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
                 added,
                 removed,
                 base_branch: base,
+                base_state,
+                base_change_count,
                 ahead: ready.ahead,
                 clean: ready.clean,
                 mergeable: ready.mergeable,
@@ -2444,6 +2456,9 @@ async fn open_thread_pr(project_hash: String, thread_id: String) -> Res<String> 
         let bin = git_bin()?;
         let root = project_root(&project_hash)?;
         let (path, branch, base) = thread_branch(&bin, &root, &project_hash, &thread_id)?;
+        if !git::status(&bin, &path)?.is_empty() {
+            return Err("This thread has uncommitted changes — commit them before opening a pull request.".into());
+        }
         // A PR is a request to merge commits; a remote can only see pushed ones.
         git::push(&bin, &path)?;
         if let Some(gh) = executor::find_on_path("gh") {

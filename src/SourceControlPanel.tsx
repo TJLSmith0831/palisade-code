@@ -742,7 +742,11 @@ export default function SourceControlPanel({
           );
         })()}
         <div className="ds-sc-commit-box">
+          <Text size="xs" component="label" htmlFor="sc-commit-message">
+            Commit message
+          </Text>
           <Textarea
+            id="sc-commit-message"
             value={message}
             onChange={(e) => setMessage(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -751,11 +755,12 @@ export default function SourceControlPanel({
                 commit();
               }
             }}
-            placeholder={`Message (⌘Enter to commit on ${branch})`}
+            placeholder="e.g. fix: prevent duplicate sends"
             aria-label="Commit message"
             rows={3}
             data-testid="sc-commit-message"
           />
+          <Text size="xs" c="dimmed">⌘↵ commits staged changes</Text>
           <Button
             className="ds-sc-generate"
             size="compact-xs"

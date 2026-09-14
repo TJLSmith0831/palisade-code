@@ -420,6 +420,10 @@ export type WorktreeStatus = {
   removed: number;
   /** The branch this thread merges back into. */
   baseBranch: string;
+  /** Whether the checked-out base branch can safely take a local merge. */
+  baseState?: "clean" | "dirty" | "unavailable";
+  /** Number of changed/untracked files in the checked-out base worktree. */
+  baseChangeCount?: number | null;
   /** Commits the base branch does not have yet. */
   ahead: number;
   /** Nothing uncommitted or untracked in the worktree. */

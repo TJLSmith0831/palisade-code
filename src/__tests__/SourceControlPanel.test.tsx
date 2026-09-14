@@ -71,6 +71,26 @@ describe("isStaged", () => {
 });
 
 describe("SourceControlPanel staging", () => {
+  it("labels the commit composer and keeps its example as a placeholder", async () => {
+    render(<SourceControlPanel {...props} />);
+    const input = await screen.findByTestId("sc-commit-message");
+    expect(screen.getByText("Commit message")).toHaveAttribute("for", "sc-commit-message");
+    expect(input).toHaveAttribute("placeholder", "e.g. fix: prevent duplicate sends");
+    expect(screen.getByText("⌘↵ commits staged changes")).toBeDefined();
+  });
+
+  it("inserts a generated commit message for the user to edit", async () => {
+    mocked.draftCommitMessage.mockResolvedValue("fix: prevent duplicate sends");
+    render(<SourceControlPanel {...props} />);
+
+    fireEvent.click(await screen.findByTestId("sc-generate"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sc-commit-message")).toHaveValue(
+        "fix: prevent duplicate sends",
+      ),
+    );
+  });
+
   it("shows repository branch refs in its Graph section, not in a separate workspace", async () => {
     render(<SourceControlPanel {...props} />);
 
@@ -236,7 +256,7 @@ describe("SourceControlPanel staging", () => {
       />
     );
 
-    expect(await screen.findByPlaceholderText(/feature\/source-control/)).toBeDefined();
+    expect(await screen.findByRole("button", { name: "Switch branch: feature/source-control" })).toBeDefined();
     fireEvent.click((await screen.findAllByTestId("sc-file"))[0]);
     expect(onOpenFile).toHaveBeenCalledWith("src/a.ts", "t1");
     fireEvent.click(screen.getByTestId("sc-review"));

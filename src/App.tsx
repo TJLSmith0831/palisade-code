@@ -4371,14 +4371,16 @@ export default function App() {
   const [worktrees, setWorktrees] = useState<Map<string, api.WorktreeStatus>>(
     new Map()
   );
-  const loadWorktrees = useCallback(() => {
+  const loadWorktrees = useCallback(async () => {
     const hash = current.current.project?.hash;
     if (!hash) return;
-    api.threadWorktrees(hash).then(
-      (list) => setWorktrees(new Map(list.map((w) => [w.threadId, w]))),
+    try {
+      const list = await api.threadWorktrees(hash);
+      setWorktrees(new Map(list.map((w) => [w.threadId, w])));
+    } catch {
       // A non-git project has no worktrees to report; the rows just show none.
-      () => setWorktrees(new Map())
-    );
+      setWorktrees(new Map());
+    }
   }, []);
 
   const { onRenameThread, onArchiveThread, onDeleteThread } = useThreadActions({
