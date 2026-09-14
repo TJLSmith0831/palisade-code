@@ -277,6 +277,27 @@ describe("executor switch during a live session (Amendment 5)", () => {
   });
 });
 
+describe("model selection", () => {
+  it("does not submit the draft when a model is picked", async () => {
+    const { onSend, props } = renderSurface({
+      models: {
+        configId: "model",
+        current: "m1",
+        models: [
+          { id: "m1", name: "Model One" },
+          { id: "m2", name: "Model Two" },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("model-btn"));
+    fireEvent.click(await screen.findByTestId("model-opt-m2"));
+
+    expect(props.onPickModel).toHaveBeenCalledWith("m2");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
 describe("thread tab strip (mockup parity)", () => {
   const threads: ThreadMeta[] = [
     { ...thread, id: "t1", title: "Add LSP status", currentMode: "spec" },

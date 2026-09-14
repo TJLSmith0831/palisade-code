@@ -2084,6 +2084,7 @@ export const ChatSurface = memo(
                     tappable chips (icon · name · chevron), and the flat
                     text-only buttons read as static labels instead. */}
                 <button
+                  type="button"
                   className="ds-composer-picker"
                   data-testid="executor-btn"
                   data-tauri-drag-region-exclude
@@ -2187,6 +2188,7 @@ export const ChatSurface = memo(
                 {/* Accented once a model is actually pinned, so "which model
                     am I about to spend a turn on" is answerable at a glance. */}
                 <button
+                  type="button"
                   className={`ds-composer-picker${
                     currentModelId ? " selected" : ""
                   }${authIssue ? " warn" : ""}`}
