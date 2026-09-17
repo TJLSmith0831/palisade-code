@@ -190,14 +190,18 @@ export default function SpecPane({
           ) : (
             <>
               {valid === true && (
-                <Badge size="xs" color="success" variant="light">
-                  validates
-                </Badge>
+                <Tooltip label="openspec validate passed for every change" openDelay={300}>
+                  <Badge size="xs" color="success" variant="light" tt="none">
+                    valid
+                  </Badge>
+                </Tooltip>
               )}
               {valid === false && (
-                <Badge size="xs" color="warn" variant="light">
-                  validation failed
-                </Badge>
+                <Tooltip label="openspec validate reported errors in at least one change" openDelay={300}>
+                  <Badge size="xs" color="warn" variant="light" tt="none">
+                    invalid
+                  </Badge>
+                </Tooltip>
               )}
               {valid === null && !loading && (
                 <Tooltip label="`openspec` is not on PATH, so validity is unknown — not invalid.">

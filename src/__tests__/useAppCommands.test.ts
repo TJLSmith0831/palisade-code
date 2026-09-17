@@ -96,6 +96,19 @@ describe("useAppCommands", () => {
   // than the memoised value so the answer is current at the moment the
   // palette renders, which is why tabs.activePath is also a dependency —
   // a stale memo would keep hiding a tab that had since opened.
+  it("chat.focus reveals a collapsed chat and hands focus to the composer", () => {
+    const toggleChat = vi.fn();
+    const heard = vi.fn();
+    window.addEventListener("palisade-chat-command", heard);
+    const base = deps();
+    list({ shell: { ...base.shell, chatCollapsed: true, toggleChat } as typeof base.shell })
+      .find((c) => c.id === "chat.focus")!
+      .run();
+    expect(toggleChat).toHaveBeenCalledTimes(1);
+    expect(heard).toHaveBeenCalledTimes(1);
+    window.removeEventListener("palisade-chat-command", heard);
+  });
+
   it("offers tab commands only when a tab is open", () => {
     const withNoTab = list().find((c) => c.id === "tab.close");
     const withTab = list({

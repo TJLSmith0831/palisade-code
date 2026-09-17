@@ -108,8 +108,25 @@ export function useAppCommands({
         id: "thread.new",
         group: "File",
         label: "New thread…",
+        chord: "Mod+Shift+N",
         enabled: !!project,
         run: onNewThread,
+      },
+      {
+        // The one key an AI-first editor is judged by: get to the prompt
+        // without touching the mouse, from anywhere, even with chat hidden.
+        id: "chat.focus",
+        group: "View",
+        label: "Focus chat",
+        chord: "Mod+L",
+        keywords: "composer message prompt agent thread",
+        enabled: !!project,
+        run: () => {
+          if (shell.chatCollapsed) shell.toggleChat();
+          window.dispatchEvent(
+            new CustomEvent("palisade-chat-command", { detail: "focus" })
+          );
+        },
       },
       {
         id: "project.open",

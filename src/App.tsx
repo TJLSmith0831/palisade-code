@@ -796,6 +796,17 @@ export const ChatSurface = memo(
         active?.classList.contains("cm-content");
       if (!typing) composerInputRef.current?.focus();
     }, [thread?.id, pendingMode]);
+    // ⌘L from anywhere: the command can't reach this ref, so it asks.
+    useEffect(() => {
+      const onChatCommand = (event: Event) => {
+        if ((event as CustomEvent).detail !== "focus") return;
+        // After a collapsed panel re-mounts the textarea.
+        requestAnimationFrame(() => composerInputRef.current?.focus());
+      };
+      window.addEventListener("palisade-chat-command", onChatCommand);
+      return () =>
+        window.removeEventListener("palisade-chat-command", onChatCommand);
+    }, []);
     // Refocus whichever box is now on screen — picking a command, or
     // Backspacing a chip away, swaps in a different <textarea> element and
     // would otherwise drop focus out of the composer entirely.
