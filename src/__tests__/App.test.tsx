@@ -930,6 +930,19 @@ describe("New thread always starts a new thread", () => {
     expect(await screen.findByTestId("mode-picker")).toBeDefined();
   });
 
+  it("switching the composer to Spec before anything was sent opens the framing menu", async () => {
+    withThreads();
+    render(<App />);
+    await openProject();
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    expect(await screen.findByTestId("composer-input")).toBeDefined();
+
+    // No thread exists yet, so the toggle used to do nothing at all.
+    const selector = await screen.findByTestId("mode-selector");
+    fireEvent.click(within(selector).getByRole("radio", { name: /Spec/ }));
+    expect(await screen.findByTestId("spec-type-picker")).toBeDefined();
+  });
+
   it("picking Go on a new thread does not reopen the thread you were reading", async () => {
     // The picker used to render *over* the selected thread without
     // deselecting it, so Go fell straight through to that thread's history —

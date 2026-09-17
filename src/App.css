@@ -1281,7 +1281,7 @@ input[type="checkbox"] {
   gap: 2px;
   padding: 2px 4px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+  flex-wrap: wrap;
   flex-shrink: 0;
 }
 
@@ -6042,6 +6042,125 @@ button.ds-onboarding-status {
 
 .ds-sessions-empty p {
   margin: 0;
+}
+
+/* Spec change: one row is both the tab strip and the state of the change.
+   Dots say what exists; words stay honest — "ticked", "passed", never "done". */
+.ds-spec-phases {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.ds-spec-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ds-spec-phase:hover {
+  background: color-mix(in oklab, var(--fg), transparent 94%);
+}
+
+.ds-spec-phase[data-active] {
+  color: var(--fg);
+  background: var(--active-row);
+}
+
+.ds-spec-phase-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in oklab, var(--fg), transparent 55%);
+  background: color-mix(in oklab, var(--fg), transparent 55%);
+}
+
+.ds-spec-phase[data-state="missing"] .ds-spec-phase-dot,
+.ds-spec-phase[data-state="not-run"] .ds-spec-phase-dot {
+  background: transparent;
+  border-style: dashed;
+}
+
+.ds-spec-phase[data-state="loading"] .ds-spec-phase-dot {
+  opacity: 0.4;
+}
+
+.ds-spec-phase[data-state="reported"] .ds-spec-phase-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  opacity: 0.7;
+}
+
+.ds-spec-phase[data-state="passed"] .ds-spec-phase-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ds-spec-phase[data-state="failed"] .ds-spec-phase-dot {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.ds-spec-phase-detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ds-spec-tasks-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ds-spec-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-spec-task {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 5px 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.ds-spec-task svg {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.ds-spec-task code {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--fg), transparent 92%);
+}
+
+.ds-spec-task[data-checked] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ds-spec-task[data-checked] svg {
+  color: var(--accent);
 }
 
 .ds-chain-empty {

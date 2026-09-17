@@ -134,13 +134,34 @@ describe("SpecChangeTab", () => {
   it("renders inner tabs for Proposal, Design, Spec, Tasks, and Verify", () => {
     renderTab();
     const tabs = screen.getAllByTestId("spec-inner-tab");
-    expect(tabs.map((t) => t.textContent)).toEqual([
+    expect(
+      tabs.map((t) => t.querySelector(".ds-spec-phase-label")?.textContent)
+    ).toEqual([
       "Proposal",
       "Design",
       "Spec",
       "Tasks",
       "Verify",
     ]);
+  });
+
+  it("reports each phase truthfully: written, ticked count, and verify result", async () => {
+    renderTab();
+    const state = (label: string) =>
+      screen
+        .getAllByTestId("spec-inner-tab")
+        .find((t) => t.querySelector(".ds-spec-phase-label")?.textContent === label)!;
+    await waitFor(() => {
+      expect(state("Proposal").dataset.state).toBe("written");
+      expect(state("Design").dataset.state).toBe("written");
+      expect(state("Tasks").dataset.state).toBe("reported");
+      expect(state("Verify").dataset.state).toBe("passed");
+    });
+    // Counts are the agent's checkboxes; the verify detail names the commit.
+    expect(state("Tasks").textContent).toContain("1/3 ticked");
+    expect(state("Verify").textContent).toContain("passed · abc1234");
+    // Nothing in the row may claim completion on a self-report.
+    expect(state("Tasks").textContent).not.toMatch(/done|complete/i);
   });
 
   it("shows the proposal markdown on the Proposal tab", async () => {

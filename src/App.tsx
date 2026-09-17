@@ -4968,7 +4968,17 @@ export default function App() {
 
   const onSpec = async () => {
     const { project, thread } = current.current;
-    if (!project || !thread) return;
+    if (!project) return;
+    // No thread yet: the user picked Go from the mode picker and changed
+    // their mind in the composer. Same destination as picking Spec there —
+    // the framing menu — instead of a toggle that silently does nothing.
+    if (!thread) {
+      if (pendingMode === "go") {
+        setPendingMode(null);
+        setSpecTypePicker(true);
+      }
+      return;
+    }
     // D9: show the framing menu when entering spec mode with no open change
     // and no stored spec_type. Reuse the stored spec_type if one exists (D11).
     // Skip the menu entirely if a change is already open.

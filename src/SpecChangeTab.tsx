@@ -7,10 +7,11 @@ import {
   Code,
   Group,
   Loader,
+  Progress,
   Stack,
-  Tabs,
   Text,
   Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   IconChevronDown,
@@ -57,6 +58,40 @@ const shortCommit = (head: string | null) =>
  * list. Tasks outside checkbox lines are ignored — the task list is the
  * checkboxes, not the prose around them. */
 type TaskItem = { checked: boolean; text: string };
+
+/** Task lines are Markdown; `code` spans are the one inline form agents
+ * actually use in them, and raw backticks read as noise. */
+function renderInlineCode(text: string) {
+  const parts = text.split(/(`[^`]+`)/g);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    part.startsWith("`") && part.endsWith("`") && part.length > 2 ? (
+      <code key={i}>{part.slice(1, -1)}</code>
+    ) : (
+      part
+    )
+  );
+}
+
+type PhaseState =
+  | "loading"
+  | "written"
+  | "missing"
+  | "reported"
+  | "passed"
+  | "failed"
+  | "not-run";
+type Phase = { value: string; label: string; state: PhaseState; detail?: string };
+
+const PHASE_TITLES: Record<PhaseState, string> = {
+  loading: "Loading",
+  written: "Written to disk",
+  missing: "Not written yet",
+  reported: "Task checkboxes ticked by the agent — a self-report, not verification",
+  passed: "The last verify command exited 0",
+  failed: "The last verify command failed",
+  "not-run": "No verify command has been run for this project",
+};
 function parseTasks(markdown: string): TaskItem[] {
   return markdown
     .split("\n")
@@ -196,37 +231,68 @@ export default function SpecChangeTab({
 
   const latestRuns = useMemo(() => [...runs].reverse(), [runs]);
 
+  // One row that is both the navigation and the status of the change: which
+  // artifacts exist, how many boxes the agent ticked, and whether a verify
+  // command has actually passed. States are worded as what they are — a
+  // ticked task is "reported", never "done"; only verify can say "passed".
+  const tickedCount = taskItems.filter((t) => t.checked).length;
+  const lastRun = latestRuns[0];
+  const artifactState = (a: ArtifactState): PhaseState =>
+    a.loading ? "loading" : a.content ? "written" : "missing";
+  const phases: Phase[] = [
+    { value: "proposal", label: "Proposal", state: artifactState(proposal) },
+    { value: "design", label: "Design", state: artifactState(design) },
+    {
+      value: "spec",
+      label: "Spec",
+      state: specLoading ? "loading" : deltas ? "written" : "missing",
+    },
+    {
+      value: "tasks",
+      label: "Tasks",
+      state: tasks.loading
+        ? "loading"
+        : taskItems.length
+          ? "reported"
+          : "missing",
+      detail: taskItems.length
+        ? `${tickedCount}/${taskItems.length} ticked`
+        : undefined,
+    },
+    {
+      value: "verify",
+      label: "Verify",
+      state: !lastRun ? "not-run" : lastRun.exitCode === 0 ? "passed" : "failed",
+      detail: lastRun
+        ? `${lastRun.exitCode === 0 ? "passed" : "failed"} · ${shortCommit(lastRun.gitHead)}`
+        : "not run",
+    },
+  ];
+
   return (
     <Stack gap={0} h="100%" style={{ overflow: "hidden" }}>
-      <Tabs
-        value={activeTab}
-        onChange={setActiveTab}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <Tabs.List style={{ flexWrap: "nowrap", overflowX: "auto" }}>
-          <Tabs.Tab value="proposal" data-testid="spec-inner-tab">
-            Proposal
-          </Tabs.Tab>
-          <Tabs.Tab value="design" data-testid="spec-inner-tab">
-            Design
-          </Tabs.Tab>
-          <Tabs.Tab value="spec" data-testid="spec-inner-tab">
-            Spec
-          </Tabs.Tab>
-          <Tabs.Tab value="tasks" data-testid="spec-inner-tab">
-            Tasks
-          </Tabs.Tab>
-          <Tabs.Tab value="verify" data-testid="spec-inner-tab">
-            Verify
-          </Tabs.Tab>
-        </Tabs.List>
-
-        <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }} p="sm">
+      <div className="ds-spec-phases" role="tablist" aria-label="Change artifacts">
+        {phases.map((phase) => (
+          <UnstyledButton
+            key={phase.value}
+            role="tab"
+            aria-selected={activeTab === phase.value}
+            title={PHASE_TITLES[phase.state]}
+            className="ds-spec-phase"
+            data-testid="spec-inner-tab"
+            data-state={phase.state}
+            data-active={activeTab === phase.value || undefined}
+            onClick={() => setActiveTab(phase.value)}
+          >
+            <span className="ds-spec-phase-dot" aria-hidden="true" />
+            <span className="ds-spec-phase-label">{phase.label}</span>
+            {phase.detail && (
+              <span className="ds-spec-phase-detail">{phase.detail}</span>
+            )}
+          </UnstyledButton>
+        ))}
+      </div>
+      <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }} p="sm">
           {/* ---------- Proposal ---------- */}
           {activeTab === "proposal" && <ArtifactView state={proposal} />}
 
@@ -280,24 +346,34 @@ export default function SpecChangeTab({
                   No tasks found in tasks.md.
                 </Text>
               )}
-              {taskItems.map((task, i) => (
-                <Group key={i} gap="xs" wrap="nowrap">
-                  <Text
-                    size="sm"
-                    c={task.checked ? "dimmed" : undefined}
-                    style={{
-                      textDecoration: task.checked ? "line-through" : undefined,
-                    }}
+              {taskItems.length > 0 && (
+                <div className="ds-spec-tasks-summary" data-testid="spec-tasks-summary">
+                  <Progress
+                    size="xs"
+                    color="neutral"
+                    value={(tickedCount / taskItems.length) * 100}
+                  />
+                  <Text size="xs" c="dimmed">
+                    {tickedCount} of {taskItems.length} ticked · agent-reported
+                  </Text>
+                </div>
+              )}
+              <ul className="ds-spec-tasks">
+                {taskItems.map((task, i) => (
+                  <li
+                    key={i}
+                    className="ds-spec-task"
+                    data-checked={task.checked || undefined}
                   >
                     {task.checked ? (
-                      <IconSquareCheck size={13} />
+                      <IconSquareCheck size={14} aria-label="ticked" />
                     ) : (
-                      <IconSquare size={13} />
-                    )}{" "}
-                    {task.text}
-                  </Text>
-                </Group>
-              ))}
+                      <IconSquare size={14} aria-label="unticked" />
+                    )}
+                    <span>{renderInlineCode(task.text)}</span>
+                  </li>
+                ))}
+              </ul>
               {/* Also show the raw markdown below the parsed list, for the
                   prose between checkboxes that gives tasks their context. */}
               {!tasks.loading && tasks.content && (
@@ -413,8 +489,7 @@ export default function SpecChangeTab({
               ))}
             </Stack>
           )}
-        </Box>
-      </Tabs>
+      </Box>
     </Stack>
   );
 }
