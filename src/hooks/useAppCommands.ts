@@ -398,6 +398,15 @@ export function useAppCommands({
         run: () => shell.selectPanel(shell.activePanel ?? "explorer"),
       },
       {
+        id: "view.explorer",
+        group: "View",
+        label: "Toggle explorer",
+        chord: "Mod+Shift+E",
+        keywords: "files tree project",
+        enabled: !!project,
+        run: () => shell.selectPanel("explorer"),
+      },
+      {
         id: "view.terminal",
         group: "View",
         label: "Toggle terminal",

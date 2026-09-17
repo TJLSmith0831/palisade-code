@@ -141,6 +141,7 @@ import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
 import LiveFileChips from "./LiveFileChips";
 import MergeGate from "./MergeGate";
+import EditorEmptyState from "./EditorEmptyState";
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
@@ -3501,6 +3502,16 @@ export default function App() {
         if (!shell.shellChosenRef.current)
           shell.setCenterShell(saved.centerShell);
         shell.setDiffOpen(saved.diffOpen);
+        // Restore the open panel; a project never seen in Editor mode starts
+        // with the explorer, since code-first with no files in sight is a
+        // dead end. Vibe keeps its rail-only default.
+        shell.openPanel(
+          saved.activePanel !== undefined
+            ? saved.activePanel
+            : saved.centerShell === "editor"
+              ? "explorer"
+              : null
+        );
 
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
@@ -4708,6 +4719,7 @@ export default function App() {
       activePath: tabs.activePath,
       centerShell: shell.centerShell,
       diffOpen: shell.diffOpen,
+      activePanel: shell.activePanel,
     };
     sessionRef.current = next;
     saveSessionDebounced(hash);
@@ -4717,6 +4729,7 @@ export default function App() {
     tabs.activePath,
     shell.centerShell,
     shell.diffOpen,
+    shell.activePanel,
   ]);
 
   const rememberCursor = useCallback((path: string, offset: number) => {
@@ -5450,6 +5463,13 @@ export default function App() {
     col: number;
   } | null>(null);
   const [lspStatus, setLspStatus] = useState<api.LspStatus | null>(null);
+  // The editor pane reports these while mounted; with no file it is not
+  // mounted at all, so the status bar has to be cleared from here.
+  useEffect(() => {
+    if (selectedFile) return;
+    setLspStatus(null);
+    setCursorPosition(null);
+  }, [selectedFile]);
   // The count belongs on the tab: a diagnostic nobody opens the tab to see
   // may as well not have been reported.
   const [problemCount, setProblemCount] = useState(0);
@@ -5811,6 +5831,8 @@ export default function App() {
         </Suspense>
       );
     }
+    // Nothing open: teach the ways in rather than describe the absence.
+    if (!selectedFile) return <EditorEmptyState commands={commands} />;
     return (
       <FileEditorPane
         projectHash={project.hash}
@@ -6094,7 +6116,12 @@ export default function App() {
               <Tooltip label="Editor — code first, chat alongside it">
                 <button
                   className={shell.centerShell === "editor" ? "active" : ""}
-                  onClick={() => shell.setCenterShell("editor")}
+                  onClick={() => {
+                    shell.setCenterShell("editor");
+                    // Code-first with nothing open needs somewhere to start.
+                    if (shell.activePanel === null && !tabs.activePath)
+                      shell.openPanel("explorer");
+                  }}
                   aria-label="Editor layout: code first, chat alongside it"
                   data-testid="shell-editor"
                 >

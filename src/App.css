@@ -2570,6 +2570,43 @@ details.graph-report-wrap > summary {
    nothing". The modifiers below keep them apart — `.is-loading` also carries
    role="status" and a spinner at its call sites, and `.is-blocked` is a
    condition to fix rather than an absence. */
+/* Empty editor: the ways into a file, not a sentence about their absence.
+   Muted like `.empty`, but each row is a real button with its chord. */
+.editor-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  min-height: 0;
+}
+
+.editor-empty-list {
+  width: min(320px, 100%);
+}
+
+.editor-empty-row {
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.editor-empty-row:hover {
+  background: color-mix(in oklab, var(--fg), transparent 94%);
+}
+
+.editor-empty-row:hover .mantine-Text-root {
+  color: var(--fg);
+}
+
+.editor-empty-kbd {
+  font-family: var(--mono);
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+  border-bottom-width: 1px;
+}
+
 .empty {
   margin: auto;
   max-width: 46ch;
@@ -4990,8 +5027,11 @@ button.ds-onboarding-status {
    before it ever agreed to truncate. They grow back into whatever space the
    action pair leaves, capped at the text they actually have. */
 .ds-composer-controls > .ds-composer-picker {
-  flex: 1 1 56px;
-  min-width: 56px;
+  /* Basis is the name's own width: a chip that read "Cla…" told the user
+     nothing, so the row wraps (Spec/Go and send drop a line) before an agent
+     or model name gives up more than its tail. */
+  flex: 0 1 auto;
+  min-width: 96px;
   max-width: max-content;
 }
 

@@ -10,6 +10,8 @@ import {
   keymap,
   lineNumbers,
   highlightActiveLine,
+  highlightActiveLineGutter,
+  dropCursor,
   drawSelection,
   rectangularSelection,
   crosshairCursor,
@@ -32,6 +34,7 @@ import {
   syntaxHighlighting,
   HighlightStyle,
   bracketMatching,
+  indentOnInput,
   foldGutter,
   codeFolding,
   foldKeymap,
@@ -444,6 +447,7 @@ export default function FileEditorPane({
   // The LSP plugin arrives after a round-trip to the backend, so it goes in
   // its own compartment rather than blocking the file from opening.
   const lspCompartment = useRef(new Compartment());
+  const focusedPathRef = useRef<string | null>(null);
   // Refs so the update/save listeners (bound once per file load) always see
   // the latest callback/path without re-mounting the EditorView per render.
   const onSaveRef = useRef(onSave);
@@ -584,10 +588,16 @@ export default function FileEditorPane({
     (forPath: string) => [
       lineNumbers(),
       highlightActiveLine(),
+      highlightActiveLineGutter(),
       highlightSpecialChars(),
       history(),
       closeBrackets(),
       bracketMatching(),
+      // Re-indent as you type a closing bracket or `else`, and show where a
+      // dragged selection will land — both things a hand expects from an
+      // editor and notices only when missing.
+      indentOnInput(),
+      dropCursor(),
       codeFolding(),
       foldGutter(),
       // Multi-cursor: drawSelection renders the extra carets, and
@@ -758,6 +768,17 @@ export default function FileEditorPane({
     );
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
+    // Focus follows the file the user just opened, so typing works at once.
+    // Not on a rebuild of the same path (an external reload), which would
+    // steal focus from whatever they were typing into.
+    if (focusedPathRef.current !== path) {
+      focusedPathRef.current = path;
+      const active = document.activeElement;
+      const typing =
+        active instanceof HTMLTextAreaElement ||
+        active instanceof HTMLInputElement;
+      if (!typing) view.focus();
+    }
     // Report where the cursor already is: the update listener only fires on
     // a change, so without this the status bar stays blank until you type.
     {
