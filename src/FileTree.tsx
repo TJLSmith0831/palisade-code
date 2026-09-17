@@ -106,6 +106,14 @@ export default function FileTree({
   // effect on every expand/collapse — which sets roots, re-renders, and loops.
   const treeRef = useRef(tree);
   treeRef.current = tree;
+  // Mantine's `expand` spreads the expanded state its closure saw, so two
+  // calls in one tick keep only the last. Expanding several directories at
+  // once has to go through one write.
+  const expandDirs = useCallback((dirs: string[]) => {
+    const next = { ...treeRef.current.expandedState };
+    for (const dir of dirs) next[dir] = true;
+    treeRef.current.setExpandedState(next);
+  }, []);
 
   // Restored once per project, not on every refresh — a token bump means
   // the tree collapsed for an unrelated reason and re-expanding then would
@@ -138,7 +146,7 @@ export default function FileTree({
         for (const entry of loaded) if (entry) next.set(entry[0], entry[1]);
         return next;
       });
-      for (const entry of loaded) if (entry) treeRef.current.expand(entry[0]);
+      expandDirs(loaded.flatMap((entry) => (entry ? [entry[0]] : [])));
     }, (err) => setError(describeError(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectHash, refreshToken, includeHidden]);
@@ -171,24 +179,31 @@ export default function FileTree({
     for (let dir = dirOf(activePath); dir; dir = dirOf(dir)) ancestors.unshift(dir);
     let cancelled = false;
     void (async () => {
+      const loaded: [string, Entry[]][] = [];
       for (const dir of ancestors) {
-        if (!childrenRef.current.has(dir)) {
-          try {
-            const entries = await api.listDirectory(projectHash, dir, includeHidden);
-            if (cancelled) return;
-            setChildren((prev) => new Map(prev).set(dir, entries));
-          } catch {
-            return; // a vanished directory: leave the tree as it is
-          }
+        if (childrenRef.current.has(dir)) continue;
+        try {
+          const entries = await api.listDirectory(projectHash, dir, includeHidden);
+          if (cancelled) return;
+          loaded.push([dir, entries]);
+        } catch {
+          return; // a vanished directory: leave the tree as it is
         }
-        treeRef.current.expand(dir);
       }
+      if (loaded.length) {
+        setChildren((prev) => {
+          const next = new Map(prev);
+          for (const [dir, entries] of loaded) next.set(dir, entries);
+          return next;
+        });
+      }
+      expandDirs(ancestors);
       pendingReveal.current = activePath;
     })();
     return () => {
       cancelled = true;
     };
-  }, [activePath, projectHash, refreshToken, includeHidden]);
+  }, [activePath, projectHash, refreshToken, includeHidden, expandDirs]);
   // The row exists only once the expanded directories have rendered, which
   // is some render after the fetch — so look for it after every render while
   // a reveal is pending, and stop as soon as it has been scrolled to.
