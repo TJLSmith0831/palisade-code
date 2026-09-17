@@ -65,6 +65,7 @@ import {
   IconShieldOff,
   IconSunMoon,
   IconTerminal2,
+  IconPencil,
   IconPlus,
   IconWand,
   IconX,
@@ -142,6 +143,14 @@ import DiffPane from "./DiffPane";
 import LiveFileChips from "./LiveFileChips";
 import MergeGate from "./MergeGate";
 import EditorEmptyState from "./EditorEmptyState";
+/** Offered on an empty thread. Ordinary asks a developer has on day one
+ * with an unfamiliar codebase, phrased so they work in either mode. */
+const STARTER_PROMPTS = [
+  "Explain how this project is structured",
+  "Find and fix the failing tests",
+  "Review my uncommitted changes",
+];
+
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
@@ -776,6 +785,17 @@ export const ChatSurface = memo(
       return text === trigger.trimEnd() ? "" : text.slice(trigger.length);
     }, [chipCommand, draft]);
     const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+    // A thread that just came on screen — new, switched to, or an empty Go
+    // composer after the mode picker — should take typing at once. Never
+    // from the code editor or another field someone is already typing in.
+    useEffect(() => {
+      const active = document.activeElement;
+      const typing =
+        active instanceof HTMLTextAreaElement ||
+        active instanceof HTMLInputElement ||
+        active?.classList.contains("cm-content");
+      if (!typing) composerInputRef.current?.focus();
+    }, [thread?.id, pendingMode]);
     // Refocus whichever box is now on screen — picking a command, or
     // Backspacing a chip away, swaps in a different <textarea> element and
     // would otherwise drop focus out of the composer entirely.
@@ -1266,12 +1286,18 @@ export const ChatSurface = memo(
             {thread?.title ?? "New thread"}
           </strong>
           {thread && (
-            <button
-              onClick={() => onRenameThread(thread)}
-              data-testid="rename-thread"
-            >
-              Rename
-            </button>
+            <Tooltip label="Rename thread" openDelay={400}>
+              <ActionIcon
+                variant="subtle"
+                color="neutral"
+                size="sm"
+                aria-label="Rename thread"
+                onClick={() => onRenameThread(thread)}
+                data-testid="rename-thread"
+              >
+                <IconPencil size={13} />
+              </ActionIcon>
+            </Tooltip>
           )}
           {thread?.openSpecChangeName && (
             <Badge
@@ -1346,12 +1372,28 @@ export const ChatSurface = memo(
           <>
             {items.length === 0 && (
               <div className="ds-thread-empty" data-testid="thread-empty">
-                <strong>Nothing said yet</strong>
+                <strong>What are we building?</strong>
                 <p>
-                  Describe what you want built. <b>Spec</b> works the problem
-                  out with you first and writes it down; <b>Go</b> builds
-                  against a spec that already exists.
+                  Describe the change you want. <b>Go</b> edits code right
+                  away; <b>Spec</b> writes the plan with you first.
                 </p>
+                {/* Starters: a blank box is the hardest prompt to answer.
+                    Each drops into the composer for editing, never sends. */}
+                <div className="ds-thread-starters">
+                  {STARTER_PROMPTS.map((prompt) => (
+                    <UnstyledButton
+                      key={prompt}
+                      className="ds-thread-starter"
+                      data-testid="thread-starter"
+                      onClick={() => {
+                        setDraft(prompt);
+                        composerInputRef.current?.focus();
+                      }}
+                    >
+                      {prompt}
+                    </UnstyledButton>
+                  ))}
+                </div>
                 <p>
                   Type <code>/</code> for commands, or <code>@</code> to point
                   at a file in this project.

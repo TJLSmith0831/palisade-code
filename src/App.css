@@ -6012,6 +6012,38 @@ button.ds-onboarding-status {
   color: var(--fg);
 }
 
+.ds-thread-starters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+
+.ds-thread-starter {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: left;
+}
+
+.ds-thread-starter:hover {
+  background: color-mix(in oklab, var(--fg), transparent 94%);
+  border-color: color-mix(in oklab, var(--fg), transparent 80%);
+}
+
+.ds-sessions-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.ds-sessions-empty p {
+  margin: 0;
+}
+
 .ds-chain-empty {
   position: absolute;
   inset: 0;

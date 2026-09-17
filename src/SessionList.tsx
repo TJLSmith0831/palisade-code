@@ -182,7 +182,16 @@ export default function SessionList({
       />
 
       <div className="ds-sessions-list">
-        {visible.length === 0 && <p className="empty">No threads.</p>}
+        {visible.length === 0 && (
+          <div className="empty ds-sessions-empty" data-testid="session-list-empty">
+            <p>{query ? "No threads match." : "No threads yet."}</p>
+            {!query && (
+              <Button variant="subtle" size="compact-sm" onClick={onNewThread}>
+                Start one
+              </Button>
+            )}
+          </div>
+        )}
         {groups.map((group) => (
           <div key={group.hash}>
             <h2 className="ds-section-heading">{group.name}</h2>
