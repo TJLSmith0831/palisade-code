@@ -183,18 +183,24 @@ export default function FileTree({
         }
         treeRef.current.expand(dir);
       }
-      // After the expanded rows render.
-      requestAnimationFrame(() => {
-        if (cancelled) return;
-        bodyRef.current
-          ?.querySelector(`[data-path="${CSS.escape(activePath)}"]`)
-          ?.scrollIntoView({ block: "nearest" });
-      });
+      pendingReveal.current = activePath;
     })();
     return () => {
       cancelled = true;
     };
   }, [activePath, projectHash, refreshToken, includeHidden]);
+  // The row exists only once the expanded directories have rendered, which
+  // is some render after the fetch — so look for it after every render while
+  // a reveal is pending, and stop as soon as it has been scrolled to.
+  const pendingReveal = useRef<string | null>(null);
+  useEffect(() => {
+    const path = pendingReveal.current;
+    if (!path) return;
+    const row = bodyRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    pendingReveal.current = null;
+  });
 
   // A single directory's contents changed (create/rename/delete/move) —
   // re-fetch just that one instead of collapsing the whole tree.
