@@ -1078,7 +1078,17 @@ export const ChatSurface = memo(
       onPick: (specType: string, description: string) => void,
       onBack?: () => void
     ) => (
-          <div className="ds-new-thread-picker" data-testid="spec-type-picker">
+          <div
+            className="ds-new-thread-picker"
+            data-testid="spec-type-picker"
+            onKeyDown={(event) => {
+              // Esc backs out, the same as the button at the bottom.
+              if (event.key === "Escape" && onBack) {
+                event.preventDefault();
+                onBack();
+              }
+            }}
+          >
             <p className="ds-mode-picker-prompt">
               What would you like to spec out today?
             </p>
@@ -1088,20 +1098,13 @@ export const ChatSurface = memo(
                 used to fire an agent turn on its own, which meant the
                 interview opened by asking for a request the user had already
                 been asked for. */}
-            <p
-              className="hint"
-              style={{ marginBottom: 12, fontSize: 11 }}
-              data-testid="spec-type-note"
-            >
+            <p className="hint ds-spec-note" data-testid="spec-type-note">
               Pick how to frame it, say what you want, and the agent opens the
               interview from there.
             </p>
             {framingPickerRow}
             {!providerSelected && (
-              <p
-                className="hint"
-                style={{ marginBottom: 12, fontSize: 12, color: "var(--warn)" }}
-              >
+              <p className="hint ds-spec-note is-warn">
                 Select a provider to continue.
               </p>
             )}
@@ -1124,16 +1127,7 @@ export const ChatSurface = memo(
               ))}
             </div>
             {activeFraming && (
-              <div
-                ref={specRequestRef}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  width: "100%",
-                  marginTop: 12,
-                }}
-              >
+              <div ref={specRequestRef} className="ds-spec-request">
                 <Textarea
                   value={otherSpecText}
                   onChange={(event) =>
@@ -1169,10 +1163,9 @@ export const ChatSurface = memo(
               </div>
             )}
             <button
-              className="ds-icon-btn"
+              className="ds-icon-btn ds-spec-back"
               data-testid="spec-type-back"
               onClick={onBack}
-              style={{ marginTop: 8, fontSize: 12 }}
             >
               ← Back
             </button>

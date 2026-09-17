@@ -6163,6 +6163,29 @@ button.ds-onboarding-status {
   color: var(--accent);
 }
 
+.ds-spec-note {
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+
+.ds-spec-note.is-warn {
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.ds-spec-request {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.ds-spec-back {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
 .ds-chain-empty {
   position: absolute;
   inset: 0;
