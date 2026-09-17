@@ -7,6 +7,8 @@
  * the project-switch path.
  */
 
+import { PANEL_IDS, type PanelId } from "./hooks/useAppShell";
+
 export const sessionKey = (projectHash: string) => `palisade:session:${projectHash}`;
 
 export type EditorSession = {
@@ -19,6 +21,9 @@ export type EditorSession = {
   centerShell: "vibe" | "editor";
   diffOpen: boolean;
   includeHidden: boolean;
+  /** Which left-rail panel was open (`null` = rail only). Absent in sessions
+   * written before this field existed, so the caller can pick a default. */
+  activePanel?: PanelId | null;
 };
 
 const EMPTY: EditorSession = {
@@ -70,6 +75,10 @@ function coerce(raw: unknown): EditorSession {
     // Only an explicit `false` hides them; a session written before this
     // field existed keeps the visible default rather than inheriting "off".
     includeHidden: value.includeHidden !== false,
+    ...(value.activePanel === null ||
+    (PANEL_IDS as readonly string[]).includes(value.activePanel as string)
+      ? { activePanel: value.activePanel as PanelId | null }
+      : {}),
   };
 }
 

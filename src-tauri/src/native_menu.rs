@@ -140,7 +140,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<NativeMenu<R>> {
     let app_menu = Submenu::with_items(app, TOP_LEVEL_MENUS[0], true, &[&about, &updates, &sep()?, &settings, &sep()?, &services, &sep()?, &hide, &hide_others, &show_all, &sep()?, &quit])?;
 
     let new_file = native.normal(app, "file.new", "New File…", Some("CmdOrCtrl+N"))?;
-    let new_thread = native.normal(app, "thread.new", "New Thread…", None)?;
+    let new_thread = native.normal(app, "thread.new", "New Thread…", Some("CmdOrCtrl+Shift+N"))?;
     let open_project = native.normal(app, "project.open", "Open Project…", Some("CmdOrCtrl+O"))?;
     let clear_recent = native.normal(app, "project.recent.clear", "Clear Menu", None)?;
     let recent_separator = sep()?;

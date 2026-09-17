@@ -190,14 +190,18 @@ export default function SpecPane({
           ) : (
             <>
               {valid === true && (
-                <Badge size="xs" color="success" variant="light">
-                  validates
-                </Badge>
+                <Tooltip label="openspec validate passed for every change" openDelay={300}>
+                  <Badge size="xs" color="success" variant="light" tt="none">
+                    valid
+                  </Badge>
+                </Tooltip>
               )}
               {valid === false && (
-                <Badge size="xs" color="warn" variant="light">
-                  validation failed
-                </Badge>
+                <Tooltip label="openspec validate reported errors in at least one change" openDelay={300}>
+                  <Badge size="xs" color="warn" variant="light" tt="none">
+                    invalid
+                  </Badge>
+                </Tooltip>
               )}
               {valid === null && !loading && (
                 <Tooltip label="`openspec` is not on PATH, so validity is unknown — not invalid.">
@@ -230,7 +234,8 @@ export default function SpecPane({
 
       {changes !== null && sorted.length === 0 && !error && (
         <Text size="xs" c="dimmed">
-          No changes in this project.
+          No changes yet. Start a thread in <b>Spec</b> mode and the change the
+          agent proposes will appear here.
         </Text>
       )}
 
@@ -263,19 +268,6 @@ export default function SpecPane({
               {change.name}
             </Text>
             <Group gap="xs" wrap="nowrap">
-              {change.status && (
-                // Rendered as openspec's own word, attributed. `complete` here
-                // means every task checkbox is ticked — an agent's self-report
-                // about its own work, not evidence that anything runs.
-                <Tooltip
-                  label={`openspec reports this change as "${change.status}", derived from task checkboxes. Only a verify command's exit code shows whether the work runs.`}
-                  multiline
-                >
-                  <Badge size="xs" variant="light">
-                    openspec: {change.status}
-                  </Badge>
-                </Tooltip>
-              )}
               {archiving.has(change.name) ? (
                 <Loader
                   color="neutral"
@@ -309,12 +301,28 @@ export default function SpecPane({
               <div>
                 <Progress
                   size="xs"
+                  color="neutral"
                   value={(change.completedTasks / change.totalTasks) * 100}
                 />
-                <Text size="10px" c="dimmed">
-                  {change.completedTasks}/{change.totalTasks} tasks ticked
-                  (agent-reported)
-                </Text>
+                <Stack gap={2} mt={2} align="flex-start">
+                  {change.status && (
+                    // openspec's own word, attributed. `complete` here means
+                    // every task checkbox is ticked — an agent's self-report,
+                    // not evidence that anything runs. Kept off the name row
+                    // so neither the name nor the word gets truncated.
+                    <Tooltip
+                      label={`openspec reports this change as "${change.status}", derived from task checkboxes. Only a verify command's exit code shows whether the work runs.`}
+                      multiline
+                    >
+                      <Badge size="xs" variant="light" color="neutral" tt="none">
+                        openspec: {change.status}
+                      </Badge>
+                    </Tooltip>
+                  )}
+                  <Text size="10px" c="dimmed">
+                    {change.completedTasks}/{change.totalTasks} tasks ticked (agent-reported)
+                  </Text>
+                </Stack>
               </div>
             </Tooltip>
           )}

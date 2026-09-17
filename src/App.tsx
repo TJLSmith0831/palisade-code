@@ -65,6 +65,7 @@ import {
   IconShieldOff,
   IconSunMoon,
   IconTerminal2,
+  IconPencil,
   IconPlus,
   IconWand,
   IconX,
@@ -141,6 +142,15 @@ import { useFileTreeCache } from "./FileTreeCache";
 import DiffPane from "./DiffPane";
 import LiveFileChips from "./LiveFileChips";
 import MergeGate from "./MergeGate";
+import EditorEmptyState from "./EditorEmptyState";
+/** Offered on an empty thread. Ordinary asks a developer has on day one
+ * with an unfamiliar codebase, phrased so they work in either mode. */
+const STARTER_PROMPTS = [
+  "Explain how this project is structured",
+  "Find and fix the failing tests",
+  "Review my uncommitted changes",
+];
+
 const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
@@ -775,6 +785,28 @@ export const ChatSurface = memo(
       return text === trigger.trimEnd() ? "" : text.slice(trigger.length);
     }, [chipCommand, draft]);
     const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+    // A thread that just came on screen — new, switched to, or an empty Go
+    // composer after the mode picker — should take typing at once. Never
+    // from the code editor or another field someone is already typing in.
+    useEffect(() => {
+      const active = document.activeElement;
+      const typing =
+        active instanceof HTMLTextAreaElement ||
+        active instanceof HTMLInputElement ||
+        active?.classList.contains("cm-content");
+      if (!typing) composerInputRef.current?.focus();
+    }, [thread?.id, pendingMode]);
+    // ⌘L from anywhere: the command can't reach this ref, so it asks.
+    useEffect(() => {
+      const onChatCommand = (event: Event) => {
+        if ((event as CustomEvent).detail !== "focus") return;
+        // After a collapsed panel re-mounts the textarea.
+        requestAnimationFrame(() => composerInputRef.current?.focus());
+      };
+      window.addEventListener("palisade-chat-command", onChatCommand);
+      return () =>
+        window.removeEventListener("palisade-chat-command", onChatCommand);
+    }, []);
     // Refocus whichever box is now on screen — picking a command, or
     // Backspacing a chip away, swaps in a different <textarea> element and
     // would otherwise drop focus out of the composer entirely.
@@ -1057,7 +1089,17 @@ export const ChatSurface = memo(
       onPick: (specType: string, description: string) => void,
       onBack?: () => void
     ) => (
-          <div className="ds-new-thread-picker" data-testid="spec-type-picker">
+          <div
+            className="ds-new-thread-picker"
+            data-testid="spec-type-picker"
+            onKeyDown={(event) => {
+              // Esc backs out, the same as the button at the bottom.
+              if (event.key === "Escape" && onBack) {
+                event.preventDefault();
+                onBack();
+              }
+            }}
+          >
             <p className="ds-mode-picker-prompt">
               What would you like to spec out today?
             </p>
@@ -1067,20 +1109,13 @@ export const ChatSurface = memo(
                 used to fire an agent turn on its own, which meant the
                 interview opened by asking for a request the user had already
                 been asked for. */}
-            <p
-              className="hint"
-              style={{ marginBottom: 12, fontSize: 11 }}
-              data-testid="spec-type-note"
-            >
+            <p className="hint ds-spec-note" data-testid="spec-type-note">
               Pick how to frame it, say what you want, and the agent opens the
               interview from there.
             </p>
             {framingPickerRow}
             {!providerSelected && (
-              <p
-                className="hint"
-                style={{ marginBottom: 12, fontSize: 12, color: "var(--warn)" }}
-              >
+              <p className="hint ds-spec-note is-warn">
                 Select a provider to continue.
               </p>
             )}
@@ -1103,16 +1138,7 @@ export const ChatSurface = memo(
               ))}
             </div>
             {activeFraming && (
-              <div
-                ref={specRequestRef}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  width: "100%",
-                  marginTop: 12,
-                }}
-              >
+              <div ref={specRequestRef} className="ds-spec-request">
                 <Textarea
                   value={otherSpecText}
                   onChange={(event) =>
@@ -1148,10 +1174,9 @@ export const ChatSurface = memo(
               </div>
             )}
             <button
-              className="ds-icon-btn"
+              className="ds-icon-btn ds-spec-back"
               data-testid="spec-type-back"
               onClick={onBack}
-              style={{ marginTop: 8, fontSize: 12 }}
             >
               ← Back
             </button>
@@ -1265,12 +1290,18 @@ export const ChatSurface = memo(
             {thread?.title ?? "New thread"}
           </strong>
           {thread && (
-            <button
-              onClick={() => onRenameThread(thread)}
-              data-testid="rename-thread"
-            >
-              Rename
-            </button>
+            <Tooltip label="Rename thread" openDelay={400}>
+              <ActionIcon
+                variant="subtle"
+                color="neutral"
+                size="sm"
+                aria-label="Rename thread"
+                onClick={() => onRenameThread(thread)}
+                data-testid="rename-thread"
+              >
+                <IconPencil size={13} />
+              </ActionIcon>
+            </Tooltip>
           )}
           {thread?.openSpecChangeName && (
             <Badge
@@ -1345,12 +1376,28 @@ export const ChatSurface = memo(
           <>
             {items.length === 0 && (
               <div className="ds-thread-empty" data-testid="thread-empty">
-                <strong>Nothing said yet</strong>
+                <strong>What are we building?</strong>
                 <p>
-                  Describe what you want built. <b>Spec</b> works the problem
-                  out with you first and writes it down; <b>Go</b> builds
-                  against a spec that already exists.
+                  Describe the change you want. <b>Go</b> edits code right
+                  away; <b>Spec</b> writes the plan with you first.
                 </p>
+                {/* Starters: a blank box is the hardest prompt to answer.
+                    Each drops into the composer for editing, never sends. */}
+                <div className="ds-thread-starters">
+                  {STARTER_PROMPTS.map((prompt) => (
+                    <UnstyledButton
+                      key={prompt}
+                      className="ds-thread-starter"
+                      data-testid="thread-starter"
+                      onClick={() => {
+                        setDraft(prompt);
+                        composerInputRef.current?.focus();
+                      }}
+                    >
+                      {prompt}
+                    </UnstyledButton>
+                  ))}
+                </div>
                 <p>
                   Type <code>/</code> for commands, or <code>@</code> to point
                   at a file in this project.
@@ -3501,6 +3548,16 @@ export default function App() {
         if (!shell.shellChosenRef.current)
           shell.setCenterShell(saved.centerShell);
         shell.setDiffOpen(saved.diffOpen);
+        // Restore the open panel; a project never seen in Editor mode starts
+        // with the explorer, since code-first with no files in sight is a
+        // dead end. Vibe keeps its rail-only default.
+        shell.openPanel(
+          saved.activePanel !== undefined
+            ? saved.activePanel
+            : saved.centerShell === "editor"
+              ? "explorer"
+              : null
+        );
 
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
@@ -4708,6 +4765,7 @@ export default function App() {
       activePath: tabs.activePath,
       centerShell: shell.centerShell,
       diffOpen: shell.diffOpen,
+      activePanel: shell.activePanel,
     };
     sessionRef.current = next;
     saveSessionDebounced(hash);
@@ -4717,6 +4775,7 @@ export default function App() {
     tabs.activePath,
     shell.centerShell,
     shell.diffOpen,
+    shell.activePanel,
   ]);
 
   const rememberCursor = useCallback((path: string, offset: number) => {
@@ -4913,7 +4972,17 @@ export default function App() {
 
   const onSpec = async () => {
     const { project, thread } = current.current;
-    if (!project || !thread) return;
+    if (!project) return;
+    // No thread yet: the user picked Go from the mode picker and changed
+    // their mind in the composer. Same destination as picking Spec there —
+    // the framing menu — instead of a toggle that silently does nothing.
+    if (!thread) {
+      if (pendingMode === "go") {
+        setPendingMode(null);
+        setSpecTypePicker(true);
+      }
+      return;
+    }
     // D9: show the framing menu when entering spec mode with no open change
     // and no stored spec_type. Reuse the stored spec_type if one exists (D11).
     // Skip the menu entirely if a change is already open.
@@ -5450,6 +5519,13 @@ export default function App() {
     col: number;
   } | null>(null);
   const [lspStatus, setLspStatus] = useState<api.LspStatus | null>(null);
+  // The editor pane reports these while mounted; with no file it is not
+  // mounted at all, so the status bar has to be cleared from here.
+  useEffect(() => {
+    if (selectedFile) return;
+    setLspStatus(null);
+    setCursorPosition(null);
+  }, [selectedFile]);
   // The count belongs on the tab: a diagnostic nobody opens the tab to see
   // may as well not have been reported.
   const [problemCount, setProblemCount] = useState(0);
@@ -5811,6 +5887,8 @@ export default function App() {
         </Suspense>
       );
     }
+    // Nothing open: teach the ways in rather than describe the absence.
+    if (!selectedFile) return <EditorEmptyState commands={commands} />;
     return (
       <FileEditorPane
         projectHash={project.hash}
@@ -6094,7 +6172,12 @@ export default function App() {
               <Tooltip label="Editor — code first, chat alongside it">
                 <button
                   className={shell.centerShell === "editor" ? "active" : ""}
-                  onClick={() => shell.setCenterShell("editor")}
+                  onClick={() => {
+                    shell.setCenterShell("editor");
+                    // Code-first with nothing open needs somewhere to start.
+                    if (shell.activePanel === null && !tabs.activePath)
+                      shell.openPanel("explorer");
+                  }}
                   aria-label="Editor layout: code first, chat alongside it"
                   data-testid="shell-editor"
                 >

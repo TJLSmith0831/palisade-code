@@ -84,6 +84,9 @@ export default function FileTree({
 }: Props) {
   const [roots, setRoots] = useState<Entry[]>([]);
   const [children, setChildren] = useState<Map<string, Entry[]>>(new Map());
+  // Mirrors `children` for effects that must not re-run on every fetch.
+  const childrenRef = useRef(children);
+  childrenRef.current = children;
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -103,6 +106,14 @@ export default function FileTree({
   // effect on every expand/collapse — which sets roots, re-renders, and loops.
   const treeRef = useRef(tree);
   treeRef.current = tree;
+  // Mantine's `expand` spreads the expanded state its closure saw, so two
+  // calls in one tick keep only the last. Expanding several directories at
+  // once has to go through one write.
+  const expandDirs = useCallback((dirs: string[]) => {
+    const next = { ...treeRef.current.expandedState };
+    for (const dir of dirs) next[dir] = true;
+    treeRef.current.setExpandedState(next);
+  }, []);
 
   // Restored once per project, not on every refresh — a token bump means
   // the tree collapsed for an unrelated reason and re-expanding then would
@@ -112,6 +123,7 @@ export default function FileTree({
   useEffect(() => {
     setError(null);
     setChildren(new Map());
+    childrenRef.current = new Map();
     treeRef.current.collapseAllNodes();
     api.listDirectory(projectHash, "", includeHidden).then(async (entries) => {
       setRoots(entries);
@@ -134,7 +146,7 @@ export default function FileTree({
         for (const entry of loaded) if (entry) next.set(entry[0], entry[1]);
         return next;
       });
-      for (const entry of loaded) if (entry) treeRef.current.expand(entry[0]);
+      expandDirs(loaded.flatMap((entry) => (entry ? [entry[0]] : [])));
     }, (err) => setError(describeError(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectHash, refreshToken, includeHidden]);
@@ -154,6 +166,56 @@ export default function FileTree({
     editInputRef.current?.focus();
     editInputRef.current?.select();
   }, [renaming, creating]);
+
+  // Reveal the active file: whatever opened it (palette, search, a diff,
+  // an agent), expand its ancestors and scroll it into view. An editor that
+  // knows the file while the explorer points somewhere else reads as two
+  // products, not one. Read `children` through a ref so this reacts only to
+  // the path changing (or the tree being rebuilt), not to every fetch.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!activePath) return;
+    const ancestors: string[] = [];
+    for (let dir = dirOf(activePath); dir; dir = dirOf(dir)) ancestors.unshift(dir);
+    let cancelled = false;
+    void (async () => {
+      const loaded: [string, Entry[]][] = [];
+      for (const dir of ancestors) {
+        if (childrenRef.current.has(dir)) continue;
+        try {
+          const entries = await api.listDirectory(projectHash, dir, includeHidden);
+          if (cancelled) return;
+          loaded.push([dir, entries]);
+        } catch {
+          return; // a vanished directory: leave the tree as it is
+        }
+      }
+      if (loaded.length) {
+        setChildren((prev) => {
+          const next = new Map(prev);
+          for (const [dir, entries] of loaded) next.set(dir, entries);
+          return next;
+        });
+      }
+      expandDirs(ancestors);
+      pendingReveal.current = activePath;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activePath, projectHash, refreshToken, includeHidden, expandDirs]);
+  // The row exists only once the expanded directories have rendered, which
+  // is some render after the fetch — so look for it after every render while
+  // a reveal is pending, and stop as soon as it has been scrolled to.
+  const pendingReveal = useRef<string | null>(null);
+  useEffect(() => {
+    const path = pendingReveal.current;
+    if (!path) return;
+    const row = bodyRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    pendingReveal.current = null;
+  });
 
   // A single directory's contents changed (create/rename/delete/move) —
   // re-fetch just that one instead of collapsing the whole tree.
@@ -387,6 +449,7 @@ export default function FileTree({
       <div
         {...rest}
         className={`ds-tree-row ${entry.is_dir ? "folder" : "file"} ${isActive ? "active" : ""} ${isDropTarget ? "drop-target" : ""}`}
+        data-path={entry.path}
         onClick={() => toggle(entry)}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -534,6 +597,7 @@ export default function FileTree({
         </div>
       </div>
       <div
+        ref={bodyRef}
         className={`ds-tree-body ${dragOver === "" ? "drop-target" : ""}`}
         onContextMenu={(event) => {
           event.preventDefault();

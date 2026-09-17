@@ -117,7 +117,7 @@ describe("SpecPane", () => {
     });
 
     renderPane();
-    await waitFor(() => expect(screen.getByText("validates")).toBeDefined());
+    await waitFor(() => expect(screen.getByText("valid")).toBeDefined());
 
     const issued = invokeMock.mock.calls.map(([cmd]) => cmd);
     expect(new Set(issued)).toEqual(

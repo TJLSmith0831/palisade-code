@@ -244,4 +244,14 @@ describe("FileTree", () => {
     fireEvent.keyDown(row, { key: " " });
     expect(onSelectFile).toHaveBeenCalledWith("README.md");
   });
+
+  it("expands the ancestors of the active file so the tree shows where you are", async () => {
+    render(
+      <FileTree projectHash="p" projectName="proj" onSelectFile={vi.fn()} activePath="src/index.ts" />,
+    );
+    // `src` was never clicked, yet its child is visible because it holds the
+    // file the editor is showing.
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeTruthy());
+    expect(screen.getByText("index.ts").closest(".ds-tree-row")?.className).toContain("active");
+  });
 });

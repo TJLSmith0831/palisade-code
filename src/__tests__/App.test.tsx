@@ -930,6 +930,19 @@ describe("New thread always starts a new thread", () => {
     expect(await screen.findByTestId("mode-picker")).toBeDefined();
   });
 
+  it("switching the composer to Spec before anything was sent opens the framing menu", async () => {
+    withThreads();
+    render(<App />);
+    await openProject();
+    fireEvent.click(await screen.findByTestId("pick-go"));
+    expect(await screen.findByTestId("composer-input")).toBeDefined();
+
+    // No thread exists yet, so the toggle used to do nothing at all.
+    const selector = await screen.findByTestId("mode-selector");
+    fireEvent.click(within(selector).getByRole("radio", { name: /Spec/ }));
+    expect(await screen.findByTestId("spec-type-picker")).toBeDefined();
+  });
+
   it("picking Go on a new thread does not reopen the thread you were reading", async () => {
     // The picker used to render *over* the selected thread without
     // deselecting it, so Go fell straight through to that thread's history —
@@ -1595,14 +1608,13 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
     }
   });
 
-  it("opens no panel by default, opens Explorer on click, and closes it on a second click", async () => {
+  it("opens the Explorer for a project first seen in Editor mode, and the rail toggles it", async () => {
     render(<App />);
     const rows = await screen.findAllByTestId("recent-project");
     fireEvent.click(rows[0]);
     await screen.findByTestId("shell-toggle");
-    expect(screen.queryByTestId("side-panel")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("rail-explorer"));
+    // Code-first with no files in sight is a dead end, so a project with no
+    // saved panel starts with the explorer open.
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
     expect(screen.getByTestId("side-panel")).toHaveAttribute(
       "data-panel",
@@ -1611,6 +1623,12 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
 
     fireEvent.click(screen.getByTestId("rail-explorer"));
     expect(screen.queryByTestId("side-panel")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("rail-explorer"));
+    expect(screen.getByTestId("side-panel")).toHaveAttribute(
+      "data-panel",
+      "explorer"
+    );
   });
 
   it("swaps panels rather than stacking them", async () => {
@@ -4611,12 +4629,11 @@ describe("Project switching", () => {
       target: { value: projB.hash },
     });
 
-    // Rail panels are exclusive — the Account panel took the Explorer's slot,
-    // so come back to it to see the new project's tree.
-    fireEvent.click(screen.getByTestId("rail-explorer"));
+    // Switching restores the target project's own panel; one never opened
+    // before lands on its explorer, so the new tree is already showing.
     await waitFor(() => expect(screen.getByText("b.ts")).toBeDefined());
     expect(screen.queryByTestId("file-editor")).toBeNull();
-    expect(screen.getByText(/select a file/i)).toBeDefined();
+    expect(screen.getByTestId("editor-empty")).toBeDefined();
   });
 });
 

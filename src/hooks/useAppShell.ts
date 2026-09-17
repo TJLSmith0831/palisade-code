@@ -56,6 +56,8 @@ export function useAppShell(projectHash: string | undefined) {
   const selectPanel = useCallback((id: PanelId) => {
     setActivePanel((current) => (current === id ? null : id));
   }, []);
+  // Direct set, for restoring a saved session — `selectPanel` toggles.
+  const openPanel = useCallback((id: PanelId | null) => setActivePanel(id), []);
 
   // Vibe-only browse surface (Amendment 3); Editor gets the thread-tab strip
   // alone, so this state is simply not read in that preset.
@@ -197,6 +199,7 @@ export function useAppShell(projectHash: string | undefined) {
       shellChosenRef,
       activePanel,
       selectPanel,
+      openPanel,
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
@@ -223,6 +226,7 @@ export function useAppShell(projectHash: string | undefined) {
       centerShell,
       activePanel,
       selectPanel,
+      openPanel,
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,

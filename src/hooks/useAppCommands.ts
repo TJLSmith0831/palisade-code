@@ -108,8 +108,25 @@ export function useAppCommands({
         id: "thread.new",
         group: "File",
         label: "New thread…",
+        chord: "Mod+Shift+N",
         enabled: !!project,
         run: onNewThread,
+      },
+      {
+        // The one key an AI-first editor is judged by: get to the prompt
+        // without touching the mouse, from anywhere, even with chat hidden.
+        id: "chat.focus",
+        group: "View",
+        label: "Focus chat",
+        chord: "Mod+L",
+        keywords: "composer message prompt agent thread",
+        enabled: !!project,
+        run: () => {
+          if (shell.chatCollapsed) shell.toggleChat();
+          window.dispatchEvent(
+            new CustomEvent("palisade-chat-command", { detail: "focus" })
+          );
+        },
       },
       {
         id: "project.open",
@@ -396,6 +413,15 @@ export function useAppCommands({
         chord: "Mod+Backslash",
         keywords: "explorer sidebar files",
         run: () => shell.selectPanel(shell.activePanel ?? "explorer"),
+      },
+      {
+        id: "view.explorer",
+        group: "View",
+        label: "Toggle explorer",
+        chord: "Mod+Shift+E",
+        keywords: "files tree project",
+        enabled: !!project,
+        run: () => shell.selectPanel("explorer"),
       },
       {
         id: "view.terminal",
