@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import FleetBoard, { groupFleet } from "../FleetBoard";
+import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
 import type { FleetBoardProps } from "../FleetBoard";
 import type { FleetRow } from "../api";
 
@@ -171,9 +171,10 @@ describe("FleetBoard", () => {
 
   it("names a playbook row as one, with its playbook and its glyph", () => {
     render(<FleetBoard {...props({ rows: [playbookRow()] })} />);
-    expect(screen.getByTestId("fleet-row")).toHaveTextContent(
-      "Playbook · draft then review"
-    );
+    // The title names the playbook; the subtitle names what this run of it
+    // was actually asked to do.
+    expect(screen.getByTestId("fleet-row")).toHaveTextContent("draft then review");
+    expect(screen.getByTestId("fleet-row")).toHaveTextContent("Playbook run");
     expect(screen.getByLabelText("Playbook")).toBeInTheDocument();
     // A run writes in its thread's tree and has no commit of its own, so
     // neither a diff nor a verify verdict would say anything true here.
@@ -225,6 +226,41 @@ describe("FleetBoard", () => {
     expect(screen.queryByText("Archive")).toBeNull();
   });
 
+  it("heads the board with the project and what the fleet is doing", () => {
+    render(
+      <FleetBoard
+        {...props({
+          projectName: "palisade",
+          rows: [
+            row({ threadId: "t1", status: "attention", attention: "turn_done" }),
+            row({ threadId: "t2", status: "running" }),
+            row({ threadId: "t3", status: "idle" }),
+            row({ threadId: "t4", status: "idle" }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText("palisade")).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-counts")).toHaveTextContent(
+      "1 need attention \u00b7 1 running \u00b7 2 idle"
+    );
+  });
+
+  /** New files carry no line counts, so the stat says them rather than
+   *  folding them into a number that cannot hold them. */
+  it("appends the new-file count only when there are untracked files", () => {
+    const withNew = render(
+      <FleetBoard
+        {...props({ rows: [row({ diff: { added: 12, removed: 3, files: 2, untracked: 4 } })] })}
+      />
+    );
+    expect(screen.getByTestId("fleet-diff")).toHaveTextContent("+12 \u22123 \u00b7 2 files \u00b7 4 new");
+    withNew.unmount();
+
+    render(<FleetBoard {...props()} />);
+    expect(screen.getByTestId("fleet-diff")).not.toHaveTextContent("new");
+  });
+
   it("keeps Start run disabled when no agent is installed", () => {
     render(
       <FleetBoard
@@ -235,5 +271,22 @@ describe("FleetBoard", () => {
       target: { value: "ship it" },
     });
     expect(screen.getByTestId("fleet-start")).toBeDisabled();
+  });
+});
+
+describe("playbookSubtitle", () => {
+  it("says what the run was seeded with, truncated", () => {
+    expect(playbookSubtitle(playbookRow({ seed: "ship the release notes" }))).toBe(
+      "Playbook \u00b7 ship the release notes"
+    );
+    const long = "x".repeat(80);
+    const line = playbookSubtitle(playbookRow({ seed: long }));
+    expect(line).toBe(`Playbook \u00b7 ${"x".repeat(60)}\u2026`);
+  });
+
+  /** A run with nothing to say says nothing, rather than an empty "Playbook \u00b7 ". */
+  it("falls back when the run records no seed", () => {
+    expect(playbookSubtitle(playbookRow())).toBe("Playbook run");
+    expect(playbookSubtitle(playbookRow({ seed: "   " }))).toBe("Playbook run");
   });
 });

@@ -3367,10 +3367,13 @@ input[type="checkbox"] {
   line-height: 1.35;
   color: var(--fg);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* One line, so the row's three-line budget holds even for a long
+     auto-named title. */
+  overflow-wrap: anywhere;
 }
 
 .ds-session-meta {
@@ -3381,6 +3384,14 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Overlap, as a glyph on the meta line rather than a second pill — the row
+   has three lines to spend and attention has first claim on one. */
+.ds-session-overlap {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
 }
 
 /* Marks a title Palisade wrote rather than one the user typed. */
@@ -3452,7 +3463,8 @@ input[type="checkbox"] {
   opacity: 0.5;
 }
 
-/* The board's own pills, in a sidebar row: attention and file overlap. */
+/* The board's attention pill, in a sidebar row. At most one — overlap rides
+   the meta line as an icon instead. */
 .ds-session-badges {
   display: flex;
   flex-wrap: wrap;
@@ -6016,6 +6028,15 @@ button.ds-onboarding-status {
   min-height: 0;
 }
 
+/* Says where a new run would land, before you type it. Tight to the
+   composer it labels — it is that block's heading, not a separate band. */
+.fleet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: -4px;
+}
+
 .fleet-composer {
   display: flex;
   flex-direction: column;
@@ -6108,6 +6129,19 @@ button.ds-onboarding-status {
   min-height: 0;
 }
 
+/* What is being reviewed, said before how it was measured. */
+.review-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-header [data-testid="review-subtitle"] {
+  font-variant-numeric: tabular-nums;
+}
+
 .review-verify {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -6130,7 +6164,8 @@ button.ds-onboarding-status {
 }
 
 .review-files-header,
-.review-files-loading {
+.review-files-loading,
+.review-files-empty {
   padding: 8px 12px;
 }
 
@@ -6196,6 +6231,16 @@ button.ds-onboarding-status {
   margin-top: 4px;
 }
 
+/* Fixed layout plus wrapping cells: at the side-panel width a skill
+   description must fold, never truncate — the description is the reason the
+   row is there. */
 .connections-skills {
   font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+.connections-skills td,
+.connections-skills th {
+  padding: 6px 6px;
+  vertical-align: top;
 }

@@ -217,6 +217,13 @@ pub fn worktree_paths(root: &Path, thread_id: &str) -> (std::path::PathBuf, Stri
     )
 }
 
+/// Raw `git diff --numstat HEAD`: one `added\tremoved\tpath` line per tracked
+/// file that differs from HEAD. Callers that need the paths (the Fleet board,
+/// the Review lane) parse this; `diff_stat` only sums it.
+pub fn diff_numstat(bin: &Path, root: &Path) -> Res<String> {
+    run(bin, root, &["diff", "--numstat", "HEAD"])
+}
+
 /// Lines added and removed in this worktree against HEAD — the "+12 −3" the
 /// sidebar shows for what a thread has actually done.
 ///
@@ -227,7 +234,7 @@ pub fn worktree_paths(root: &Path, thread_id: &str) -> (std::path::PathBuf, Stri
 /// ponytail: an untracked *directory* reports as one porcelain entry and is
 /// counted as zero. Recurse it if new-directory changes start reading wrong.
 pub fn diff_stat(bin: &Path, root: &Path) -> Res<(u32, u32)> {
-    let raw = run(bin, root, &["diff", "--numstat", "HEAD"])?;
+    let raw = diff_numstat(bin, root)?;
     let (mut added, mut removed) = (0u32, 0u32);
     for line in raw.lines() {
         let mut cols = line.split('\t');

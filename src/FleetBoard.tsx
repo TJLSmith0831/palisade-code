@@ -5,6 +5,7 @@ import {
   Select,
   SegmentedControl,
   Switch,
+  Text,
   Textarea,
   Tooltip,
 } from "@mantine/core";
@@ -24,6 +25,9 @@ export type FleetBoardProps = {
   rows: FleetRow[];
   loading: boolean;
   error?: string;
+  /** The open project, named above the composer so the board says where a new
+   *  run would land before you type it. */
+  projectName?: string;
   agents: { id: string; name: string; installed: boolean }[];
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
@@ -37,6 +41,15 @@ export type FleetBoardProps = {
   onArchive(threadId: string): void;
   onNewRun(input: NewRunInput): void;
 };
+
+/** A playbook row's subtitle. The saved playbook's name says which script ran;
+ *  the seed says what this run was actually asked to do, which is the thing
+ *  that tells two runs of the same playbook apart. */
+export function playbookSubtitle(row: FleetRow): string {
+  const seed = row.seed?.trim();
+  if (!seed) return "Playbook run";
+  return `Playbook · ${seed.length > 60 ? `${seed.slice(0, 60)}…` : seed}`;
+}
 
 /** Split the fleet into the three bands the board renders. Attention rows are
  *  newest-first — the thing that just stopped and wants you is the thing you
@@ -125,7 +138,7 @@ function Row({
         <div className="fleet-row-meta">
           <span>
             {playbook
-              ? `Playbook · ${row.playbookName ?? row.title}`
+              ? playbookSubtitle(row)
               : `${row.projectName}${row.branch ? ` · ${row.branch}` : ""}`}
           </span>
           {/* A run writes in its thread's tree, so its own diff is always
@@ -136,6 +149,9 @@ function Row({
               <span className="added">+{row.diff.added}</span>{" "}
               <span className="removed">−{row.diff.removed}</span> ·{" "}
               {row.diff.files} files
+              {/* New files carry no line counts, so they are said, not
+                  silently folded into a number that can't hold them. */}
+              {(row.diff.untracked ?? 0) > 0 && ` · ${row.diff.untracked} new`}
             </span>
           )}
           <span>{relativeTime(row.updatedAt)}</span>
@@ -200,6 +216,7 @@ export default function FleetBoard({
   rows,
   loading,
   error,
+  projectName,
   agents,
   onOpen,
   onReview,
@@ -228,6 +245,16 @@ export default function FleetBoard({
 
   return (
     <section className="fleet-board" aria-label="Fleet" data-testid="fleet-board">
+      <div className="fleet-header">
+        <Text size="sm" fw={600} className="fleet-header-project">
+          {projectName ?? "Fleet"}
+        </Text>
+        <Text size="xs" c="dimmed" data-testid="fleet-counts">
+          {groups.attention.length} need attention · {groups.running.length}{" "}
+          running · {groups.idle.length} idle
+        </Text>
+      </div>
+
       <div className="fleet-composer">
         <Textarea
           value={prompt}

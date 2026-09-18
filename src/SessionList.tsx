@@ -8,7 +8,7 @@ import {
   IconSparkles,
 } from "@tabler/icons-react";
 import type { FleetRow, ThreadMeta, WorktreeStatus } from "./api";
-import { AttentionPill, OverlapBadge } from "./fleetBadges";
+import { AttentionPill, OverlapIcon } from "./fleetBadges";
 
 // Amendment 3's Vibe-only session list: the browse/search surface, distinct
 // from the in-conversation thread-tab strip (which stays as the quick
@@ -269,11 +269,14 @@ export default function SessionList({
                       <span className="removed">−{diff.removed}</span>
                     </span>
                   )}
+                  {/* Overlap rides this line as a glyph rather than a second
+                      pill: three lines is the row's budget, and attention is
+                      the one thing worth a pill. */}
+                  {row && <OverlapIcon overlap={row.overlap} />}
                 </div>
-                {row && (row.attention || row.overlap.length > 0) && (
+                {row?.attention && (
                   <div className="ds-session-badges">
-                    {row.attention && <AttentionPill attention={row.attention} />}
-                    <OverlapBadge overlap={row.overlap} />
+                    <AttentionPill attention={row.attention} />
                   </div>
                 )}
                 {worktree && (

@@ -7,6 +7,7 @@
 //! session state) and this module turns them into rows.
 
 use serde::Serialize;
+use std::path::Path;
 
 /// The dot the board shows for a thread. `Attention` always carries a
 /// reason — a board that says "look at this" without saying why is noise.
@@ -91,7 +92,12 @@ pub enum FleetMerge {
 pub struct FleetDiff {
     pub added: u32,
     pub removed: u32,
+    /// Tracked files that differ from HEAD — `git diff --numstat` and nothing
+    /// else, so `+a −r` and `n files` always describe the same measurement.
     pub files: u32,
+    /// Files the thread created that git does not track yet, counted apart
+    /// because they contribute no numstat lines.
+    pub untracked: u32,
 }
 
 /// Another thread in the same project writing some of the same files.
@@ -115,6 +121,11 @@ pub struct FleetRow {
     /// Set on playbook rows only: the saved playbook the run came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playbook_name: Option<String>,
+    /// Set on playbook rows only: the prompt the run was seeded with, so a
+    /// row says what this run was asked to do rather than only which playbook
+    /// it replayed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
     pub title: String,
     pub project_id: String,
     pub project_name: String,
@@ -158,6 +169,21 @@ pub struct StatusInput {
     pub merge_conflict: bool,
     /// The thread's last session ended `crashed`.
     pub crashed: bool,
+}
+
+/// Has the user looked at this thread since its last turn ended?
+///
+/// A thread that predates view tracking has no `last_viewed_at` at all.
+/// Reading that absence as "never viewed" made every legacy thread shout
+/// "Turn finished" forever, which is the opposite of a signal — so missing
+/// tracking counts as viewed. Only a recorded view older than a recorded turn
+/// end is evidence of something unread.
+pub fn viewed_since_turn(last_viewed_at: Option<&str>, turn_ended_at: Option<&str>) -> bool {
+    match (last_viewed_at, turn_ended_at) {
+        // ISO timestamps compare lexically, same as everywhere else here.
+        (Some(viewed), Some(ended)) => viewed >= ended,
+        _ => true,
+    }
 }
 
 /// Map observed session/worktree state onto the dot and its reason.
@@ -218,6 +244,165 @@ pub fn derive_playbook_status(input: &PlaybookInput) -> (FleetStatus, Option<Fle
         return (FleetStatus::Attention, Some(FleetAttention::Crashed));
     }
     (FleetStatus::Idle, None)
+}
+
+/// One changed file in a thread's tree. The Review lane's row, and the unit
+/// the board's counts are made of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewFile {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    /// "added" | "modified" | "deleted".
+    pub status: String,
+}
+
+/// One untracked path git reported, with the two facts that decide whether it
+/// is this thread's work at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntrackedFile {
+    pub path: String,
+    pub lines: u32,
+    /// Byte-identical to the same path in the project checkout: the thread
+    /// inherited this file, it did not write it.
+    pub inherited: bool,
+}
+
+/// What one thread's tree holds once the noise is gone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadChanges {
+    pub files: Vec<ReviewFile>,
+    pub added: u32,
+    pub removed: u32,
+    /// Numstat files only — what `n files` counts.
+    pub tracked: u32,
+    pub untracked: u32,
+}
+
+impl ThreadChanges {
+    pub fn paths(&self) -> Vec<String> {
+        self.files.iter().map(|f| f.path.clone()).collect()
+    }
+}
+
+/// A path the file tree already hides is a path no thread authored: machine-
+/// local state (`.palisade/`, `.mcp.json`, `.project-settings.json`, every
+/// other dotfile) and build output (`node_modules/`, `target/`,
+/// `__pycache__/`). Reuses the tree's own rule rather than restating it, so
+/// the two can never drift.
+pub fn is_skipped_path(path: &str) -> bool {
+    path.split('/').any(|part| crate::commands::fs_ops::should_skip_entry(part, false))
+}
+
+/// Turn one tree's raw git output into what the board and the Review lane
+/// both read. Pure on purpose: the two surfaces disagreeing about what a
+/// thread changed is the bug this exists to prevent.
+///
+/// `status` is porcelain `(code, path)` pairs, used only to tell a deletion
+/// from a modification — numstat cannot.
+pub fn changed_files(
+    numstat: &str,
+    status: &[(String, String)],
+    untracked: &[UntrackedFile],
+) -> ThreadChanges {
+    let mut out = ThreadChanges::default();
+    for line in numstat.lines() {
+        let mut cols = line.split('\t');
+        let (Some(a), Some(r), Some(path)) = (cols.next(), cols.next(), cols.next()) else {
+            continue;
+        };
+        if is_skipped_path(path) {
+            continue;
+        }
+        // A binary file reports "-\t-": a real change with no line counts.
+        let added = a.parse::<u32>().unwrap_or(0);
+        let removed = r.parse::<u32>().unwrap_or(0);
+        let code = status.iter().find(|(_, p)| p == path).map(|(c, _)| c.as_str());
+        let state = match code {
+            Some(c) if c.contains('D') => "deleted",
+            Some(c) if c.contains('A') => "added",
+            _ => "modified",
+        };
+        out.added += added;
+        out.removed += removed;
+        out.tracked += 1;
+        out.files.push(ReviewFile {
+            path: path.to_string(),
+            added,
+            removed,
+            status: state.to_string(),
+        });
+    }
+    for file in untracked {
+        if file.inherited || is_skipped_path(&file.path) {
+            continue;
+        }
+        out.untracked += 1;
+        out.files.push(ReviewFile {
+            path: file.path.clone(),
+            added: file.lines,
+            removed: 0,
+            status: "added".to_string(),
+        });
+    }
+    out.files.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// The same path, byte for byte, already sits in the project checkout — so
+/// the thread inherited this file rather than writing it.
+///
+/// A thread with no worktree of its own measures the checkout itself, where
+/// every untracked file is inherited by definition. That is exactly the bug
+/// this rule closes: five such threads used to report the same fourteen
+/// ambient files and "overlap" each other on all of them.
+///
+/// ponytail: over 1 MiB, equal length is taken as equal content. Hash the
+/// bytes if two big generated files ever need telling apart.
+fn is_inherited(tree: &Path, root: &Path, rel: &str) -> bool {
+    if tree == root {
+        return true;
+    }
+    let (a, b) = (tree.join(rel), root.join(rel));
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(&a), std::fs::metadata(&b)) else {
+        return false;
+    };
+    if ma.len() != mb.len() {
+        return false;
+    }
+    if ma.len() > (1 << 20) {
+        return true;
+    }
+    matches!((std::fs::read(&a), std::fs::read(&b)), (Ok(x), Ok(y)) if x == y)
+}
+
+/// Everything the board and the Review lane need from one thread's tree, in
+/// two git calls: `diff --numstat HEAD` and `status --porcelain`.
+pub fn thread_changes(bin: &Path, tree: &Path, root: &Path) -> ThreadChanges {
+    let numstat = crate::git::diff_numstat(bin, tree).unwrap_or_default();
+    let status = crate::git::status(bin, tree).unwrap_or_default();
+    let untracked: Vec<UntrackedFile> = status
+        .iter()
+        .filter(|f| f.code == "??")
+        .map(|f| UntrackedFile {
+            path: f.path.clone(),
+            // A binary file decodes to nothing; it still counts as a file.
+            lines: std::fs::read_to_string(tree.join(&f.path))
+                .map(|body| body.lines().count() as u32)
+                .unwrap_or(0),
+            inherited: is_inherited(tree, root, &f.path),
+        })
+        .collect();
+    let pairs: Vec<(String, String)> =
+        status.iter().map(|f| (f.code.clone(), f.path.clone())).collect();
+    changed_files(&numstat, &pairs, &untracked)
+}
+
+/// The Review lane's file list. Deliberately the same measurement the board
+/// shows — one helper, so the two surfaces cannot disagree.
+pub fn review_files(bin: &Path, tree: &Path, root: &Path) -> Vec<ReviewFile> {
+    thread_changes(bin, tree, root).files
 }
 
 /// The files a thread has touched: whatever is dirty in its tree right now,
@@ -303,6 +488,7 @@ mod tests {
             thread_id: thread_id.into(),
             run_id: None,
             playbook_name: None,
+            seed: None,
             title: thread_id.into(),
             project_id: project_id.into(),
             project_name: project_id.into(),
@@ -527,6 +713,136 @@ mod tests {
         assert_eq!(json["merge"], "no_worktree");
         assert_eq!(json["verify"]["state"], "not_run");
         assert!(json["verify"].get("command").is_none(), "an absent field stays absent");
+    }
+
+    fn untracked(path: &str, lines: u32, inherited: bool) -> UntrackedFile {
+        UntrackedFile { path: path.into(), lines, inherited }
+    }
+
+    fn status_pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(c, p)| ((*c).to_string(), (*p).to_string())).collect()
+    }
+
+    #[test]
+    fn numstat_lines_become_files_with_their_counts() {
+        let changes = changed_files(
+            "12\t3\tsrc/App.tsx\n0\t4\tsrc/old.rs\n",
+            &status_pairs(&[(" M", "src/App.tsx"), (" D", "src/old.rs")]),
+            &[],
+        );
+        assert_eq!(changes.added, 12);
+        assert_eq!(changes.removed, 7);
+        assert_eq!(changes.tracked, 2);
+        assert_eq!(changes.untracked, 0);
+        assert_eq!(changes.files[0].status, "modified");
+        assert_eq!(changes.files[1].status, "deleted");
+    }
+
+    /// A binary file reports "-\t-": a real change with no line counts.
+    #[test]
+    fn a_binary_file_counts_as_a_file_with_no_lines() {
+        let changes = changed_files("-\t-\tassets/logo.png\n", &[], &[]);
+        assert_eq!(changes.tracked, 1);
+        assert_eq!((changes.added, changes.removed), (0, 0));
+    }
+
+    /// Machine-local state and build output are not anyone's work. The rule
+    /// is the file tree's own, imported rather than restated.
+    #[test]
+    fn the_file_trees_skip_list_hides_machine_local_paths() {
+        assert!(is_skipped_path(".mcp.json"));
+        assert!(is_skipped_path(".project-settings.json"));
+        assert!(is_skipped_path(".palisade/threads.jsonl"));
+        assert!(is_skipped_path("node_modules/react/index.js"));
+        assert!(is_skipped_path("src-tauri/target/debug/build.rs"));
+        assert!(!is_skipped_path("src/App.tsx"));
+        assert!(!is_skipped_path("artifacts/report.md"));
+    }
+
+    #[test]
+    fn skip_listed_paths_never_reach_the_board() {
+        let changes = changed_files(
+            "5\t0\t.mcp.json\n2\t1\tsrc/App.tsx\n",
+            &[],
+            &[untracked(".palisade/threads.jsonl", 40, false), untracked("src/new.rs", 9, false)],
+        );
+        assert_eq!(changes.paths(), vec!["src/App.tsx", "src/new.rs"]);
+        assert_eq!(changes.added, 2, "the skipped file's lines are not this thread's work");
+    }
+
+    /// The bug this rule closes: threads with no worktree of their own all
+    /// measure the project checkout, so its ambient untracked files showed up
+    /// as every thread's work — identical diffs that then "overlapped".
+    #[test]
+    fn untracked_files_inherited_from_the_checkout_are_not_this_threads_work() {
+        let changes = changed_files(
+            "",
+            &[],
+            &[
+                untracked("artifacts/report.md", 36, true),
+                untracked("artifacts/ledger.json", 136, true),
+                untracked("src/new.rs", 9, false),
+            ],
+        );
+        assert_eq!(changes.untracked, 1);
+        assert_eq!(changes.paths(), vec!["src/new.rs"]);
+    }
+
+    /// A new file is still a change, and it is the most visible one there is
+    /// — it just contributes no numstat lines, so it is counted apart.
+    #[test]
+    fn untracked_files_are_added_rows_counted_apart_from_the_numstat() {
+        let changes = changed_files("2\t1\tsrc/App.tsx\n", &[], &[untracked("src/new.rs", 9, false)]);
+        assert_eq!(changes.tracked, 1, "n files counts only what numstat measured");
+        assert_eq!(changes.untracked, 1);
+        assert_eq!((changes.added, changes.removed), (2, 1));
+        let new = changes.files.iter().find(|f| f.path == "src/new.rs").unwrap();
+        assert_eq!((new.status.as_str(), new.added, new.removed), ("added", 9, 0));
+    }
+
+    /// The board's TypeScript type is camelCase, same as every other row field.
+    #[test]
+    fn a_review_file_serializes_as_camel_case() {
+        let file =
+            ReviewFile { path: "src/a.rs".into(), added: 1, removed: 2, status: "modified".into() };
+        let json = serde_json::to_value(&file).unwrap();
+        assert_eq!(json["path"], "src/a.rs");
+        assert_eq!(json["status"], "modified");
+    }
+
+    /// Threads created before view tracking existed have no `last_viewed_at`.
+    /// Reading that absence as "never viewed" made every legacy thread shout
+    /// "Turn finished" forever.
+    #[test]
+    fn a_thread_that_predates_view_tracking_counts_as_viewed() {
+        assert!(viewed_since_turn(None, Some("2026-01-01T00:00:00Z")));
+        let input = StatusInput {
+            turn_ended: true,
+            has_diff: true,
+            viewed_since_turn: viewed_since_turn(None, Some("2026-01-01T00:00:00Z")),
+            ..StatusInput::default()
+        };
+        assert_eq!(derive_status(&input), (FleetStatus::Idle, None));
+    }
+
+    #[test]
+    fn a_view_older_than_the_turn_that_ended_is_still_unread() {
+        assert!(!viewed_since_turn(Some("2026-01-01T00:00:00Z"), Some("2026-01-02T00:00:00Z")));
+        assert!(viewed_since_turn(Some("2026-01-03T00:00:00Z"), Some("2026-01-02T00:00:00Z")));
+        assert!(viewed_since_turn(Some("2026-01-01T00:00:00Z"), None), "no turn has ended");
+    }
+
+    #[test]
+    fn a_playbook_row_serializes_its_seed() {
+        let mut r = row("run-1", "p1", &[]);
+        r.kind = FleetKind::Playbook;
+        r.seed = Some("draft the release notes".into());
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["seed"], "draft the release notes");
+        assert!(
+            serde_json::to_value(row("a", "p1", &[])).unwrap().get("seed").is_none(),
+            "a thread row carries no seed"
+        );
     }
 
     fn playbook(run_id: &str, status: FleetStatus, updated_at: &str) -> FleetRow {

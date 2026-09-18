@@ -188,7 +188,6 @@ import NavRail from "./NavRail";
 import FleetBoard, { type NewRunInput } from "./FleetBoard";
 import ReviewPane, { type ReviewFile } from "./ReviewPane";
 import { useFleet } from "./hooks/useFleet";
-import { parseFilePatches, pathFromPatch } from "./gitDiff";
 import SessionList from "./SessionList";
 import { VerifyBadge } from "./fleetBadges";
 import SearchPanel from "./SearchPanel";
@@ -203,27 +202,6 @@ import "./App.css";
  * registers no target hears *every* emit, whichever window it was meant for,
  * so scoping here is what keeps a menu command in the window that ran it. */
 const nativeEventTarget = () => ({ target: getCurrentWindow().label });
-
-/** The review list is the working diff, read per file: the same patches the
- *  diff pane parses, counted rather than rendered. */
-export function reviewFilesFromDiff(diffText: string): ReviewFile[] {
-  return parseFilePatches(diffText).map((patch) => {
-    const lines = patch.hunks.flatMap((hunk) => hunk.lines);
-    return {
-      path: pathFromPatch(patch),
-      added: lines.filter((line) => line.startsWith("+")).length,
-      removed: lines.filter((line) => line.startsWith("-")).length,
-      status:
-        patch.oldFileName === "/dev/null"
-          ? "added"
-          : patch.newFileName === "/dev/null"
-            ? "deleted"
-            : patch.oldFileName !== patch.newFileName
-              ? "renamed"
-              : "modified",
-    };
-  });
-}
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
 // Editor shell's right-rail chat area (see openspec/changes/
@@ -5699,9 +5677,12 @@ export default function App() {
     }
     let cancelled = false;
     setReviewLoading(true);
+    // The same helper the Fleet board measures with — the lane used to parse
+    // the working diff itself, which sees no untracked file and nothing of
+    // the skip-list, so the two surfaces could disagree about one thread.
     api
-      .gitWorkingDiff(project.hash, thread.id)
-      .then((text) => !cancelled && setReviewFiles(reviewFilesFromDiff(text)))
+      .threadReviewFiles(project.hash, thread.id)
+      .then((rows) => !cancelled && setReviewFiles(rows))
       .catch(() => !cancelled && setReviewFiles([]))
       .finally(() => !cancelled && setReviewLoading(false));
     return () => {
@@ -5723,8 +5704,10 @@ export default function App() {
     return (
       <ReviewPane
         threadId={thread.id}
+        title={thread.title}
         branch={row?.branch ?? worktree?.branch}
         baseBranch={worktree?.baseBranch}
+        diff={row?.diff ?? { added: 0, removed: 0, files: 0, untracked: 0 }}
         files={reviewFiles}
         loadingFiles={reviewLoading}
         verify={row?.verify ?? { state: "not_run" }}
@@ -5755,6 +5738,7 @@ export default function App() {
           shell.openPanel(null);
           selectFile(path);
         }}
+        onBackToFleet={() => shell.openPanel("fleet")}
       />
     );
   };
@@ -6744,6 +6728,7 @@ export default function App() {
                   rows={fleet.rows}
                   loading={fleet.loading}
                   error={fleet.error}
+                  projectName={project?.displayName}
                   agents={fleetAgents}
                   onOpen={onFleetOpen}
                   onReview={onFleetReview}

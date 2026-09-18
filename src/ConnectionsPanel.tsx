@@ -52,6 +52,15 @@ const OWNER_LABEL: Record<api.Skill["owner"], string> = {
   other: "other",
 };
 
+/** Bar colour by pressure, not by taste: room left, tightening, nearly spent.
+ *  Thresholds are inclusive at 60 and exclusive at 85 — 85% is still a warning,
+ *  not yet an alarm. */
+export function usageColor(usedPercent: number): "success" | "warn" | "danger" {
+  if (usedPercent > 85) return "danger";
+  if (usedPercent >= 60) return "warn";
+  return "success";
+}
+
 /** Warnings that are about agents, not about the rest of preflight. */
 const agentWarning = (warning: string) => /agent/i.test(warning);
 
@@ -78,20 +87,14 @@ function UsageBlock({ usage }: { usage: api.AgentUsage | undefined }) {
   }
   return (
     <Stack gap={6} data-testid="usage-ok">
-      <Group gap="xs">
-        {usage.plan && (
-          <Badge size="xs" variant="light" data-testid="usage-plan">
-            {usage.plan}
-          </Badge>
-        )}
-        {usage.balanceUsd !== undefined && (
-          <Text size="xs" c="dimmed" data-testid="usage-balance">
-            ${usage.balanceUsd.toFixed(2)} remaining
-          </Text>
-        )}
-      </Group>
+      {usage.balanceUsd !== undefined && (
+        <Text size="xs" c="dimmed" data-testid="usage-balance">
+          ${usage.balanceUsd.toFixed(2)} remaining
+        </Text>
+      )}
       {usage.windows.map((window) => {
         const reset = window.resetsAt ? resetsIn(window.resetsAt) : null;
+        const color = usageColor(window.usedPercent);
         return (
           <div key={window.label} className="connections-usage-window">
             <Text size="xs" c="dimmed">
@@ -102,8 +105,10 @@ function UsageBlock({ usage }: { usage: api.AgentUsage | undefined }) {
             <Progress
               value={window.usedPercent}
               size="sm"
+              color={color}
               aria-label={`${window.label} usage`}
               data-testid="usage-window"
+              data-color={color}
             />
           </div>
         );
@@ -164,44 +169,56 @@ function AgentsTab({ projectHash, onLogin }: { projectHash: string; onLogin: Con
       )}
       {(flight?.agents ?? []).map((agent) => {
         const mine = logins[agent.id] ?? [];
+        const mineUsage = usage.find((u) => u.agentId === agent.id);
+        // A reported usage window is proof of a session, so the sign-in
+        // prompt retires on evidence rather than on a guess.
+        const signedIn = mineUsage?.state === "ok";
+        const plan = mineUsage?.state === "ok" ? mineUsage.plan : undefined;
         return (
           <Card key={agent.id} withBorder padding="sm" data-testid="connections-agent">
-            <Group justify="space-between" wrap="nowrap">
-              <Group gap="xs" wrap="nowrap">
-                <Text size="sm" fw={500}>
-                  {agent.name}
+            {/* Stacked, not side by side: at the side-panel width a row of
+                name + badges + button truncates all three. */}
+            <Group justify="space-between" wrap="nowrap" gap="xs" align="baseline">
+              <Text size="sm" fw={500} truncate>
+                {agent.name}
+              </Text>
+              {agent.version && (
+                <Text size="xs" c="dimmed" ff="monospace" style={{ flexShrink: 0 }}>
+                  {agent.version}
                 </Text>
-                <Badge size="xs" variant="light" color={agent.path ? "success" : "warn"}>
-                  {agent.path ? "Installed" : "Not installed"}
-                </Badge>
-                {agent.version && (
-                  <Text size="xs" c="dimmed">
-                    {agent.version}
-                  </Text>
-                )}
-              </Group>
-              <Group gap="xs" wrap="nowrap">
-                {mine.length === 0 ? (
-                  <Text size="xs" c="dimmed">
-                    No sign-in offered
-                  </Text>
-                ) : (
-                  mine.map((login) => (
-                    <Button
-                      key={login.methodId}
-                      size="compact-xs"
-                      variant="light"
-                      onClick={() => onLogin(login)}
-                      data-testid="connections-sign-in"
-                    >
-                      Sign in — {login.label}
-                    </Button>
-                  ))
-                )}
-              </Group>
+              )}
             </Group>
+            {(plan || !agent.path) && (
+              <Group gap="xs" mt={6}>
+                {!agent.path && (
+                  <Badge size="xs" variant="light" color="warn">
+                    Not installed
+                  </Badge>
+                )}
+                {plan && (
+                  <Badge size="xs" variant="light" data-testid="usage-plan">
+                    {plan}
+                  </Badge>
+                )}
+              </Group>
+            )}
+            {!signedIn &&
+              mine.map((login) => (
+                <Tooltip key={login.methodId} label={login.label} openDelay={300}>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    fullWidth
+                    mt={8}
+                    onClick={() => onLogin(login)}
+                    data-testid="connections-sign-in"
+                  >
+                    Sign in
+                  </Button>
+                </Tooltip>
+              ))}
             <div className="connections-usage">
-              <UsageBlock usage={usage.find((u) => u.agentId === agent.id)} />
+              <UsageBlock usage={mineUsage} />
             </div>
           </Card>
         );
@@ -210,24 +227,22 @@ function AgentsTab({ projectHash, onLogin }: { projectHash: string; onLogin: Con
   );
 }
 
+/** The path is a tooltip on the copy button rather than a column: a full
+ *  skill path never fits a side panel, and a truncated one tells you nothing
+ *  the copy button doesn't already hand you. */
 function SkillPath({ path }: { path: string }) {
   const clipboard = useClipboard({ timeout: 1200 });
   return (
-    <Group gap={4} wrap="nowrap">
-      <Text size="xs" c="dimmed" ff="monospace" truncate title={path}>
-        {path}
-      </Text>
-      <Tooltip label={clipboard.copied ? "Copied" : "Copy path"} openDelay={300}>
-        <ActionIcon
-          variant="subtle"
-          size="sm"
-          aria-label={`Copy path for ${path}`}
-          onClick={() => clipboard.copy(path)}
-        >
-          {clipboard.copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-        </ActionIcon>
-      </Tooltip>
-    </Group>
+    <Tooltip label={clipboard.copied ? "Copied" : path} openDelay={300} multiline maw={320}>
+      <ActionIcon
+        variant="subtle"
+        size="sm"
+        aria-label={`Copy path for ${path}`}
+        onClick={() => clipboard.copy(path)}
+      >
+        {clipboard.copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+      </ActionIcon>
+    </Tooltip>
   );
 }
 
@@ -253,20 +268,24 @@ function SkillsTab() {
   }
 
   return (
-    <Table striped highlightOnHover className="connections-skills">
+    <Table striped highlightOnHover layout="fixed" className="connections-skills">
       <Table.Thead>
         <Table.Tr>
-          <Table.Th>Name</Table.Th>
-          <Table.Th>Owner</Table.Th>
+          <Table.Th w="38%">Name</Table.Th>
+          <Table.Th w="24%">Owner</Table.Th>
           <Table.Th>Description</Table.Th>
-          <Table.Th>Path</Table.Th>
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
         {(skills ?? []).map((skill) => (
           <Table.Tr key={`${skill.owner}:${skill.path}`} data-testid="connections-skill">
             <Table.Td>
-              <Text size="xs">{skill.name}</Text>
+              <Group gap={2} wrap="nowrap" align="center">
+                <Text size="xs" style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                  {skill.name}
+                </Text>
+                <SkillPath path={skill.path} />
+              </Group>
             </Table.Td>
             <Table.Td>
               <Badge size="xs" variant="light">
@@ -274,12 +293,13 @@ function SkillsTab() {
               </Badge>
             </Table.Td>
             <Table.Td>
-              <Text size="xs" c="dimmed">
+              <Text
+                size="xs"
+                c="dimmed"
+                style={{ whiteSpace: "normal", wordBreak: "break-word" }}
+              >
                 {skill.description ?? "—"}
               </Text>
-            </Table.Td>
-            <Table.Td>
-              <SkillPath path={skill.path} />
             </Table.Td>
           </Table.Tr>
         ))}

@@ -322,17 +322,35 @@ describe("SessionList fleet rows", () => {
     expect(screen.getByTestId("fleet-attention").textContent).toBe("Verify failed");
   });
 
-  it("names the overlapping files in the overlap badge's tooltip", async () => {
+  it("names the count and the overlapping files in the overlap icon's tooltip", async () => {
     renderRows(
       [thread({})],
       [fleetRow({ overlap: [{ threadId: "t2", files: ["src/App.tsx"] }] })],
     );
-    const badge = screen.getByTestId("fleet-overlap");
-    expect(badge.textContent).toBe("Overlaps 1 thread");
-    await userEvent.hover(badge);
+    const icon = screen.getByTestId("fleet-overlap-icon");
+    expect(screen.queryByTestId("fleet-overlap")).toBeNull();
+    await userEvent.hover(icon);
     expect(
-      await screen.findByRole("tooltip", { name: "src/App.tsx" }),
+      await screen.findByRole("tooltip", { name: "Overlaps 1 thread: src/App.tsx" }),
     ).toBeTruthy();
+  });
+
+  // Three lines is the row's whole budget. Attention gets the pill; overlap
+  // gets the glyph on the meta line, and never a pill of its own.
+  it("shows at most one pill on a row, even when it also overlaps", () => {
+    renderRows(
+      [thread({})],
+      [
+        fleetRow({
+          status: "attention",
+          attention: "permission",
+          overlap: [{ threadId: "t2", files: ["src/App.tsx"] }],
+        }),
+      ],
+    );
+    expect(screen.getAllByTestId("fleet-attention")).toHaveLength(1);
+    expect(screen.queryByTestId("fleet-overlap")).toBeNull();
+    expect(screen.getByTestId("fleet-overlap-icon")).toBeTruthy();
   });
 
   it("groups attention over running over idle, and heads only what exists", () => {

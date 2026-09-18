@@ -2357,23 +2357,22 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                 // checkout, so that is the tree its diff is measured in.
                 let worktree = thread.worktree_path.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
                 let tree = worktree.clone().unwrap_or_else(|| root.clone());
-                let (added, removed) = git::diff_stat(&bin, &tree).unwrap_or((0, 0));
-                let status_paths: Vec<String> = git::status(&bin, &tree)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|file| file.path)
-                    .collect();
+                // One helper for the board and the Review lane, and the only
+                // place the skip-list and the inherited-file rule live.
+                let changes = fleet::thread_changes(&bin, &tree, &root);
                 // Overlap must also see files already committed on the
                 // thread's branch but not yet merged back — a thread that
                 // commits as it goes would otherwise vanish from overlap
                 // detection the moment its tree goes clean.
                 let committed_paths = match (&thread.worktree_base_branch, &thread.worktree_branch) {
-                    (Some(base), Some(branch)) => {
-                        git::changed_between(&bin, &tree, base, branch).unwrap_or_default()
-                    }
+                    (Some(base), Some(branch)) => git::changed_between(&bin, &tree, base, branch)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|path| !fleet::is_skipped_path(path))
+                        .collect(),
                     _ => vec![],
                 };
-                let files_touched = fleet::union_files_touched(status_paths, committed_paths);
+                let files_touched = fleet::union_files_touched(changes.paths(), committed_paths);
                 let merge = match (&worktree, &thread.worktree_branch) {
                     (Some(path), Some(branch)) => {
                         let base = thread
@@ -2417,17 +2416,11 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     awaiting_permission: live.awaiting_permission,
                     busy: live.busy,
                     turn_ended: last.is_some() && !live.busy,
-                    has_diff: added + removed > 0 || !files_touched.is_empty(),
-                    // The user has looked at the thread at or after the last
-                    // session ended. ISO timestamps compare lexically, same as
-                    // the verify lookup above.
-                    viewed_since_turn: match (
-                        thread.last_viewed_at.as_ref(),
-                        last.and_then(|s| s.ended_at.as_ref()),
-                    ) {
-                        (Some(viewed), Some(ended)) => viewed >= ended,
-                        _ => false,
-                    },
+                    has_diff: changes.added + changes.removed > 0 || !files_touched.is_empty(),
+                    viewed_since_turn: fleet::viewed_since_turn(
+                        thread.last_viewed_at.as_deref(),
+                        last.and_then(|s| s.ended_at.as_deref()),
+                    ),
                     verify_failed: verify.state == fleet::VerifyState::Fail,
                     merge_conflict: merge == fleet::FleetMerge::Conflicts,
                     crashed: last.is_some_and(|s| s.outcome.as_deref() == Some("crashed")),
@@ -2437,6 +2430,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     thread_id: thread.id.clone(),
                     run_id: None,
                     playbook_name: None,
+                    seed: None,
                     title: thread.title.clone(),
                     project_id: project.hash.clone(),
                     project_name: project.display_name.clone(),
@@ -2447,7 +2441,12 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     attention,
                     branch: thread.worktree_branch.clone(),
                     worktree_path: worktree.map(|p| p.to_string_lossy().into_owned()),
-                    diff: fleet::FleetDiff { added, removed, files: files_touched.len() as u32 },
+                    diff: fleet::FleetDiff {
+                        added: changes.added,
+                        removed: changes.removed,
+                        files: changes.tracked,
+                        untracked: changes.untracked,
+                    },
                     files_touched,
                     overlap: vec![],
                     verify,
@@ -2477,6 +2476,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     thread_id: run.id.clone(),
                     run_id: Some(run.id.clone()),
                     playbook_name: Some(run.chain_name.clone()),
+                    seed: (!run.seed.trim().is_empty()).then(|| run.seed.clone()),
                     title: run.chain_name.clone(),
                     project_id: project.hash.clone(),
                     project_name: project.display_name.clone(),
@@ -2509,6 +2509,35 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
         // clients render the same fleet in the same order.
         rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(rows)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// The files one thread has changed, measured exactly as the Fleet board
+/// measures them.
+///
+/// The Review lane used to parse `git_working_diff` itself, which sees no
+/// untracked file and knows nothing of the skip-list — so the lane and the
+/// board could disagree about what a thread had done. One helper now answers
+/// both.
+#[tauri::command]
+async fn thread_review_files(
+    project_hash: String,
+    thread_id: String,
+) -> Res<Vec<fleet::ReviewFile>> {
+    tokio::task::spawn_blocking(move || {
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        // A thread with no worktree of its own edits the project checkout.
+        let tree = store::list_threads(&palisade_home(), &project_hash)?
+            .into_iter()
+            .find(|t| t.id == thread_id)
+            .and_then(|t| t.worktree_path)
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| root.clone());
+        Ok(fleet::review_files(&bin, &tree, &root))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -3936,6 +3965,7 @@ pub fn run() {
             list_sessions,
             thread_worktrees,
             fleet_overview,
+            thread_review_files,
             merge_thread_worktree,
             open_thread_pr,
             prune_thread_worktree,

@@ -1,4 +1,5 @@
 import { Badge, Tooltip } from "@mantine/core";
+import { IconArrowsCross } from "@tabler/icons-react";
 import type { FleetAttention, FleetRow, FleetVerify } from "./api";
 
 // The three signals a fleet row carries, shared by the Fleet board and the
@@ -59,6 +60,27 @@ export function VerifyBadge({ verify }: { verify: FleetVerify }) {
       >
         {badge.label}
       </Badge>
+    </Tooltip>
+  );
+}
+
+/** The same signal as [`OverlapBadge`], at the size a sidebar row can pay
+ *  for: one muted glyph, with the count and the files in its tooltip. A row
+ *  gets at most one pill, and attention outranks overlap for it. */
+export function OverlapIcon({ overlap }: { overlap: FleetRow["overlap"] }) {
+  if (overlap.length === 0) return null;
+  const files = overlap.flatMap((o) => o.files).join(", ");
+  return (
+    <Tooltip
+      label={`Overlaps ${overlap.length} thread${overlap.length === 1 ? "" : "s"}: ${files}`}
+      openDelay={400}
+    >
+      <IconArrowsCross
+        size={14}
+        className="ds-session-overlap"
+        data-testid="fleet-overlap-icon"
+        aria-label={`Overlaps ${overlap.length} thread${overlap.length === 1 ? "" : "s"}`}
+      />
     </Tooltip>
   );
 }

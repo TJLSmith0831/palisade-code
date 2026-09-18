@@ -26,13 +26,16 @@ const onMerge = vi.fn();
 const onRunVerify = vi.fn();
 const onOpenPr = vi.fn();
 const onOpenInEditor = vi.fn();
+const onBackToFleet = vi.fn();
 
 const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) =>
   render(
     <ReviewPane
       threadId="t1"
+      title="Fix the merge gate"
       branch="palisade/abcd"
       baseBranch="main"
+      diff={{ added: 12, removed: 5, files: 3, untracked: 0 }}
       files={files}
       loadingFiles={false}
       verify={pass}
@@ -42,6 +45,7 @@ const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) =>
       onMerge={onMerge}
       onOpenPr={onOpenPr}
       onOpenInEditor={onOpenInEditor}
+      onBackToFleet={onBackToFleet}
       {...over}
     />,
   );
@@ -140,6 +144,46 @@ describe("ReviewPane", () => {
     expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("0 of 3 viewed");
     fireEvent.keyDown(window, { key: "o" });
     expect(onOpenInEditor).toHaveBeenCalledWith("src/a.ts");
+  });
+
+  it("heads the lane with the thread, its branch and the fleet's own diff stat", () => {
+    mount({ diff: { added: 12, removed: 5, files: 3, untracked: 2 } });
+    expect(screen.getByTestId("review-title")).toHaveTextContent("Fix the merge gate");
+    expect(screen.getByTestId("review-subtitle")).toHaveTextContent(
+      "palisade/abcd → main · +12 −5 · 3 files · 2 new",
+    );
+  });
+
+  /** New files carry no line counts, so "· n new" only appears when there
+   *  are some — never as a "· 0 new" the reader has to discount. */
+  it("leaves the new-file count out when nothing is untracked", () => {
+    mount();
+    expect(screen.getByTestId("review-subtitle")).not.toHaveTextContent("new");
+  });
+
+  it("offers the way back when a thread has changed nothing yet", () => {
+    mount({ files: [] });
+    expect(
+      screen.getByText(
+        "No file changes yet. Files the agent edits or creates appear here.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to fleet" }));
+    expect(onBackToFleet).toHaveBeenCalled();
+  });
+
+  /** A disabled button that never says why is a dead end. */
+  it("names the one thing a blocked merge is waiting on", () => {
+    const unverified = mount({ verify: { state: "not_run" } });
+    expect(screen.getByTestId("review-merge-blocker")).toHaveTextContent(
+      "Merge needs a passing verify",
+    );
+    unverified.unmount();
+
+    mount({ merge: "conflicts" });
+    expect(screen.getByTestId("review-merge-blocker")).toHaveTextContent(
+      "Merge needs a clean base",
+    );
   });
 
   it("shows a loading state and Open PR", () => {

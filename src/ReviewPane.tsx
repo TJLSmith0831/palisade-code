@@ -34,8 +34,13 @@ export type ReviewFile = {
 
 export type ReviewPaneProps = {
   threadId: string;
+  /** The thread's own name — what is being reviewed, said before the branch
+   *  it lives on. */
+  title: string;
   branch?: string;
   baseBranch?: string;
+  /** The same measurement the Fleet board shows for this thread. */
+  diff: { added: number; removed: number; files: number; untracked?: number };
   files: ReviewFile[];
   loadingFiles: boolean;
   verify: FleetVerify;
@@ -46,6 +51,8 @@ export type ReviewPaneProps = {
   onMerge(opts: { override: boolean }): void;
   onOpenPr(): void;
   onOpenInEditor(path: string): void;
+  /** The way out of an empty review: back to the board that sent you here. */
+  onBackToFleet(): void;
 };
 
 /** Reuses Source Control's chip tones; git has no porcelain code for the
@@ -79,8 +86,10 @@ const MERGE_BLOCKER: Record<FleetMerge, string | null> = {
 
 export default function ReviewPane({
   threadId,
+  title,
   branch,
   baseBranch,
+  diff,
   files,
   loadingFiles,
   verify,
@@ -90,6 +99,7 @@ export default function ReviewPane({
   onMerge,
   onOpenPr,
   onOpenInEditor,
+  onBackToFleet,
 }: ReviewPaneProps) {
   const [viewed, setViewedSet] = useState<Set<string>>(() => loadViewed(threadId));
   const [selected, setSelected] = useState(0);
@@ -142,6 +152,17 @@ export default function ReviewPane({
 
   return (
     <div className="review-pane" data-testid="review-pane">
+      <div className="review-header">
+        <Text size="sm" fw={600} data-testid="review-title">
+          {title}
+        </Text>
+        <Text size="xs" c="dimmed" data-testid="review-subtitle">
+          {branch ? `${branch}${baseBranch ? ` → ${baseBranch}` : ""} · ` : ""}
+          +{diff.added} −{diff.removed} · {diff.files} files
+          {(diff.untracked ?? 0) > 0 && ` · ${diff.untracked} new`}
+        </Text>
+      </div>
+
       <Group className="review-verify" justify="space-between" wrap="nowrap">
         <Text size="sm" data-testid="review-verify-line" data-state={verify.state}>
           {verifyLine(verify)}
@@ -156,8 +177,9 @@ export default function ReviewPane({
       <div className="review-body">
         <div className="review-files">
           <Text size="xs" c="dimmed" className="review-files-header" data-testid="review-viewed-count">
+            {/* The branch lives in the header now; saying it twice only
+                crowds the column the file names need. */}
             {viewedCount} of {files.length} viewed
-            {branch ? ` · ${branch}${baseBranch ? ` → ${baseBranch}` : ""}` : ""}
           </Text>
           {loadingFiles ? (
             <Group className="review-files-loading" gap="xs">
@@ -165,7 +187,14 @@ export default function ReviewPane({
               <Text size="xs" c="dimmed">Loading files…</Text>
             </Group>
           ) : files.length === 0 ? (
-            <Text size="xs" c="dimmed" className="review-files-loading">No file changes.</Text>
+            <Stack className="review-files-empty" gap="xs" align="flex-start">
+              <Text size="xs" c="dimmed">
+                No file changes yet. Files the agent edits or creates appear here.
+              </Text>
+              <Button size="xs" variant="subtle" onClick={onBackToFleet}>
+                Back to fleet
+              </Button>
+            </Stack>
           ) : (
             files.map((file, i) => {
               const glyph = fileGlyph(file.status);
@@ -224,6 +253,13 @@ export default function ReviewPane({
           </Button>
         ) : (
           <>
+            {/* A disabled button that never says why is a dead end. Name the
+                one thing that would enable it. */}
+            <Text size="xs" c="dimmed" data-testid="review-merge-blocker">
+              {merge === "clean"
+                ? "Merge needs a passing verify"
+                : "Merge needs a clean base"}
+            </Text>
             <Button size="xs" disabled>
               Merge
             </Button>

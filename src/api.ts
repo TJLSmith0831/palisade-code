@@ -552,6 +552,8 @@ export type FleetRow = {
   runId?: string;
   /** Playbook rows only: the saved playbook the run came from. */
   playbookName?: string;
+  /** Playbook rows only: the prompt the run was seeded with. */
+  seed?: string;
   title: string;
   projectId: string;
   projectName: string;
@@ -562,7 +564,12 @@ export type FleetRow = {
   attention?: FleetAttention;
   branch?: string;
   worktreePath?: string;
-  diff: { added: number; removed: number; files: number };
+  /** `files` counts tracked files that differ from HEAD and nothing else, so
+   *  it always describes the same measurement `added`/`removed` do.
+   *  `untracked` is the files the thread created that git does not track yet
+   *  — they contribute no line counts. Optional only so fixtures written
+   *  before it existed still typecheck; the backend always sends it. */
+  diff: { added: number; removed: number; files: number; untracked?: number };
   filesTouched: string[];
   /** Other threads in the same project writing some of the same files. */
   overlap: { threadId: string; files: string[] }[];
@@ -575,6 +582,20 @@ export type FleetRow = {
  *  the whole board: cross-thread file overlap can only be computed with all
  *  the rows in hand. */
 export const fleetOverview = () => invoke<FleetRow[]>("fleet_overview");
+
+/** One changed file in a thread's tree, as the Review lane lists it. */
+export type ReviewFileRow = {
+  path: string;
+  added: number;
+  removed: number;
+  status: "added" | "modified" | "deleted";
+};
+
+/** The files one thread changed, measured by the same helper the Fleet board
+ *  uses — untracked files included, machine-local paths excluded. The lane
+ *  used to parse the working diff itself, which sees neither. */
+export const threadReviewFiles = (projectHash: string, threadId: string) =>
+  invoke<ReviewFileRow[]>("thread_review_files", { projectHash, threadId });
 
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });

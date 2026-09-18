@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
-import ConnectionsPanel, { resetsIn } from "../ConnectionsPanel";
+import ConnectionsPanel, { resetsIn, usageColor } from "../ConnectionsPanel";
 
 const { apiMock } = vi.hoisted(() => ({
   apiMock: {
@@ -109,10 +109,58 @@ describe("ConnectionsPanel", () => {
   });
 
   it("routes Sign in through the app's existing login flow", async () => {
+    apiMock.agentUsage.mockResolvedValue([
+      { agentId: "claude", state: "not_signed_in", reason: "no credential" },
+    ]);
     mount();
     const button = await screen.findByTestId("connections-sign-in");
+    expect(button.textContent).toBe("Sign in");
     fireEvent.click(button);
     expect(onLogin).toHaveBeenCalledWith(login);
+  });
+
+  // A reported usage window is proof of a session; prompting to sign in over
+  // it would be the panel arguing with its own data.
+  it("drops the sign-in button once usage proves a session", async () => {
+    mount();
+    await waitFor(() => expect(screen.getByTestId("usage-ok")).toBeTruthy());
+    expect(screen.queryByTestId("connections-sign-in")).toBeNull();
+  });
+
+  // "Installed" was true of every row it ever rendered, so it said nothing.
+  it("does not badge an agent as Installed", async () => {
+    mount();
+    await waitFor(() => expect(screen.getByTestId("connections-agent")).toBeTruthy());
+    expect(screen.queryByText("Installed")).toBeNull();
+    expect(screen.queryByText("No sign-in offered")).toBeNull();
+  });
+
+  it("colours the usage bar by how much of the window is spent", async () => {
+    expect(usageColor(12)).toBe("success");
+    expect(usageColor(59.9)).toBe("success");
+    expect(usageColor(60)).toBe("warn");
+    expect(usageColor(85)).toBe("warn");
+    expect(usageColor(85.1)).toBe("danger");
+    expect(usageColor(100)).toBe("danger");
+
+    apiMock.agentUsage.mockResolvedValue([
+      {
+        agentId: "claude",
+        state: "ok",
+        windows: [
+          { label: "5h", usedPercent: 12 },
+          { label: "Day", usedPercent: 70 },
+          { label: "Week", usedPercent: 96 },
+        ],
+        fetchedAt: "2026-09-18T00:00:00Z",
+        source: "keychain",
+      },
+    ]);
+    mount();
+    await waitFor(() => expect(screen.getAllByTestId("usage-window")).toHaveLength(3));
+    expect(
+      screen.getAllByTestId("usage-window").map((bar) => bar.getAttribute("data-color"))
+    ).toEqual(["success", "warn", "danger"]);
   });
 
   it("shows agent-related preflight warnings at the top of the Agents tab", async () => {
