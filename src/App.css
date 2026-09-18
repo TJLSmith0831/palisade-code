@@ -3445,6 +3445,22 @@ input[type="checkbox"] {
   height: 8px;
 }
 
+/* Only rendered once the fleet has a verdict for this thread: a quiet dot
+   saying "the backend looked, and there is nothing pending". */
+.ds-session-dot[data-state="idle"] {
+  background: var(--muted);
+  opacity: 0.5;
+}
+
+/* The board's own pills, in a sidebar row: attention and file overlap. */
+.ds-session-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
 .ds-sessions-header {
   display: flex;
   align-items: center;

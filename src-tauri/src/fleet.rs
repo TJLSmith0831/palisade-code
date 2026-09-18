@@ -267,6 +267,32 @@ pub fn compute_overlap(rows: &mut [FleetRow]) {
     }
 }
 
+/// How many finished playbook runs the board keeps. Enough that a run which
+/// just ended is still where you left it; few enough that a week of runs does
+/// not bury the threads.
+pub const FINISHED_PLAYBOOK_LIMIT: usize = 5;
+
+/// Drop all but the `keep` most recent finished playbook rows.
+///
+/// A finished run is history, and the Playbooks panel is where history lives.
+/// Running and attention rows are never dropped, however old: a run at an
+/// approval gate is the whole reason to look at the board.
+pub fn cap_finished_playbooks(rows: &mut Vec<FleetRow>, keep: usize) {
+    let mut finished: Vec<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r.kind == FleetKind::Playbook && r.status == FleetStatus::Idle)
+        .map(|r| (r.updated_at.as_str(), r.thread_id.as_str()))
+        .collect();
+    if finished.len() <= keep {
+        return;
+    }
+    // ISO timestamps compare lexically, same as everywhere else here.
+    finished.sort_by(|a, b| b.0.cmp(a.0));
+    let dropped: std::collections::HashSet<String> =
+        finished.into_iter().skip(keep).map(|(_, id)| id.to_string()).collect();
+    rows.retain(|r| !dropped.contains(&r.thread_id));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,5 +527,49 @@ mod tests {
         assert_eq!(json["merge"], "no_worktree");
         assert_eq!(json["verify"]["state"], "not_run");
         assert!(json["verify"].get("command").is_none(), "an absent field stays absent");
+    }
+
+    fn playbook(run_id: &str, status: FleetStatus, updated_at: &str) -> FleetRow {
+        let mut r = row(run_id, "p1", &[]);
+        r.kind = FleetKind::Playbook;
+        r.run_id = Some(run_id.into());
+        r.status = status;
+        r.updated_at = updated_at.into();
+        r
+    }
+
+    /// A week of finished runs must not bury the threads: the board keeps the
+    /// newest few, and the Playbooks panel keeps the rest.
+    #[test]
+    fn only_the_newest_finished_playbook_runs_survive_the_cap() {
+        let mut rows: Vec<FleetRow> = (1..=8)
+            .map(|i| playbook(&format!("r{i}"), FleetStatus::Idle, &format!("2026-01-0{i}T00:00:00Z")))
+            .collect();
+        cap_finished_playbooks(&mut rows, 3);
+        let kept: Vec<&str> = rows.iter().map(|r| r.thread_id.as_str()).collect();
+        assert_eq!(kept, vec!["r6", "r7", "r8"]);
+    }
+
+    /// A run that is still walking, or stopped at an approval gate, is the
+    /// whole reason to look at the board — age never drops it.
+    #[test]
+    fn running_and_attention_playbook_rows_are_never_capped() {
+        let mut rows = vec![
+            playbook("old-running", FleetStatus::Running, "2020-01-01T00:00:00Z"),
+            playbook("old-gate", FleetStatus::Attention, "2020-01-01T00:00:00Z"),
+            playbook("done-1", FleetStatus::Idle, "2026-01-01T00:00:00Z"),
+            playbook("done-2", FleetStatus::Idle, "2026-01-02T00:00:00Z"),
+        ];
+        cap_finished_playbooks(&mut rows, 1);
+        let kept: Vec<&str> = rows.iter().map(|r| r.thread_id.as_str()).collect();
+        assert_eq!(kept, vec!["old-running", "old-gate", "done-2"]);
+    }
+
+    /// Threads are not runs. The cap must not touch them however many there are.
+    #[test]
+    fn thread_rows_are_untouched_by_the_playbook_cap() {
+        let mut rows = vec![row("a", "p1", &[]), row("b", "p1", &[]), row("c", "p1", &[])];
+        cap_finished_playbooks(&mut rows, 1);
+        assert_eq!(rows.len(), 3);
     }
 }

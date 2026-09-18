@@ -2499,6 +2499,11 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                 });
             }
         }
+        // Finished runs are history, and history is the Playbooks panel's job.
+        // The board keeps the newest few so a run that just ended is still
+        // where you left it; a run still walking, or stuck at a gate, is never
+        // dropped.
+        fleet::cap_finished_playbooks(&mut rows, fleet::FINISHED_PLAYBOOK_LIMIT);
         fleet::compute_overlap(&mut rows);
         // Most recently touched first: the board's own ordering, so two
         // clients render the same fleet in the same order.

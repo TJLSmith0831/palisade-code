@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Badge,
   Button,
   Menu,
   Select,
@@ -10,7 +9,8 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { IconBox, IconDots, IconRoute } from "@tabler/icons-react";
-import type { FleetRow, FleetAttention, FleetVerify } from "./api";
+import type { FleetRow } from "./api";
+import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { relativeTime } from "./SessionList";
 
 export type NewRunInput = {
@@ -56,39 +56,6 @@ export function groupFleet(rows: FleetRow[]): {
   };
 }
 
-const ATTENTION_LABEL: Record<FleetAttention, string> = {
-  permission: "Needs permission",
-  gate: "Needs approval",
-  turn_done: "Turn finished",
-  verify_failed: "Verify failed",
-  merge_conflict: "Merge conflict",
-  crashed: "Crashed",
-};
-
-/** Evidence, not opinion: a pass names the commit it was measured at, and
- *  "Not verified" is the honest default rather than a neutral blank. */
-function verifyBadge(verify: FleetVerify) {
-  if (verify.state === "pass") {
-    return {
-      label: `Verified at ${(verify.commit ?? "").slice(0, 7)}`,
-      color: "success",
-      tip: verify.command ?? "Verified",
-    };
-  }
-  if (verify.state === "fail") {
-    return {
-      label: "Verify failed",
-      color: "danger",
-      tip: verify.command ?? "The verify command exited non-zero",
-    };
-  }
-  return {
-    label: "Not verified",
-    color: "neutral",
-    tip: "No verify command has run at this commit",
-  };
-}
-
 function Row({
   row,
   onOpen,
@@ -110,9 +77,7 @@ function Row({
   | "onOpenRun"
   | "onCancelRun"
 >) {
-  const verify = verifyBadge(row.verify);
   const mergeable = row.merge === "clean" && row.verify.state === "pass";
-  const overlaps = row.overlap.length;
   // A playbook run is not a thread: it opens and stops by run id, and it has
   // no branch to merge, no PR to open and nothing to archive.
   const playbook = row.kind === "playbook";
@@ -178,49 +143,12 @@ function Row({
       </div>
 
       <div className="fleet-row-badges">
-        {row.attention && (
-          <Badge
-            size="xs"
-            radius="sm"
-            variant="light"
-            color="warn"
-            data-testid="fleet-attention"
-          >
-            {ATTENTION_LABEL[row.attention]}
-          </Badge>
-        )}
+        {row.attention && <AttentionPill attention={row.attention} />}
         {/* Verification is a thread's evidence. A run has no commit of its
             own to have verified, so the badge would only ever say the same
             nothing. */}
-        {!playbook && (
-          <Tooltip label={verify.tip} openDelay={400}>
-            <Badge
-              size="xs"
-              radius="sm"
-              variant="light"
-              color={verify.color}
-              data-testid="fleet-verify"
-            >
-              {verify.label}
-            </Badge>
-          </Tooltip>
-        )}
-        {overlaps > 0 && (
-          <Tooltip
-            label={row.overlap.flatMap((o) => o.files).join(", ")}
-            openDelay={400}
-          >
-            <Badge
-              size="xs"
-              radius="sm"
-              variant="light"
-              color="neutral"
-              data-testid="fleet-overlap"
-            >
-              {`Overlaps ${overlaps} thread${overlaps === 1 ? "" : "s"}`}
-            </Badge>
-          </Tooltip>
-        )}
+        {!playbook && <VerifyBadge verify={row.verify} />}
+        <OverlapBadge overlap={row.overlap} />
       </div>
 
       <Menu position="bottom-end" withinPortal>

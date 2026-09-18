@@ -190,6 +190,7 @@ import ReviewPane, { type ReviewFile } from "./ReviewPane";
 import { useFleet } from "./hooks/useFleet";
 import { parseFilePatches, pathFromPatch } from "./gitDiff";
 import SessionList from "./SessionList";
+import { VerifyBadge } from "./fleetBadges";
 import SearchPanel from "./SearchPanel";
 import SourceControlPanel from "./SourceControlPanel";
 import type { PanelId } from "./hooks/useAppShell";
@@ -243,6 +244,9 @@ type ChatSurfaceProps = {
   /** This thread's isolated worktree, absent until its first session runs
    *  and for every thread in a non-git project. */
   worktree?: api.WorktreeStatus;
+  /** This thread's latest verification, from the same fleet rows the board
+   *  reads. Absent while no project is open. */
+  verify?: api.FleetVerify;
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
   /** Archive this thread — the merge gate offers it once work has landed. */
@@ -540,6 +544,7 @@ export const ChatSurface = memo(
     onPermissionAnswered,
     busy,
     worktree,
+    verify,
     onViewDiff,
     onArchiveSelf,
     onWorktreeChanged,
@@ -1359,6 +1364,9 @@ export const ChatSurface = memo(
               </Badge>
             </Tooltip>
           )}
+          {/* The branch's evidence, beside the branch itself: a named verify
+              command's exit code at a named commit, or "Not verified". */}
+          {verify && <VerifyBadge verify={verify} />}
           <div className="spacer" />
         </div>
         {/* Amendment 5: switching agents mid-session used to be explained
@@ -5525,10 +5533,19 @@ export default function App() {
   }, [project?.hash, thread?.id]);
 
   // ----------------------------------------------------------------- fleet
-  // Polled only while one of the two surfaces that reads it is on screen.
-  // Review takes its verify/merge evidence from the same rows — one source
-  // for "what does the backend actually know about this thread".
-  const fleet = useFleet({ active: boardPanel });
+  // Polled whenever a project is open: the board, Review and the sidebar's
+  // thread rows all read these rows, and the sidebar is on screen far more
+  // often than the board is. One source for "what does the backend actually
+  // know about this thread".
+  const fleet = useFleet({ active: !!project });
+  /** The open thread's own row — what the header's verify badge reports. */
+  const threadFleetRow = useMemo(
+    () =>
+      thread
+        ? fleet.rows.find((r) => r.kind === "thread" && r.threadId === thread.id)
+        : undefined,
+    [fleet.rows, thread]
+  );
   const fleetAgents = useMemo(
     () =>
       (flight?.agents ?? []).map((agent) => ({
@@ -5962,6 +5979,7 @@ export default function App() {
     },
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
+    verify: threadFleetRow?.verify,
     onArchiveSelf: thread ? () => onArchiveThread(thread) : undefined,
     onWorktreeChanged: loadWorktrees,
     onError: (message: string) => banner(message, "error"),
@@ -6671,14 +6689,15 @@ export default function App() {
             {!boardPanel && shell.sessionListOpen && (
               <SessionList
                 threads={threads}
-                projects={projects}
-                activeProject={project ?? undefined}
                 activeThread={thread ?? undefined}
                 /* `busyThreads` is already exactly "threads with a live
                    session" — no second derivation of the same state. */
                 liveThreadIds={busyThreads}
                 attentionThreadIds={attentionThreads}
                 worktrees={worktrees}
+                /* Same rows the board renders — one source for what the
+                   backend knows about a thread, whichever surface asks. */
+                fleetRows={fleet.rows}
                 onNewThread={onNewThread}
                 onSelect={onSelectVibeThread}
                 onRename={onRenameThread}

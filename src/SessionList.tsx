@@ -7,7 +7,8 @@ import {
   IconSearch,
   IconSparkles,
 } from "@tabler/icons-react";
-import type { Project, ThreadMeta, WorktreeStatus } from "./api";
+import type { FleetRow, ThreadMeta, WorktreeStatus } from "./api";
+import { AttentionPill, OverlapBadge } from "./fleetBadges";
 
 // Amendment 3's Vibe-only session list: the browse/search surface, distinct
 // from the in-conversation thread-tab strip (which stays as the quick
@@ -82,6 +83,28 @@ export function threadState(
   return "idle";
 }
 
+/** The three bands the sidebar shares with the Fleet board, in the order a
+ *  band earns your attention. A thread with no fleet row is idle: the backend
+ *  having nothing to say about it is not the same as it being busy. */
+export const FLEET_BANDS = [
+  { key: "attention", label: "Needs attention" },
+  { key: "running", label: "Running" },
+  { key: "idle", label: "Idle" },
+] as const;
+
+/** Split threads into those bands, keeping each band in the order it came in.
+ *  Empty bands are dropped so the sidebar never heads a group over nothing. */
+export function groupByFleet(
+  threads: ThreadMeta[],
+  rows: Map<string, FleetRow>
+): { key: string; label: string; list: ThreadMeta[] }[] {
+  return FLEET_BANDS.map(({ key, label }) => ({
+    key,
+    label,
+    list: threads.filter((t) => (rows.get(t.id)?.status ?? "idle") === key),
+  })).filter((band) => band.list.length > 0);
+}
+
 const STATE_LABEL: Record<ThreadState, string> = {
   "needs-attention": "Waiting on you",
   running: "Agent is working",
@@ -91,12 +114,11 @@ const STATE_LABEL: Record<ThreadState, string> = {
 
 export default function SessionList({
   threads,
-  projects,
-  activeProject,
   activeThread,
   liveThreadIds,
   attentionThreadIds = new Set(),
   worktrees,
+  fleetRows,
   onNewThread,
   onSelect,
   onRename,
@@ -104,8 +126,6 @@ export default function SessionList({
   userOpened = false,
 }: {
   threads: ThreadMeta[];
-  projects: Project[];
-  activeProject: Project | undefined;
   activeThread: ThreadMeta | undefined;
   /** Threads with a live/busy session — drives the accent dot. */
   liveThreadIds: Set<string>;
@@ -115,6 +135,9 @@ export default function SessionList({
   /** Each thread's isolated worktree, keyed by thread id. Threads that have
    *  never run — and every thread in a non-git project — are absent. */
   worktrees: Map<string, WorktreeStatus>;
+  /** The same rows the Fleet board renders. Absent — or missing this thread —
+   *  and the row falls back to what the worktree alone can say. */
+  fleetRows?: FleetRow[];
   onNewThread: () => void;
   onSelect: (thread: ThreadMeta) => void;
   onRename: (thread: ThreadMeta) => void;
@@ -126,24 +149,22 @@ export default function SessionList({
   const [query, setQuery] = useState("");
   const visible = useMemo(() => filterThreads(threads, query), [threads, query]);
 
-  // Group headers are the workspace name — Palisade already has a workspace
-  // picker, so this is not an invented "Spaces" concept.
-  const groups = useMemo(() => {
-    const byHash = new Map<string, ThreadMeta[]>();
-    for (const thread of visible) {
-      const list = byHash.get(thread.projectHash) ?? [];
-      list.push(thread);
-      byHash.set(thread.projectHash, list);
+  // Keyed by thread so a row asks one question. Playbook runs are not
+  // threads and never match — this is the thread list.
+  const rowsByThread = useMemo(() => {
+    const map = new Map<string, FleetRow>();
+    for (const row of fleetRows ?? []) {
+      if (row.kind === "thread") map.set(row.threadId, row);
     }
-    return [...byHash.entries()].map(([hash, list]) => ({
-      hash,
-      name:
-        projects.find((p) => p.hash === hash)?.displayName ??
-        activeProject?.displayName ??
-        "Workspace",
-      list,
-    }));
-  }, [visible, projects, activeProject]);
+    return map;
+  }, [fleetRows]);
+
+  // Grouped the way the board groups: what wants you, what is moving, the
+  // rest. The workspace name is already in the workspace picker.
+  const groups = useMemo(
+    () => groupByFleet(visible, rowsByThread),
+    [visible, rowsByThread]
+  );
 
   return (
     <aside
@@ -193,11 +214,20 @@ export default function SessionList({
           </div>
         )}
         {groups.map((group) => (
-          <div key={group.hash}>
-            <h2 className="ds-section-heading">{group.name}</h2>
+          <div key={group.key} data-testid={`session-group-${group.key}`}>
+            <h2 className="ds-section-heading">{group.label}</h2>
             {group.list.map((thread) => {
               const worktree = worktrees.get(thread.id);
-              const state = threadState(thread, liveThreadIds, worktree, attentionThreadIds);
+              const row = rowsByThread.get(thread.id);
+              // The backend's verdict wins when it has one: it can see a
+              // failed verify or a conflicting merge that no local diff stat
+              // reveals.
+              const state: ThreadState = row
+                ? row.status === "attention"
+                  ? "needs-attention"
+                  : row.status
+                : threadState(thread, liveThreadIds, worktree, attentionThreadIds);
+              const diff = row?.diff ?? worktree;
               return (
               <div
                 key={thread.id}
@@ -233,13 +263,19 @@ export default function SessionList({
                 </div>
                 <div className="ds-session-meta">
                   <span>{relativeTime(thread.updatedAt)}</span>
-                  {worktree && worktree.added + worktree.removed > 0 && (
+                  {diff && diff.added + diff.removed > 0 && (
                     <span className="ds-session-diff" data-testid="session-diff">
-                      <span className="added">+{worktree.added}</span>
-                      <span className="removed">−{worktree.removed}</span>
+                      <span className="added">+{diff.added}</span>
+                      <span className="removed">−{diff.removed}</span>
                     </span>
                   )}
                 </div>
+                {row && (row.attention || row.overlap.length > 0) && (
+                  <div className="ds-session-badges">
+                    {row.attention && <AttentionPill attention={row.attention} />}
+                    <OverlapBadge overlap={row.overlap} />
+                  </div>
+                )}
                 {worktree && (
                   <div className="ds-session-branch" title={worktree.branch}>
                     {worktree.branch}
@@ -288,7 +324,7 @@ export default function SessionList({
                     <IconArchive size={13} />
                   </button>
                 </div>
-                {state !== "idle" && (
+                {(state !== "idle" || row) && (
                   <Tooltip label={STATE_LABEL[state]} openDelay={400}>
                     <span
                       className="ds-session-dot"
