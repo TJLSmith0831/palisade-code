@@ -10,6 +10,7 @@ const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
 
 const row = (over: Partial<FleetRow> = {}): FleetRow => ({
+  kind: "thread",
   threadId: "t1",
   title: "Fix the merge gate",
   projectId: "p1",
@@ -38,9 +39,26 @@ const props = (over: Partial<FleetBoardProps> = {}): FleetBoardProps => ({
   onMerge: vi.fn(),
   onOpenPr: vi.fn(),
   onArchive: vi.fn(),
+  onOpenRun: vi.fn(),
+  onCancelRun: vi.fn(),
   onNewRun: vi.fn(),
   ...over,
 });
+
+/** One run of a playbook: a run id for identity, no branch and no diff. */
+const playbookRow = (over: Partial<FleetRow> = {}): FleetRow =>
+  row({
+    kind: "playbook",
+    threadId: "run-1",
+    runId: "run-1",
+    playbookName: "draft then review",
+    title: "draft then review",
+    branch: undefined,
+    diff: { added: 0, removed: 0, files: 0 },
+    filesTouched: [],
+    merge: "no_worktree",
+    ...over,
+  });
 
 describe("groupFleet", () => {
   it("splits rows into the three bands", () => {
@@ -149,6 +167,62 @@ describe("FleetBoard", () => {
       mode: "spec",
       isolated: true,
     });
+  });
+
+  it("names a playbook row as one, with its playbook and its glyph", () => {
+    render(<FleetBoard {...props({ rows: [playbookRow()] })} />);
+    expect(screen.getByTestId("fleet-row")).toHaveTextContent(
+      "Playbook · draft then review"
+    );
+    expect(screen.getByLabelText("Playbook")).toBeInTheDocument();
+    // A run writes in its thread's tree and has no commit of its own, so
+    // neither a diff nor a verify verdict would say anything true here.
+    expect(screen.queryByTestId("fleet-diff")).toBeNull();
+    expect(screen.queryByTestId("fleet-verify")).toBeNull();
+  });
+
+  it("calls the run to a stop at a gate 'Needs approval'", () => {
+    render(
+      <FleetBoard
+        {...props({ rows: [playbookRow({ status: "attention", attention: "gate" })] })}
+      />
+    );
+    expect(screen.getByTestId("fleet-attention")).toHaveTextContent("Needs approval");
+  });
+
+  it("opens and stops a playbook row by run id, never by thread", async () => {
+    const onOpen = vi.fn();
+    const onStop = vi.fn();
+    const onOpenRun = vi.fn();
+    const onCancelRun = vi.fn();
+    render(
+      <FleetBoard
+        {...props({
+          rows: [playbookRow({ status: "running" })],
+          onOpen,
+          onStop,
+          onOpenRun,
+          onCancelRun,
+        })}
+      />
+    );
+    fireEvent.click(screen.getByTestId("fleet-row"));
+    fireEvent.click(screen.getByTestId("fleet-actions"));
+    fireEvent.click(await screen.findByText("Stop"));
+    expect(onOpenRun).toHaveBeenCalledWith("run-1");
+    expect(onCancelRun).toHaveBeenCalledWith("run-1");
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it("hides Merge, Open PR and Archive on a playbook row", async () => {
+    render(<FleetBoard {...props({ rows: [playbookRow()] })} />);
+    fireEvent.click(screen.getByTestId("fleet-actions"));
+    expect(await screen.findByText("Open")).toBeInTheDocument();
+    expect(screen.queryByText("Merge")).toBeNull();
+    expect(screen.queryByTestId("fleet-merge-disabled")).toBeNull();
+    expect(screen.queryByText("Open PR")).toBeNull();
+    expect(screen.queryByText("Archive")).toBeNull();
   });
 
   it("keeps Start run disabled when no agent is installed", () => {

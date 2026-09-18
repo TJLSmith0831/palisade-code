@@ -108,7 +108,7 @@ describe("ChainsPanel", () => {
       </MantineProvider>
     );
 
-    expect(await screen.findByText(/No chains yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No playbooks yet/)).toBeInTheDocument();
   });
 
   it("empty state offers a worked example that saves and opens it (D16)", async () => {

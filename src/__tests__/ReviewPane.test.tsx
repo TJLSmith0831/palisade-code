@@ -37,7 +37,7 @@ const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) =>
       loadingFiles={false}
       verify={pass}
       merge={"clean" as FleetMerge}
-      renderDiff={(path, mode) => <div data-testid="diff">{`${path}:${mode}`}</div>}
+      renderDiff={(path) => <div data-testid="diff">{path}</div>}
       onRunVerify={onRunVerify}
       onMerge={onMerge}
       onOpenPr={onOpenPr}
@@ -121,15 +121,15 @@ describe("ReviewPane", () => {
 
   it("moves the selection with j/k and clamps at both ends", () => {
     mount();
-    expect(screen.getByTestId("diff")).toHaveTextContent("src/a.ts:inline");
+    expect(screen.getByTestId("diff")).toHaveTextContent("src/a.ts");
     fireEvent.keyDown(window, { key: "k" });
-    expect(screen.getByTestId("diff")).toHaveTextContent("src/a.ts:inline");
+    expect(screen.getByTestId("diff")).toHaveTextContent("src/a.ts");
     fireEvent.keyDown(window, { key: "j" });
     fireEvent.keyDown(window, { key: "j" });
     fireEvent.keyDown(window, { key: "j" });
-    expect(screen.getByTestId("diff")).toHaveTextContent("src/c.ts:inline");
+    expect(screen.getByTestId("diff")).toHaveTextContent("src/c.ts");
     fireEvent.keyDown(window, { key: "k" });
-    expect(screen.getByTestId("diff")).toHaveTextContent("src/b.ts:inline");
+    expect(screen.getByTestId("diff")).toHaveTextContent("src/b.ts");
   });
 
   it("toggles Viewed with v and opens the editor with o", () => {
@@ -140,16 +140,6 @@ describe("ReviewPane", () => {
     expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("0 of 3 viewed");
     fireEvent.keyDown(window, { key: "o" });
     expect(onOpenInEditor).toHaveBeenCalledWith("src/a.ts");
-  });
-
-  it("persists the diff mode choice", () => {
-    const first = mount();
-    fireEvent.click(screen.getByText("Side by side"));
-    expect(screen.getByTestId("diff")).toHaveTextContent("src/a.ts:side-by-side");
-    expect(localStorage.getItem("palisade.review.diffMode")).toBe("side-by-side");
-    first.unmount();
-    mount();
-    expect(screen.getByTestId("diff")).toHaveTextContent("src/a.ts:side-by-side");
   });
 
   it("shows a loading state and Open PR", () => {

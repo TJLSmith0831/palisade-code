@@ -9,7 +9,7 @@ import {
   Textarea,
   Tooltip,
 } from "@mantine/core";
-import { IconBox, IconDots } from "@tabler/icons-react";
+import { IconBox, IconDots, IconRoute } from "@tabler/icons-react";
 import type { FleetRow, FleetAttention, FleetVerify } from "./api";
 import { relativeTime } from "./SessionList";
 
@@ -28,6 +28,10 @@ export type FleetBoardProps = {
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
   onStop(threadId: string): void;
+  /** Opens a playbook run — the board's Open for a `playbook` row. */
+  onOpenRun(runId: string): void;
+  /** Stops a playbook run — the board's Stop for a `playbook` row. */
+  onCancelRun(runId: string): void;
   onMerge(threadId: string): void;
   onOpenPr(threadId: string): void;
   onArchive(threadId: string): void;
@@ -54,6 +58,7 @@ export function groupFleet(rows: FleetRow[]): {
 
 const ATTENTION_LABEL: Record<FleetAttention, string> = {
   permission: "Needs permission",
+  gate: "Needs approval",
   turn_done: "Turn finished",
   verify_failed: "Verify failed",
   merge_conflict: "Merge conflict",
@@ -92,13 +97,28 @@ function Row({
   onMerge,
   onOpenPr,
   onArchive,
+  onOpenRun,
+  onCancelRun,
 }: { row: FleetRow } & Pick<
   FleetBoardProps,
-  "onOpen" | "onReview" | "onStop" | "onMerge" | "onOpenPr" | "onArchive"
+  | "onOpen"
+  | "onReview"
+  | "onStop"
+  | "onMerge"
+  | "onOpenPr"
+  | "onArchive"
+  | "onOpenRun"
+  | "onCancelRun"
 >) {
   const verify = verifyBadge(row.verify);
   const mergeable = row.merge === "clean" && row.verify.state === "pass";
   const overlaps = row.overlap.length;
+  // A playbook run is not a thread: it opens and stops by run id, and it has
+  // no branch to merge, no PR to open and nothing to archive.
+  const playbook = row.kind === "playbook";
+  const runId = row.runId ?? row.threadId;
+  const open = () => (playbook ? onOpenRun(runId) : onOpen(row.threadId));
+  const stop = () => (playbook ? onCancelRun(runId) : onStop(row.threadId));
 
   return (
     <div
@@ -107,20 +127,31 @@ function Row({
       tabIndex={0}
       data-testid="fleet-row"
       data-thread={row.threadId}
-      onClick={() => onOpen(row.threadId)}
+      onClick={open}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();
-          onOpen(row.threadId);
-        } else if (e.key === "r" || e.key === "R") {
+          open();
+        } else if (!playbook && (e.key === "r" || e.key === "R")) {
           e.preventDefault();
           onReview(row.threadId);
         }
       }}
     >
-      <Tooltip label={row.agentName ?? row.agentId ?? "No agent"} openDelay={400}>
+      <Tooltip
+        label={
+          playbook
+            ? `Playbook · ${row.playbookName ?? row.title}`
+            : row.agentName ?? row.agentId ?? "No agent"
+        }
+        openDelay={400}
+      >
         <span className="fleet-agent" data-testid="fleet-agent">
-          <IconBox size={14} aria-label={row.agentName ?? "Agent"} />
+          {playbook ? (
+            <IconRoute size={14} aria-label="Playbook" />
+          ) : (
+            <IconBox size={14} aria-label={row.agentName ?? "Agent"} />
+          )}
         </span>
       </Tooltip>
 
@@ -128,14 +159,20 @@ function Row({
         <div className="fleet-row-title">{row.title}</div>
         <div className="fleet-row-meta">
           <span>
-            {row.projectName}
-            {row.branch ? ` · ${row.branch}` : ""}
+            {playbook
+              ? `Playbook · ${row.playbookName ?? row.title}`
+              : `${row.projectName}${row.branch ? ` · ${row.branch}` : ""}`}
           </span>
-          <span className="fleet-diff" data-testid="fleet-diff">
-            <span className="added">+{row.diff.added}</span>{" "}
-            <span className="removed">−{row.diff.removed}</span> ·{" "}
-            {row.diff.files} files
-          </span>
+          {/* A run writes in its thread's tree, so its own diff is always
+              zero — a "+0 −0 · 0 files" on every playbook row is noise, not
+              evidence. */}
+          {!playbook && (
+            <span className="fleet-diff" data-testid="fleet-diff">
+              <span className="added">+{row.diff.added}</span>{" "}
+              <span className="removed">−{row.diff.removed}</span> ·{" "}
+              {row.diff.files} files
+            </span>
+          )}
           <span>{relativeTime(row.updatedAt)}</span>
         </div>
       </div>
@@ -152,17 +189,22 @@ function Row({
             {ATTENTION_LABEL[row.attention]}
           </Badge>
         )}
-        <Tooltip label={verify.tip} openDelay={400}>
-          <Badge
-            size="xs"
-            radius="sm"
-            variant="light"
-            color={verify.color}
-            data-testid="fleet-verify"
-          >
-            {verify.label}
-          </Badge>
-        </Tooltip>
+        {/* Verification is a thread's evidence. A run has no commit of its
+            own to have verified, so the badge would only ever say the same
+            nothing. */}
+        {!playbook && (
+          <Tooltip label={verify.tip} openDelay={400}>
+            <Badge
+              size="xs"
+              radius="sm"
+              variant="light"
+              color={verify.color}
+              data-testid="fleet-verify"
+            >
+              {verify.label}
+            </Badge>
+          </Tooltip>
+        )}
         {overlaps > 0 && (
           <Tooltip
             label={row.overlap.flatMap((o) => o.files).join(", ")}
@@ -193,24 +235,33 @@ function Row({
           </button>
         </Menu.Target>
         <Menu.Dropdown onClick={(e) => e.stopPropagation()}>
-          <Menu.Item onClick={() => onOpen(row.threadId)}>Open</Menu.Item>
-          <Menu.Item onClick={() => onReview(row.threadId)}>Review</Menu.Item>
+          <Menu.Item onClick={open}>Open</Menu.Item>
+          {!playbook && (
+            <Menu.Item onClick={() => onReview(row.threadId)}>Review</Menu.Item>
+          )}
           {row.status === "running" && (
-            <Menu.Item onClick={() => onStop(row.threadId)}>Stop</Menu.Item>
+            <Menu.Item onClick={stop}>Stop</Menu.Item>
           )}
-          {mergeable ? (
-            <Menu.Item onClick={() => onMerge(row.threadId)}>Merge</Menu.Item>
-          ) : (
-            <Tooltip label="Merge needs a passing verify">
-              <div>
-                <Menu.Item disabled data-testid="fleet-merge-disabled">
-                  Merge
-                </Menu.Item>
-              </div>
-            </Tooltip>
+          {/* Merge, PR and Archive are a branch's story. A playbook run has
+              no branch of its own. */}
+          {!playbook &&
+            (mergeable ? (
+              <Menu.Item onClick={() => onMerge(row.threadId)}>Merge</Menu.Item>
+            ) : (
+              <Tooltip label="Merge needs a passing verify">
+                <div>
+                  <Menu.Item disabled data-testid="fleet-merge-disabled">
+                    Merge
+                  </Menu.Item>
+                </div>
+              </Tooltip>
+            ))}
+          {!playbook && (
+            <Menu.Item onClick={() => onOpenPr(row.threadId)}>Open PR</Menu.Item>
           )}
-          <Menu.Item onClick={() => onOpenPr(row.threadId)}>Open PR</Menu.Item>
-          <Menu.Item onClick={() => onArchive(row.threadId)}>Archive</Menu.Item>
+          {!playbook && (
+            <Menu.Item onClick={() => onArchive(row.threadId)}>Archive</Menu.Item>
+          )}
         </Menu.Dropdown>
       </Menu>
     </div>
@@ -228,6 +279,8 @@ export default function FleetBoard({
   onMerge,
   onOpenPr,
   onArchive,
+  onOpenRun,
+  onCancelRun,
   onNewRun,
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
@@ -327,6 +380,8 @@ export default function FleetBoard({
                   onMerge={onMerge}
                   onOpenPr={onOpenPr}
                   onArchive={onArchive}
+                  onOpenRun={onOpenRun}
+                  onCancelRun={onCancelRun}
                 />
               ))}
             </div>

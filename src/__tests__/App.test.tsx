@@ -4053,19 +4053,6 @@ describe("Session restore", () => {
     );
   });
 
-  it("comes back in the shell it was left in", async () => {
-    localStorage.setItem(
-      "palisade:session:proj-1",
-      JSON.stringify({ openPaths: [], activePath: null, centerShell: "vibe" })
-    );
-    invokeMock.mockImplementation(router());
-
-    render(<App />);
-    await openProject();
-
-    await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
-  });
-
   it("records what is open so the next launch can restore it", async () => {
     invokeMock.mockImplementation(router());
     render(<App />);

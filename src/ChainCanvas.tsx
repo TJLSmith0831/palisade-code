@@ -182,9 +182,9 @@ export function applyNodePatch(
 
 /** The first thing wrong with this draft, or null. Mirrors `Chain::validate`. */
 export function draftProblem(draft: Draft): string | null {
-  if (!draft.name.trim()) return "Give the chain a name before saving.";
+  if (!draft.name.trim()) return "Give the playbook a name before saving.";
   if (Object.keys(draft.nodes).length === 0) return "Add at least one node.";
-  if (!draft.nodes[draft.entry]) return "Pick which node the chain starts at.";
+  if (!draft.nodes[draft.entry]) return "Pick which node the playbook starts at.";
   // Keyed, not `n.role`: the map key *is* the role, and a node whose `role`
   // field went missing is precisely the case that used to report itself as
   // "undefined has no agent bound to it".
@@ -371,7 +371,7 @@ export default function ChainCanvas({
           }).catch(() => undefined);
         }
       })
-      .catch((err) => live && setError(describeError(err, { loading: "this chain" })));
+      .catch((err) => live && setError(describeError(err, { loading: "this playbook" })));
     return () => {
       live = false;
     };
@@ -531,7 +531,7 @@ export default function ChainCanvas({
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setError(describeError(err, { action: "save this chain" }));
+      setError(describeError(err, { action: "save this playbook" }));
     }
   };
 
@@ -744,8 +744,8 @@ export default function ChainCanvas({
       <div className="ds-chain-toolbar">
         <TextInput
           size="xs"
-          placeholder="Chain name"
-          aria-label="Chain name"
+          placeholder="Playbook name"
+          aria-label="Playbook name"
           value={draft.name}
           disabled={watching}
           onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
@@ -796,7 +796,7 @@ export default function ChainCanvas({
               label={
                 persisted.current === draft.name
                   ? `Test run ${draft.name}`
-                  : "Save this chain before starting a test run"
+                  : "Save this playbook before starting a test run"
               }
             >
               {/* The one action here that spends money and takes time. It is
@@ -934,7 +934,7 @@ export default function ChainCanvas({
         onKeyDown={(e) => e.key === "Escape" && setConnectFrom(null)}
         tabIndex={0}
         role="application"
-        aria-label="Chain graph"
+        aria-label="Playbook graph"
       >
         {/* Overlaid, not stacked in flow: this used to sit between the
             toolbar and the surface, so every toggle resized the surface
@@ -1140,7 +1140,7 @@ export default function ChainCanvas({
       <Modal
         opened={seedComposer}
         onClose={() => setSeedComposer(false)}
-        title="Test this chain"
+        title="Test this playbook"
         size="sm"
       >
         <Stack gap="sm">
@@ -1431,7 +1431,7 @@ function OutcomeBar({ outcome }: { outcome: api.ChainOutcome }) {
 export function outcomeText(outcome: api.ChainOutcome): string {
   switch (outcome.kind) {
     case "completed":
-      return "Chain finished.";
+      return "Playbook finished.";
     case "rejected":
       return `Rejected at ${outcome.at}.`;
     case "gateFailed":

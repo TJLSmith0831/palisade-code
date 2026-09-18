@@ -18,7 +18,6 @@ export type EditorSession = {
   /** Cursor offset per path, so a restored tab opens where you left it. */
   cursors: Record<string, number>;
   expandedDirs: string[];
-  centerShell: "vibe" | "editor";
   diffOpen: boolean;
   includeHidden: boolean;
   /** Which left-rail panel was open (`null` = rail only). Absent in sessions
@@ -31,7 +30,6 @@ const EMPTY: EditorSession = {
   activePath: null,
   cursors: {},
   expandedDirs: [],
-  centerShell: "editor",
   diffOpen: false,
   // Dotfiles visible by default (f3b44ce). FileTree's own `?? true` fallback
   // never fired for a new project, because App always passes this field —
@@ -70,7 +68,6 @@ function coerce(raw: unknown): EditorSession {
     expandedDirs: Array.isArray(value.expandedDirs)
       ? value.expandedDirs.filter((d): d is string => typeof d === "string")
       : [],
-    centerShell: value.centerShell === "vibe" ? "vibe" : "editor",
     diffOpen: value.diffOpen === true,
     // Only an explicit `false` hides them; a session written before this
     // field existed keeps the visible default rather than inheriting "off".

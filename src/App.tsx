@@ -151,6 +151,7 @@ const STARTER_PROMPTS = [
 
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
+import ConnectionsPanel from "./ConnectionsPanel";
 // Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
 // nobody loads until they open the panel.
 const DatabasePanel = lazy(() => import("./DatabasePanel"));
@@ -1642,13 +1643,13 @@ export const ChatSurface = memo(
               data-testid="command-menu"
               data-kind={openMenuKind ?? undefined}
               role="listbox"
-              aria-label={openMenuKind === "chains" ? "Chains" : "Skills"}
+              aria-label={openMenuKind === "chains" ? "Playbooks" : "Skills"}
             >
               <div className="ds-command-menu-header">
                 {openMenuKind === "chains" ? (
                   <>
                     <IconRoute size={12} />
-                    Chains
+                    Playbooks
                   </>
                 ) : (
                   <>
@@ -1661,7 +1662,7 @@ export const ChatSurface = memo(
                 {commandPool.length === 0 ? (
                   <p className="ds-command-menu-empty">
                     {openMenuKind === "chains"
-                      ? "No chains saved for this project yet."
+                      ? "No playbooks saved for this project yet."
                       : "No skills advertised for this session yet — send a message to start one."}
                   </p>
                 ) : commandMatches.length === 0 ? (
@@ -2155,7 +2156,7 @@ export const ChatSurface = memo(
                 {chains.length > 0 && (
                   <>
                     <Menu.Divider />
-                    <Menu.Label>Chain</Menu.Label>
+                    <Menu.Label>Playbook</Menu.Label>
                     {chains.map((chain) => {
                       const id = `${CHAIN_EXECUTOR_PREFIX}${chain.name}`;
                       return (
@@ -5571,6 +5572,19 @@ export default function App() {
   const onFleetStop = useCallback((threadId: string) => {
     void api.stopExecutor(undefined, threadId);
   }, []);
+  /** A playbook row opens where its run already lives: the Playbooks panel,
+   *  with the run selected on the canvas — the same path the panel's own run
+   *  history takes. */
+  const onFleetOpenRun = useCallback(
+    (runId: string) => {
+      onChainOpenRun(runId);
+      shell.openPanel("chains");
+    },
+    [onChainOpenRun, shell.openPanel]
+  );
+  const onFleetCancelRun = useCallback((runId: string) => {
+    void api.cancelChainRun(runId);
+  }, []);
   const onFleetArchive = useCallback(
     (threadId: string) => {
       const found = threads.find((t) => t.id === threadId);
@@ -6275,7 +6289,13 @@ export default function App() {
           </>
         );
       case "mcp":
-        return <McpPane projectHash={project.hash} onError={fail} />;
+        return (
+          <ConnectionsPanel
+            projectHash={project.hash}
+            onLogin={onAgentLogin}
+            mcp={<McpPane projectHash={project.hash} onError={fail} />}
+          />
+        );
       case "database":
         return (
           <Suspense fallback={<div style={{ padding: 12 }}>Loading…</div>}>
@@ -6712,6 +6732,8 @@ export default function App() {
                   onMerge={onMergeThread}
                   onOpenPr={onOpenThreadPr}
                   onArchive={onFleetArchive}
+                  onOpenRun={onFleetOpenRun}
+                  onCancelRun={onFleetCancelRun}
                   onNewRun={onNewRun}
                 />
               ) : shell.activePanel === "review" ? (

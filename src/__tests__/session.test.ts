@@ -8,7 +8,6 @@ const full = {
   activePath: "b.ts",
   cursors: { "a.ts": 42 },
   expandedDirs: ["src"],
-  centerShell: "vibe" as const,
   diffOpen: true,
   includeHidden: true,
 };
@@ -23,7 +22,6 @@ describe("editor session", () => {
     const session = loadSession("unseen");
     expect(session.openPaths).toEqual([]);
     expect(session.activePath).toBeNull();
-    expect(session.centerShell).toBe("editor");
     expect(session.diffOpen).toBe(false);
   });
 
@@ -56,7 +54,6 @@ describe("editor session", () => {
     expect(session.openPaths).toEqual(["a.ts"]);
     expect(session.cursors).toEqual({});
     expect(session.expandedDirs).toEqual([]);
-    expect(session.centerShell).toBe("editor");
   });
 
   it("discards junk inside otherwise-valid fields", () => {

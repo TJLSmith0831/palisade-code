@@ -27,6 +27,7 @@ mod pidguard;
 mod session_log_writer;
 mod openspec_cache;
 mod settings;
+mod skills;
 mod store;
 mod project_path;
 mod project_windows;
@@ -744,6 +745,15 @@ async fn agent_usage(app: tauri::AppHandle) -> Res<Vec<agent_usage::AgentUsage>>
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
+}
+
+/// User-level skills installed under `~/.claude/skills` and `~/.agents/skills`.
+/// Read-only: Palisade lists what the CLIs own, it never writes a skill.
+#[tauri::command]
+async fn list_skills() -> Res<Vec<skills::Skill>> {
+    Ok(tokio::task::spawn_blocking(skills::list_skills)
+        .await
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
 }
 
 /// Pure decision: which executor a project should use, given a preflight
@@ -2328,6 +2338,13 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
             }
             map
         };
+        // Playbook runs share the board with threads. Both live maps are read
+        // here, before any git call, for the same reason the session pass
+        // above is: a held lock and a subprocess don't mix.
+        let live_runs: std::collections::HashSet<String> =
+            harness.chain.chain_cancels.lock_or_recover().keys().cloned().collect();
+        let gated_runs: std::collections::HashSet<String> =
+            harness.chain.chain_gates.lock_or_recover().keys().cloned().collect();
         let home = palisade_home();
         let bin = git_bin()?;
         let mut rows = vec![];
@@ -2416,7 +2433,10 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     crashed: last.is_some_and(|s| s.outcome.as_deref() == Some("crashed")),
                 });
                 rows.push(fleet::FleetRow {
+                    kind: fleet::FleetKind::Thread,
                     thread_id: thread.id.clone(),
+                    run_id: None,
+                    playbook_name: None,
                     title: thread.title.clone(),
                     project_id: project.hash.clone(),
                     project_name: project.display_name.clone(),
@@ -2433,6 +2453,49 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     verify,
                     merge,
                     updated_at: thread.updated_at.clone(),
+                });
+            }
+            // One row per playbook run, from the same records the Playbooks
+            // panel lists. Read-only on purpose: reconciling a stale record is
+            // `list_chain_runs`'s job, and a record no live run owns is over
+            // either way — which is all the board needs to say.
+            for run in chain_history::list_runs(&home, &project.hash).unwrap_or_default() {
+                let live = live_runs.contains(&run.id);
+                let completed = matches!(
+                    run.outcome,
+                    Some(chain_history::OutcomeSnapshot::Completed { .. })
+                );
+                let (status, attention) = fleet::derive_playbook_status(&fleet::PlaybookInput {
+                    awaiting_gate: gated_runs.contains(&run.id),
+                    ended: !live,
+                    failed: !live && !completed,
+                });
+                rows.push(fleet::FleetRow {
+                    kind: fleet::FleetKind::Playbook,
+                    // The run id is this row's identity, so the board keys and
+                    // opens it the same way it does a thread.
+                    thread_id: run.id.clone(),
+                    run_id: Some(run.id.clone()),
+                    playbook_name: Some(run.chain_name.clone()),
+                    title: run.chain_name.clone(),
+                    project_id: project.hash.clone(),
+                    project_name: project.display_name.clone(),
+                    agent_id: None,
+                    agent_name: None,
+                    mode: "go".into(),
+                    status,
+                    attention,
+                    branch: None,
+                    worktree_path: None,
+                    // A run has no worktree of its own — its nodes write in
+                    // the thread's tree — so there is nothing git can measure
+                    // here that the thread's own row doesn't already show.
+                    diff: fleet::FleetDiff::default(),
+                    files_touched: vec![],
+                    overlap: vec![],
+                    verify: fleet::FleetVerify::not_run(),
+                    merge: fleet::FleetMerge::NoWorktree,
+                    updated_at: run.ended_at.clone().unwrap_or_else(|| run.started_at.clone()),
                 });
             }
         }
@@ -3816,6 +3879,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             complete_code,
             agent_usage,
+            list_skills,
             set_completion_enabled,
             set_completion_keybinding,
             get_completion_settings,

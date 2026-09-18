@@ -45,7 +45,7 @@ export const tabLabel = (tab: OpenTab): string => {
     case "query":
       return `SQL — ${tab.connectionName}`;
     case "chain":
-      return tab.chainName ?? "New chain";
+      return tab.chainName ?? "New playbook";
     case "preview":
       return "Preview";
     default:
@@ -62,7 +62,7 @@ const tabTooltip = (tab: OpenTab): string => {
     case "query":
       return `SQL editor for ${tab.connectionName}`;
     case "chain":
-      return tab.chainName ? `Agent chain: ${tab.chainName}` : "New agent chain";
+      return tab.chainName ? `Playbook: ${tab.chainName}` : "New playbook";
     case "preview":
       return tab.url ?? "Preview — no URL loaded";
     default:
@@ -212,7 +212,7 @@ export default function TabBar({
                 data-testid="new-tab-chain"
                 onClick={onNewChain}
               >
-                New Chain
+                New Playbook
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>

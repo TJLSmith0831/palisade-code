@@ -5,7 +5,6 @@ import {
   Group,
   Loader,
   Modal,
-  SegmentedControl,
   Stack,
   Text,
   UnstyledButton,
@@ -42,22 +41,11 @@ export type ReviewPaneProps = {
   verify: FleetVerify;
   merge: FleetMerge;
   /** App supplies the existing DiffPane for that file. */
-  renderDiff(path: string, mode: "inline" | "side-by-side"): React.ReactNode;
+  renderDiff(path: string): React.ReactNode;
   onRunVerify(): void;
   onMerge(opts: { override: boolean }): void;
   onOpenPr(): void;
   onOpenInEditor(path: string): void;
-};
-
-type DiffMode = "inline" | "side-by-side";
-const DIFF_MODE_KEY = "palisade.review.diffMode";
-
-const readDiffMode = (): DiffMode => {
-  try {
-    return localStorage.getItem(DIFF_MODE_KEY) === "side-by-side" ? "side-by-side" : "inline";
-  } catch {
-    return "inline";
-  }
 };
 
 /** Reuses Source Control's chip tones; git has no porcelain code for the
@@ -105,7 +93,6 @@ export default function ReviewPane({
 }: ReviewPaneProps) {
   const [viewed, setViewedSet] = useState<Set<string>>(() => loadViewed(threadId));
   const [selected, setSelected] = useState(0);
-  const [diffMode, setDiffMode] = useState<DiffMode>(readDiffMode);
   const [overrideOpen, setOverrideOpen] = useState(false);
 
   useEffect(() => {
@@ -119,15 +106,6 @@ export default function ReviewPane({
     (path: string, next: boolean) => setViewedSet(setViewed(threadId, path, next)),
     [threadId],
   );
-
-  const pickMode = useCallback((next: string) => {
-    setDiffMode(next as DiffMode);
-    try {
-      localStorage.setItem(DIFF_MODE_KEY, next);
-    } catch {
-      /* the choice just doesn't survive a reload */
-    }
-  }, []);
 
   // j/k/v/o, ignored while typing so the chat composer keeps its keys.
   useEffect(() => {
@@ -223,15 +201,6 @@ export default function ReviewPane({
           <Group justify="space-between" className="review-diff-header" wrap="nowrap">
             <Text size="xs" c="dimmed">{selectedFile?.path ?? "No file selected"}</Text>
             <Group gap="xs" wrap="nowrap">
-              <SegmentedControl
-                size="xs"
-                value={diffMode}
-                onChange={pickMode}
-                data={[
-                  { label: "Inline", value: "inline" },
-                  { label: "Side by side", value: "side-by-side" },
-                ]}
-              />
               {selectedFile ? (
                 <Button
                   size="xs"
@@ -244,7 +213,7 @@ export default function ReviewPane({
               ) : null}
             </Group>
           </Group>
-          {selectedFile ? renderDiff(selectedFile.path, diffMode) : null}
+          {selectedFile ? renderDiff(selectedFile.path) : null}
         </div>
       </div>
 

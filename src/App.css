@@ -6162,3 +6162,24 @@ button.ds-onboarding-status {
   padding: 8px 12px;
   border-top: 1px solid var(--border);
 }
+
+/* Connections panel: Agents · MCP servers · Skills. */
+.connections-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+}
+
+.connections-usage {
+  margin-top: 8px;
+}
+
+.connections-usage-window + .connections-usage-window {
+  margin-top: 4px;
+}
+
+.connections-skills {
+  font-variant-numeric: tabular-nums;
+}

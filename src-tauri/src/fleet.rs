@@ -18,6 +18,16 @@ pub enum FleetStatus {
     Idle,
 }
 
+/// What a row is: a thread someone is working in, or one run of a playbook.
+/// The board renders both, and a playbook run is not a thread — it has a run
+/// id, no branch and no merge story of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetKind {
+    Thread,
+    Playbook,
+}
+
 /// Why a thread wants the user. Ordered by how blocked the work is: a
 /// permission prompt has an agent literally stopped mid-turn, a finished turn
 /// is only waiting to be read.
@@ -25,6 +35,8 @@ pub enum FleetStatus {
 #[serde(rename_all = "snake_case")]
 pub enum FleetAttention {
     Permission,
+    /// A playbook run is suspended at a human approval gate.
+    Gate,
     TurnDone,
     VerifyFailed,
     MergeConflict,
@@ -93,7 +105,16 @@ pub struct FleetOverlap {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FleetRow {
+    pub kind: FleetKind,
+    /// The thread, or — for a playbook row — the run id, so the board keys
+    /// every row the same way.
     pub thread_id: String,
+    /// Set on playbook rows only: the run this row is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Set on playbook rows only: the saved playbook the run came from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playbook_name: Option<String>,
     pub title: String,
     pub project_id: String,
     pub project_name: String,
@@ -168,6 +189,37 @@ pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention
     }
 }
 
+/// What one playbook run's record says it is doing. Gathered by the caller
+/// for the same reason `StatusInput` is: a pure function of observed facts.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlaybookInput {
+    /// The run is suspended at a human approval gate right now.
+    pub awaiting_gate: bool,
+    /// The run is over — it recorded an outcome, or no live run owns it any
+    /// more, which is the same thing said the honest way.
+    pub ended: bool,
+    /// It ended as anything other than `Completed`: rejected, cancelled,
+    /// timed out, interrupted by a restart.
+    pub failed: bool,
+}
+
+/// Map a playbook run onto the same dot and reason a thread gets.
+///
+/// Same precedence shape as `derive_status`: a run waiting on a human
+/// outranks one still moving, and only a finished run can be judged.
+pub fn derive_playbook_status(input: &PlaybookInput) -> (FleetStatus, Option<FleetAttention>) {
+    if input.awaiting_gate {
+        return (FleetStatus::Attention, Some(FleetAttention::Gate));
+    }
+    if !input.ended {
+        return (FleetStatus::Running, None);
+    }
+    if input.failed {
+        return (FleetStatus::Attention, Some(FleetAttention::Crashed));
+    }
+    (FleetStatus::Idle, None)
+}
+
 /// The files a thread has touched: whatever is dirty in its tree right now,
 /// plus whatever it already committed on its worktree branch but hasn't
 /// merged back yet. A thread that commits as it goes would otherwise drop
@@ -221,7 +273,10 @@ mod tests {
 
     fn row(thread_id: &str, project_id: &str, files: &[&str]) -> FleetRow {
         FleetRow {
+            kind: FleetKind::Thread,
             thread_id: thread_id.into(),
+            run_id: None,
+            playbook_name: None,
             title: thread_id.into(),
             project_id: project_id.into(),
             project_name: project_id.into(),
@@ -383,6 +438,50 @@ mod tests {
         assert_eq!(derive_status(&StatusInput::default()), (FleetStatus::Idle, None));
     }
 
+    #[test]
+    fn a_playbook_run_still_walking_is_running() {
+        let input = PlaybookInput::default();
+        assert_eq!(derive_playbook_status(&input), (FleetStatus::Running, None));
+    }
+
+    #[test]
+    fn a_playbook_run_at_an_approval_gate_asks_for_approval() {
+        let input = PlaybookInput { awaiting_gate: true, ..PlaybookInput::default() };
+        assert_eq!(
+            derive_playbook_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::Gate))
+        );
+    }
+
+    #[test]
+    fn a_finished_playbook_run_is_idle() {
+        let input = PlaybookInput { ended: true, ..PlaybookInput::default() };
+        assert_eq!(derive_playbook_status(&input), (FleetStatus::Idle, None));
+    }
+
+    /// Rejected, cancelled, timed out and interrupted all land here: the run
+    /// stopped without finishing, which is the one thing the board must say.
+    #[test]
+    fn a_playbook_run_that_ended_unfinished_is_attention() {
+        let input = PlaybookInput { ended: true, failed: true, ..PlaybookInput::default() };
+        assert_eq!(
+            derive_playbook_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::Crashed))
+        );
+    }
+
+    #[test]
+    fn a_playbook_row_serializes_its_kind_and_run_id() {
+        let mut row = row("run-1", "p1", &[]);
+        row.kind = FleetKind::Playbook;
+        row.run_id = Some("run-1".into());
+        row.playbook_name = Some("release notes".into());
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["kind"], "playbook");
+        assert_eq!(json["runId"], "run-1");
+        assert_eq!(json["playbookName"], "release notes");
+    }
+
     /// The board's TypeScript types are camelCase; serde must agree or every
     /// field reads as undefined in the frontend.
     #[test]
@@ -392,6 +491,8 @@ mod tests {
         row.attention = Some(FleetAttention::TurnDone);
         row.merge = FleetMerge::NoWorktree;
         let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["kind"], "thread");
+        assert!(json.get("runId").is_none(), "a thread row carries no run id");
         assert_eq!(json["threadId"], "a");
         assert_eq!(json["projectName"], "p1");
         assert_eq!(json["filesTouched"][0], "src/lib.rs");

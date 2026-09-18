@@ -263,6 +263,18 @@ export type AgentUsage =
 /** One entry per agent the cached preflight reports as installed. Cached 60s. */
 export const agentUsage = () => invoke<AgentUsage[]>("agent_usage");
 
+/** A user-level skill directory containing a `SKILL.md`. */
+export type Skill = {
+  name: string;
+  path: string;
+  description?: string;
+  owner: "claude" | "agents" | "other";
+};
+
+/** Skills installed under `~/.claude/skills` and `~/.agents/skills`, by name.
+ *  Read-only: the CLIs own these files, Palisade only mirrors them. */
+export const listSkills = () => invoke<Skill[]>("list_skills");
+
 /** One selectable model an agent reported through its ACP config options. */
 export type ModelInfo = { id: string; name: string };
 
@@ -513,6 +525,8 @@ export const setThreadWorktreeEnabled = (
 export type FleetStatus = "attention" | "running" | "idle";
 export type FleetAttention =
   | "permission"
+  /** A playbook run is suspended at a human approval gate. */
+  | "gate"
   | "turn_done"
   | "verify_failed"
   | "merge_conflict"
@@ -530,7 +544,14 @@ export type FleetVerify = {
 export type FleetMerge = "clean" | "conflicts" | "behind" | "no_worktree";
 
 export type FleetRow = {
+  /** A thread someone is working in, or one run of a playbook. */
+  kind: "thread" | "playbook";
+  /** The thread — or, on a playbook row, the run id. One key either way. */
   threadId: string;
+  /** Playbook rows only: the run this row is. */
+  runId?: string;
+  /** Playbook rows only: the saved playbook the run came from. */
+  playbookName?: string;
   title: string;
   projectId: string;
   projectName: string;
