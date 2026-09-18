@@ -259,7 +259,9 @@ export default function MergeGate({
             <Text size="xs" c="dimmed" ff="monospace">
               {worktree.ahead > 0 && `${worktree.ahead} ahead`}
               {worktree.ahead > 0 && !worktree.clean && " · "}
-              {!worktree.clean && `+${worktree.added} −${worktree.removed} uncommitted`}
+              {/* Not "uncommitted": the stat now measures from the base, so
+                  it counts the thread's commits too. */}
+              {!worktree.clean && `+${worktree.added} −${worktree.removed}`}
             </Text>
           </Group>
 

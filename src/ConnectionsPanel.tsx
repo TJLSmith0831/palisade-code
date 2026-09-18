@@ -8,7 +8,6 @@ import {
   Group,
   Progress,
   Stack,
-  Table,
   Tabs,
   Text,
   Tooltip,
@@ -267,44 +266,33 @@ function SkillsTab() {
     );
   }
 
+  // Three columns inside a 215px side panel gave every cell one character
+  // per line. One card per skill, stacked: the name gets the full width,
+  // the description gets whole words.
   return (
-    <Table striped highlightOnHover layout="fixed" className="connections-skills">
-      <Table.Thead>
-        <Table.Tr>
-          <Table.Th w="38%">Name</Table.Th>
-          <Table.Th w="24%">Owner</Table.Th>
-          <Table.Th>Description</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {(skills ?? []).map((skill) => (
-          <Table.Tr key={`${skill.owner}:${skill.path}`} data-testid="connections-skill">
-            <Table.Td>
-              <Group gap={2} wrap="nowrap" align="center">
-                <Text size="xs" style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
-                  {skill.name}
-                </Text>
-                <SkillPath path={skill.path} />
-              </Group>
-            </Table.Td>
-            <Table.Td>
-              <Badge size="xs" variant="light">
-                {OWNER_LABEL[skill.owner] ?? skill.owner}
-              </Badge>
-            </Table.Td>
-            <Table.Td>
-              <Text
-                size="xs"
-                c="dimmed"
-                style={{ whiteSpace: "normal", wordBreak: "break-word" }}
-              >
-                {skill.description ?? "—"}
-              </Text>
-            </Table.Td>
-          </Table.Tr>
-        ))}
-      </Table.Tbody>
-    </Table>
+    <Stack gap="xs" p="xs" className="connections-skills">
+      {(skills ?? []).map((skill) => (
+        <Card
+          key={`${skill.owner}:${skill.path}`}
+          withBorder
+          padding="xs"
+          data-testid="connections-skill"
+        >
+          <Group justify="space-between" wrap="nowrap" gap={4} align="center">
+            <Text size="xs" fw={500} truncate>
+              {skill.name}
+            </Text>
+            <SkillPath path={skill.path} />
+          </Group>
+          <Badge size="xs" variant="light" mt={4}>
+            {OWNER_LABEL[skill.owner] ?? skill.owner}
+          </Badge>
+          <Text size="xs" c="dimmed" mt={4} lineClamp={3}>
+            {skill.description ?? "—"}
+          </Text>
+        </Card>
+      ))}
+    </Stack>
   );
 }
 

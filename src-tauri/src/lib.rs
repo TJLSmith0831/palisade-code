@@ -2256,12 +2256,17 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
             if !path.is_dir() {
                 continue;
             }
-            let (added, removed) = git::diff_stat(&bin, &path).unwrap_or((0, 0));
             let base = thread
                 .worktree_base_branch
                 .clone()
                 .or_else(|| git::current_branch_name(&bin, &root).ok())
                 .unwrap_or_else(|| "HEAD".into());
+            // The same helper the Fleet board and the Review lane read, so
+            // the three surfaces cannot report different numbers for the
+            // same thread: work since the base, committed or not, minus the
+            // machine-local paths nobody authored.
+            let changes = fleet::thread_changes(&bin, &path, &root, Some(&base));
+            let (added, removed) = (changes.added, changes.removed);
             // A readiness probe must never fail the whole list: a repo git
             // can't answer for reports as "nothing to land", not as an error.
             let ready = git::merge_readiness(&bin, &root, &path, &base, &branch)
@@ -2358,8 +2363,12 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                 let worktree = thread.worktree_path.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
                 let tree = worktree.clone().unwrap_or_else(|| root.clone());
                 // One helper for the board and the Review lane, and the only
-                // place the skip-list and the inherited-file rule live.
-                let changes = fleet::thread_changes(&bin, &tree, &root);
+                // place the skip-list and the inherited-file rule live. The
+                // base branch is only meaningful for a thread that has its
+                // own worktree; without one the measurement stays vs HEAD.
+                let base =
+                    worktree.as_ref().and(thread.worktree_base_branch.as_deref());
+                let changes = fleet::thread_changes(&bin, &tree, &root, base);
                 // Overlap must also see files already committed on the
                 // thread's branch but not yet merged back — a thread that
                 // commits as it goes would otherwise vanish from overlap
@@ -2529,15 +2538,20 @@ async fn thread_review_files(
     tokio::task::spawn_blocking(move || {
         let bin = git_bin()?;
         let root = project_root(&project_hash)?;
-        // A thread with no worktree of its own edits the project checkout.
-        let tree = store::list_threads(&palisade_home(), &project_hash)?
-            .into_iter()
-            .find(|t| t.id == thread_id)
-            .and_then(|t| t.worktree_path)
+        // A thread with no worktree of its own edits the project checkout,
+        // and has no base branch to measure against either.
+        let thread =
+            store::list_threads(&palisade_home(), &project_hash)?.into_iter().find(|t| t.id == thread_id);
+        let worktree = thread
+            .as_ref()
+            .and_then(|t| t.worktree_path.clone())
             .map(PathBuf::from)
-            .filter(|p| p.is_dir())
-            .unwrap_or_else(|| root.clone());
-        Ok(fleet::review_files(&bin, &tree, &root))
+            .filter(|p| p.is_dir());
+        let base = worktree
+            .as_ref()
+            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let tree = worktree.clone().unwrap_or_else(|| root.clone());
+        Ok(fleet::review_files(&bin, &tree, &root, base))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?

@@ -378,9 +378,20 @@ fn is_inherited(tree: &Path, root: &Path, rel: &str) -> bool {
 }
 
 /// Everything the board and the Review lane need from one thread's tree, in
-/// two git calls: `diff --numstat HEAD` and `status --porcelain`.
-pub fn thread_changes(bin: &Path, tree: &Path, root: &Path) -> ThreadChanges {
-    let numstat = crate::git::diff_numstat(bin, tree).unwrap_or_default();
+/// at most three git calls: `merge-base`, `diff --numstat <mb>` and
+/// `status --porcelain`.
+///
+/// `base` is the thread's base branch. The diff runs from where that branch
+/// and this tree's HEAD diverged, so a thread that commits as it goes still
+/// reports the work it did — measuring against HEAD dropped it to "+0 −0"
+/// the moment it committed, which is also why the board and the thread
+/// footer could disagree. No base (a thread with no worktree of its own, or
+/// no shared history) keeps the HEAD measurement.
+pub fn thread_changes(bin: &Path, tree: &Path, root: &Path, base: Option<&str>) -> ThreadChanges {
+    let from = base
+        .and_then(|b| crate::git::merge_base(bin, tree, b))
+        .unwrap_or_else(|| "HEAD".to_string());
+    let numstat = crate::git::diff_numstat(bin, tree, &from).unwrap_or_default();
     let status = crate::git::status(bin, tree).unwrap_or_default();
     let untracked: Vec<UntrackedFile> = status
         .iter()
@@ -401,8 +412,8 @@ pub fn thread_changes(bin: &Path, tree: &Path, root: &Path) -> ThreadChanges {
 
 /// The Review lane's file list. Deliberately the same measurement the board
 /// shows — one helper, so the two surfaces cannot disagree.
-pub fn review_files(bin: &Path, tree: &Path, root: &Path) -> Vec<ReviewFile> {
-    thread_changes(bin, tree, root).files
+pub fn review_files(bin: &Path, tree: &Path, root: &Path, base: Option<&str>) -> Vec<ReviewFile> {
+    thread_changes(bin, tree, root, base).files
 }
 
 /// The files a thread has touched: whatever is dirty in its tree right now,
@@ -798,6 +809,57 @@ mod tests {
         assert_eq!((changes.added, changes.removed), (2, 1));
         let new = changes.files.iter().find(|f| f.path == "src/new.rs").unwrap();
         assert_eq!((new.status.as_str(), new.added, new.removed), ("added", 9, 0));
+    }
+
+    /// A throwaway repo with one committed file, plus a worktree branched
+    /// off it — the shape every thread with isolation on actually has.
+    fn repo_with_worktree() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "test@example.com"][..],
+            &["config", "user.name", "Test"][..],
+        ] {
+            std::process::Command::new("git").args(args).current_dir(root).output().unwrap();
+        }
+        std::fs::write(root.join("tracked.txt"), "one\ntwo\nthree\n").unwrap();
+        crate::git::stage_file(Path::new("git"), root, "tracked.txt").unwrap();
+        crate::git::commit(Path::new("git"), root, "initial").unwrap();
+        let (path, _) = crate::git::add_worktree(Path::new("git"), root, "01THREADAAAA").unwrap();
+        (dir, path)
+    }
+
+    /// The bug: a thread that commits as it goes went clean, so the board
+    /// showed it "+0 −0" while the thread footer still counted its work.
+    /// Measured from the merge base, the commit still counts.
+    #[test]
+    fn committed_work_on_the_thread_branch_still_counts_as_changed() {
+        let (dir, wt) = repo_with_worktree();
+        std::fs::write(wt.join("added_then_committed.rs"), "a\nb\nc\n").unwrap();
+        crate::git::stage_file(Path::new("git"), &wt, "added_then_committed.rs").unwrap();
+        crate::git::commit(Path::new("git"), &wt, "thread work").unwrap();
+
+        let vs_head = thread_changes(Path::new("git"), &wt, dir.path(), None);
+        assert_eq!(vs_head.added, 0, "against HEAD a committed change is invisible");
+
+        let vs_base = thread_changes(Path::new("git"), &wt, dir.path(), Some("main"));
+        assert_eq!(vs_base.added, 3);
+        assert_eq!(vs_base.tracked, 1);
+        assert_eq!(vs_base.paths(), vec!["added_then_committed.rs"]);
+    }
+
+    /// A thread with no worktree of its own has no base branch to diverge
+    /// from, and measures its checkout exactly as it always did.
+    #[test]
+    fn a_thread_without_a_worktree_keeps_the_head_measurement() {
+        let (dir, _) = repo_with_worktree();
+        let root = dir.path();
+        std::fs::write(root.join("tracked.txt"), "one\nedited\nthree\nfour\n").unwrap();
+
+        let changes = thread_changes(Path::new("git"), root, root, None);
+        assert_eq!((changes.added, changes.removed), (2, 1));
+        assert_eq!(changes.paths(), vec!["tracked.txt"]);
     }
 
     /// The board's TypeScript type is camelCase, same as every other row field.

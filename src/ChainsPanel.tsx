@@ -199,53 +199,59 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
               >
                 <IconRoute size={14} className="ds-chain-row-icon" />
                 <span className="ds-chain-row-name">{chain.name}</span>
-                <span className="ds-chain-row-count">
-                  {Object.keys(chain.nodes).length}
-                </span>
               </UnstyledButton>
-              <Tooltip label="Run history" position="left">
-                <ActionIcon
-                  size="sm"
-                  variant="subtle"
-                  color="neutral"
-                  aria-label={`Run history for ${chain.name}`}
-                  aria-pressed={historyFor === chain.name}
-                  onClick={() =>
-                    setHistoryFor((current) => (current === chain.name ? null : chain.name))
-                  }
-                >
-                  <IconHistory size={14} />
-                </ActionIcon>
-              </Tooltip>
-              <Menu position="bottom-end" withinPortal>
-                <Menu.Target>
+              {/* Second line, so the name gets the panel's full width:
+                  side by side, every playbook read as "gated-l…". */}
+              <div className="ds-chain-row-meta">
+                <span className="ds-chain-row-count">
+                  {Object.keys(chain.nodes).length === 1
+                    ? "1 node"
+                    : `${Object.keys(chain.nodes).length} nodes`}
+                </span>
+                <Tooltip label="Run history" position="left">
                   <ActionIcon
                     size="sm"
                     variant="subtle"
                     color="neutral"
-                    aria-label={`Actions for ${chain.name}`}
+                    aria-label={`Run history for ${chain.name}`}
+                    aria-pressed={historyFor === chain.name}
+                    onClick={() =>
+                      setHistoryFor((current) => (current === chain.name ? null : chain.name))
+                    }
                   >
-                    <IconDots size={14} />
+                    <IconHistory size={14} />
                   </ActionIcon>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  {onRun && (
-                    <Menu.Item
-                      leftSection={<IconPlayerPlay size={14} />}
-                      onClick={() => onRun(chain.name, "")}
+                </Tooltip>
+                <Menu position="bottom-end" withinPortal>
+                  <Menu.Target>
+                    <ActionIcon
+                      size="sm"
+                      variant="subtle"
+                      color="neutral"
+                      aria-label={`Actions for ${chain.name}`}
                     >
-                      Run
+                      <IconDots size={14} />
+                    </ActionIcon>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    {onRun && (
+                      <Menu.Item
+                        leftSection={<IconPlayerPlay size={14} />}
+                        onClick={() => onRun(chain.name, "")}
+                      >
+                        Run
+                      </Menu.Item>
+                    )}
+                    <Menu.Item
+                      color="danger"
+                      leftSection={<IconTrash size={14} />}
+                      onClick={() => void remove(chain.name)}
+                    >
+                      Delete
                     </Menu.Item>
-                  )}
-                  <Menu.Item
-                    color="danger"
-                    leftSection={<IconTrash size={14} />}
-                    onClick={() => void remove(chain.name)}
-                  >
-                    Delete
-                  </Menu.Item>
-                </Menu.Dropdown>
-              </Menu>
+                  </Menu.Dropdown>
+                </Menu>
+              </div>
             </div>
             {projectHash && historyFor === chain.name && (
               <ChainRunHistory

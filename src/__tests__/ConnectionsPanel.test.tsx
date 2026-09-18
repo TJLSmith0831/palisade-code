@@ -182,6 +182,9 @@ describe("ConnectionsPanel", () => {
     expect(screen.getByText("Implements a change")).toBeTruthy();
     expect(screen.getByText("~/.agents")).toBeTruthy();
     expect(screen.getByLabelText("Copy path for /home/me/.agents/skills/ship")).toBeTruthy();
+    // Cards, not a three-column table: at 215px the table gave every cell
+    // one character per line.
+    expect(document.querySelector("table")).toBeNull();
   });
 
   it("shows where skills live when none are installed", async () => {
