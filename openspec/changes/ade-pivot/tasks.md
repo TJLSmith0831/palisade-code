@@ -8,33 +8,33 @@
 
 ## 2. Fleet backend
 
-- [ ] 2.1 Add `fleet_overview` IPC command in `src-tauri/src/fleet.rs` returning, per thread: status (idle/running/attention), agent, project, branch, worktree, diff stat (+/-/files), files touched, last verify (pass/fail/not-run, cmd, commit), merge readiness, and overlap (files touched by 2+ live threads in the same project).
-- [ ] 2.2 Register the command in `generate_handler!` (`lib.rs`) and add a typed wrapper in `src/api.ts`.
-- [ ] 2.3 `cd src-tauri && cargo test fleet::` green.
+- [x] 2.1 Add `fleet_overview` IPC command in `src-tauri/src/fleet.rs` returning, per thread: status (idle/running/attention), agent, project, branch, worktree, diff stat (+/-/files), files touched, last verify (pass/fail/not-run, cmd, commit), merge readiness, and overlap (files touched by 2+ live threads in the same project).
+- [x] 2.2 Register the command in `generate_handler!` (`lib.rs`) and add a typed wrapper in `src/api.ts`.
+- [x] 2.3 `cd src-tauri && cargo test fleet::` green.
 
 ## 3. Fleet board UI
 
-- [ ] 3.1 Build `src/FleetBoard.tsx` as the home view, grouped Needs attention / Running / Idle, with row fields (agent glyph, title, project·branch, diff stat, verify badge, overlap warning) and actions (Open/Review/Stop/Merge/PR/Archive).
-- [ ] 3.2 Add a "New run" composer (prompt + agent + mode + isolated worktree in one step).
-- [ ] 3.3 Update `NavRail.tsx` to put Fleet first and group IDE panels under Workbench; update `App.tsx` routing/default panel and `App.css` as needed.
-- [ ] 3.4 `npx vitest run src/__tests__/FleetBoard.test.tsx` green; app boots to Fleet.
+- [x] 3.1 Build `src/FleetBoard.tsx` as the home view, grouped Needs attention / Running / Idle, with row fields (agent glyph, title, project·branch, diff stat, verify badge, overlap warning) and actions (Open/Review/Stop/Merge/PR/Archive).
+- [x] 3.2 Add a "New run" composer (prompt + agent + mode + isolated worktree in one step).
+- [x] 3.3 Update `NavRail.tsx` to put Fleet first and group IDE panels under Workbench; update `App.tsx` routing/default panel and `App.css` as needed.
+- [x] 3.4 `npx vitest run src/__tests__/FleetBoard.test.tsx` green; app boots to Fleet.
 
 ## 4. Review lane
 
-- [ ] 4.1 Build `src/ReviewPane.tsx` composing `DiffPane` (inline/side-by-side) with per-file Viewed state persisted per thread.
-- [ ] 4.2 Add a verify evidence strip and a `MergeGate` action; Merge enabled only on a green verify or an explicit override.
-- [ ] 4.3 Add j/k file navigation; wire `App.tsx` and `api.ts` if Viewed-state persistence needs IPC.
-- [ ] 4.4 `npx vitest run src/__tests__/ReviewPane.test.tsx` green.
+- [x] 4.1 Build `src/ReviewPane.tsx` composing `DiffPane` (inline/side-by-side) with per-file Viewed state persisted per thread.
+- [x] 4.2 Add a verify evidence strip and a `MergeGate` action; Merge enabled only on a green verify or an explicit override.
+- [x] 4.3 Add j/k file navigation; wire `App.tsx` and `api.ts` if Viewed-state persistence needs IPC.
+- [x] 4.4 `npx vitest run src/__tests__/ReviewPane.test.tsx` green.
 
 ## 5. Sidebar + thread header
 
-- [ ] 5.1 Update `SessionList.tsx` rows: 3-state dot, diff stat, agent glyph, overlap badge, grouped by status.
-- [ ] 5.2 Update the open thread's header in `App.tsx` to show branch + verify badge.
-- [ ] 5.3 `npx vitest run src/__tests__/SessionList.test.tsx` green.
+- [x] 5.1 Update `SessionList.tsx` rows: 3-state dot, diff stat, agent glyph, overlap badge, grouped by status.
+- [x] 5.2 Update the open thread's header in `App.tsx` to show branch + verify badge.
+- [x] 5.3 `npx vitest run src/__tests__/SessionList.test.tsx` green.
 
 ## 6. Gate + after-screenshots + PR
 
-- [ ] 6.1 Run `pnpm test`, `cd src-tauri && cargo test`, `npx tsc --noEmit`.
-- [ ] 6.2 Run the app; capture an after-screenshot set matching `docs/pr/ade-pivot/before/*.png`.
-- [ ] 6.3 Commit before/after screenshot sets to `docs/pr/ade-pivot/`.
-- [ ] 6.4 Open the PR with a before/after table; record the PR URL.
+- [x] 6.1 Run `pnpm test`, `cd src-tauri && cargo test`, `npx tsc --noEmit`.
+- [x] 6.2 Run the app; capture an after-screenshot set matching `docs/pr/ade-pivot/before/*.png`.
+- [x] 6.3 Commit before/after screenshot sets to `docs/pr/ade-pivot/`.
+- [x] 6.4 Open the PR with a before/after table; record the PR URL.
