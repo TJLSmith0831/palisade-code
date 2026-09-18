@@ -19,7 +19,7 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 - `src-tauri/src/lib.rs` — IPC command layer; the `generate_handler!` registry is at the bottom
 - `src-tauri/src/executor.rs` — executor detect/spawn, stdout JSON-line parsing for both CLIs
 - `src-tauri/src/store.rs` — append-only session store under `~/.palisade-code`
-- `src-tauri/src/{git,terminal,integrations,settings}.rs` — git ops, PTY, Graphify+MCP wiring, `.project-settings.json`
+- `src-tauri/src/{git,terminal,mcp,settings}.rs` — git ops, PTY, MCP server config, `.project-settings.json`
 - `src/__tests__/*` — frontend tests, one per source file; Rust tests are inline `mod tests`
 
 ## Gotchas
@@ -32,7 +32,6 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 - **`ExecutorEvent::Done` ends a turn, not a session.** A session record closes `done` when Palisade releases it idle (thread switch, app quit), `crashed`/`cancelled`/`interrupted` otherwise.
 - **Every emitted event is an `Envelope{session_id, thread_id, event}`.** The frontend keys live state by session id; a bare event has nowhere to go.
 - **Preflight checks user-level installs**, not repo files: `~/.claude/skills/grill-apply` (or `~/.agents/...` for Codex) and the Ponytail plugin. Missing ones surface as warnings, not errors.
-- **Graphify runs against the active project, never this repo**, in its own process; output lands in that project's `graphify-out/`.
 - **Session history is append-only.** Never mutate past messages; truncate by copying forward.
 - **`.agents/` and `.claude/` are gitignored** — in-repo skills exist locally but aren't committed.
 - **Two modes only** (spec / go). They differ by permission flag (`--permission-mode` / `--sandbox`) and skill focus — not by model. No third mode.
@@ -41,7 +40,7 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 
 ## Do not touch
 
-- Generated: `node_modules/`, `dist/`, `src-tauri/target/`, `src-tauri/gen/schemas`, `graphify-out/`
+- Generated: `node_modules/`, `dist/`, `src-tauri/target/`, `src-tauri/gen/schemas`
 - Machine-local and gitignored: `.mcp.json`, `.project-settings.json` (the app rewrites these)
 
 ## Operating rules

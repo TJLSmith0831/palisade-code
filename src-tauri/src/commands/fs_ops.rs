@@ -26,17 +26,10 @@ pub(crate) fn should_skip_entry(name: &str, include_hidden: bool) -> bool {
     // the UI should react to either. Left out of this list, a pytest run
     // reported its own `.pyc` writes as source edits and flagged its own
     // results as stale the moment it finished.
-    // Palisade's own code-graph output. `list_all_files` asks git what to
-    // ignore, and `ensure_graph_ignored` adds this directory to `.gitignore`
-    // — but a project that is not a git repo has neither, and the cache's
-    // 64-character filenames then flooded the `@` mention menu and ⌘P with
-    // an artifact the app itself wrote. Palisade knows this name; it should
-    // not need git to hide it.
     name.starts_with('.')
         || name == "node_modules"
         || name == "target"
         || name == "__pycache__"
-        || name == crate::integrations::GRAPH_DIR
 }
 
 #[tauri::command]
@@ -79,7 +72,7 @@ pub async fn list_all_files(project_hash: String) -> Res<Vec<String>> {
     tokio::task::spawn_blocking(move || {
         let root = project_root(&project_hash)?;
         // FIL-02: the hardcoded skip list above misses project-specific
-        // `.gitignore` entries (e.g. `graphify-out/`) — ask git what it
+        // `.gitignore` entries (e.g. `build-out/`) — ask git what it
         // would ignore so a generated-cache tree doesn't leak into the
         // fuzzy-find palette. Empty outside a git repo; the walk still runs.
         let ignored = crate::git_bin()
@@ -518,17 +511,17 @@ pub async fn create_directory(project_hash: String, relative_path: String) -> Re
 mod tests {
     use super::*;
 
-    /// A project that is not a git repo has no `.gitignore` to consult, and
-    /// the code-graph cache used to fill the file palette and the `@` mention
-    /// menu with 64-character generated filenames.
+    /// A project that is not a git repo has no `.gitignore` to consult, so the
+    /// skip list has to hide generated output on its own — otherwise it fills
+    /// the file palette and the `@` mention menu.
     #[test]
     fn generated_output_is_hidden_even_without_a_gitignore() {
-        assert!(should_skip_entry(crate::integrations::GRAPH_DIR, false));
         assert!(should_skip_entry("node_modules", false));
+        assert!(should_skip_entry("target", false));
         assert!(!should_skip_entry("src", false));
         assert!(!should_skip_entry("README.md", false));
-        // "Show hidden files" still reveals it rather than lying to the user.
-        assert!(!should_skip_entry(crate::integrations::GRAPH_DIR, true));
+        // "Show hidden files" still reveals dotfiles rather than lying.
+        assert!(!should_skip_entry(".env", true));
         // `.git` is never browsable, hidden files shown or not.
         assert!(should_skip_entry(".git", true));
     }

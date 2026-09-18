@@ -86,10 +86,9 @@ export function useAppCommands({
   closeTabRef,
   tabsRef,
 }: AppCommandDeps): Command[] {
-  // Derived rather than passed: which pane "toggle the side pane" means
-  // depends only on which shell is showing.
-  const toggleSidePane =
-    shell.centerShell === "vibe" ? shell.toggleEditor : shell.toggleChat;
+  // Chat is the subject of the one layout, so the pane you can send away is
+  // the editor column.
+  const toggleSidePane = shell.toggleEditor;
 
   return useMemo<Command[]>(
     () => [
@@ -347,28 +346,22 @@ export function useAppCommands({
         run: () => shell.setDiffOpen((open) => !open),
       },
       {
-        id: "view.shell",
+        id: "view.fleet",
         group: "View",
-        label: "Switch between Vibe and Editor",
-        keywords: "shell layout agent",
-        run: () =>
-          shell.setCenterShell(
-            shell.centerShell === "vibe" ? "editor" : "vibe"
-          ),
+        label: "Fleet",
+        chord: "Mod+1",
+        keywords: "runs board agents threads",
+        enabled: !!project,
+        run: () => shell.openPanel("fleet"),
       },
       {
-        id: "view.layout.editor",
+        id: "view.review",
         group: "View",
-        label: "Editor layout",
-        checked: shell.centerShell === "editor",
-        run: () => shell.setCenterShell("editor"),
-      },
-      {
-        id: "view.layout.vibe",
-        group: "View",
-        label: "Vibe layout",
-        checked: shell.centerShell === "vibe",
-        run: () => shell.setCenterShell("vibe"),
+        label: "Review",
+        chord: "Mod+2",
+        keywords: "diff changes verify merge land",
+        enabled: !!project,
+        run: () => shell.openPanel("review"),
       },
       {
         id: "view.theme.auto",
@@ -395,11 +388,8 @@ export function useAppCommands({
         id: "view.rightPanel",
         group: "View",
         // The chord means "hide the pane that isn't the subject", which is
-        // chat in Editor and the editor column in Vibe.
-        label:
-          shell.centerShell === "vibe"
-            ? "Toggle editor panel"
-            : "Toggle chat panel",
+        // the editor column — chat is the subject.
+        label: "Toggle editor panel",
         chord: "Mod+J",
         run: () => toggleSidePane(),
       },
@@ -455,7 +445,6 @@ export function useAppCommands({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       project,
-      shell.centerShell,
       // Recomputed as tabs come and go: "Close tab" is only offered when
       // there is one, and a stale memo would keep hiding it.
       tabs.activePath,
@@ -470,7 +459,6 @@ export function useAppCommands({
       shell.selectPanel,
       shell.activePanel,
       shell.toggleTerminal,
-      shell.setCenterShell,
       shell.theme,
       shell.setTheme,
       newFileAtRoot,

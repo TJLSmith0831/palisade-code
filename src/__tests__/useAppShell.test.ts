@@ -20,11 +20,12 @@ const render = () =>
 describe("left rail panel selection", () => {
   it("exposes the rail panels the redesign specifies, plus MCP, Database and Chains", () => {
     expect(PANEL_IDS).toEqual([
+      "fleet",
+      "review",
       "explorer",
       "search",
       "git",
       "specs",
-      "codemap",
       "run",
       "mcp",
       "database",
@@ -35,8 +36,8 @@ describe("left rail panel selection", () => {
     ]);
   });
 
-  it("opens no panel by default — rail only until the user picks one", () => {
-    expect(render().result.current.activePanel).toBeNull();
+  it("opens on the Fleet board — an ADE's first question is what the runs are doing", () => {
+    expect(render().result.current.activePanel).toBe("fleet");
   });
 
   it("opens a panel when its rail icon is selected", () => {
@@ -59,15 +60,10 @@ describe("left rail panel selection", () => {
     expect(result.current.activePanel).toBe("specs");
   });
 
-  // Governing rule: the panel inventory is identical in both presets, so the
-  // open panel must survive a preset switch rather than resetting.
-  it("keeps the open panel across a Vibe/Editor preset switch", () => {
+  it("opens the board panels like any other rail selection", () => {
     const { result } = render();
-    act(() => result.current.selectPanel("codemap"));
-    act(() => result.current.setCenterShell("vibe"));
-    expect(result.current.activePanel).toBe("codemap");
-    act(() => result.current.setCenterShell("editor"));
-    expect(result.current.activePanel).toBe("codemap");
+    act(() => result.current.selectPanel("review"));
+    expect(result.current.activePanel).toBe("review");
   });
 });
 

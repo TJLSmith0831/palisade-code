@@ -1,8 +1,8 @@
 //! Preflight and executor resolution (D16, D18).
 //!
 //! The new preflight loads the cached ACP registry, checks PATH availability,
-//! and returns a list of available agents. Palisade-level `openspec`/`graphify`
-//! checks remain. Per-agent skill/plugin checks are dropped.
+//! and returns a list of available agents. The Palisade-level `openspec`
+//! check remains. Per-agent skill/plugin checks are dropped.
 //!
 //! `executorOverride` survives as a per-project default, resolved against
 //! ACP registry agent ids.
@@ -35,7 +35,6 @@ pub struct Preflight {
     /// The id of the first available agent (or first in the list).
     pub selected: Option<String>,
     pub openspec: bool,
-    pub graphify: bool,
     /// True when at least one agent is available.
     pub ready: bool,
     pub warnings: Vec<String>,
@@ -72,7 +71,6 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
     let is_empty = agents.is_empty();
 
     let openspec = find_on_path("openspec").is_some();
-    let graphify = find_on_path("graphify").is_some();
 
     let mut warnings = vec![];
     if is_empty {
@@ -85,17 +83,11 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
             "`openspec` not on PATH — change-linked /go will not work.".into(),
         );
     }
-    if !graphify {
-        warnings.push(
-            "`graphify` not on PATH — code maps won't build. Install: `uv tool install \"graphifyy[watch]\"`.".into(),
-        );
-    }
 
     Preflight {
         selected,
         agents,
         openspec,
-        graphify,
         ready: !is_empty && openspec,
         warnings,
         checked_at: chrono::Utc::now().to_rfc3339(),
@@ -176,7 +168,6 @@ mod tests {
             selected: agents.first().map(|a| a.id.clone()),
             agents,
             openspec: true,
-            graphify: true,
             ready: true,
             warnings: vec![],
             checked_at: "2026-08-10T00:00:00Z".into(),
@@ -196,14 +187,13 @@ mod tests {
         assert!(flight.ready);
     }
 
-    // --------------------------------------------------------- 8.2: openspec/graphify
+    // --------------------------------------------------------------- 8.2: openspec
 
-    /// RED→GREEN 8.2: Preflight keeps openspec/graphify checks.
+    /// RED→GREEN 8.2: Preflight keeps the openspec check.
     #[test]
-    fn preflight_checks_openspec_and_graphify() {
+    fn preflight_checks_openspec() {
         let flight = test_flight(&["devin"]);
         assert!(flight.openspec);
-        assert!(flight.graphify);
     }
 
     /// RED→GREEN 8.2: Missing openspec triggers warning.

@@ -348,6 +348,11 @@ pub struct ThreadMeta {
     /// Cleared on the thread's next successful turn.
     #[serde(default)]
     pub auth_blocked: Option<String>,
+    /// When the user last looked at this thread. Set by `mark_thread_viewed`;
+    /// the Fleet board uses it to stop asking for a turn already read.
+    /// Absent on records written before viewing was tracked.
+    #[serde(default)]
+    pub last_viewed_at: Option<String>,
 }
 
 fn manual_title_source() -> String {
@@ -391,6 +396,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         // choice — the first turn replaces it.
         title_source: "auto".into(),
         auth_blocked: None,
+        last_viewed_at: None,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -548,6 +554,13 @@ pub fn derive_title(prompt: &str) -> Option<String> {
 /// sessions and the metadata all stay exactly where they were.
 pub fn set_thread_archived(home: &Path, hash: &str, id: &str, archived: bool) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| m.archived = archived)
+}
+
+/// Record that the user has looked at this thread just now. Idempotent:
+/// calling it again only advances the timestamp.
+pub fn mark_thread_viewed(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
+    let stamp = now();
+    update_thread(home, hash, id, |m| m.last_viewed_at = Some(stamp))
 }
 
 /// Record the worktree a thread's sessions run in. Written once, by the
@@ -1941,6 +1954,23 @@ mod tests {
         let restored =
             set_thread_archived(home.path(), &project.hash, &thread.id, false).unwrap();
         assert!(!restored.archived);
+    }
+
+    #[test]
+    fn marking_a_thread_viewed_sets_the_timestamp_and_is_idempotent() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert!(thread.last_viewed_at.is_none());
+
+        let viewed = mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
+        let first = viewed.last_viewed_at.clone();
+        assert!(first.is_some());
+
+        // Calling it again only advances the stamp; it never errors or resets.
+        let viewed_again = mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
+        assert!(viewed_again.last_viewed_at >= first);
     }
 
     #[test]

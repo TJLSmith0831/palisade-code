@@ -327,8 +327,8 @@ export default function OnboardingScreen({
             </span>
             <span className="ds-onboarding-card-title">New Project</span>
             <span className="ds-onboarding-card-body">
-              Point Palisade at a local folder. Everything stays scoped to
-              that project root.
+              Point Palisade at a local folder. Every thread you start here
+              runs in its own isolated worktree.
             </span>
           </button>
           <button
@@ -357,7 +357,7 @@ export default function OnboardingScreen({
                   submit();
                 }
               }}
-              placeholder="Describe what you want to build…"
+              placeholder="Describe what you want an agent to build…"
               aria-label="Request"
               minRows={1}
               maxRows={6}

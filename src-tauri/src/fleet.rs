@@ -1,0 +1,404 @@
+//! What the Fleet board renders: one row per live thread, across every open
+//! project.
+//!
+//! The rules live here rather than in the command so they are testable
+//! without a Tauri app, a git repo or a running agent: `lib.rs`'s
+//! `fleet_overview` gathers the facts (store records, git measurements, live
+//! session state) and this module turns them into rows.
+
+use serde::Serialize;
+
+/// The dot the board shows for a thread. `Attention` always carries a
+/// reason — a board that says "look at this" without saying why is noise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetStatus {
+    Attention,
+    Running,
+    Idle,
+}
+
+/// Why a thread wants the user. Ordered by how blocked the work is: a
+/// permission prompt has an agent literally stopped mid-turn, a finished turn
+/// is only waiting to be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetAttention {
+    Permission,
+    TurnDone,
+    VerifyFailed,
+    MergeConflict,
+    Crashed,
+}
+
+/// Evidence, not opinion: a spec is green because a named command exited 0 at
+/// a named commit. `NotRun` is the honest default, never a quiet pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyState {
+    Pass,
+    Fail,
+    NotRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetVerify {
+    pub state: VerifyState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The commit the command ran at, so a pass can be matched to the tree it
+    /// actually proves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+impl FleetVerify {
+    /// No verification has ever run for this thread.
+    pub fn not_run() -> Self {
+        Self { state: VerifyState::NotRun, command: None, commit: None, at: None }
+    }
+}
+
+/// How close this thread's branch is to landing. `Behind` is a measured
+/// rev-list count, `Conflicts` a real trial merge — the same probes the merge
+/// gate runs, so the board can never promise a merge git would refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetMerge {
+    Clean,
+    Conflicts,
+    Behind,
+    NoWorktree,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetDiff {
+    pub added: u32,
+    pub removed: u32,
+    pub files: u32,
+}
+
+/// Another thread in the same project writing some of the same files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetOverlap {
+    pub thread_id: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetRow {
+    pub thread_id: String,
+    pub title: String,
+    pub project_id: String,
+    pub project_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    /// "spec" | "go" — the thread's intent, which is what the board filters on.
+    pub mode: String,
+    pub status: FleetStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention: Option<FleetAttention>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    pub diff: FleetDiff,
+    pub files_touched: Vec<String>,
+    pub overlap: Vec<FleetOverlap>,
+    pub verify: FleetVerify,
+    pub merge: FleetMerge,
+    pub updated_at: String,
+}
+
+/// Everything status derivation looks at, gathered by the caller so this stays
+/// a pure function of observed facts.
+#[derive(Debug, Clone, Default)]
+pub struct StatusInput {
+    /// A live session is blocked on an unanswered Allow/Deny prompt.
+    pub awaiting_permission: bool,
+    /// A live session is mid-turn.
+    pub busy: bool,
+    /// At least one turn has run and ended.
+    pub turn_ended: bool,
+    pub has_diff: bool,
+    /// The user has looked at the thread since that turn ended. Always false
+    /// today — Palisade records no per-thread view time (see `fleet_overview`).
+    pub viewed_since_turn: bool,
+    /// The thread's most recent verification run failed.
+    pub verify_failed: bool,
+    pub merge_conflict: bool,
+    /// The thread's last session ended `crashed`.
+    pub crashed: bool,
+}
+
+/// Map observed session/worktree state onto the dot and its reason.
+///
+/// The order is the precedence: a paused agent outranks a running one, a
+/// running one outranks anything waiting to be read, and a crash only shows
+/// when nothing more actionable is true.
+pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention>) {
+    if input.awaiting_permission {
+        return (FleetStatus::Attention, Some(FleetAttention::Permission));
+    }
+    if input.busy {
+        return (FleetStatus::Running, None);
+    }
+    let attention = if input.turn_ended && input.has_diff && !input.viewed_since_turn {
+        Some(FleetAttention::TurnDone)
+    } else if input.verify_failed {
+        Some(FleetAttention::VerifyFailed)
+    } else if input.merge_conflict {
+        Some(FleetAttention::MergeConflict)
+    } else if input.crashed {
+        Some(FleetAttention::Crashed)
+    } else {
+        None
+    };
+    match attention {
+        Some(reason) => (FleetStatus::Attention, Some(reason)),
+        None => (FleetStatus::Idle, None),
+    }
+}
+
+/// The files a thread has touched: whatever is dirty in its tree right now,
+/// plus whatever it already committed on its worktree branch but hasn't
+/// merged back yet. A thread that commits as it goes would otherwise drop
+/// out of overlap detection the moment its tree goes clean.
+pub fn union_files_touched(status: Vec<String>, committed: Vec<String>) -> Vec<String> {
+    let mut set: std::collections::BTreeSet<String> = status.into_iter().collect();
+    set.extend(committed);
+    set.into_iter().collect()
+}
+
+/// Fill every row's `overlap`: the other threads in the same project that
+/// have touched any of the same files.
+///
+/// Symmetric by construction — if A overlaps B, B overlaps A — so the board
+/// can warn on either card without the user having to find the other one.
+///
+/// ponytail: O(n²) over threads in the open projects, which is tens at most.
+/// Index by path if a fleet ever runs to thousands.
+pub fn compute_overlap(rows: &mut [FleetRow]) {
+    let others: Vec<(String, String, std::collections::HashSet<String>)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.thread_id.clone(),
+                row.project_id.clone(),
+                row.files_touched.iter().cloned().collect(),
+            )
+        })
+        .collect();
+    for row in rows.iter_mut() {
+        row.overlap = others
+            .iter()
+            .filter(|(id, project, _)| *id != row.thread_id && *project == row.project_id)
+            .filter_map(|(id, _, files)| {
+                let shared: Vec<String> = row
+                    .files_touched
+                    .iter()
+                    .filter(|path| files.contains(*path))
+                    .cloned()
+                    .collect();
+                (!shared.is_empty())
+                    .then(|| FleetOverlap { thread_id: id.clone(), files: shared })
+            })
+            .collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(thread_id: &str, project_id: &str, files: &[&str]) -> FleetRow {
+        FleetRow {
+            thread_id: thread_id.into(),
+            title: thread_id.into(),
+            project_id: project_id.into(),
+            project_name: project_id.into(),
+            agent_id: None,
+            agent_name: None,
+            mode: "go".into(),
+            status: FleetStatus::Idle,
+            attention: None,
+            branch: None,
+            worktree_path: None,
+            diff: FleetDiff::default(),
+            files_touched: files.iter().map(|f| (*f).to_string()).collect(),
+            overlap: vec![],
+            verify: FleetVerify::not_run(),
+            merge: FleetMerge::NoWorktree,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn overlapping_ids(row: &FleetRow) -> Vec<&str> {
+        row.overlap.iter().map(|o| o.thread_id.as_str()).collect()
+    }
+
+    #[test]
+    fn disjoint_threads_do_not_overlap() {
+        let mut rows = vec![row("a", "p1", &["src/a.rs"]), row("b", "p1", &["src/b.rs"])];
+        compute_overlap(&mut rows);
+        assert!(rows.iter().all(|r| r.overlap.is_empty()), "no shared path, no overlap");
+    }
+
+    #[test]
+    fn a_shared_file_overlaps_both_ways() {
+        let mut rows = vec![
+            row("a", "p1", &["src/lib.rs", "src/a.rs"]),
+            row("b", "p1", &["src/lib.rs"]),
+        ];
+        compute_overlap(&mut rows);
+        assert_eq!(overlapping_ids(&rows[0]), ["b"]);
+        assert_eq!(overlapping_ids(&rows[1]), ["a"]);
+        assert_eq!(rows[0].overlap[0].files, ["src/lib.rs"], "only the shared path is listed");
+    }
+
+    #[test]
+    fn three_threads_on_one_file_each_see_the_other_two() {
+        let mut rows = vec![
+            row("a", "p1", &["src/lib.rs"]),
+            row("b", "p1", &["src/lib.rs"]),
+            row("c", "p1", &["src/lib.rs"]),
+        ];
+        compute_overlap(&mut rows);
+        assert_eq!(overlapping_ids(&rows[0]), ["b", "c"]);
+        assert_eq!(overlapping_ids(&rows[1]), ["a", "c"]);
+        assert_eq!(overlapping_ids(&rows[2]), ["a", "b"]);
+    }
+
+    /// Two projects can hold the same relative path; they are different files.
+    #[test]
+    fn the_same_path_in_another_project_is_not_an_overlap() {
+        let mut rows = vec![row("a", "p1", &["src/lib.rs"]), row("b", "p2", &["src/lib.rs"])];
+        compute_overlap(&mut rows);
+        assert!(rows.iter().all(|r| r.overlap.is_empty()), "overlap is per project");
+    }
+
+    #[test]
+    fn a_pending_permission_prompt_outranks_everything_else() {
+        let input = StatusInput {
+            awaiting_permission: true,
+            busy: true,
+            crashed: true,
+            verify_failed: true,
+            ..StatusInput::default()
+        };
+        assert_eq!(
+            derive_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::Permission))
+        );
+    }
+
+    #[test]
+    fn a_busy_session_is_running_not_attention() {
+        let input =
+            StatusInput { busy: true, verify_failed: true, crashed: true, ..StatusInput::default() };
+        assert_eq!(derive_status(&input), (FleetStatus::Running, None));
+    }
+
+    #[test]
+    fn a_finished_turn_with_unreviewed_changes_asks_to_be_read() {
+        let input =
+            StatusInput { turn_ended: true, has_diff: true, ..StatusInput::default() };
+        assert_eq!(
+            derive_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::TurnDone))
+        );
+    }
+
+    #[test]
+    fn a_finished_turn_that_changed_nothing_is_idle() {
+        let input = StatusInput { turn_ended: true, ..StatusInput::default() };
+        assert_eq!(derive_status(&input), (FleetStatus::Idle, None));
+    }
+
+    #[test]
+    fn an_already_viewed_turn_stops_asking() {
+        let input = StatusInput {
+            turn_ended: true,
+            has_diff: true,
+            viewed_since_turn: true,
+            ..StatusInput::default()
+        };
+        assert_eq!(derive_status(&input), (FleetStatus::Idle, None));
+    }
+
+    #[test]
+    fn a_failed_verification_is_attention() {
+        let input = StatusInput { verify_failed: true, ..StatusInput::default() };
+        assert_eq!(
+            derive_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::VerifyFailed))
+        );
+    }
+
+    #[test]
+    fn a_conflicting_merge_is_attention() {
+        let input = StatusInput { merge_conflict: true, ..StatusInput::default() };
+        assert_eq!(
+            derive_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::MergeConflict))
+        );
+    }
+
+    #[test]
+    fn a_crashed_session_is_attention() {
+        let input = StatusInput { crashed: true, ..StatusInput::default() };
+        assert_eq!(
+            derive_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::Crashed))
+        );
+    }
+
+    #[test]
+    fn files_touched_unions_dirty_and_committed_paths_deduped() {
+        let files = union_files_touched(
+            vec!["src/a.rs".into(), "src/b.rs".into()],
+            vec!["src/b.rs".into(), "src/c.rs".into()],
+        );
+        assert_eq!(files, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+    }
+
+    #[test]
+    fn files_touched_includes_committed_only_paths_even_with_a_clean_tree() {
+        // A thread that commits as it goes has nothing dirty, but its
+        // committed-and-unmerged files must still count for overlap.
+        let files = union_files_touched(vec![], vec!["src/c.rs".into()]);
+        assert_eq!(files, vec!["src/c.rs"]);
+    }
+
+    #[test]
+    fn a_quiet_thread_is_idle() {
+        assert_eq!(derive_status(&StatusInput::default()), (FleetStatus::Idle, None));
+    }
+
+    /// The board's TypeScript types are camelCase; serde must agree or every
+    /// field reads as undefined in the frontend.
+    #[test]
+    fn rows_serialize_as_camel_case() {
+        let mut row = row("a", "p1", &["src/lib.rs"]);
+        row.status = FleetStatus::Attention;
+        row.attention = Some(FleetAttention::TurnDone);
+        row.merge = FleetMerge::NoWorktree;
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["threadId"], "a");
+        assert_eq!(json["projectName"], "p1");
+        assert_eq!(json["filesTouched"][0], "src/lib.rs");
+        assert_eq!(json["updatedAt"], "2026-01-01T00:00:00Z");
+        assert_eq!(json["attention"], "turn_done");
+        assert_eq!(json["merge"], "no_worktree");
+        assert_eq!(json["verify"]["state"], "not_run");
+        assert!(json["verify"].get("command").is_none(), "an absent field stays absent");
+    }
+}

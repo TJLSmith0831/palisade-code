@@ -119,6 +119,10 @@ export const setThreadArchived = (
   invoke<ThreadMeta>("set_thread_archived", { projectHash, threadId, archived });
 export const deleteThread = (projectHash: string, threadId: string) =>
   invoke<void>("delete_thread", { projectHash, threadId });
+/** Records that the user just looked at this thread, so the Fleet board
+ *  stops flagging it as "Turn finished". Idempotent. */
+export const markThreadViewed = (projectHash: string, threadId: string) =>
+  invoke<void>("mark_thread_viewed", { projectHash, threadId });
 
 export const appendMessage = (
   projectHash: string,
@@ -154,7 +158,6 @@ export type Preflight = {
   /** The id of the first available agent. */
   selected: string | null;
   openspec: boolean;
-  graphify: boolean;
   ready: boolean;
   warnings: string[];
   checkedAt: string;
@@ -232,6 +235,33 @@ export type AgentCommands = {
 
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
+
+/** One plan-usage window an agent reports. `usedPercent` is 0–100. */
+export type AgentUsageWindow = {
+  label: "5h" | "Week" | "Month";
+  usedPercent: number;
+  resetsAt?: string;
+};
+
+/**
+ * Plan usage for one agent, or an honest reason there is none. Sources are
+ * undocumented per-agent surfaces, so every provider fails soft rather than
+ * claiming a number it doesn't have.
+ */
+export type AgentUsage =
+  | {
+      agentId: string;
+      state: "ok";
+      plan?: string;
+      windows: AgentUsageWindow[];
+      balanceUsd?: number;
+      fetchedAt: string;
+      source: string;
+    }
+  | { agentId: string; state: "not_signed_in" | "unavailable"; reason: string };
+
+/** One entry per agent the cached preflight reports as installed. Cached 60s. */
+export const agentUsage = () => invoke<AgentUsage[]>("agent_usage");
 
 /** One selectable model an agent reported through its ACP config options. */
 export type ModelInfo = { id: string; name: string };
@@ -475,6 +505,55 @@ export const setThreadWorktreeEnabled = (
   threadId: string,
   enabled: boolean,
 ) => invoke<ThreadMeta>("set_thread_worktree_enabled", { projectHash, threadId, enabled });
+
+// ------------------------------------------------------------------ fleet
+
+/** `attention` always carries a reason — a dot that says "look" without
+ *  saying why is noise. */
+export type FleetStatus = "attention" | "running" | "idle";
+export type FleetAttention =
+  | "permission"
+  | "turn_done"
+  | "verify_failed"
+  | "merge_conflict"
+  | "crashed";
+/** Evidence, never opinion: a pass is a named command that exited 0 at a
+ *  named commit. `not_run` is the honest default. */
+export type FleetVerify = {
+  state: "pass" | "fail" | "not_run";
+  command?: string;
+  commit?: string;
+  at?: string;
+};
+/** Measured, not inferred: `conflicts` is a real trial merge and `behind` a
+ *  rev-list count — the same probes the merge gate runs. */
+export type FleetMerge = "clean" | "conflicts" | "behind" | "no_worktree";
+
+export type FleetRow = {
+  threadId: string;
+  title: string;
+  projectId: string;
+  projectName: string;
+  agentId?: string;
+  agentName?: string;
+  mode: Mode;
+  status: FleetStatus;
+  attention?: FleetAttention;
+  branch?: string;
+  worktreePath?: string;
+  diff: { added: number; removed: number; files: number };
+  filesTouched: string[];
+  /** Other threads in the same project writing some of the same files. */
+  overlap: { threadId: string; files: string[] }[];
+  verify: FleetVerify;
+  merge: FleetMerge;
+  updatedAt: string;
+};
+
+/** Every unarchived thread in every open project, newest first. One call for
+ *  the whole board: cross-thread file overlap can only be computed with all
+ *  the rows in hand. */
+export const fleetOverview = () => invoke<FleetRow[]>("fleet_overview");
 
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
@@ -984,39 +1063,6 @@ export const setSpecChange = (
   threadId: string,
   name: string | null
 ) => invoke<ThreadMeta>("set_spec_change", { projectHash, threadId, name });
-
-// ----------------------------------------------------------------- graphify
-
-export type GraphifyOptions = {
-  incremental: boolean;
-  codeOnly: boolean;
-  deep: boolean;
-};
-
-export type GraphifyRun = {
-  outDir: string;
-  report: string;
-  graph: { nodes?: unknown[]; links?: unknown[] } | null;
-  summary: string;
-};
-
-export const runGraphify = (
-  projectHash: string,
-  subpath: string,
-  options: GraphifyOptions
-) =>
-  invoke<GraphifyRun>("run_graphify", {
-    projectHash,
-    subpath,
-    options,
-  });
-export const loadGraphify = (projectHash: string) =>
-  invoke<GraphifyRun>("load_graphify", { projectHash });
-export const queryGraphify = (
-  projectHash: string,
-  subcommand: string,
-  args: string[]
-) => invoke<string>("query_graphify", { projectHash, subcommand, args });
 
 // ---------------------------------------------------------------- terminal
 

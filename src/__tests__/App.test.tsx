@@ -31,7 +31,7 @@ const render = (ui: ReactElement) =>
 const openProject = async () => {
   const rows = await screen.findAllByTestId("recent-project");
   fireEvent.click(rows[0]);
-  await screen.findByTestId("shell-toggle");
+  await screen.findByTestId("nav-rail");
   fireEvent.click(screen.getByTestId("rail-explorer"));
 };
 
@@ -134,10 +134,6 @@ vi.mock("@uiw/react-md-editor", () => ({
   MDEditor: { Markdown: mdMarkdownMock },
 }));
 
-vi.mock("../GraphPane", () => ({
-  default: () => <div data-testid="graph-pane" />,
-}));
-
 import App, { clearRecoveredNotebook } from "../App";
 import { clearDiagnostics, publishDiagnostics } from "../lspClients";
 
@@ -189,18 +185,9 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
-        });
-      }
-      if (cmd === "load_graphify") {
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
         });
       }
       if (cmd === "list_directory") {
@@ -329,7 +316,12 @@ describe("Source Control working tree", () => {
         name: /Switch working tree: Project root/i,
       })
     );
-    fireEvent.click(await screen.findByText("Selected tree"));
+    // The thread list names the same thread, so aim at the picker row.
+    fireEvent.click(
+      (await screen.findAllByText("Selected tree")).filter((el) =>
+        el.classList.contains("ds-branch-name")
+      )[0]
+    );
     fireEvent.click(screen.getByTestId("sc-review"));
 
     await waitFor(() =>
@@ -392,7 +384,12 @@ describe("Source Control working tree", () => {
         name: /Switch working tree: Project root/i,
       })
     );
-    fireEvent.click(await screen.findByText("Selected tree"));
+    // The thread list names the same thread, so aim at the picker row.
+    fireEvent.click(
+      (await screen.findAllByText("Selected tree")).filter((el) =>
+        el.classList.contains("ds-branch-name")
+      )[0]
+    );
 
     fireEvent.click(await screen.findByTestId("worktree-view-diff"));
 
@@ -426,7 +423,12 @@ describe("Source Control working tree", () => {
         name: /Switch working tree: Project root/i,
       })
     );
-    fireEvent.click(await screen.findByText("Selected tree"));
+    // The thread list names the same thread, so aim at the picker row.
+    fireEvent.click(
+      (await screen.findAllByText("Selected tree")).filter((el) =>
+        el.classList.contains("ds-branch-name")
+      )[0]
+    );
     fireEvent.click(
       await screen.findByRole("button", {
         name: /Switch working tree: Selected tree/i,
@@ -904,7 +906,6 @@ describe("New thread always starts a new thread", () => {
             openspec: true,
             grillApply: true,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -978,7 +979,6 @@ describe("New thread always starts a new thread", () => {
             openspec: true,
             grillApply: true,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -1044,7 +1044,6 @@ describe("Picking a provider/model before the thread exists", () => {
             openspec: true,
             grillApply: true,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -1093,7 +1092,6 @@ describe("Picking a provider/model before the thread exists", () => {
             openspec: true,
             grillApply: true,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -1183,7 +1181,6 @@ describe("Running a chain from the deferred composer", () => {
             openspec: true,
             grillApply: true,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -1330,7 +1327,6 @@ describe("Collapsing chat (Cmd+J)", () => {
   it("leaves Vibe's chat alone — it is the primary surface there", async () => {
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await screen.findByTestId("vibe-shell");
 
     // No toggle to hide it with, and Cmd+J can't either: Vibe without chat
@@ -1368,7 +1364,6 @@ describe("Status bar (mockup parity)", () => {
     expect(bar.closest(".ds-editor-col")).toBeNull();
     expect(bar.closest(".ds-window")).not.toBeNull();
 
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     expect(screen.getByTestId("editor-status-bar")).toBeDefined();
   });
 
@@ -1395,7 +1390,6 @@ describe("Status bar (mockup parity)", () => {
 
     // Vibe hides the editor column behind a collapse toggle; collapse it,
     // then click a file the way a user would.
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     fireEvent.click(screen.getByTestId("toggle-editor"));
     expect(screen.queryByTestId("editor-col")).toBeNull();
 
@@ -1409,37 +1403,23 @@ describe("Status bar (mockup parity)", () => {
   });
 });
 
-describe("Chat column width per preset (Governing Rule)", () => {
+describe("Chat column width", () => {
   const chatWidth = () =>
     screen.getByTestId("right-sidebar").style.getPropertyValue("--panel-w");
 
-  it("gives Vibe a wide chat and Editor a narrow one", async () => {
+  it("gives chat the wide default — the conversation is the subject", async () => {
     render(<App />);
     await openProject();
-    // Editor: the code is the subject, chat is the sidekick.
-    expect(chatWidth()).toBe("300px");
-
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    // Vibe: the conversation is the subject.
     expect(chatWidth()).toBe("520px");
-
-    fireEvent.click(screen.getByTestId("shell-editor"));
-    expect(chatWidth()).toBe("300px");
   });
 
-  it("remembers each preset's width separately", async () => {
-    localStorage.setItem(
-      "palisade:layout:proj-1:right",
-      JSON.stringify({ size: 340, collapsed: false })
-    );
+  it("remembers a dragged width", async () => {
     localStorage.setItem(
       "palisade:layout:proj-1:vibe-chat",
       JSON.stringify({ size: 700, collapsed: false })
     );
     render(<App />);
     await openProject();
-    expect(chatWidth()).toBe("340px");
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     expect(chatWidth()).toBe("700px");
   });
 });
@@ -1598,7 +1578,6 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
       "search",
       "git",
       "specs",
-      "codemap",
       "run",
       "history",
       "workspace",
@@ -1608,13 +1587,17 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
     }
   });
 
-  it("opens the Explorer for a project first seen in Editor mode, and the rail toggles it", async () => {
+  it("opens the Fleet board on a project first seen here, and the rail toggles the Explorer", async () => {
     render(<App />);
     const rows = await screen.findAllByTestId("recent-project");
     fireEvent.click(rows[0]);
-    await screen.findByTestId("shell-toggle");
-    // Code-first with no files in sight is a dead end, so a project with no
-    // saved panel starts with the explorer open.
+    await screen.findByTestId("nav-rail");
+    // An ADE's first question is what the runs are doing, so a project with
+    // no saved panel lands on the board rather than on a file tree.
+    await waitFor(() => expect(screen.getByTestId("fleet-board")).toBeDefined());
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("rail-explorer"));
     await waitFor(() => expect(screen.getByTestId("file-tree")).toBeDefined());
     expect(screen.getByTestId("side-panel")).toHaveAttribute(
       "data-panel",
@@ -1640,26 +1623,6 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
       "git"
     );
     expect(screen.queryByTestId("file-tree")).toBeNull();
-  });
-
-  // Governing Rule: the panel inventory is identical in both presets, so an
-  // open panel survives a preset switch instead of resetting.
-  it("keeps the open panel when switching Vibe/Editor", async () => {
-    render(<App />);
-    await openProject();
-    fireEvent.click(screen.getByTestId("rail-specs"));
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await waitFor(() =>
-      expect(screen.getByTestId("side-panel")).toHaveAttribute(
-        "data-panel",
-        "specs"
-      )
-    );
-    fireEvent.click(screen.getByTestId("shell-editor"));
-    expect(screen.getByTestId("side-panel")).toHaveAttribute(
-      "data-panel",
-      "specs"
-    );
   });
 
   // Dogfood gap: the commit box says "commit on main" from a branch list read
@@ -1925,7 +1888,6 @@ describe("Settings panel (D14/D15)", () => {
             openspec: true,
             grillApply: false,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -2000,7 +1962,6 @@ describe("Settings panel (D14/D15)", () => {
             openspec: true,
             grillApply: false,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -2046,7 +2007,6 @@ describe("Right sidebar (merged-design v2)", () => {
     render(<App />);
     await openProject();
     expect(screen.queryByTestId("tab-threads")).toBeNull();
-    expect(screen.queryByTestId("tab-codemap")).toBeNull();
     expect(screen.queryByTestId("tab-notes")).toBeNull();
   });
 
@@ -2056,44 +2016,24 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.queryByTestId("tab-files")).toBeNull();
   });
 
-  it("is open by default at 300px (D57 — Workspace + Threads are load-bearing, not optional)", async () => {
+  it("is open by default, with a handle to size it", async () => {
     render(<App />);
     await openProject();
     const sidebar = screen.getByTestId("right-sidebar");
-    expect(sidebar.style.getPropertyValue("--panel-w")).toBe("300px");
+    expect(sidebar.style.getPropertyValue("--panel-w")).toBe("520px");
     expect(screen.getByTestId("resize-right-panel")).toBeDefined();
   });
 
-  // Amendment 9: the chat toggle is Editor-preset only — Vibe's chat is the
-  // primary surface and already has the session-list toggle.
-  it("collapses the chat rail via the toggle and restores on a second click", async () => {
+  it("offers no chat toggle — chat is the subject, the editor column is what collapses", async () => {
     render(<App />);
     await openProject();
-    const toggle = screen.getByTestId("toggle-chat");
-
-    fireEvent.click(toggle);
-    expect(screen.queryByTestId("right-sidebar")).toBeNull();
-
-    fireEvent.click(toggle);
-    expect(screen.getByTestId("right-sidebar")).toBeDefined();
-  });
-
-  it("offers the chat toggle in Editor only", async () => {
-    // Vibe's chat is the subject of the preset, not a panel — collapsing it
-    // there leaves the user staring at an editor they came to Vibe to avoid.
-    render(<App />);
-    await openProject();
-    expect(screen.getByTestId("toggle-chat")).toBeDefined();
-
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await screen.findByTestId("vibe-shell");
     expect(screen.queryByTestId("toggle-chat")).toBeNull();
+    expect(screen.getByTestId("toggle-editor")).toBeDefined();
   });
 
-  it("sizes Vibe's chat from its own resizable, so the handle actually works", async () => {
+  it("sizes chat from its own resizable, so the handle actually works", async () => {
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await screen.findByTestId("vibe-shell");
 
     const sidebar = screen.getByTestId("right-sidebar");
@@ -2116,10 +2056,12 @@ describe("Resizable layout persistence", () => {
     await openProject();
     openExplorerPanel();
 
+    // The panel sits at the right edge, so dragging its inner edge *left*
+    // is what grows it.
     fireEvent.pointerDown(screen.getByTestId("resize-left-rail"), {
       clientX: 200,
     });
-    fireEvent.pointerMove(window, { clientX: 260, buttons: 1 });
+    fireEvent.pointerMove(window, { clientX: 140, buttons: 1 });
     fireEvent.pointerUp(window);
     expect(
       screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
@@ -2263,19 +2205,11 @@ describe("Keyboard navigation (accessibility)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") return Promise.resolve([]);
         if (cmd === "git_branches") return Promise.resolve([]);
         return Promise.resolve([]);
@@ -2348,19 +2282,11 @@ describe("Keyboard navigation (accessibility)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches") {
         return Promise.resolve([
@@ -2436,19 +2362,11 @@ describe("Keyboard navigation (accessibility)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches") {
         return Promise.resolve([
@@ -2515,14 +2433,11 @@ describe("Keyboard navigation (accessibility)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({ outDir: "", report: "", graph: null, summary: "" });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches") {
         return Promise.resolve([
@@ -2604,19 +2519,11 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") {
           const relativePath = String(args?.relativePath ?? "");
           if (relativePath === "") {
@@ -2720,19 +2627,11 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") {
           return Promise.resolve(
             String(args?.relativePath ?? "") === ""
@@ -2823,19 +2722,11 @@ describe("Unsaved-edit guard (data-loss prevention)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") {
           const relativePath = String(args?.relativePath ?? "");
           if (relativePath === "") {
@@ -2932,19 +2823,11 @@ describe("Labeled inputs (accessibility)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches") return Promise.resolve([]);
       return Promise.resolve([]);
@@ -3007,19 +2890,11 @@ describe("Labeled inputs (accessibility)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches")
         return Promise.resolve([
@@ -3087,19 +2962,11 @@ describe("Error banner provenance", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches") {
         return Promise.resolve([
@@ -3226,7 +3093,6 @@ describe("First-run onboarding", () => {
             openspec: true,
             grillApply: true,
             ponytail: true,
-            graphify: true,
             ready: true,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
@@ -3337,42 +3203,21 @@ describe("First-run onboarding", () => {
     // Launch lands on onboarding even though a recent project exists — the
     // user opens it themselves, the way every other IDE behaves.
     await screen.findByTestId("onboarding");
-    expect(screen.queryByTestId("shell-toggle")).toBeNull();
+    expect(screen.queryByTestId("nav-rail")).toBeNull();
 
     fireEvent.click((await screen.findAllByTestId("recent-project"))[0]);
-    await screen.findByTestId("shell-toggle");
+    await screen.findByTestId("nav-rail");
     expect(screen.queryByTestId("onboarding")).toBeNull();
   });
 });
 
-describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
-  it("renders a Vibe/Editor toggle in the top chrome, with Editor active by default", async () => {
+describe("Workspace shell", () => {
+  it("has one layout — no Vibe/Editor switch to get lost in", async () => {
     render(<App />);
     await openProject();
-    const chrome = screen.getByTestId("top-chrome");
-    const toggle = within(chrome).getByTestId("shell-toggle");
-    expect(within(toggle).getByTestId("shell-editor").className).toMatch(
-      /active/
-    );
-    expect(within(toggle).getByTestId("shell-vibe").className).not.toMatch(
-      /active/
-    );
-  });
-
-  it("switching to Vibe renders the Vibe shell in place of the Editor shell, preserving the active project", async () => {
-    render(<App />);
-    await openProject();
-    await waitFor(() =>
-      expect(openWorkspacePanel()).toHaveValue("proj-1")
-    );
-    expect(screen.getByTestId("editor-shell")).toBeDefined();
-    expect(screen.queryByTestId("vibe-shell")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-
-    expect(screen.queryByTestId("editor-shell")).toBeNull();
+    expect(screen.queryByTestId("shell-toggle")).toBeNull();
     expect(screen.getByTestId("vibe-shell")).toBeDefined();
-    expect(openWorkspacePanel()).toHaveValue("proj-1");
+    await waitFor(() => expect(openWorkspacePanel()).toHaveValue("proj-1"));
   });
 
   it("picking Go from the Vibe shell's empty mode picker shows the empty composer (not the picker again)", async () => {
@@ -3463,19 +3308,11 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") return Promise.resolve([]);
         if (cmd === "read_thread") return Promise.resolve([]);
         return Promise.resolve([]);
@@ -3486,7 +3323,6 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     await openProject();
 
     // Switch to the Vibe shell (which uses showEmptyModePicker, not newThreadPicker).
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
     // The empty mode picker shows because there are no threads.
     await waitFor(() =>
@@ -3549,19 +3385,11 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") return Promise.resolve([]);
         if (cmd === "read_thread") return Promise.resolve([]);
         return Promise.resolve([]);
@@ -3571,7 +3399,6 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     render(<App />);
     await openProject();
 
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
     await waitFor(() =>
       expect(screen.getByTestId("mode-picker")).toBeDefined()
@@ -3673,19 +3500,11 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") return Promise.resolve([]);
         if (cmd === "list_models")
           return Promise.resolve({ configId: null, current: null, models: [] });
@@ -3697,7 +3516,6 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     await openProject();
 
     // Switch to the Vibe shell (uses showEmptyModePicker, not newThreadPicker).
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
     await waitFor(() =>
       expect(screen.getByTestId("mode-picker")).toBeDefined()
@@ -3810,19 +3628,11 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") return Promise.resolve([]);
         return Promise.resolve([]);
       }
@@ -3832,7 +3642,6 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     await openProject();
 
     // Switch to the Vibe shell.
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("vibe-shell")).toBeDefined());
     // The go-mode thread auto-selects.
     await waitFor(() =>
@@ -3916,19 +3725,11 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") return Promise.resolve([]);
         return Promise.resolve([]);
       }
@@ -3939,8 +3740,6 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
       expect(openWorkspacePanel()).toHaveValue("proj-1")
     );
 
-    fireEvent.click(screen.getByTestId("shell-editor"));
-    fireEvent.click(screen.getByTestId("shell-vibe"));
 
     expect(invokeMock).not.toHaveBeenCalledWith(
       "set_thread_mode",
@@ -3948,18 +3747,10 @@ describe("Workspace shell toggle (vibe-editor-shell-redesign)", () => {
     );
   });
 
-  it("Vibe shell renders no Codebase Map control anywhere", async () => {
-    render(<App />);
-    await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    expect(screen.queryByTestId("tab-codemap")).toBeNull();
-    expect(screen.queryByTestId("graph-pane")).toBeNull();
-  });
 });
 
 describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
   const toVibe = async () => {
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await screen.findByTestId("vibe-shell");
   };
 
@@ -3974,10 +3765,7 @@ describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
     expect(screen.getByTestId("pick-spec")).toBeDefined();
   });
 
-  // Governing Rule: same children in both presets, rearranged by CSS order.
-  // Vibe adds the session list and moves the rail to the trailing edge; it
-  // does not gain or lose a panel.
-  it("renders the same panel inventory as Editor, plus the session list", async () => {
+  it("renders the session list, rail, editor column and chat together", async () => {
     render(<App />);
     await openProject();
     await toVibe();
@@ -3988,14 +3776,14 @@ describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 
-  it("hides the session list in the Editor preset", async () => {
+  it("hides the session list on the Fleet board — the board already lists every run", async () => {
     render(<App />);
     await openProject();
     await toVibe();
     expect(screen.getByTestId("session-list")).toBeDefined();
 
-    fireEvent.click(screen.getByTestId("shell-editor"));
-    await screen.findByTestId("editor-shell");
+    fireEvent.click(screen.getByTestId("rail-fleet"));
+    expect(await screen.findByTestId("fleet-board")).toBeDefined();
     expect(screen.queryByTestId("session-list")).toBeNull();
   });
 
@@ -4201,19 +3989,11 @@ describe("Session restore", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") {
         return Promise.resolve(
           String(args?.relativePath ?? "") === ""
@@ -4307,7 +4087,7 @@ describe("Session restore", () => {
   });
 });
 
-describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
+describe("Shell layout (vibe-editor-shell-redesign)", () => {
   it("renders the file tree on the left and Editor/Diff tabs in the center", async () => {
     render(<App />);
     await openProject();
@@ -4377,19 +4157,11 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       return Promise.resolve([]);
     });
@@ -4472,19 +4244,11 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       return Promise.resolve([]);
     });
@@ -4508,24 +4272,6 @@ describe("Editor shell collapsible rail (vibe-editor-shell-redesign)", () => {
     expect(screen.queryByTestId("rail-disclosure-body")).toBeNull();
   });
 
-  it("reaches Codebase Map in one click from the rail", async () => {
-    render(<App />);
-    await openProject();
-    fireEvent.click(screen.getByTestId("rail-codemap"));
-    expect(await screen.findByTestId("graph-pane")).toBeDefined();
-  });
-
-  // Same one click in Vibe — the rail is shared, so the map is not further
-  // away in one preset than the other.
-  it("reaches Codebase Map in one click from the Vibe preset too", async () => {
-    render(<App />);
-    await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
-    await screen.findByTestId("vibe-shell");
-
-    fireEvent.click(screen.getByTestId("rail-codemap"));
-    expect(await screen.findByTestId("graph-pane")).toBeDefined();
-  });
 });
 
 describe("Project switching", () => {
@@ -4575,19 +4321,11 @@ describe("Project switching", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
           });
         }
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
-          });
         if (cmd === "list_directory") {
           const relativePath = String(args?.relativePath ?? "");
           if (relativePath !== "") return Promise.resolve([]);
@@ -4625,7 +4363,9 @@ describe("Project switching", () => {
     });
 
     // Switching restores the target project's own panel; one never opened
-    // before lands on its explorer, so the new tree is already showing.
+    // before lands on its Fleet board, so the explorer is opened here.
+    await waitFor(() => expect(screen.getByTestId("fleet-board")).toBeDefined());
+    openExplorerPanel();
     await waitFor(() => expect(screen.getByText("b.ts")).toBeDefined());
     expect(screen.queryByTestId("file-editor")).toBeNull();
     expect(screen.getByTestId("editor-empty")).toBeDefined();
@@ -4696,7 +4436,6 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
           ],
           selected,
           openspec: true,
-          graphify: true,
           ready: true,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
@@ -5408,7 +5147,6 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
           ],
           selected: "claude",
           openspec: true,
-          graphify: true,
           ready: true,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
@@ -5511,17 +5249,9 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
-        });
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
         });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "read_thread") return Promise.resolve([]);
@@ -5530,7 +5260,6 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
 
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
 
     // The Specs rail panel replaced the Vibe-only launcher — one panel
     // inventory, both presets (the governing rule).
@@ -5605,17 +5334,9 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
-        });
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
         });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "read_thread") return Promise.resolve([]);
@@ -5624,7 +5345,6 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
 
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() =>
       expect(screen.getByTestId("change-chip")).toBeInTheDocument()
     );
@@ -5703,17 +5423,9 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: [],
             checkedAt: "2026-08-06T00:00:00Z",
-          });
-        if (cmd === "load_graphify")
-          return Promise.resolve({
-            outDir: "",
-            report: "",
-            graph: null,
-            summary: "",
           });
         if (cmd === "list_directory") return Promise.resolve([]);
         if (cmd === "read_thread") return Promise.resolve([]);
@@ -5723,7 +5435,6 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
 
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
 
     fireEvent.click(screen.getByTestId("rail-specs"));
     const row = await screen.findByTestId("spec-change");
@@ -5732,7 +5443,6 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
       expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
     });
 
-    fireEvent.click(screen.getByTestId("shell-editor"));
 
     await waitFor(() => {
       expect(screen.getAllByTestId("spec-inner-tab").length).toBe(5);
@@ -5800,19 +5510,11 @@ describe("Agent command menu", () => {
           openspec: false,
           grillApply: false,
           ponytail: false,
-          graphify: false,
           ready: false,
           warnings: [],
           checkedAt: "2026-08-06T00:00:00Z",
         });
       }
-      if (cmd === "load_graphify")
-        return Promise.resolve({
-          outDir: "",
-          report: "",
-          graph: null,
-          summary: "",
-        });
       if (cmd === "list_directory") return Promise.resolve([]);
       if (cmd === "git_branches") return Promise.resolve([]);
       return Promise.resolve([]);
@@ -6132,7 +5834,6 @@ describe("Beta feedback #31", () => {
     });
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     fireEvent.click(screen.getByTestId("toggle-editor"));
     expect(screen.queryByTestId("editor-col")).toBeNull();
     fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "Hello" } });
@@ -6375,7 +6076,6 @@ describe("Beta feedback #35 — custom spec framing (Other)", () => {
   const openOther = async () => {
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("mode-picker")).toBeDefined());
     fireEvent.click(screen.getByTestId("pick-spec"));
     fireEvent.click(await screen.findByTestId("spec-type-other"));
@@ -6475,7 +6175,6 @@ describe("Beta feedback #35 — the wait before the agent's first question", () 
     });
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
     await waitFor(() => expect(screen.getByTestId("mode-picker")).toBeDefined());
     fireEvent.click(screen.getByTestId("pick-spec"));
     fireEvent.click(await screen.findByTestId(`spec-type-${specType}`));
@@ -6533,7 +6232,6 @@ describe("Session list on a narrow window", () => {
     invokeMock.mockImplementation(defaultInvoke);
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
 
     // Below 1180px the shell folds this column away to make room. The toggle
     // was inert there: it flipped React state a stylesheet then overrode, so
@@ -6662,7 +6360,6 @@ describe("Streamed tool output survives a mid-turn refresh", () => {
     });
     render(<App />);
     await openProject();
-    fireEvent.click(screen.getByTestId("shell-vibe"));
 
     await act(async () => {
       emit("executor-event", {
@@ -6720,7 +6417,6 @@ describe("Chat-only mode when no agent is installed", () => {
             openspec: false,
             grillApply: false,
             ponytail: false,
-            graphify: false,
             ready: false,
             warnings: ["No ACP agents found on PATH — chat-only mode, /go unavailable."],
             checkedAt: "2026-08-06T00:00:00Z",

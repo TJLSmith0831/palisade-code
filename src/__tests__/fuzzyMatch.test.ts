@@ -23,7 +23,7 @@ describe("scorePath — file-picker ranking", () => {
     const readme = scorePath("rea", "README.md")!;
     const cache = scorePath(
       "rea",
-      "graphify-out/cache/ast/v0.9.45/5bb3c671e7c68faa52938e8918ce2a0e.json"
+      "build-out/cache/ast/v0.9.45/5bb3c671e7c68faa52938e8918ce2a0e.json"
     );
     expect(readme).not.toBeNull();
     if (cache !== null) expect(readme).toBeGreaterThan(cache);

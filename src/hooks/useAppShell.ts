@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMantineColorScheme } from "@mantine/core";
 import { useResizable } from "../useResizable";
 
@@ -9,15 +9,16 @@ export type Theme = "auto" | "light" | "dark";
 export const nextTheme = (t: Theme): Theme =>
   t === "auto" ? "light" : t === "light" ? "dark" : "auto";
 
-/// The left icon rail's panel inventory. Identical in both presets — the
-/// Governing Rule is that Vibe and Editor share one panel set and differ
-/// only in arrangement, so this list is deliberately not per-shell.
+/// The left icon rail's panel inventory. `fleet` and `review` are not side
+/// panels — they take over the center, which is what an ADE opens on — but
+/// they are rail selections like any other, so they live in the same union.
 export const PANEL_IDS = [
+  "fleet",
+  "review",
   "explorer",
   "search",
   "git",
   "specs",
-  "codemap",
   "run",
   "mcp",
   "database",
@@ -39,20 +40,10 @@ export function useAppShell(projectHash: string | undefined) {
 
   const [diffOpen, setDiffOpenState] = useState(false);
 
-  const [centerShell, setCenterShellState] = useState<"vibe" | "editor">(
-    "editor"
-  );
-  const shellChosenRef = useRef(false);
-  const setCenterShell = useCallback((shell: "vibe" | "editor") => {
-    shellChosenRef.current = true;
-    setCenterShellState(shell);
-  }, []);
-
-  // Which left-rail panel is open, or null for "rail only, no panel". Held
-  // once for both presets so switching Vibe/Editor never resets it. Starts
-  // closed — the rail itself is the wayfinding, no panel should presume to
-  // be what the user wants on a first look.
-  const [activePanel, setActivePanel] = useState<PanelId | null>(null);
+  // Which rail selection is showing, or null for "rail only, no panel".
+  // Opens on the Fleet board: an ADE's first question is "what are my runs
+  // doing", and that answer is the same before you have picked anything.
+  const [activePanel, setActivePanel] = useState<PanelId | null>("fleet");
   const selectPanel = useCallback((id: PanelId) => {
     setActivePanel((current) => (current === id ? null : id));
   }, []);
@@ -147,12 +138,10 @@ export function useAppShell(projectHash: string | undefined) {
     min: 160,
     max: 420,
     axis: "horizontal",
-    // The rail and its panel are DOM-first/left-edge, but `data-preset`
-    // flips their CSS `order` to the right edge in Vibe (see the shell's
-    // "ONE shell, two arrangements" comment). The resize handle sits on
-    // the panel's *inner* edge either way, so which drag direction grows
-    // it flips right along with that visual side.
-    reverse: centerShell === "vibe",
+    // The rail and its panel are DOM-first/left-edge, but CSS `order` puts
+    // them at the right edge. The resize handle sits on the panel's *inner*
+    // edge, so dragging left is what grows it.
+    reverse: true,
   });
   const rightPanel = useResizable({
     storageKey: `palisade:layout:${layoutHash}:right`,
@@ -194,9 +183,6 @@ export function useAppShell(projectHash: string | undefined) {
     () => ({
       diffOpen,
       setDiffOpen,
-      centerShell,
-      setCenterShell,
-      shellChosenRef,
       activePanel,
       selectPanel,
       openPanel,
@@ -223,7 +209,6 @@ export function useAppShell(projectHash: string | undefined) {
     }),
     [
       diffOpen,
-      centerShell,
       activePanel,
       selectPanel,
       openPanel,

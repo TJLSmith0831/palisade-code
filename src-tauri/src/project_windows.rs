@@ -53,14 +53,9 @@ pub fn open_project_hashes(harness: &Harness) -> HashSet<String> {
 
 /// Drop watchers for projects no window is showing any more. Called after
 /// every switch and window close, so a long session does not accumulate one
-/// `graphify watch` process per project the user has ever opened.
+/// filesystem watcher per project the user has ever opened.
 pub fn retire_unwatched(harness: &Harness) {
     let open = open_project_hashes(harness);
-    harness
-        .workspace.watch
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .retain(|hash, _| open.contains(hash));
     harness
         .workspace.fswatch
         .lock()

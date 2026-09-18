@@ -15,7 +15,7 @@
 ## D3: How should LSP servers be managed (spawned, lifecycle, transport)?
 
 - **Decision**: Rust backend manages LSP server processes via stdio transport, frontend uses WebSocket bridge to communicate
-- **Why**: Palisade already has Rust process management patterns (executor, terminal, Graphify watcher). Managing LSP servers in Rust gives us proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security model. WebSocket bridge (similar to Tauri MCP bridge pattern) allows the frontend LSP client to talk to Rust-managed servers.
+- **Why**: Palisade already has Rust process management patterns (executor, terminal, filesystem watcher). Managing LSP servers in Rust gives us proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security model. WebSocket bridge (similar to Tauri MCP bridge pattern) allows the frontend LSP client to talk to Rust-managed servers.
 - **Source**: grill-explore
 
 ## D4: Which LSP servers should we support initially?

@@ -1,21 +1,21 @@
 //! Cross-restart child-process cleanup.
 //!
-//! `Watcher`/`Terminal` normally kill their child via `Drop` when replaced
+//! `FsWatcher`/`Terminal` normally kill their child via `Drop` when replaced
 //! or the app exits. That doesn't run when `tauri dev` hard-restarts the
-//! whole Rust binary on a source change (observed: 20 orphaned `graphify
-//! watch` processes accumulated across a single dev session, each still
-//! running and burning CPU — D48). A PID file lets the *next* spawn find
-//! and kill what the *previous* run's Drop never got to.
+//! whole Rust binary on a source change (observed: 20 orphaned watcher
+//! processes accumulated across a single dev session, each still running and
+//! burning CPU — D48). A PID file lets the *next* spawn find and kill what
+//! the *previous* run's Drop never got to.
 //!
 //! Only ever used for children whose command line is distinctive enough to
 //! safely re-identify after a PID could have been reused by an unrelated
-//! process (D48's follow-up note) — `graphify watch <path>` qualifies; a
-//! bare login shell does not, so the PTY terminal deliberately doesn't use
+//! process (D48's follow-up note) — `llama-server --model <path>` qualifies;
+//! a bare login shell does not, so the PTY terminal deliberately doesn't use
 //! this.
 //!
 //! ## What is covered, and what is deliberately not
 //!
-//! The orphaning is not theoretical. Beside the 20 `graphify watch`
+//! The orphaning is not theoretical. Beside the 20 orphaned watcher
 //! processes above, an audit found `llama-server` PID 1659 reparented to
 //! init, its owning app long gone, still holding a GPU-backed model some 31
 //! hours later. Nothing would ever have reaped it.
@@ -23,7 +23,6 @@
 //! Covered, because each carries an absolute path unique to this app on its
 //! command line:
 //!
-//! * `graphify watch <project>` — `integrations.rs`
 //! * `llama-server --model <model path>` — `completion.rs`
 //! * `python3 <…>/notebook_driver.py` — `notebook.rs`
 //!
@@ -105,7 +104,7 @@ mod tests {
         record(&pid_path, child.id());
 
         // Wrong expected substring — must not touch this process.
-        reap_stale(&pid_path, "graphify watch /some/other/project");
+        reap_stale(&pid_path, "llama-server --model /some/other/model.gguf");
 
         assert_eq!(child.try_wait().unwrap(), None, "process should still be running");
         let _ = child.kill();
@@ -135,7 +134,6 @@ mod tests {
         let model = Path::new("/Applications/Palisade.app/Contents/Resources/models/Qwen.gguf");
         let driver = Path::new("/Applications/Palisade.app/Contents/Resources/driver/notebook_driver.py");
         vec![
-            ("graphify watcher", "graphify watch".to_string()),
             ("completion sidecar", crate::completion::sidecar_reap_token(model)),
             ("notebook kernel", crate::notebook::kernel_reap_token(driver)),
         ]

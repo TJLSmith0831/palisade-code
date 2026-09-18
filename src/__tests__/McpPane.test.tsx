@@ -35,9 +35,9 @@ const page = (
 ): api.McpRegistryPage => ({ servers, nextCursor });
 
 const server = (over: Partial<api.McpServer> = {}): api.McpServer => ({
-  name: "graphify",
+  name: "docs",
   transport: "stdio",
-  command: "graphify-mcp",
+  command: "docs-mcp",
   args: ["--graph", "g.json"],
   env: {},
   url: "",
@@ -59,9 +59,9 @@ const props = { projectHash: "p1", onError: vi.fn() };
 describe("McpPane installed servers", () => {
   it("lists the project's configured servers with their command", async () => {
     render(<McpPane {...props} />);
-    expect(await screen.findByText("graphify")).toBeInTheDocument();
+    expect(await screen.findByText("docs")).toBeInTheDocument();
     expect(
-      screen.getByText("graphify-mcp --graph g.json")
+      screen.getByText("docs-mcp --graph g.json")
     ).toBeInTheDocument();
   });
 
@@ -75,11 +75,11 @@ describe("McpPane installed servers", () => {
 
   it("toggles a server and re-reads the file rather than guessing", async () => {
     render(<McpPane {...props} />);
-    fireEvent.click(await screen.findByLabelText("Enable graphify"));
+    fireEvent.click(await screen.findByLabelText("Enable docs"));
     await waitFor(() =>
       expect(mocked.setMcpServerEnabled).toHaveBeenCalledWith(
         "p1",
-        "graphify",
+        "docs",
         false
       )
     );
@@ -90,9 +90,9 @@ describe("McpPane installed servers", () => {
 
   it("removes a server", async () => {
     render(<McpPane {...props} />);
-    fireEvent.click(await screen.findByLabelText("Remove graphify"));
+    fireEvent.click(await screen.findByLabelText("Remove docs"));
     await waitFor(() =>
-      expect(mocked.removeMcpServer).toHaveBeenCalledWith("p1", "graphify")
+      expect(mocked.removeMcpServer).toHaveBeenCalledWith("p1", "docs")
     );
   });
 
@@ -140,12 +140,12 @@ describe("McpPane installed servers", () => {
 
   it("edits an existing server in place rather than adding a second", async () => {
     render(<McpPane {...props} />);
-    fireEvent.click(await screen.findByTestId("mcp-server-graphify"));
+    fireEvent.click(await screen.findByTestId("mcp-server-docs"));
     fireEvent.click(screen.getByTestId("mcp-save"));
     await waitFor(() =>
       expect(mocked.saveMcpServer).toHaveBeenCalledWith(
         "p1",
-        expect.objectContaining({ name: "graphify" })
+        expect.objectContaining({ name: "docs" })
       )
     );
   });
@@ -176,7 +176,7 @@ describe("McpPane registry browsing", () => {
 
   const openBrowse = async () => {
     render(<McpPane {...props} />);
-    await screen.findByText("graphify");
+    await screen.findByText("docs");
     fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
   };
 

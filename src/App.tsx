@@ -46,10 +46,8 @@ import {
   IconTrash,
   IconBrandTelegram,
   IconListCheck,
-  IconCode,
   IconCommand,
   IconFile,
-  IconMessageDots,
   IconPlayerPlay,
   IconFolder,
   IconFolders,
@@ -151,7 +149,6 @@ const STARTER_PROMPTS = [
   "Review my uncommitted changes",
 ];
 
-const GraphPane = lazy(() => import("./GraphPane"));
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
 // Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
@@ -187,10 +184,15 @@ import { markersForFile, resolveTestPath } from "./testGutter";
 import { languageForPath } from "./lsp";
 import OnboardingScreen from "./OnboardingScreen";
 import NavRail from "./NavRail";
+import FleetBoard, { type NewRunInput } from "./FleetBoard";
+import ReviewPane, { type ReviewFile } from "./ReviewPane";
+import { useFleet } from "./hooks/useFleet";
+import { parseFilePatches, pathFromPatch } from "./gitDiff";
 import SessionList from "./SessionList";
 import SearchPanel from "./SearchPanel";
 import SourceControlPanel from "./SourceControlPanel";
 import type { PanelId } from "./hooks/useAppShell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { enableModernWindowStyle } from "./macRoundedCorners";
 import { type UseResizableResult } from "./useResizable";
 import "./App.css";
@@ -199,6 +201,27 @@ import "./App.css";
  * registers no target hears *every* emit, whichever window it was meant for,
  * so scoping here is what keeps a menu command in the window that ran it. */
 const nativeEventTarget = () => ({ target: getCurrentWindow().label });
+
+/** The review list is the working diff, read per file: the same patches the
+ *  diff pane parses, counted rather than rendered. */
+export function reviewFilesFromDiff(diffText: string): ReviewFile[] {
+  return parseFilePatches(diffText).map((patch) => {
+    const lines = patch.hunks.flatMap((hunk) => hunk.lines);
+    return {
+      path: pathFromPatch(patch),
+      added: lines.filter((line) => line.startsWith("+")).length,
+      removed: lines.filter((line) => line.startsWith("-")).length,
+      status:
+        patch.oldFileName === "/dev/null"
+          ? "added"
+          : patch.newFileName === "/dev/null"
+            ? "deleted"
+            : patch.oldFileName !== patch.newFileName
+              ? "renamed"
+              : "modified",
+    };
+  });
+}
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
 // Editor shell's right-rail chat area (see openspec/changes/
@@ -3547,18 +3570,12 @@ export default function App() {
         const saved = loadSession(next.hash);
         sessionRef.current = saved;
         setSession(saved);
-        if (!shell.shellChosenRef.current)
-          shell.setCenterShell(saved.centerShell);
         shell.setDiffOpen(saved.diffOpen);
-        // Restore the open panel; a project never seen in Editor mode starts
-        // with the explorer, since code-first with no files in sight is a
-        // dead end. Vibe keeps its rail-only default.
+        // Restore the open panel; a project never opened under this shell
+        // lands on the Fleet board, which is what opening a project means
+        // in an ADE.
         shell.openPanel(
-          saved.activePanel !== undefined
-            ? saved.activePanel
-            : saved.centerShell === "editor"
-              ? "explorer"
-              : null
+          saved.activePanel !== undefined ? saved.activePanel : "fleet"
         );
 
         const refreshed = await api.switchProject(next.hash);
@@ -3794,7 +3811,9 @@ export default function App() {
       if (persisted) activeThread = persisted;
       setThreads(await api.listThreads(added.hash));
       await selectThread(added.hash, activeThread);
-      shell.setCenterShell("vibe");
+      // Off the board and onto the thread, so the run is visible immediately
+      // rather than as one row among everything else.
+      shell.openPanel(null);
       setBusy(true);
       const prefs = resolvePrefs(added.hash, activeThread.id);
       const sent = await api.sendMessage(
@@ -3863,12 +3882,7 @@ export default function App() {
   useEffect(() => {
     const changed = tabs.activePath !== prevActivePathRef.current;
     prevActivePathRef.current = tabs.activePath;
-    if (
-      changed &&
-      tabs.activePath &&
-      shell.centerShell === "vibe" &&
-      shell.editorCollapsed
-    ) {
+    if (changed && tabs.activePath && shell.editorCollapsed) {
       shell.toggleEditor();
     }
   }, [tabs.activePath]);
@@ -4465,13 +4479,19 @@ export default function App() {
         .map((agent) => ({ id: agent.id, name: agent.name })),
     [flight]
   );
-  const [chainVerifyCommands, setChainVerifyCommands] = useState<string[]>([]);
+  // Pairs rather than names: the chain canvas picks by name, but Review has
+  // to match a *command* back to the name that runs it.
+  const [verifyPairs, setVerifyPairs] = useState<[string, string][]>([]);
+  const chainVerifyCommands = useMemo(
+    () => verifyPairs.map(([name]) => name),
+    [verifyPairs]
+  );
   useEffect(() => {
     if (!project) return;
     api
       .verifyCommands(project.hash)
-      .then((pairs) => setChainVerifyCommands(pairs.map(([name]) => name)))
-      .catch(() => setChainVerifyCommands([]));
+      .then(setVerifyPairs)
+      .catch(() => setVerifyPairs([]));
   }, [project]);
 
   // Live run progress. One run at a time on screen: a second `run_chain` while
@@ -4578,7 +4598,7 @@ export default function App() {
   // collapsed rail expands first and the scroll waits one frame for layout.
   const onChainTranscript = useCallback(
     (sessionId: string) => {
-      const collapsed = shell.centerShell === "editor" && shell.chatCollapsed;
+      const collapsed = shell.chatCollapsed;
       if (collapsed) shell.toggleChat();
       if (collapsed) requestAnimationFrame(() => scrollToSession(sessionId));
       else scrollToSession(sessionId);
@@ -4696,8 +4716,8 @@ export default function App() {
       "spec-link-ambiguous",
       ({ payload }) => setSpecLinkChoice(payload)
     );
-    // A graphify watch spawn failure or crash — the routine "not on PATH"
-    // case is already covered by the persistent preflight warning banner.
+    // A watcher spawn failure or crash — the routine "not on PATH" case is
+    // already covered by the persistent preflight warning banner.
     const warned = listen<string>("harness-warning", ({ payload }) =>
       warn(payload)
     );
@@ -4767,7 +4787,6 @@ export default function App() {
       ...sessionRef.current,
       openPaths: tabs.tabs.map((tab) => tabKey(tab)),
       activePath: tabs.activePath,
-      centerShell: shell.centerShell,
       diffOpen: shell.diffOpen,
       activePanel: shell.activePanel,
     };
@@ -4777,7 +4796,6 @@ export default function App() {
     project?.hash,
     tabs.tabs,
     tabs.activePath,
-    shell.centerShell,
     shell.diffOpen,
     shell.activePanel,
   ]);
@@ -5481,16 +5499,234 @@ export default function App() {
     [shell.selectPanel]
   );
 
-  const chatPanel =
-    shell.centerShell === "vibe" ? shell.vibeChat : shell.rightPanel;
-  // Vibe is the chat-first preset — collapsing chat there leaves the editor
-  // alone on screen, which is just Editor with the panels on the wrong side.
-  // So the collapse (and its toggle, and Cmd+J) applies to Editor only.
-  const chatCollapsed = shell.centerShell === "editor" && shell.chatCollapsed;
-  // Vibe's mirror image: chat is the subject there, so the pane you can send
-  // away is the editor column. Same affordance, same chord, other side.
-  const editorCollapsed =
-    shell.centerShell === "vibe" && shell.editorCollapsed;
+  const chatPanel = shell.vibeChat;
+  // Chat is the subject of this layout, so the pane you can send away is the
+  // editor column — collapsing chat would leave the editor alone on screen,
+  // which is a different app.
+  const editorCollapsed = shell.editorCollapsed;
+  // Fleet and Review take the whole center: they are the board and the
+  // review of one thread, not a column beside a transcript.
+  const boardPanel =
+    shell.activePanel === "fleet" || shell.activePanel === "review";
+
+  // Looking at a thread is what clears its "Turn finished" flag on the
+  // board. Re-marked on window focus too: a turn that finishes while the
+  // app is in the background and is read the moment you come back would
+  // otherwise keep flagging itself.
+  useEffect(() => {
+    const hash = project?.hash;
+    const id = thread?.id;
+    if (!hash || !id) return;
+    const mark = () => void api.markThreadViewed(hash, id).catch(() => {});
+    mark();
+    window.addEventListener("focus", mark);
+    return () => window.removeEventListener("focus", mark);
+  }, [project?.hash, thread?.id]);
+
+  // ----------------------------------------------------------------- fleet
+  // Polled only while one of the two surfaces that reads it is on screen.
+  // Review takes its verify/merge evidence from the same rows — one source
+  // for "what does the backend actually know about this thread".
+  const fleet = useFleet({ active: boardPanel });
+  const fleetAgents = useMemo(
+    () =>
+      (flight?.agents ?? []).map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        installed: !!agent.path,
+      })),
+    [flight]
+  );
+  /** The board is cross-project; this window can only open its own project's
+   *  threads, so a foreign row says so rather than doing nothing. */
+  const selectFleetThread = useCallback(
+    async (threadId: string) => {
+      if (!project) return false;
+      const found = threads.find((t) => t.id === threadId);
+      if (!found) {
+        warn("That run belongs to another project. Open it there first.");
+        return false;
+      }
+      await selectThread(project.hash, found);
+      return true;
+    },
+    [project, threads, selectThread]
+  );
+  const onFleetOpen = useCallback(
+    (threadId: string) => {
+      void selectFleetThread(threadId).then((ok) => {
+        if (ok) shell.openPanel(null);
+      });
+    },
+    [selectFleetThread, shell.openPanel]
+  );
+  const onFleetReview = useCallback(
+    (threadId: string) => {
+      void selectFleetThread(threadId).then((ok) => {
+        if (ok) shell.openPanel("review");
+      });
+    },
+    [selectFleetThread, shell.openPanel]
+  );
+  const onFleetStop = useCallback((threadId: string) => {
+    void api.stopExecutor(undefined, threadId);
+  }, []);
+  const onFleetArchive = useCallback(
+    (threadId: string) => {
+      const found = threads.find((t) => t.id === threadId);
+      if (found) onArchiveThread(found);
+    },
+    [threads, onArchiveThread]
+  );
+  const onMergeThread = useCallback(
+    async (threadId: string) => {
+      if (!project) return;
+      try {
+        const result = await api.mergeThreadWorktree(project.hash, threadId);
+        if (!result.merged) {
+          // A conflict is a place to work, not an error — say where it is.
+          banner(
+            result.conflictPath
+              ? `Merge conflicts — the half-merged tree is at ${result.conflictPath} (branch ${result.conflictBranch}). Open it to resolve.`
+              : result.detail,
+            "error"
+          );
+        }
+        await loadWorktrees();
+        await fleet.refresh();
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [project, loadWorktrees, fleet.refresh]
+  );
+  const onOpenThreadPr = useCallback(
+    async (threadId: string) => {
+      if (!project) return;
+      try {
+        const url = await api.openThreadPr(project.hash, threadId);
+        await loadWorktrees();
+        await openUrl(url);
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [project, loadWorktrees]
+  );
+  /** A run started from the board is the same first send the composer does:
+   *  create the thread, put the picks on it, send, and land on it. */
+  const onNewRun = useCallback(
+    async ({ prompt, agentId, mode, isolated }: NewRunInput) => {
+      if (!project) return;
+      const hash = project.hash;
+      try {
+        const created = await api.createThread(hash, "New thread");
+        if (agentId) await api.setThreadExecutor(hash, created.id, agentId, null);
+        let activeThread = await api.setThreadMode(hash, created.id, mode);
+        try {
+          activeThread = await api.setThreadWorktreeEnabled(
+            hash,
+            created.id,
+            isolated
+          );
+        } catch {
+          // A project that isn't a git repo has no isolation to set; the
+          // thread is still fine (same fallback createThreadWithPrefs makes).
+        }
+        setThreads(await api.listThreads(hash));
+        await selectThread(hash, activeThread);
+        shell.openPanel(null);
+        setBusy(true);
+        const prefs = resolvePrefs(hash, activeThread.id);
+        const sent = await api.sendMessage(
+          hash,
+          activeThread.id,
+          prompt,
+          mode,
+          prefs.bypass
+        );
+        setMessages((prev) =>
+          prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
+        );
+        api.listThreads(hash).then(setThreads, () => {});
+        if (!flight?.selected) setBusy(false);
+      } catch (err) {
+        setBusy(false);
+        fail(err);
+      }
+    },
+    [project, selectThread, shell.openPanel, resolvePrefs, flight?.selected]
+  );
+
+  // ---------------------------------------------------------------- review
+  const [reviewFiles, setReviewFiles] = useState<ReviewFile[]>([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  useEffect(() => {
+    if (shell.activePanel !== "review" || !project || !thread) {
+      setReviewFiles([]);
+      return;
+    }
+    let cancelled = false;
+    setReviewLoading(true);
+    api
+      .gitWorkingDiff(project.hash, thread.id)
+      .then((text) => !cancelled && setReviewFiles(reviewFilesFromDiff(text)))
+      .catch(() => !cancelled && setReviewFiles([]))
+      .finally(() => !cancelled && setReviewLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [shell.activePanel, project?.hash, thread?.id, diffRefreshToken]);
+
+  const renderReview = () => {
+    if (!project || !thread)
+      return (
+        <div className="review-pane" data-testid="review-empty">
+          <div className="ds-panel-body">
+            Pick a run on the Fleet board to review it.
+          </div>
+        </div>
+      );
+    const row = fleet.rows.find((r) => r.threadId === thread.id);
+    const worktree = worktrees.get(thread.id);
+    return (
+      <ReviewPane
+        threadId={thread.id}
+        branch={row?.branch ?? worktree?.branch}
+        baseBranch={worktree?.baseBranch}
+        files={reviewFiles}
+        loadingFiles={reviewLoading}
+        verify={row?.verify ?? { state: "not_run" }}
+        merge={row?.merge ?? (worktree ? "clean" : "no_worktree")}
+        renderDiff={(path) => (
+          <DiffPane
+            projectHash={project.hash}
+            threadId={thread.id}
+            focusPath={path}
+            refreshToken={diffRefreshToken}
+          />
+        )}
+        onRunVerify={() => {
+          // The command this thread's evidence was measured with, else the
+          // project's first configured one.
+          const name =
+            verifyPairs.find(([, cmd]) => cmd === row?.verify.command)?.[0] ??
+            verifyPairs[0]?.[0];
+          if (!name) {
+            warn("No verify command is configured for this project.");
+            return;
+          }
+          api.runVerify(project.hash, name, thread.id).catch(fail);
+        }}
+        onMerge={() => void onMergeThread(thread.id)}
+        onOpenPr={() => void onOpenThreadPr(thread.id)}
+        onOpenInEditor={(path) => {
+          shell.openPanel(null);
+          selectFile(path);
+        }}
+      />
+    );
+  };
 
   // The strip shows opened threads, not every thread the project has ever
   // had — a hundred threads is a hundred tabs otherwise. The active thread
@@ -6008,17 +6244,6 @@ export default function App() {
             </div>
           </>
         );
-      case "codemap":
-        return (
-          <>
-            <div className="ds-panel-head">Codebase Map</div>
-            <div className="ds-panel-body">
-              <Suspense fallback={<div style={{ padding: 12 }}>Loading map…</div>}>
-                <GraphPane projectHash={project.hash} />
-              </Suspense>
-            </div>
-          </>
-        );
       case "run":
         return (
           <>
@@ -6148,52 +6373,9 @@ export default function App() {
           onMouseDown={onTitlebarMouseDown}
         >
           <h1 className="sr-only">Palisade Code</h1>
-          {/* Amendment 8: no shell switch before a project is open — there
-              is nothing for either preset to arrange yet. */}
-          {project && (
-            <div
-              className="ds-shell-toggle"
-              data-testid="shell-toggle"
-              data-tauri-drag-region-exclude
-            >
-              {/* "Vibe" and "Editor" say nothing to someone who has never
-                  used this app — a first-run reviewer listed both as
-                  unexplained jargon. The names stay (they're the product's
-                  own), but a tooltip only pays out on hover, so the glyph
-                  carries the same distinction for someone just looking:
-                  speech bubble = chat leads, brackets = code leads. */}
-              <Tooltip label="Vibe — chat first, code alongside it">
-                <button
-                  className={shell.centerShell === "vibe" ? "active" : ""}
-                  onClick={() => shell.setCenterShell("vibe")}
-                  aria-label="Vibe layout: chat first, code alongside it"
-                  data-testid="shell-vibe"
-                >
-                  <IconMessageDots size={13} stroke={1.8} aria-hidden="true" />
-                  Vibe
-                </button>
-              </Tooltip>
-              <Tooltip label="Editor — code first, chat alongside it">
-                <button
-                  className={shell.centerShell === "editor" ? "active" : ""}
-                  onClick={() => {
-                    shell.setCenterShell("editor");
-                    // Code-first with nothing open needs somewhere to start.
-                    if (shell.activePanel === null && !tabs.activePath)
-                      shell.openPanel("explorer");
-                  }}
-                  aria-label="Editor layout: code first, chat alongside it"
-                  data-testid="shell-editor"
-                >
-                  <IconCode size={13} stroke={1.8} aria-hidden="true" />
-                  Editor
-                </button>
-              </Tooltip>
-            </div>
-          )}
-          {/* Vibe preset only: chat is the primary surface there, so the
-              reclaimable width is the session list's, not the chat rail's. */}
-          {project && shell.centerShell === "vibe" && (
+          {/* Chat is the primary surface, so the reclaimable width is the
+              session list's, not the chat rail's. */}
+          {project && !boardPanel && (
             <Tooltip
               label={
                 attentionThreads.size > 0
@@ -6300,25 +6482,9 @@ export default function App() {
               </ActionIcon>
             </Tooltip>
             )}
-            {/* Each preset can send away its secondary pane: chat in Editor,
-                the editor column in Vibe. Same chord, same corner, the icon
-                points at whichever side actually collapses. */}
-            {project && shell.centerShell === "editor" && (
-              <Tooltip label="Toggle chat panel (Cmd+J)">
-                <ActionIcon
-                  variant="subtle"
-                  className="ds-icon-btn"
-                  onClick={shell.toggleChat}
-                  aria-label="Toggle chat panel"
-                  aria-pressed={!shell.chatCollapsed}
-                  data-testid="toggle-chat"
-                  data-tauri-drag-region-exclude
-                >
-                  <IconLayoutSidebarRightFilled size={14} />
-                </ActionIcon>
-              </Tooltip>
-            )}
-            {project && shell.centerShell === "vibe" && (
+            {/* The secondary pane is the editor column — chat is the
+                subject, so that is the side that can be sent away. */}
+            {project && !boardPanel && (
               <Tooltip label="Toggle editor panel (Cmd+J)">
                 <ActionIcon
                   variant="subtle"
@@ -6471,23 +6637,18 @@ export default function App() {
               openingHash={openingProject}
             />
           ) : (
-            // ONE shell, two arrangements (Governing Rule). The same children
-            // are mounted in both presets; `data-preset` flips their CSS
-            // `order` so the rail and its panel sit at the right edge in Vibe
-            // and the left edge in Editor. There is deliberately no
-            // Vibe-only or Editor-only panel — the only preset-conditional
-            // children are the session list and the chat-collapse control,
-            // which are affordances, not panels.
+            // One arrangement: chat leads, the editor column sits beside it,
+            // and CSS `order` puts the rail and its panel at the right edge.
+            // `data-preset` stays as the hook those order rules hang on.
           <div
             className="ds-shell-contents"
-            data-preset={shell.centerShell}
-            data-chat={chatCollapsed ? "collapsed" : undefined}
+            data-preset="vibe"
             data-editor={editorCollapsed ? "collapsed" : undefined}
-            data-testid={
-              shell.centerShell === "vibe" ? "vibe-shell" : "editor-shell"
-            }
+            data-testid="vibe-shell"
           >
-            {shell.centerShell === "vibe" && shell.sessionListOpen && (
+            {/* Fleet is already every thread in every project; a thread list
+                beside it would be the same question asked twice. */}
+            {!boardPanel && shell.sessionListOpen && (
               <SessionList
                 threads={threads}
                 projects={projects}
@@ -6512,7 +6673,7 @@ export default function App() {
               dirtyGit={dirtyCount > 0}
             />
 
-            {shell.activePanel && (
+            {shell.activePanel && !boardPanel && (
               <div
                 className="ds-side-panel"
                 data-testid="side-panel"
@@ -6527,7 +6688,7 @@ export default function App() {
               </div>
             )}
 
-            {shell.activePanel && (
+            {shell.activePanel && !boardPanel && (
               <div
                 className="ds-resize-handle ds-resize-handle-x"
                 data-testid="resize-left-rail"
@@ -6539,6 +6700,23 @@ export default function App() {
             )}
 
             <div className="ds-main" data-testid="main-pane">
+              {shell.activePanel === "fleet" ? (
+                <FleetBoard
+                  rows={fleet.rows}
+                  loading={fleet.loading}
+                  error={fleet.error}
+                  agents={fleetAgents}
+                  onOpen={onFleetOpen}
+                  onReview={onFleetReview}
+                  onStop={onFleetStop}
+                  onMerge={onMergeThread}
+                  onOpenPr={onOpenThreadPr}
+                  onArchive={onFleetArchive}
+                  onNewRun={onNewRun}
+                />
+              ) : shell.activePanel === "review" ? (
+                renderReview()
+              ) : (
               <div className="ds-work-row">
                 {!editorCollapsed && (
                 <main className="ds-editor-col" data-testid="editor-col">
@@ -6595,13 +6773,8 @@ export default function App() {
                 </main>
                 )}
 
-                {!chatCollapsed && (
+                {(
                   <>
-                    {/* The Governing Rule allows the two presets to differ
-                        by default width, and they must: a 520px chat is the
-                        subject in Vibe and swamps the editor in Editor.
-                        Two resizables, so a drag in one preset doesn't
-                        resize the other. */}
                     {/* Nothing to size against once the other pane is gone. */}
                     {!editorCollapsed && (
                       <div
@@ -6627,6 +6800,7 @@ export default function App() {
                   </>
                 )}
               </div>
+              )}
 
               {/* Hidden rather than unmounted while collapsed: unmounting
                   disposes the xterm instance, so every collapse threw away

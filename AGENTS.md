@@ -1,8 +1,8 @@
 # Day 23 — Palisade Code — AGENTS.md
-Cross-machine agent harness: compiled-in agents (Claude Code or Codex) drive both spec-mode (read-only/plan, grill-explore/grill-propose) and go-mode (write-enabled, grill-apply), keeping project threads, session history, and Graphify code maps in sync. Sessions are concurrent and individually identified — a thread can hold several at once.
+Cross-machine agent harness: compiled-in agents (Claude Code or Codex) drive both spec-mode (read-only/plan, grill-explore/grill-propose) and go-mode (write-enabled, grill-apply), keeping project threads and session history in sync. Sessions are concurrent and individually identified — a thread can hold several at once.
 
 ## Stack
-Rust + Tauri · TypeScript (frontend) · pnpm · Browserbase (web search) · Graphify (code maps) · Claude Code / Codex CLI
+Rust + Tauri · TypeScript (frontend) · pnpm · Browserbase (web search) · Claude Code / Codex CLI
 
 ## Commands (verified 2026-08-03)
 - `pnpm install` — install frontend dependencies (run from the repo root)
@@ -82,7 +82,6 @@ Two-mode harness that moves from spec to tested code, both modes driven by the s
 
 ## Gotchas
 - **Executor detection is machine-specific.** Personal laptop expects `claude`; work laptop expects `codex`. Detection must tolerate aliases, PATH variations, and missing executables. If both are present, prefer `claude`; if neither, warn and stay in chat-only mode.
-- **Graphify maps the active project, not the harness.** Always pass the detected project root as the working directory; never run it against `day-23-palisade-code/`.
 - **Browserbase key lives in `.env`.** Load with `dotenv`; never commit the key or read `.env` contents into logs.
 - **Session store must live outside target repos.** Default to a dotdir under the user's home (e.g. `~/.palisade-code/sessions/`) so project git histories stay clean.
 - **Notes are files inside the project.** The harness proposes a path under the project root; the user confirms before any write. Never create files outside the project root.

@@ -1,15 +1,13 @@
 //! Watches the active project root for changes Palisade didn't make itself.
 //!
-//! Mirrors `integrations::Watcher`'s shape — `spawn` returns `Self` rather
-//! than `Res<Self>` (a failed spawn reports through `on_crash` instead of
-//! blocking the caller), `Drop` calls `terminate`, and the callbacks are
-//! moved into the watcher. It differs in one way: the debouncer owns its own
-//! thread, so there's no `AtomicBool`/`JoinHandle` pair to manage here —
-//! dropping the debouncer stops it.
+//! `spawn` returns `Self` rather than `Res<Self>` (a failed spawn reports
+//! through `on_crash` instead of blocking the caller), `Drop` calls
+//! `terminate`, and the callbacks are moved into the watcher. The debouncer
+//! owns its own thread, so there's no `AtomicBool`/`JoinHandle` pair to manage
+//! here — dropping the debouncer stops it.
 //!
-//! Unlike that watcher, which polls one known file's mtime, this one has to
-//! see every path under the project, so it uses FSEvents (via `notify`)
-//! rather than a poll loop.
+//! It has to see every path under the project, so it uses FSEvents (via
+//! `notify`) rather than a poll loop.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,13 +26,6 @@ use crate::locks::MutexExt;
 /// enough that macOS's rename-as-delete+create arrives as one batch, short
 /// enough that an agent edit shows up while you're still watching it happen.
 const DEBOUNCE: Duration = Duration::from_millis(400);
-
-/// Graphify's output directory, which `graphify watch` rewrites every few
-/// seconds while it runs. Filtered here rather than in `should_skip_entry`
-/// so the file tree still *lists* it — it's browsable output, it just isn't
-/// a change the editor or the tree should react to. Without this, a running
-/// watch collapses the tree's expanded folders on a loop.
-const GRAPHIFY_OUT_DIR: &str = "graphify-out";
 
 /// How long after one of our own writes we ignore events for that path.
 /// FSEvents can take a moment to deliver, so this outlives `DEBOUNCE`.
@@ -167,7 +158,7 @@ fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
     }
     for component in relative.components() {
         let name = component.as_os_str().to_string_lossy();
-        if should_skip_entry(&name, false) || name == GRAPHIFY_OUT_DIR {
+        if should_skip_entry(&name, false) {
             return None;
         }
     }
@@ -331,20 +322,20 @@ mod tests {
     }
 
     #[test]
-    fn ignores_graphify_output_so_a_running_watch_does_not_thrash_the_tree() {
+    fn skipped_directories_never_reach_the_ui() {
         // This is the filter's real seam. FSEvents delivery is an OS service
         // and is not deterministic in a sandboxed test process; testing it
         // here turned a pure path-policy regression into an intermittent
         // five-second timeout. The callback above invokes this helper for
-        // every event path, so these assertions prove graph output cannot
+        // every event path, so these assertions prove generated output cannot
         // reach the UI while a sibling source file still can.
         let root = Path::new("/project");
         assert_eq!(
-            relative_if_interesting(root, Path::new("/project/graphify-out/needs_update")),
+            relative_if_interesting(root, Path::new("/project/node_modules/pkg/index.js")),
             None
         );
         assert_eq!(
-            relative_if_interesting(root, Path::new("/project/graphify-out/graph.json")),
+            relative_if_interesting(root, Path::new("/project/target/debug/build.log")),
             None
         );
         assert_eq!(

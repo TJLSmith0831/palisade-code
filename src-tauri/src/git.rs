@@ -8,7 +8,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::git_repo;
-use crate::integrations::GRAPH_DIR;
 use crate::store::Res;
 
 pub use crate::git_repo::{BranchInfo, FileStatus};
@@ -520,23 +519,9 @@ pub fn ahead_behind(_bin: &Path, root: &Path) -> Res<Option<(u32, u32)>> {
 /// deleting it instead of `git checkout --`.
 pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res<()> {
     if untracked {
-        // A project that doesn't gitignore `graphify-out/` reports it as one
-        // untracked directory entry, so "discard changes" on it means
-        // `remove_dir_all` on the whole code graph — minutes of extraction, and
-        // every graph tool broken until it's rebuilt. The graph is
-        // Palisade-managed state, not the user's uncommitted work, so this
-        // button doesn't get to delete it; removing it stays a deliberate act
-        // outside the diff pane.
-        if path.trim_end_matches('/') == GRAPH_DIR {
-            return Err(format!(
-                "{GRAPH_DIR}/ holds this project's code graph, which Palisade maintains — \
-                 discarding changes won't delete it. Remove the folder yourself if you \
-                 really want it gone."
-            ).into());
-        }
         let full = root.join(path);
         // An untracked directory (git status reports it as one entry, e.g.
-        // "graphify-out/") needs remove_dir_all — remove_file only deletes
+        // "build-out/") needs remove_dir_all — remove_file only deletes
         // a single file and errors ("Operation not permitted") on a dir.
         let result = if full.is_dir() { std::fs::remove_dir_all(&full) } else { std::fs::remove_file(&full) };
         result.map_err(|err| crate::PalisadeError::from(format!("could not delete {path}: {err}")))
@@ -677,7 +662,7 @@ pub fn init_repo(bin: &Path, root: &Path) -> Res<()> {
 
 /// Paths `git` itself would ignore, one entry per top-level ignored file or
 /// directory (`--directory` collapses a whole ignored tree like
-/// `graphify-out/` into a single entry instead of walking every file inside
+/// `build-out/` into a single entry instead of walking every file inside
 /// it). Empty rather than erroring outside a git repo — callers like the
 /// file palette work on any project; ignore-awareness is a nicety on top.
 pub fn ignored_paths(bin: &Path, root: &Path) -> std::collections::HashSet<String> {
@@ -1073,46 +1058,25 @@ world
         assert!(!root.join("scratch-dir").exists());
     }
 
-    /// RED→GREEN: in a project that doesn't gitignore it, `graphify-out/` shows
-    /// up in `git status` as one untracked directory entry, and "discard" then
-    /// means `remove_dir_all` on the whole code graph — minutes of extraction
-    /// gone, from a button whose confirm dialog says "discard changes". The
-    /// graph is Palisade-managed state, not the user's uncommitted work.
-    #[test]
-    fn discard_file_refuses_to_delete_the_code_graph() {
-        let (dir, _tracked) = init_test_repo();
-        let root = dir.path();
-        let out = root.join("graphify-out");
-        fs::create_dir(&out).unwrap();
-        fs::write(out.join("graph.json"), "{}").unwrap();
-
-        let error = discard_file(git(), root, "graphify-out/", true).unwrap_err();
-
-        assert!(out.join("graph.json").exists(), "the graph must survive a discard");
-        assert!(error.contains("graphify-out"), "the error should name what it refused: {error}");
-    }
-
-    /// The guard keys on the graph directory itself, not on anything that
-    /// merely lives beneath it — a stray file inside stays discardable.
     // -------------------------------------------------------- ignored_paths
 
     /// FIL-02: the file palette walked the whole tree with only a hardcoded
     /// name-skip (`.git`, `node_modules`, `target`, `__pycache__`) — a
-    /// project-specific `.gitignore` entry like `graphify-out/` was invisible
+    /// project-specific `.gitignore` entry like `build-out/` was invisible
     /// to it and leaked hundreds of generated-cache files into the palette.
     #[test]
     fn ignored_paths_reports_a_gitignored_directory_as_one_entry() {
         let (dir, _tracked) = init_test_repo();
         let root = dir.path();
-        fs::write(root.join(".gitignore"), "graphify-out/\n").unwrap();
-        fs::create_dir(root.join("graphify-out")).unwrap();
-        fs::write(root.join("graphify-out/graph.json"), "{}").unwrap();
-        fs::write(root.join("graphify-out/cache.bin"), "x").unwrap();
+        fs::write(root.join(".gitignore"), "build-out/\n").unwrap();
+        fs::create_dir(root.join("build-out")).unwrap();
+        fs::write(root.join("build-out/bundle.js"), "{}").unwrap();
+        fs::write(root.join("build-out/cache.bin"), "x").unwrap();
 
         let ignored = ignored_paths(git(), root);
 
         assert!(
-            ignored.contains("graphify-out/"),
+            ignored.contains("build-out/"),
             "expected the whole ignored dir as one entry, got {ignored:?}"
         );
     }
@@ -1123,18 +1087,6 @@ world
     fn ignored_paths_is_empty_outside_a_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         assert!(ignored_paths(git(), dir.path()).is_empty());
-    }
-
-    #[test]
-    fn discard_file_still_deletes_a_sibling_of_the_code_graph() {
-        let (dir, _tracked) = init_test_repo();
-        let root = dir.path();
-        fs::create_dir(root.join("graphify-outtakes")).unwrap();
-        fs::write(root.join("graphify-outtakes/x.txt"), "temp\n").unwrap();
-
-        discard_file(git(), root, "graphify-outtakes/", true).unwrap();
-
-        assert!(!root.join("graphify-outtakes").exists());
     }
 
     #[test]
