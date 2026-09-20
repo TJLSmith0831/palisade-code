@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActionIcon,
   Button,
   Checkbox,
   Group,
@@ -8,6 +9,7 @@ import {
   Stack,
   Text,
   TextInput,
+  Tooltip,
   UnstyledButton,
 } from "@mantine/core";
 import { IconArrowLeft, IconGitPullRequest } from "@tabler/icons-react";
@@ -202,17 +204,28 @@ export default function ReviewPane({
   return (
     <div className="review-pane" data-testid="review-pane">
       <div className="review-header">
-        <Button size="compact-xs" variant="subtle" leftSection={<IconArrowLeft size={13} />} onClick={onBackToFleet}>
-          All reviews
-        </Button>
-        <Text size="sm" fw={600} data-testid="review-title">
-          {title}
-        </Text>
-        <Text size="xs" c="dimmed" data-testid="review-subtitle">
-          {branch ? `${branch}${baseBranch ? ` → ${baseBranch}` : ""} · ` : ""}
-          +{diff.added} −{diff.removed} · {diff.files} files
-          {(diff.untracked ?? 0) > 0 && ` · ${diff.untracked} new`}
-        </Text>
+        <Tooltip label="All reviews">
+          <ActionIcon
+            variant="subtle"
+            color="neutral"
+            size="md"
+            aria-label="All reviews"
+            data-testid="review-back"
+            onClick={onBackToFleet}
+          >
+            <IconArrowLeft size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <div className="review-header-text">
+          <Text size="sm" fw={600} data-testid="review-title">
+            {title}
+          </Text>
+          <Text size="xs" c="dimmed" data-testid="review-subtitle">
+            {branch ? `${branch}${baseBranch ? ` → ${baseBranch}` : ""} · ` : ""}
+            +{diff.added} −{diff.removed} · {diff.files} files
+            {(diff.untracked ?? 0) > 0 && ` · ${diff.untracked} new`}
+          </Text>
+        </div>
       </div>
 
       <Group className="review-verify" justify="space-between" wrap="nowrap">
@@ -232,7 +245,7 @@ export default function ReviewPane({
       {setup?.state === "running" && <Text size="xs" c="dimmed">Setting up worktree…</Text>}
       {setup?.state === "failed" && (
         <Group gap="xs" wrap="nowrap">
-          <Text size="xs" c="red" lineClamp={1}>Setup failed{setup.output ? `: ${setup.output}` : ""}</Text>
+          <Text size="xs" c="danger" lineClamp={1}>Setup failed{setup.output ? `: ${setup.output}` : ""}</Text>
           <Button size="compact-xs" variant="default" onClick={onRerunSetup}>Re-run setup</Button>
         </Group>
       )}
@@ -366,7 +379,7 @@ export default function ReviewPane({
               })} />
           ))}
           {!suggestions.length && <Text size="xs" c="dimmed">No conventional checks were found. Add one below.</Text>}
-          {configureError && <Text size="xs" c="red">{configureError}</Text>}
+          {configureError && <Text size="xs" c="danger">{configureError}</Text>}
           <TextInput label="Check name" value={manualName} onChange={(event) => setManualName(event.currentTarget.value)} placeholder="test" />
           <TextInput label="Command" value={manualCommand} onChange={(event) => setManualCommand(event.currentTarget.value)} placeholder="cargo test" />
           <Button loading={configuring} disabled={!selectedSuggestions.size && !(manualName.trim() && manualCommand.trim())} onClick={() => void saveVerification()}>

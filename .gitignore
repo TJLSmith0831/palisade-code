@@ -48,3 +48,6 @@ __pycache__/
 
 # Signing/notarization secrets — see .env.example
 .env
+
+# brooks-lint run history
+.brooks-lint-history.json

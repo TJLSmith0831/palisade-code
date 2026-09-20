@@ -2051,6 +2051,18 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("toggle-editor")).toBeDefined();
   });
 
+  it("groups the Threads and Chat toggles together, apart from the editor and terminal", async () => {
+    render(<App />);
+    await openProject();
+    const threads = screen.getByTestId("toggle-session-list");
+    const chat = screen.getByTestId("toggle-chat");
+    const group = chat.closest(".ds-pill-group");
+    expect(group).not.toBeNull();
+    expect(group).toContainElement(threads);
+    expect(group).not.toContainElement(screen.getByTestId("toggle-editor"));
+    expect(group).not.toContainElement(screen.getByTestId("toggle-terminal"));
+  });
+
   it("sizes chat from its own resizable, so the handle actually works", async () => {
     render(<App />);
     await openProject();

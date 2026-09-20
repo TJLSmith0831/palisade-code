@@ -36,7 +36,6 @@ import {
 import {
   IconAlertTriangle,
   IconFlask,
-  IconArchive,
   IconBolt,
   IconBox,
   IconAppWindow,
@@ -82,6 +81,7 @@ import { useProjectManager } from "./hooks/useProjectManager";
 import { resolvePrefs, useThreadPrefs } from "./hooks/useThreadPrefs";
 import { useNewThreadFlow } from "./hooks/useNewThreadFlow";
 import { useThreadActions } from "./hooks/useThreadActions";
+import { ArchiveIcon, ArchivingContext } from "./archiving";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useExecutor } from "./hooks/useExecutor";
 import type {
@@ -2523,7 +2523,7 @@ const ThreadRow = memo(function ThreadRow({
             aria-label={thread.archived ? "Unarchive thread" : "Archive thread"}
             data-testid="archive-thread"
           >
-            <IconArchive size={13} />
+            <ArchiveIcon threadId={thread.id} />
           </button>
           <button
             className="ds-thread-action delete"
@@ -4333,7 +4333,7 @@ export default function App() {
     return () => { unlisten.then((un) => un()); };
   }, [loadWorktrees]);
 
-  const { onRenameThread, onArchiveThread, onDeleteThread } = useThreadActions({
+  const { onRenameThread, onArchiveThread, onDeleteThread, archivingIds, withArchiving } = useThreadActions({
     projectHash: project?.hash ?? null,
     activeThread: thread,
     setThread,
@@ -5528,8 +5528,10 @@ export default function App() {
     void api.cancelChainRun(runId);
   }, []);
   const onFleetArchiveRun = useCallback((projectId: string, runId: string) => {
-    void api.setChainRunArchived(projectId, runId, true).then(() => fleet.refresh()).catch(fail);
-  }, [fleet.refresh, fail]);
+    void withArchiving(runId, () => api.setChainRunArchived(projectId, runId, true))
+      .then(() => fleet.refresh())
+      .catch(fail);
+  }, [withArchiving, fleet.refresh, fail]);
   const onFleetArchive = useCallback(
     (projectId: string, threadId: string) => {
       const found = projectId === project?.hash
@@ -5539,12 +5541,11 @@ export default function App() {
         onArchiveThread(found);
         return;
       }
-      void api
-        .setThreadArchived(projectId, threadId, true)
+      void withArchiving(threadId, () => api.setThreadArchived(projectId, threadId, true))
         .then(() => fleet.refresh())
         .catch(fail);
     },
-    [project?.hash, threads, onArchiveThread, fleet.refresh, fail]
+    [project?.hash, threads, onArchiveThread, withArchiving, fleet.refresh, fail]
   );
   const onMergeThread = useCallback(
     async (projectId: string, threadId: string, overrideVerify = false) => {
@@ -6376,6 +6377,7 @@ export default function App() {
   };
 
   return (
+    <ArchivingContext.Provider value={archivingIds}>
     <div className="ds-window" data-testid="window-shell">
       <div className="app" data-color-mode="dark">
         <header
@@ -6387,6 +6389,7 @@ export default function App() {
           {/* Chat is the primary surface, so the reclaimable width is the
               session list's, not the chat rail's. */}
           {project && !boardPanel && (
+            <div className="ds-pill-group" aria-label="Chat panels">
             <Tooltip
               label={
                 attentionThreads.size > 0
@@ -6415,6 +6418,25 @@ export default function App() {
                 </ActionIcon>
               </Indicator>
             </Tooltip>
+              {/* Chat is the pane that can be sent away when the editor is
+                  what you're focused on. Same state the collapsed strip's
+                  own chevron drives — one toggle, two entry points, like the
+                  terminal's. */}
+              <Tooltip label={`${shell.chatOpen ? "Hide" : "Show"} chat panel (Cmd+K)`}>
+                <ActionIcon
+                  variant="subtle"
+                  className="ds-icon-btn"
+                  onClick={shell.toggleChat}
+                  aria-label={shell.chatOpen ? "Hide chat panel" : "Show chat panel"}
+                  aria-pressed={shell.chatOpen}
+                  data-testid="toggle-chat"
+                  data-tauri-drag-region-exclude
+                >
+                  <IconMessageCircle size={14} />
+                  <span className="ds-chrome-label">Chat</span>
+                </ActionIcon>
+              </Tooltip>
+            </div>
           )}
           <div className="ds-chrome-utils">
             <BetaBadge onUpdateReady={setUpdateReady} />
@@ -6480,7 +6502,7 @@ export default function App() {
                 bottom panel's own inline chevron both call toggleTerminal.
                 Both panel toggles need a project to have a panel at all. */}
             {project && (
-            <div className="ds-workspace-group" aria-label="Workspace panels">
+            <div className="ds-pill-group" aria-label="Workspace panels">
             <Tooltip label="Toggle terminal panel (Cmd+`)">
               <ActionIcon
                 variant="subtle"
@@ -6511,29 +6533,9 @@ export default function App() {
                 </ActionIcon>
               </Tooltip>
             )}
-            {/* The mirror of the toggle above: chat is the pane that can be
-                sent away instead, when the editor is what you're focused on.
-                Same state the collapsed strip's own chevron drives — one
-                toggle, two entry points, like the terminal's. */}
-            {project && !boardPanel && (
-              <Tooltip label={`${shell.chatOpen ? "Hide" : "Show"} chat panel (Cmd+K)`}>
-                <ActionIcon
-                  variant="subtle"
-                  className="ds-icon-btn"
-                  onClick={shell.toggleChat}
-                  aria-label={shell.chatOpen ? "Hide chat panel" : "Show chat panel"}
-                  aria-pressed={shell.chatOpen}
-                  data-testid="toggle-chat"
-                  data-tauri-drag-region-exclude
-                >
-                  <IconMessageCircle size={14} />
-                  <span className="ds-chrome-label">Chat</span>
-                </ActionIcon>
-              </Tooltip>
-            )}
             </div>
             )}
-            <div className="ds-utility-group" aria-label="Application controls">
+            <div className="ds-pill-group" aria-label="Application controls">
             <Tooltip label="Theme: click to cycle auto → light → dark">
               <ActionIcon
                 variant="subtle"
@@ -7214,5 +7216,6 @@ export default function App() {
         )}
       </div>
     </div>
+    </ArchivingContext.Provider>
   );
 }

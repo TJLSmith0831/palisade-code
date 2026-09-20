@@ -13,6 +13,7 @@ import { IconBox, IconDots, IconRoute } from "@tabler/icons-react";
 import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { relativeTime } from "./SessionList";
+import { ArchivingSpinner, useIsArchiving } from "./archiving";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 
 export type NewRunInput = {
@@ -108,12 +109,15 @@ function Row({
   // no branch to merge, no PR to open and nothing to archive.
   const playbook = row.kind === "playbook";
   const runId = row.runId ?? row.threadId;
+  // Keyed like the archive call itself: a playbook run archives by run id.
+  const archiving = useIsArchiving(runId);
   const open = () => (playbook ? onOpenRun(runId) : onOpen(row.threadId));
   const stop = () => (playbook ? onCancelRun(runId) : onStop(row.threadId));
 
   return (
     <div
       className="fleet-row"
+      data-busy={archiving || undefined}
       role="button"
       tabIndex={0}
       data-testid="fleet-row"
@@ -186,9 +190,10 @@ function Row({
             className="ds-icon-btn"
             aria-label={`Actions for ${row.title}`}
             data-testid="fleet-actions"
+            disabled={archiving}
             onClick={(e) => e.stopPropagation()}
           >
-            <IconDots size={14} />
+            {archiving ? <ArchivingSpinner /> : <IconDots size={14} />}
           </button>
         </Menu.Target>
         <Menu.Dropdown onClick={(e) => e.stopPropagation()}>

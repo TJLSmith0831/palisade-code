@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, TextInput, Tooltip } from "@mantine/core";
 import {
-  IconArchive,
   IconPencil,
   IconPlus,
   IconSearch,
@@ -9,6 +8,7 @@ import {
 } from "@tabler/icons-react";
 import type { FleetRow, ThreadMeta, WorktreeStatus } from "./api";
 import { AttentionPill, OverlapIcon } from "./fleetBadges";
+import { ArchiveIcon } from "./archiving";
 
 // Amendment 3's Vibe-only session list: the browse/search surface, distinct
 // from the in-conversation thread-tab strip (which stays as the quick
@@ -324,7 +324,7 @@ export default function SessionList({
                     aria-label="Archive thread"
                     data-testid="session-archive"
                   >
-                    <IconArchive size={13} />
+                    <ArchiveIcon threadId={thread.id} />
                   </button>
                 </div>
                 {(state !== "idle" || row) && (

@@ -70,6 +70,34 @@ describe("useThreadActions", () => {
     expect(deps.setThread).not.toHaveBeenCalled();
   });
 
+  it("marks a thread as archiving until the archive settles, and ignores a second click meanwhile", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((r) => { release = r; });
+    const { result, deps } = setup({ setThreadArchived: vi.fn().mockReturnValue(pending) });
+
+    act(() => result.current.onArchiveThread(thread()));
+    await vi.waitFor(() => expect(result.current.archivingIds.has("t1")).toBe(true));
+
+    act(() => result.current.onArchiveThread(thread()));
+    expect(deps.setThreadArchived).toHaveBeenCalledTimes(1);
+
+    await act(async () => { release(); await pending; });
+    await vi.waitFor(() => expect(result.current.archivingIds.has("t1")).toBe(false));
+  });
+
+  it("withArchiving marks any id for the length of the work, and clears it on failure too", async () => {
+    const { result } = setup();
+    let fail!: (e: Error) => void;
+    const work = new Promise<void>((_, rej) => { fail = rej; });
+
+    let settled!: Promise<unknown>;
+    act(() => { settled = result.current.withArchiving("run-9", () => work).catch(() => "failed"); });
+    expect(result.current.archivingIds.has("run-9")).toBe(true);
+
+    await act(async () => { fail(new Error("boom")); await settled; });
+    expect(result.current.archivingIds.has("run-9")).toBe(false);
+  });
+
   // Archiving is reversible and must stay that way: it never discards work on
   // its own. Unmerged work is the one case the user has to answer for.
   it("archives silently when the worktree has nothing the base branch lacks", async () => {

@@ -289,8 +289,16 @@ describe("ChainRunHistory — archive (issue #53)", () => {
   });
 
   it("Archive calls setChainRunArchived with archived true and the row drops out of the default view", async () => {
-    apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x", archived: false })]);
-    apiMock.setChainRunArchived.mockResolvedValue(record({ id: "run-x", archived: true }));
+    // Archiving announces a change, which reloads the list — so the backend
+    // has to answer the reload with the run already archived, as it would.
+    let archived = false;
+    apiMock.listChainRuns.mockImplementation(() =>
+      Promise.resolve([record({ id: "run-x", archived })]),
+    );
+    apiMock.setChainRunArchived.mockImplementation(() => {
+      archived = true;
+      return Promise.resolve(record({ id: "run-x", archived: true }));
+    });
 
     renderHistory();
 

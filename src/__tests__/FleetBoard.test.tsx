@@ -5,6 +5,7 @@ import { MantineProvider } from "@mantine/core";
 import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
 import type { FleetBoardProps } from "../FleetBoard";
 import type { FleetRow } from "../api";
+import { ArchivingContext } from "../archiving";
 
 const { apiMock } = vi.hoisted(() => ({
   apiMock: {
@@ -389,5 +390,31 @@ describe("playbookSubtitle", () => {
   it("falls back when the run records no seed", () => {
     expect(playbookSubtitle(playbookRow())).toBe("Playbook run");
     expect(playbookSubtitle(playbookRow({ seed: "   " }))).toBe("Playbook run");
+  });
+});
+
+describe("FleetBoard — archive in flight", () => {
+  const withArchiving = (ids: string[], rows: FleetRow[]) =>
+    render(
+      <ArchivingContext.Provider value={new Set(ids)}>
+        <FleetBoard {...props({ rows })} />
+      </ArchivingContext.Provider>,
+    );
+
+  it("swaps a thread row's actions button for a spinner and disables it", () => {
+    withArchiving(["t1"], [row()]);
+    expect(screen.getByLabelText("Archiving")).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-actions")).toBeDisabled();
+    expect(screen.getByTestId("fleet-row")).toHaveAttribute("data-busy", "true");
+  });
+
+  it("keys a playbook run by its run id, the id it is archived by", () => {
+    withArchiving(["run-1"], [playbookRow({ threadId: "thread-of-run", runId: "run-1" })]);
+    expect(screen.getByLabelText("Archiving")).toBeInTheDocument();
+  });
+
+  it("leaves other rows alone", () => {
+    withArchiving(["t1"], [row(), row({ threadId: "t2" })]);
+    expect(screen.getAllByLabelText("Archiving")).toHaveLength(1);
   });
 });

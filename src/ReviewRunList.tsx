@@ -1,5 +1,5 @@
-import { Badge, Button, Group, Stack, Text, UnstyledButton } from "@mantine/core";
-import { IconLayoutGrid } from "@tabler/icons-react";
+import { Badge, Button, Stack, Text, UnstyledButton } from "@mantine/core";
+import { IconBox, IconChevronRight, IconLayoutGrid } from "@tabler/icons-react";
 import type { FleetRow } from "./api";
 import { VerifyBadge } from "./fleetBadges";
 
@@ -45,37 +45,46 @@ export function ReviewRunList({ runs, onSelect, onGoToFleet }: ReviewRunListProp
   }
 
   return (
-    <Stack gap={2} data-testid="review-run-list" p="xs">
+    <div className="review-run-list" data-testid="review-run-list">
+      <div className="review-run-list-head">
+        <Text size="sm" fw={600}>Review</Text>
+        <Text size="xs" c="dimmed">
+          {runs.length} {runs.length === 1 ? "thread" : "threads"}
+        </Text>
+      </div>
       {runs.map((row) => (
         <UnstyledButton
           key={row.threadId}
+          className="fleet-row review-run-row"
           data-testid="review-run-row"
           onClick={() => onSelect(row.threadId)}
-          p="xs"
-          style={{ borderRadius: 6 }}
         >
-          <Group justify="space-between" gap="sm" wrap="nowrap">
-            <Stack gap={0} style={{ minWidth: 0 }}>
-              <Text size="sm" fw={500} truncate>{row.title}</Text>
-              <Text size="xs" c="dimmed" truncate>
+          <span className="fleet-agent" aria-hidden>
+            <IconBox size={14} />
+          </span>
+          <span className="fleet-row-main">
+            <span className="fleet-row-title">{row.title}</span>
+            <span className="fleet-row-meta">
+              <span>
                 {row.agentName ?? row.agentId ?? "No agent"}
                 {row.branch ? ` · ${row.branch}` : ""}
-              </Text>
-            </Stack>
-            <Group gap="xs" wrap="nowrap">
-              <Text size="xs" c="dimmed" data-testid="review-run-diff">
-                <span>+{row.diff.added}</span> <span>−{row.diff.removed}</span> ·{" "}
-                {row.diff.files} files
-              </Text>
-              <VerifyBadge verify={row.verify} />
-              <Badge size="xs" radius="sm" variant="light" color={STATUS_COLOR[row.status]}>
-                {STATUS_LABEL[row.status]}
-              </Badge>
-            </Group>
-          </Group>
+              </span>
+              <span className="fleet-diff" data-testid="review-run-diff">
+                <span className="added">+{row.diff.added}</span>{" "}
+                <span className="removed">−{row.diff.removed}</span> · {row.diff.files} files
+              </span>
+            </span>
+          </span>
+          <span className="fleet-row-badges">
+            <VerifyBadge verify={row.verify} />
+            <Badge size="xs" radius="sm" variant="light" color={STATUS_COLOR[row.status]}>
+              {STATUS_LABEL[row.status]}
+            </Badge>
+          </span>
+          <IconChevronRight size={14} className="review-run-chevron" aria-hidden />
         </UnstyledButton>
       ))}
-    </Stack>
+    </div>
   );
 }
 
