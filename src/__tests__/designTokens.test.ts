@@ -408,6 +408,17 @@ describe("every custom interactive row can be seen to have focus", () => {
   });
 });
 
+describe("titlebar chrome does not select text while it drags", () => {
+  it("keeps the non-content titlebar non-selectable", () => {
+    const topChrome = css.slice(
+      css.indexOf(".ds-top-chrome {"),
+      css.indexOf("}", css.indexOf(".ds-top-chrome {"))
+    );
+    expect(topChrome).toContain("user-select: none");
+    expect(topChrome).toContain("-webkit-user-select: none");
+  });
+});
+
 describe("loading, empty and blocked do not look like each other", () => {
   // One `.empty` treatment carried three different states across twenty call
   // sites: nothing here, still loading, and can't show you this. A stalled

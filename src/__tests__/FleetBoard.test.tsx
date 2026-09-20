@@ -260,7 +260,7 @@ describe("FleetBoard", () => {
     expect(onArchiveRun).toHaveBeenCalledWith("p1", "run-1");
   });
 
-  it("heads the board with the project and what the fleet is doing", () => {
+  it("heads the board with the project and its three status counts", () => {
     render(
       <FleetBoard
         {...props({
@@ -275,9 +275,9 @@ describe("FleetBoard", () => {
       />
     );
     expect(screen.getByText("palisade")).toBeInTheDocument();
-    expect(screen.getByTestId("fleet-counts")).toHaveTextContent(
-      "1 need attention \u00b7 1 running \u00b7 2 idle"
-    );
+    expect(screen.getByTestId("fleet-count-attention")).toHaveTextContent("1Needs attention");
+    expect(screen.getByTestId("fleet-count-running")).toHaveTextContent("1Running");
+    expect(screen.getByTestId("fleet-count-idle")).toHaveTextContent("2Idle");
   });
 
   /** New files carry no line counts, so the stat says them rather than

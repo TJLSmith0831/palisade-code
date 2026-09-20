@@ -300,13 +300,32 @@ export default function FleetBoard({
   return (
     <section className="fleet-board" aria-label="Fleet" data-testid="fleet-board">
       <div className="fleet-header">
-        <Text size="sm" fw={600} className="fleet-header-project">
+        <Text className="fleet-header-project">
           {projectName ?? "Fleet"}
         </Text>
-        <Text size="xs" c="dimmed" data-testid="fleet-counts">
-          {groups.attention.length} need attention · {groups.running.length}{" "}
-          running · {groups.idle.length} idle
-        </Text>
+        <div className="fleet-statuses" aria-label="Fleet status" data-testid="fleet-counts">
+          <div className="fleet-status" data-testid="fleet-count-attention">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="attention" aria-hidden="true" />
+              {groups.attention.length}
+            </span>
+            <span className="fleet-status-label">Needs attention</span>
+          </div>
+          <div className="fleet-status" data-testid="fleet-count-running">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="running" aria-hidden="true" />
+              {groups.running.length}
+            </span>
+            <span className="fleet-status-label">Running</span>
+          </div>
+          <div className="fleet-status" data-testid="fleet-count-idle">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="idle" aria-hidden="true" />
+              {groups.idle.length}
+            </span>
+            <span className="fleet-status-label">Idle</span>
+          </div>
+        </div>
       </div>
 
       <div className="fleet-composer">
