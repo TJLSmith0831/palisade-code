@@ -67,6 +67,12 @@ describe("activityLabel", () => {
     );
   });
 
+  it("has a compact form for the narrow sidebar", () => {
+    expect(activityLabel("2026-08-12T12:00:00Z", "2026-08-14T10:00:00Z", now, true)).toBe(
+      "Created 2d · Active 2h",
+    );
+  });
+
   it("says a thread that never spoke has not run", () => {
     expect(activityLabel("2026-08-14T09:00:00Z", undefined, now)).toBe("Created 3h ago · Not run yet");
   });

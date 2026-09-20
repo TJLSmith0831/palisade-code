@@ -29,12 +29,21 @@ export function relativeTime(iso: string, now = Date.now()): string {
 }
 
 /** The two times a thread row shows. Sorting uses "last touched", which
- *  includes opening the thread; these say what actually happened. */
-export function activityLabel(createdAt: string, lastActivityAt?: string, now = Date.now()): string {
-  const created = `Created ${relativeTime(createdAt, now)}`;
-  return lastActivityAt
-    ? `${created} · Last active ${relativeTime(lastActivityAt, now)}`
-    : `${created} · Not run yet`;
+ *  includes opening the thread; these say what actually happened. `compact`
+ *  drops the "ago" so the sidebar's narrow row keeps it to one line. */
+export function activityLabel(
+  createdAt: string,
+  lastActivityAt?: string,
+  now = Date.now(),
+  compact = false,
+): string {
+  const t = (iso: string) => {
+    const rel = relativeTime(iso, now);
+    return compact ? rel.replace(/ ago$/, "") : rel;
+  };
+  const created = `Created ${t(createdAt)}`;
+  if (!lastActivityAt) return `${created} · Not run yet`;
+  return `${created} · ${compact ? "Active" : "Last active"} ${t(lastActivityAt)}`;
 }
 
 /** Live threads matching `query`. Archived ones are out of this list by
@@ -277,7 +286,7 @@ export default function SessionList({
                   {thread.title}
                 </div>
                 <div className="ds-session-meta" data-testid="session-times">
-                  {activityLabel(thread.createdAt, row?.lastActivityAt)}
+                  {activityLabel(thread.createdAt, row?.lastActivityAt, Date.now(), true)}
                 </div>
                 <div className="ds-session-meta">
                   {diff && diff.added + diff.removed > 0 && (
@@ -302,7 +311,6 @@ export default function SessionList({
                     title={row?.mergeTarget ? `${worktree.branch} → ${row.mergeTarget}` : worktree.branch}
                   >
                     {worktree.branch}
-                    {row?.mergeTarget && ` → ${row.mergeTarget}`}
                     {READINESS[worktree.state] && (
                       <Tooltip label={READINESS[worktree.state]!.tip} openDelay={400}>
                         <Badge
@@ -318,6 +326,8 @@ export default function SessionList({
                         </Badge>
                       </Tooltip>
                     )}
+                    {/* After the badge, so a narrow row clips this first. */}
+                    {row?.mergeTarget && ` → ${row.mergeTarget}`}
                   </div>
                 )}
                 {/* Same two verbs the Editor preset's History panel offers.
