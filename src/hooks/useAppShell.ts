@@ -67,10 +67,7 @@ export function useAppShell(projectHash: string | undefined) {
     []
   );
 
-  // The mirror of the chat-pane collapse below, for Editor: there the editor
-  // column is the secondary pane, so that is what collapses. Separate state
-  // rather than one shared flag — collapsing chat in Vibe should not hide the
-  // tabs the next time you switch to Editor.
+  // The editor column is the secondary pane, so it is what can be sent away.
   const [editorCollapsed, setEditorCollapsed] = useState(false);
   const toggleEditor = useCallback(
     () => setEditorCollapsed((collapsed) => !collapsed),
@@ -94,10 +91,9 @@ export function useAppShell(projectHash: string | undefined) {
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("terminal");
 
-  // Chat pane collapse (issue #51), Vibe's mirror of Editor's collapse above.
-  // Collapsing and resizing are two facets of one pane, so this reuses the
-  // chat pane's own resizable — one `useResizable` call, one localStorage
-  // key (`vibe-chat`) — instead of a second, unpersisted flag.
+  // Chat is a thread's page and is never closed — only sized. The saved
+  // `collapsed` flag from when it could be is deliberately never read, so a
+  // user who had collapsed it does not land on a thread with no way back.
   const vibeChat = useResizable({
     storageKey: `palisade:layout:${layoutHash}:vibe-chat`,
     defaultSize: 520,
@@ -105,8 +101,6 @@ export function useAppShell(projectHash: string | undefined) {
     max: 900,
     axis: "horizontal",
   });
-  const chatOpen = !vibeChat.collapsed;
-  const toggleChat = vibeChat.toggleCollapsed;
 
   // Which threads have a tab in the chat strip. Like editor tabs: selecting
   // a thread opens one, closing removes it, and the thread itself is
@@ -114,13 +108,7 @@ export function useAppShell(projectHash: string | undefined) {
   const [openThreadIds, setOpenThreadIds] = useState<string[]>([]);
   const openThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    // Editor lets you send the chat pane away, and every route to a thread
-    // (the strip's +, History, a brand-new thread) ends up here — so this is
-    // the one place that has to reclaim it, rather than each call site
-    // remembering to. Only fires when the active thread actually changes,
-    // so it never refights a deliberate collapse of the thread you're on.
-    vibeChat.setCollapsed(false);
-  }, [vibeChat.setCollapsed]);
+  }, []);
   const closeThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => prev.filter((existing) => existing !== id));
   }, []);
@@ -187,8 +175,6 @@ export function useAppShell(projectHash: string | undefined) {
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
-      chatOpen,
-      toggleChat,
       editorCollapsed,
       toggleEditor,
       bottomTab,
@@ -213,8 +199,6 @@ export function useAppShell(projectHash: string | undefined) {
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
-      chatOpen,
-      toggleChat,
       editorCollapsed,
       toggleEditor,
       bottomTab,

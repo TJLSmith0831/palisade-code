@@ -81,32 +81,19 @@ describe("session list (Vibe preset only)", () => {
   });
 });
 
-describe("chat pane collapse (issue #51)", () => {
-  it("starts open", () => {
-    expect(render().result.current.chatOpen).toBe(true);
+describe("chat pane (a thread's page — sized, never closed)", () => {
+  it("offers no way to close or hide it", () => {
+    const shell = render().result.current as Record<string, unknown>;
+    expect(shell.chatOpen).toBeUndefined();
+    expect(shell.toggleChat).toBeUndefined();
   });
 
-  it("toggles from the title-bar control", () => {
-    const { result } = render();
-    act(() => result.current.toggleChat());
-    expect(result.current.chatOpen).toBe(false);
-    act(() => result.current.toggleChat());
-    expect(result.current.chatOpen).toBe(true);
-  });
-
-  // Persisted on the chat pane's own resizable state (same localStorage key
-  // its width already uses), same mechanism as every other layout pane —
-  // not a second, unpersisted flag.
-  it("persists the collapsed flag across mounts, per project", () => {
-    const first = render();
-    act(() => first.result.current.toggleChat());
-    expect(first.result.current.chatOpen).toBe(false);
-    expect(
-      JSON.parse(localStorage.getItem("palisade:layout:proj:vibe-chat")!).collapsed
-    ).toBe(true);
-
-    const second = render();
-    expect(second.result.current.chatOpen).toBe(false);
+  it("still remembers its width, per project", () => {
+    localStorage.setItem(
+      "palisade:layout:proj:vibe-chat",
+      JSON.stringify({ size: 640, collapsed: true })
+    );
+    expect(render().result.current.vibeChat.size).toBe(640);
   });
 });
 
@@ -170,16 +157,11 @@ describe("opening the diff reclaims the pane that renders it", () => {
   });
 });
 
-describe("opening a thread reclaims a collapsed chat pane", () => {
-  // Editor lets you send the chat pane away, and every route to a thread
-  // ends up in openThread — so that is where the reclaim belongs.
-  it("uncollapses the chat pane when a thread is opened", () => {
+describe("opening a thread", () => {
+  it("adds it to the tab strip once", () => {
     const { result } = render();
-    act(() => result.current.toggleChat());
-    expect(result.current.chatOpen).toBe(false);
-
     act(() => result.current.openThread("t1"));
-    expect(result.current.openThreadIds).toContain("t1");
-    expect(result.current.chatOpen).toBe(true);
+    act(() => result.current.openThread("t1"));
+    expect(result.current.openThreadIds).toEqual(["t1"]);
   });
 });

@@ -121,7 +121,6 @@ export function useAppCommands({
         keywords: "composer message prompt agent thread",
         enabled: !!project,
         run: () => {
-          if (!shell.chatOpen) shell.toggleChat();
           window.dispatchEvent(
             new CustomEvent("palisade-chat-command", { detail: "focus" })
           );
@@ -394,15 +393,14 @@ export function useAppCommands({
         run: () => toggleSidePane(),
       },
       {
-        // The mirror of the command above: send the chat pane away instead,
-        // for when the editor is what you're focused on.
-        id: "view.chat",
+        // A thread is a page inside Fleet, so the way out of it is back.
+        id: "view.backToFleet",
         group: "View",
-        label: "Toggle chat panel",
+        label: "Back to Fleet",
         chord: "Mod+K",
-        keywords: "composer conversation thread messages",
-        enabled: !!project,
-        run: () => shell.toggleChat(),
+        keywords: "home board threads leave close",
+        enabled: !!project && shell.activePanel !== "fleet",
+        run: () => shell.openPanel("fleet"),
       },
       {
         // One state, two entry points: this and the rail icon both drive
@@ -466,7 +464,6 @@ export function useAppCommands({
       openFilePalette,
       openTextSearch,
       shell.rightPanel.toggleCollapsed,
-      shell.toggleChat,
       shell.selectPanel,
       shell.activePanel,
       shell.toggleTerminal,

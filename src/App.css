@@ -3395,17 +3395,6 @@ input[type="checkbox"] {
   border-right: none;
 }
 
-/* Chat pane collapsed to a thin strip (issue #51): stays mounted, at a fixed
-   width, holding only its restore chevron. The editor column needs no
-   matching rule — it is already `flex: 1 1 auto` and fills the reclaimed
-   space on its own, same as when it is the one that's collapsed. */
-.ds-chat-rail[data-collapsed="true"] {
-  width: 32px;
-  flex: 0 0 32px;
-  align-items: center;
-  padding-top: 8px;
-}
-
 /* --- Vibe session list --------------------------------------------------- */
 
 .ds-sessions {

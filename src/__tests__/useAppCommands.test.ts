@@ -19,7 +19,7 @@ const deps = (over: Partial<AppCommandDeps> = {}): AppCommandDeps =>
       activePanel: "explorer",
       editorCollapsed: false,
       rightPanel: { toggleCollapsed: noop },
-      toggleChat: noop,
+      openPanel: noop,
       toggleEditor: noop,
       selectPanel: noop,
       toggleTerminal: noop,
@@ -96,17 +96,29 @@ describe("useAppCommands", () => {
   // than the memoised value so the answer is current at the moment the
   // palette renders, which is why tabs.activePath is also a dependency —
   // a stale memo would keep hiding a tab that had since opened.
-  it("chat.focus reveals a collapsed chat and hands focus to the composer", () => {
-    const toggleChat = vi.fn();
+  it("chat.focus hands focus to the composer (chat is always on screen)", () => {
     const heard = vi.fn();
     window.addEventListener("palisade-chat-command", heard);
-    const base = deps();
-    list({ shell: { ...base.shell, chatOpen: false, toggleChat } as typeof base.shell })
-      .find((c) => c.id === "chat.focus")!
-      .run();
-    expect(toggleChat).toHaveBeenCalledTimes(1);
+    list().find((c) => c.id === "chat.focus")!.run();
     expect(heard).toHaveBeenCalledTimes(1);
     window.removeEventListener("palisade-chat-command", heard);
+  });
+
+  // A thread is a page inside Fleet, so Mod+K is the way back out of it.
+  it("Mod+K goes back to Fleet from a thread page, and is off on Fleet itself", () => {
+    const openPanel = vi.fn();
+    const base = deps();
+    const onThread = list({ shell: { ...base.shell, openPanel } as typeof base.shell })
+      .find((c) => c.id === "view.backToFleet")!;
+    expect(onThread.chord).toBe("Mod+K");
+    expect(onThread.enabled).toBe(true);
+    onThread.run();
+    expect(openPanel).toHaveBeenCalledWith("fleet");
+
+    const onFleet = list({
+      shell: { ...base.shell, activePanel: "fleet", openPanel } as typeof base.shell,
+    }).find((c) => c.id === "view.backToFleet")!;
+    expect(onFleet.enabled).toBe(false);
   });
 
   it("offers tab commands only when a tab is open", () => {

@@ -171,7 +171,7 @@ export default function SessionList({
       className="ds-sessions"
       data-testid="session-list"
       data-user-opened={userOpened || undefined}
-      aria-label="Threads"
+      aria-label="Agent Access"
     >
       <div className="ds-sessions-header">
         <Button

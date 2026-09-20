@@ -35,12 +35,12 @@ import {
 } from "@mantine/core";
 import {
   IconAlertTriangle,
+  IconArrowLeft,
   IconFlask,
   IconBolt,
   IconBox,
   IconAppWindow,
   IconChevronDown,
-  IconChevronRight,
   IconClockPause,
   IconDots,
   IconTrash,
@@ -56,7 +56,6 @@ import {
   IconLayoutBottombar,
   IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
-  IconMessageCircle,
   IconPlayerStopFilled,
   IconRoute,
   IconSettings,
@@ -4528,16 +4527,9 @@ export default function App() {
   // A chain node's session IS a thread session (chain_exec.rs), so "click a
   // node, see what it actually did" means scrolling this thread's transcript
   // to where that session began — no second viewer, no new storage format.
-  // The rail has to be on screen before there is an anchor to scroll to, so a
-  // collapsed rail expands first and the scroll waits one frame for layout.
   const onChainTranscript = useCallback(
-    (sessionId: string) => {
-      const collapsed = !shell.chatOpen;
-      if (collapsed) shell.toggleChat();
-      if (collapsed) requestAnimationFrame(() => scrollToSession(sessionId));
-      else scrollToSession(sessionId);
-    },
-    [shell]
+    (sessionId: string) => scrollToSession(sessionId),
+    []
   );
 
   /** Opens a past run (D8) from the chat card's own history section — same
@@ -6386,55 +6378,50 @@ export default function App() {
           onMouseDown={onTitlebarMouseDown}
         >
           <h1 className="sr-only">Palisade Code</h1>
-          {/* Chat is the primary surface, so the reclaimable width is the
-              session list's, not the chat rail's. */}
+          {/* A thread is a page inside Fleet: back leaves it, and Agent Access is
+              the compact Fleet beside it — quick access without leaving. Chat is
+              never closable, so hiding the list can never empty the canvas. */}
           {project && !boardPanel && (
-            <div className="ds-pill-group" aria-label="Chat panels">
-            <Tooltip
-              label={
-                attentionThreads.size > 0
-                  ? `${attentionThreads.size} thread${attentionThreads.size === 1 ? "" : "s"} waiting on you`
-                  : "Toggle session list"
-              }
-            >
-              <Indicator
-                label={attentionThreads.size}
-                size={16}
-                color="var(--danger)"
-                disabled={shell.sessionListOpen || attentionThreads.size === 0}
-                data-testid="session-list-attention-badge"
+            <div className="ds-pill-group" role="group" aria-label="Fleet navigation">
+              <Tooltip label="Back to Fleet (Cmd+K)">
+                <ActionIcon
+                  variant="subtle"
+                  className="ds-icon-btn"
+                  onClick={() => shell.openPanel("fleet")}
+                  aria-label="Back to Fleet"
+                  data-testid="back-to-fleet"
+                  data-tauri-drag-region-exclude
+                >
+                  <IconArrowLeft size={14} />
+                  <span className="ds-chrome-label">Fleet</span>
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip
+                label={
+                  attentionThreads.size > 0
+                    ? `Agent Access · ${attentionThreads.size} thread${attentionThreads.size === 1 ? "" : "s"} waiting on you`
+                    : "Agent Access"
+                }
               >
-                <ActionIcon
-                  variant="subtle"
-                  className="ds-icon-btn"
-                  onClick={shell.toggleSessionList}
-                  aria-label={shell.sessionListOpen ? "Hide threads" : "Show threads"}
-                  aria-pressed={shell.sessionListOpen}
-                  data-testid="toggle-session-list"
-                  data-tauri-drag-region-exclude
+                <Indicator
+                  label={attentionThreads.size}
+                  size={16}
+                  color="var(--danger)"
+                  disabled={shell.sessionListOpen || attentionThreads.size === 0}
+                  data-testid="session-list-attention-badge"
                 >
-                  <IconLayoutSidebar size={14} />
-                  <span className="ds-chrome-label">Threads</span>
-                </ActionIcon>
-              </Indicator>
-            </Tooltip>
-              {/* Chat is the pane that can be sent away when the editor is
-                  what you're focused on. Same state the collapsed strip's
-                  own chevron drives — one toggle, two entry points, like the
-                  terminal's. */}
-              <Tooltip label={`${shell.chatOpen ? "Hide" : "Show"} chat panel (Cmd+K)`}>
-                <ActionIcon
-                  variant="subtle"
-                  className="ds-icon-btn"
-                  onClick={shell.toggleChat}
-                  aria-label={shell.chatOpen ? "Hide chat panel" : "Show chat panel"}
-                  aria-pressed={shell.chatOpen}
-                  data-testid="toggle-chat"
-                  data-tauri-drag-region-exclude
-                >
-                  <IconMessageCircle size={14} />
-                  <span className="ds-chrome-label">Chat</span>
-                </ActionIcon>
+                  <ActionIcon
+                    variant="subtle"
+                    className="ds-icon-btn"
+                    onClick={shell.toggleSessionList}
+                    aria-label={shell.sessionListOpen ? "Hide agent access" : "Show agent access"}
+                    aria-pressed={shell.sessionListOpen}
+                    data-testid="toggle-session-list"
+                    data-tauri-drag-region-exclude
+                  >
+                    <IconLayoutSidebar size={14} />
+                  </ActionIcon>
+                </Indicator>
               </Tooltip>
             </div>
           )}
@@ -6502,7 +6489,7 @@ export default function App() {
                 bottom panel's own inline chevron both call toggleTerminal.
                 Both panel toggles need a project to have a panel at all. */}
             {project && (
-            <div className="ds-pill-group" aria-label="Workspace panels">
+            <div className="ds-pill-group" role="group" aria-label="Workspace panels">
             <Tooltip label="Toggle terminal panel (Cmd+`)">
               <ActionIcon
                 variant="subtle"
@@ -6535,7 +6522,7 @@ export default function App() {
             )}
             </div>
             )}
-            <div className="ds-pill-group" aria-label="Application controls">
+            <div className="ds-pill-group" role="group" aria-label="Application controls">
             <Tooltip label="Theme: click to cycle auto → light → dark">
               <ActionIcon
                 variant="subtle"
@@ -6817,48 +6804,24 @@ export default function App() {
                 </main>
                 )}
 
-                {(
-                  <>
-                    {/* Nothing to size against once the other pane is gone,
-                        or while the chat pane itself is the thin strip. */}
-                    {!editorCollapsed && shell.chatOpen && (
-                      <div
-                        className="ds-resize-handle ds-resize-handle-x"
-                        data-testid="resize-right-panel"
-                        onPointerDown={bindDrag(
-                          chatPanel.handleProps,
-                          "col-resize"
-                        )}
-                      />
+                {/* Nothing to size against once the editor pane is gone. */}
+                {!editorCollapsed && (
+                  <div
+                    className="ds-resize-handle ds-resize-handle-x"
+                    data-testid="resize-right-panel"
+                    onPointerDown={bindDrag(
+                      chatPanel.handleProps,
+                      "col-resize"
                     )}
-                    <aside
-                      className="ds-chat-rail"
-                      data-testid="right-sidebar"
-                      data-collapsed={shell.chatOpen ? undefined : "true"}
-                      style={
-                        shell.chatOpen
-                          ? ({ "--panel-w": `${chatPanel.size}px` } as CSSProperties)
-                          : undefined
-                      }
-                    >
-                      {shell.chatOpen ? (
-                        <ChatSurface {...chatProps} />
-                      ) : (
-                        <Tooltip label="Show chat panel (Cmd+K)" position="left">
-                          <ActionIcon
-                            variant="subtle"
-                            className="ds-icon-btn"
-                            onClick={shell.toggleChat}
-                            aria-label="Show chat panel"
-                            data-testid="chat-rail-restore"
-                          >
-                            <IconChevronRight size={14} />
-                          </ActionIcon>
-                        </Tooltip>
-                      )}
-                    </aside>
-                  </>
+                  />
                 )}
+                <aside
+                  className="ds-chat-rail"
+                  data-testid="right-sidebar"
+                  style={{ "--panel-w": `${chatPanel.size}px` } as CSSProperties}
+                >
+                  <ChatSurface {...chatProps} />
+                </aside>
               </div>
               )}
 

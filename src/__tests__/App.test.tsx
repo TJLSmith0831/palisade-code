@@ -1323,7 +1323,7 @@ describe("Where a chain run lives (D3/D7/D7a)", () => {
   });
 });
 
-describe("Collapsing panes (Cmd+J editor, Cmd+K chat — issue #51)", () => {
+describe("Panes (Cmd+J editor, Cmd+K back to Fleet)", () => {
   it("Cmd+J only collapses the editor column, leaving chat alone", async () => {
     render(<App />);
     await openProject();
@@ -1334,17 +1334,38 @@ describe("Collapsing panes (Cmd+J editor, Cmd+K chat — issue #51)", () => {
     expect(screen.getByTestId("vibe-shell")).not.toHaveAttribute("data-chat");
   });
 
-  it("Cmd+K collapses the chat pane to its thin restore strip", async () => {
+  it("Cmd+K leaves the thread page for Fleet", async () => {
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("vibe-shell");
+    expect(screen.queryByTestId("fleet-board")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(await screen.findByTestId("fleet-board")).toBeDefined();
+  });
+
+  // Chat used to collapse to a strip and remember that. It can't any more, so
+  // a saved collapse must not strand anyone on a page with no chat.
+  it("ignores a saved 'chat collapsed' flag — chat is always on screen", async () => {
+    localStorage.setItem(
+      "palisade:layout:proj-1:vibe-chat",
+      JSON.stringify({ size: 520, collapsed: true })
+    );
     render(<App />);
     await openProject();
     await screen.findByTestId("vibe-shell");
 
-    fireEvent.keyDown(window, { key: "k", metaKey: true });
-    expect(screen.getByTestId("right-sidebar")).toHaveAttribute("data-collapsed", "true");
-    expect(screen.getByTestId("chat-rail-restore")).toBeDefined();
+    expect(screen.queryByTestId("chat-rail-restore")).toBeNull();
+    expect(within(screen.getByTestId("right-sidebar")).getByTestId("mode-picker")).toBeDefined();
+  });
 
-    fireEvent.click(screen.getByTestId("chat-rail-restore"));
-    expect(screen.getByTestId("right-sidebar")).not.toHaveAttribute("data-collapsed");
+  it("keeps chat on screen with the editor pane closed", async () => {
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("vibe-shell");
+
+    fireEvent.click(screen.getByTestId("toggle-editor"));
+    expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 });
 
@@ -2044,23 +2065,42 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("resize-right-panel")).toBeDefined();
   });
 
-  it("offers a chat toggle mirroring the editor toggle (issue #51)", async () => {
+  it("has no Chat toggle — a thread's page always shows chat — but keeps Threads and the editor toggle", async () => {
     render(<App />);
     await openProject();
-    expect(screen.getByTestId("toggle-chat")).toBeDefined();
+    expect(screen.queryByTestId("toggle-chat")).toBeNull();
+    expect(screen.getByTestId("toggle-session-list")).toBeDefined();
     expect(screen.getByTestId("toggle-editor")).toBeDefined();
   });
 
-  it("groups the Threads and Chat toggles together, apart from the editor and terminal", async () => {
+  it("groups Back to Fleet and Threads together, apart from the editor and terminal", async () => {
     render(<App />);
     await openProject();
-    const threads = screen.getByTestId("toggle-session-list");
-    const chat = screen.getByTestId("toggle-chat");
-    const group = chat.closest(".ds-pill-group");
+    const group = screen.getByTestId("back-to-fleet").closest(".ds-pill-group");
     expect(group).not.toBeNull();
-    expect(group).toContainElement(threads);
+    // A label on a bare div is ignored by assistive tech; the group role is
+    // what makes it a named region.
+    expect(group).toHaveAttribute("role", "group");
+    expect(screen.getByRole("group", { name: "Fleet navigation" })).toBe(group);
+
+    // Agent Access is icon-only: no visible text, but an accessible name.
+    const access = screen.getByTestId("toggle-session-list");
+    expect(access).toHaveAccessibleName("Hide agent access");
+    expect(access).toHaveTextContent("");
+    expect(group).toContainElement(screen.getByTestId("toggle-session-list"));
     expect(group).not.toContainElement(screen.getByTestId("toggle-editor"));
     expect(group).not.toContainElement(screen.getByTestId("toggle-terminal"));
+  });
+
+  it("puts a Back to Fleet button in the top bar on a thread page, and none on Fleet", async () => {
+    render(<App />);
+    await openProject();
+    const back = screen.getByTestId("back-to-fleet");
+    expect(back).toHaveAccessibleName("Back to Fleet");
+
+    fireEvent.click(back);
+    expect(await screen.findByTestId("fleet-board")).toBeDefined();
+    expect(screen.queryByTestId("back-to-fleet")).toBeNull();
   });
 
   it("sizes chat from its own resizable, so the handle actually works", async () => {
