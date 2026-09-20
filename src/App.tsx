@@ -3568,6 +3568,14 @@ export default function App() {
           saved.activePanel !== undefined ? saved.activePanel : "fleet"
         );
 
+        // The backend starts watchers and checks settings before it replies.
+        // Switch the visible workspace now; its data continues loading below.
+        setProject(next);
+        setThreads([]);
+        void selectThread(next.hash, null);
+        currentProjectRef.current = next.hash;
+        tabsRef.current.closeAll();
+
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
         // Editing sessions are per-project; keeping them would leak memory
@@ -3578,9 +3586,6 @@ export default function App() {
           // a rust-analyzer indexing a directory nobody has open.
           void disposeProject(previous);
         }
-        currentProjectRef.current = refreshed.hash;
-        tabsRef.current.closeAll();
-
         // Reopen what was on screen last time. Files that have since gone
         // are dropped silently — an agent deleting one between sessions is
         // routine here. Spec tabs (keyed `spec:<name>`) are reopened without

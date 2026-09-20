@@ -4430,6 +4430,28 @@ describe("Project switching", () => {
     expect(screen.queryByTestId("file-editor")).toBeNull();
     expect(screen.getByTestId("editor-empty")).toBeDefined();
   });
+
+  it("shows the selected project while the backend switch is still pending", async () => {
+    let finishSwitch!: (project: typeof projB) => void;
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "switch_project" && args?.hash === projB.hash)
+        return new Promise((resolve) => {
+          finishSwitch = resolve;
+        });
+      if (cmd === "switch_project") return Promise.resolve(projA);
+      if (cmd === "list_projects") return Promise.resolve([projA, projB]);
+      if (cmd === "list_threads") return Promise.resolve([]);
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+
+    fireEvent.change(openWorkspacePanel(), { target: { value: projB.hash } });
+
+    await waitFor(() => expect(openWorkspacePanel()).toHaveValue(projB.hash));
+    finishSwitch(projB);
+  });
 });
 
 describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
