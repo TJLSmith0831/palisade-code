@@ -121,7 +121,7 @@ export function useAppCommands({
         keywords: "composer message prompt agent thread",
         enabled: !!project,
         run: () => {
-          if (shell.chatCollapsed) shell.toggleChat();
+          if (!shell.chatOpen) shell.toggleChat();
           window.dispatchEvent(
             new CustomEvent("palisade-chat-command", { detail: "focus" })
           );
@@ -392,6 +392,17 @@ export function useAppCommands({
         label: "Toggle editor panel",
         chord: "Mod+J",
         run: () => toggleSidePane(),
+      },
+      {
+        // The mirror of the command above: send the chat pane away instead,
+        // for when the editor is what you're focused on.
+        id: "view.chat",
+        group: "View",
+        label: "Toggle chat panel",
+        chord: "Mod+K",
+        keywords: "composer conversation thread messages",
+        enabled: !!project,
+        run: () => shell.toggleChat(),
       },
       {
         // One state, two entry points: this and the rail icon both drive

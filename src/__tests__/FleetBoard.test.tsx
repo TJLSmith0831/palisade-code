@@ -1,10 +1,17 @@
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
 import type { FleetBoardProps } from "../FleetBoard";
 import type { FleetRow } from "../api";
+
+const { apiMock } = vi.hoisted(() => ({
+  apiMock: {
+    listModels: vi.fn().mockResolvedValue({ configId: null, current: null, models: [] }),
+  },
+}));
+vi.mock("../api", () => apiMock);
 
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
@@ -292,6 +299,74 @@ describe("FleetBoard", () => {
       target: { value: "ship it" },
     });
     expect(screen.getByTestId("fleet-start")).toBeDisabled();
+  });
+
+  it("offers the selected agent's advertised models, and the pick reaches the start-run payload", async () => {
+    apiMock.listModels.mockResolvedValueOnce({
+      configId: "model",
+      current: null,
+      models: [{ id: "m1", name: "Model One" }],
+    });
+    const onNewRun = vi.fn();
+    render(<FleetBoard {...props({ onNewRun })} />);
+
+    const select = screen.getByTestId("fleet-model-select");
+    await waitFor(() => expect(select).not.toBeDisabled());
+    expect(apiMock.listModels).toHaveBeenCalledWith(null, "a1");
+
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByRole("option", { name: "Model One", hidden: true }));
+
+    fireEvent.change(screen.getByTestId("fleet-prompt"), {
+      target: { value: "ship it" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-start"));
+
+    expect(onNewRun).toHaveBeenCalledWith({
+      prompt: "ship it",
+      agentId: "a1",
+      model: "m1",
+      mode: "spec",
+      isolated: true,
+    });
+  });
+
+  it("disables the model select with a clear placeholder while loading, and when the agent offers none", async () => {
+    let resolveModels: (state: { configId: null; current: null; models: never[] }) => void =
+      () => {};
+    apiMock.listModels.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveModels = resolve;
+        })
+    );
+    render(<FleetBoard {...props()} />);
+
+    const select = screen.getByTestId("fleet-model-select");
+    expect(select).toBeDisabled();
+    expect(select).toHaveAttribute("placeholder", "Loading models…");
+
+    resolveModels({ configId: null, current: null, models: [] });
+    await waitFor(() =>
+      expect(select).toHaveAttribute("placeholder", "No models offered")
+    );
+    expect(select).toBeDisabled();
+  });
+
+  it("renders no effort control — no ACP channel advertises one", () => {
+    render(<FleetBoard {...props()} />);
+    expect(screen.queryByLabelText(/effort/i)).toBeNull();
+    expect(document.querySelector('[data-testid*="effort"]')).toBeNull();
+  });
+
+  it("colors the Spec/Go control like the main composer's, active segment filled", () => {
+    render(<FleetBoard {...props()} />);
+    const specActive = document.querySelector(".mode-selector-control[data-active]");
+    expect(specActive).toHaveTextContent("Spec");
+
+    fireEvent.click(screen.getByText("Go"));
+    const goActive = document.querySelector(".mode-selector-control[data-active]");
+    expect(goActive).toHaveTextContent("Go");
   });
 });
 

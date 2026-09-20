@@ -263,7 +263,10 @@ export type AgentUsage =
   | { agentId: string; state: "not_signed_in" | "unavailable"; reason: string };
 
 /** One entry per agent the cached preflight reports as installed. Cached 60s. */
-export const agentUsage = () => invoke<AgentUsage[]>("agent_usage");
+/** `force` bypasses the backend's 60s per-agent cache — pass it from the
+ *  manual refresh and while a sign-in is unconfirmed so a completed login
+ *  doesn't sit behind a stale `not_signed_in` hit for up to a minute. */
+export const agentUsage = (force?: boolean) => invoke<AgentUsage[]>("agent_usage", { force });
 
 /** A user-level skill directory containing a `SKILL.md`. */
 export type Skill = {
@@ -966,6 +969,8 @@ export type ChainRunRecord = {
   endedAt: string | null;
   outcome: ChainRunOutcome | null;
   nodes: Record<string, ChainRunNodeHistory>;
+  /** Soft-flag archive (issue #53) — never a delete; hidden from the default list. */
+  archived: boolean;
 };
 
 /**
@@ -1001,13 +1006,25 @@ export const rerunChainRun = (
 export const cancelChainRun = (runId: string) =>
   invoke<void>("cancel_chain_run", { runId });
 
-/** Durable history, optionally restricted to one chain definition. */
-export const listChainRuns = (projectHash: string, chainName?: string) =>
-  invoke<ChainRunRecord[]>("list_chain_runs", { projectHash, chainName: chainName ?? null });
+/**
+ * Durable history, optionally restricted to one chain definition. Archived
+ * runs are excluded unless `includeArchived` is true (default excludes,
+ * mirroring `listThreads`'s archive convention).
+ */
+export const listChainRuns = (projectHash: string, chainName?: string, includeArchived?: boolean) =>
+  invoke<ChainRunRecord[]>("list_chain_runs", {
+    projectHash,
+    chainName: chainName ?? null,
+    includeArchived: includeArchived ?? null,
+  });
 
 /** One durable run by id, or null when it does not belong to this project. */
 export const getChainRun = (projectHash: string, runId: string) =>
   invoke<ChainRunRecord | null>("get_chain_run", { projectHash, runId });
+
+/** Soft-flags a run archived or unarchived (issue #53) — never a delete. */
+export const setChainRunArchived = (projectHash: string, runId: string, archived: boolean) =>
+  invoke<ChainRunRecord>("set_chain_run_archived", { projectHash, runId, archived });
 
 /** The three things a human can do at a paused approval gate (D9). */
 export const resolveChainGate = (

@@ -182,7 +182,7 @@ describe("ChainRunCard — past runs (D8)", () => {
     fireEvent.click(screen.getByTestId("chain-run-card-history-toggle"));
 
     expect(await screen.findByTestId("chain-run-row-past-run-1")).toBeInTheDocument();
-    expect(apiMock.listChainRuns).toHaveBeenCalledWith("proj-1", "review");
+    expect(apiMock.listChainRuns).toHaveBeenCalledWith("proj-1", "review", true);
   });
 
   it("re-runs a past record through the same rerunChainRun path re-run-from-node uses", async () => {

@@ -213,6 +213,49 @@ describe("ConnectionsPanel", () => {
     );
   });
 
+  it("shows a loading skeleton before the first fetch resolves, not the empty-usage string", async () => {
+    apiMock.preflight.mockReturnValue(new Promise(() => {}));
+    apiMock.agentUsage.mockReturnValue(new Promise(() => {}));
+    mount();
+    expect(screen.getByTestId("connections-agents-loading")).toBeTruthy();
+    expect(screen.queryByText("Usage not available for this agent")).toBeNull();
+  });
+
+  it("puts the agent card into an in-flight state when sign-in is clicked", async () => {
+    apiMock.agentUsage.mockResolvedValue([
+      { agentId: "claude", state: "not_signed_in", reason: "no credential" },
+    ]);
+    mount();
+    const button = await screen.findByTestId("connections-sign-in");
+    fireEvent.click(button);
+    expect(onLogin).toHaveBeenCalledWith(login);
+    expect(await screen.findByTestId("connections-sign-in-status")).toBeTruthy();
+  });
+
+  it("manual refresh re-runs the fetch on demand", async () => {
+    mount();
+    await waitFor(() => expect(apiMock.preflight).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId("connections-refresh"));
+    await waitFor(() => expect(apiMock.preflight).toHaveBeenCalledTimes(2));
+    expect(apiMock.agentUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("clears the poll interval and sign-in timeout on unmount", async () => {
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+    apiMock.agentUsage.mockResolvedValue([
+      { agentId: "claude", state: "not_signed_in", reason: "no credential" },
+    ]);
+    const { unmount } = mount();
+    const button = await screen.findByTestId("connections-sign-in");
+    fireEvent.click(button);
+    unmount();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
+  });
+
   it("resetsIn picks the coarsest readable unit and drops past resets", () => {
     const now = Date.now();
     expect(resetsIn(new Date(now + 30 * 60_000).toISOString(), now)).toBe("resets in 30m");

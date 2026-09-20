@@ -81,15 +81,32 @@ describe("session list (Vibe preset only)", () => {
   });
 });
 
-describe("chat rail collapse (Editor preset only)", () => {
-  it("starts expanded", () => {
-    expect(render().result.current.chatCollapsed).toBe(false);
+describe("chat pane collapse (issue #51)", () => {
+  it("starts open", () => {
+    expect(render().result.current.chatOpen).toBe(true);
   });
 
   it("toggles from the title-bar control", () => {
     const { result } = render();
     act(() => result.current.toggleChat());
-    expect(result.current.chatCollapsed).toBe(true);
+    expect(result.current.chatOpen).toBe(false);
+    act(() => result.current.toggleChat());
+    expect(result.current.chatOpen).toBe(true);
+  });
+
+  // Persisted on the chat pane's own resizable state (same localStorage key
+  // its width already uses), same mechanism as every other layout pane —
+  // not a second, unpersisted flag.
+  it("persists the collapsed flag across mounts, per project", () => {
+    const first = render();
+    act(() => first.result.current.toggleChat());
+    expect(first.result.current.chatOpen).toBe(false);
+    expect(
+      JSON.parse(localStorage.getItem("palisade:layout:proj:vibe-chat")!).collapsed
+    ).toBe(true);
+
+    const second = render();
+    expect(second.result.current.chatOpen).toBe(false);
   });
 });
 
@@ -159,10 +176,10 @@ describe("opening a thread reclaims a collapsed chat pane", () => {
   it("uncollapses the chat pane when a thread is opened", () => {
     const { result } = render();
     act(() => result.current.toggleChat());
-    expect(result.current.chatCollapsed).toBe(true);
+    expect(result.current.chatOpen).toBe(false);
 
     act(() => result.current.openThread("t1"));
     expect(result.current.openThreadIds).toContain("t1");
-    expect(result.current.chatCollapsed).toBe(false);
+    expect(result.current.chatOpen).toBe(true);
   });
 });

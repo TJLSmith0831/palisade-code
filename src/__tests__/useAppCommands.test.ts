@@ -101,7 +101,7 @@ describe("useAppCommands", () => {
     const heard = vi.fn();
     window.addEventListener("palisade-chat-command", heard);
     const base = deps();
-    list({ shell: { ...base.shell, chatCollapsed: true, toggleChat } as typeof base.shell })
+    list({ shell: { ...base.shell, chatOpen: false, toggleChat } as typeof base.shell })
       .find((c) => c.id === "chat.focus")!
       .run();
     expect(toggleChat).toHaveBeenCalledTimes(1);

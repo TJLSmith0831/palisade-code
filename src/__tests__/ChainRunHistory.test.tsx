@@ -8,6 +8,7 @@ import type { ChainRunRecord } from "../api";
 const { apiMock } = vi.hoisted(() => ({
   apiMock: {
     listChainRuns: vi.fn(),
+    setChainRunArchived: vi.fn(),
   },
 }));
 vi.mock("../api", () => apiMock);
@@ -18,6 +19,7 @@ function record(overrides: Partial<ChainRunRecord>): ChainRunRecord {
     projectHash: "proj-1",
     threadId: "thread-1",
     chainName: "review",
+    archived: false,
     chainSnapshot: {
       name: "review",
       entry: "scout",
@@ -69,6 +71,7 @@ function renderHistory(props: Partial<React.ComponentProps<typeof ChainRunHistor
 
 beforeEach(() => {
   apiMock.listChainRuns.mockReset();
+  apiMock.setChainRunArchived.mockReset();
 });
 
 describe("ChainRunHistory — list and sort", () => {
@@ -253,6 +256,82 @@ describe("ChainRunHistory — re-run", () => {
     fireEvent.click(within(row).getByRole("button", { name: /open/i }));
 
     expect(onOpenRun).toHaveBeenCalledWith("run-open");
+  });
+});
+
+describe("ChainRunHistory — archive (issue #53)", () => {
+  it("hides archived runs by default and reveals them via the toggle", async () => {
+    apiMock.listChainRuns.mockResolvedValue([
+      record({ id: "active" }),
+      record({ id: "old", archived: true }),
+    ]);
+
+    renderHistory();
+
+    await screen.findByTestId("chain-run-row-active");
+    expect(screen.queryByTestId("chain-run-row-old")).toBeNull();
+
+    const toggle = screen.getByTestId("toggle-archived-runs");
+    expect(toggle.textContent).toMatch(/show 1 archived/i);
+    fireEvent.click(toggle);
+
+    await screen.findByTestId("chain-run-row-old");
+    expect(screen.getByTestId("toggle-archived-runs").textContent).toMatch(/hide archived/i);
+  });
+
+  it("does not show the toggle when nothing is archived", async () => {
+    apiMock.listChainRuns.mockResolvedValue([record({ id: "active" })]);
+
+    renderHistory();
+
+    await screen.findByTestId("chain-run-row-active");
+    expect(screen.queryByTestId("toggle-archived-runs")).toBeNull();
+  });
+
+  it("Archive calls setChainRunArchived with archived true and the row drops out of the default view", async () => {
+    apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x", archived: false })]);
+    apiMock.setChainRunArchived.mockResolvedValue(record({ id: "run-x", archived: true }));
+
+    renderHistory();
+
+    const row = await screen.findByTestId("chain-run-row-run-x");
+    fireEvent.click(within(row).getByRole("button", { name: /actions/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^archive$/i }));
+
+    expect(apiMock.setChainRunArchived).toHaveBeenCalledWith("proj-1", "run-x", true);
+    await waitFor(() => {
+      expect(screen.queryByTestId("chain-run-row-run-x")).toBeNull();
+    });
+    expect(screen.getByTestId("toggle-archived-runs").textContent).toMatch(/show 1 archived/i);
+  });
+
+  it("Unarchive calls setChainRunArchived with archived false", async () => {
+    apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x", archived: true })]);
+    apiMock.setChainRunArchived.mockResolvedValue(record({ id: "run-x", archived: false }));
+
+    renderHistory();
+
+    fireEvent.click(await screen.findByTestId("toggle-archived-runs"));
+    const row = await screen.findByTestId("chain-run-row-run-x");
+    fireEvent.click(within(row).getByRole("button", { name: /actions/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^unarchive$/i }));
+
+    expect(apiMock.setChainRunArchived).toHaveBeenCalledWith("proj-1", "run-x", false);
+  });
+
+  it("surfaces a setChainRunArchived rejection as an error instead of swallowing it", async () => {
+    apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x" })]);
+    apiMock.setChainRunArchived.mockRejectedValue(new Error("disk on fire"));
+
+    renderHistory();
+
+    const row = await screen.findByTestId("chain-run-row-run-x");
+    fireEvent.click(within(row).getByRole("button", { name: /actions/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^archive$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chain-run-history-error").textContent).toMatch(/disk on fire/);
+    });
   });
 });
 

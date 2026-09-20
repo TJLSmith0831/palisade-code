@@ -80,16 +80,21 @@ fn cache() -> &'static Mutex<HashMap<String, (Instant, AgentUsage)>> {
 }
 
 /// Usage for every agent id given (the preflight's installed agents).
-/// Blocking — callers run it off the UI thread.
-pub fn usage_for(agent_ids: &[String]) -> Vec<AgentUsage> {
-    agent_ids.iter().map(|id| usage_one(id)).collect()
+/// Blocking — callers run it off the UI thread. `force` bypasses the 60s
+/// cache — the manual refresh and the fast-poll a pending sign-in runs use
+/// it, so a completed login shows up on the next poll rather than waiting
+/// out a stale `not_signed_in` hit.
+pub fn usage_for(agent_ids: &[String], force: bool) -> Vec<AgentUsage> {
+    agent_ids.iter().map(|id| usage_one(id, force)).collect()
 }
 
-fn usage_one(agent_id: &str) -> AgentUsage {
-    if let Ok(c) = cache().lock() {
-        if let Some((at, hit)) = c.get(agent_id) {
-            if at.elapsed() < CACHE_TTL {
-                return hit.clone();
+fn usage_one(agent_id: &str, force: bool) -> AgentUsage {
+    if !force {
+        if let Ok(c) = cache().lock() {
+            if let Some((at, hit)) = c.get(agent_id) {
+                if at.elapsed() < CACHE_TTL {
+                    return hit.clone();
+                }
             }
         }
     }
@@ -493,6 +498,36 @@ mod tests {
         let snap = parse_opencode_usage(r#"{"five_hour":{"used_percent":1}}"#).unwrap();
         assert_eq!(snap.balance_usd, None);
         assert_eq!(snap.windows.len(), 1);
+    }
+
+    #[test]
+    fn force_bypasses_cache_no_force_serves_cached_entry() {
+        let agent_id = "test-cache-agent";
+        // Seed the cache with a manufactured entry a real fetch would never
+        // produce, so a cache hit is unambiguous.
+        let seeded = AgentUsage::Unavailable {
+            agent_id: agent_id.to_string(),
+            reason: "seeded".into(),
+        };
+        {
+            let mut c = cache().lock().unwrap();
+            c.insert(agent_id.to_string(), (Instant::now(), seeded.clone()));
+        }
+
+        // force: false serves the cached entry unchanged.
+        assert_eq!(usage_one(agent_id, false), seeded);
+
+        // force: true bypasses the cache and refetches — this agent id has
+        // no provider, so the fresh result carries the "no provider" reason
+        // rather than the seeded one.
+        let refetched = usage_one(agent_id, true);
+        assert_ne!(refetched, seeded);
+        match refetched {
+            AgentUsage::Unavailable { reason, .. } => {
+                assert_eq!(reason, "This agent does not expose plan usage");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
     }
 
     #[test]

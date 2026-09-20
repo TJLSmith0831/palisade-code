@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Menu,
@@ -10,13 +10,18 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { IconBox, IconDots, IconRoute } from "@tabler/icons-react";
-import type { FleetRow } from "./api";
+import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { relativeTime } from "./SessionList";
+import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 
 export type NewRunInput = {
   prompt: string;
   agentId?: string;
+  /** Flows into the same `setThreadExecutor` model field the main
+   *  composer's model picker writes. Undefined when the agent offers no
+   *  models (or none is picked yet) — same as the main composer's default. */
+  model?: string;
   mode: "spec" | "go";
   isolated: boolean;
 };
@@ -28,6 +33,11 @@ export type FleetBoardProps = {
   /** The open project, named above the composer so the board says where a new
    *  run would land before you type it. */
   projectName?: string;
+  /** Scopes the model probe to the open project, same as the main
+   *  composer's `api.listModels(project.hash, agentId)` call. Wired from
+   *  App.tsx as `project?.hash` — undefined falls back to the backend's
+   *  home-directory probe. */
+  projectHash?: string | null;
   agents: { id: string; name: string; installed: boolean }[];
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
@@ -217,6 +227,7 @@ export default function FleetBoard({
   loading,
   error,
   projectName,
+  projectHash,
   agents,
   onOpen,
   onReview,
@@ -231,8 +242,34 @@ export default function FleetBoard({
   const installed = agents.filter((a) => a.installed);
   const [prompt, setPrompt] = useState("");
   const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
+  const [modelId, setModelId] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [mode, setMode] = useState<"spec" | "go">("spec");
   const [isolated, setIsolated] = useState(true);
+
+  // Same `list_models` probe the main composer's model picker and the
+  // playbook canvas's node editor use, re-read whenever the agent changes —
+  // an old model choice means nothing to a new agent.
+  useEffect(() => {
+    setModelId(null);
+    if (!agentId) {
+      setModels([]);
+      setModelsLoading(false);
+      return;
+    }
+    let live = true;
+    setModelsLoading(true);
+    listModels(projectHash ?? null, agentId)
+      .then((state) => {
+        if (live) setModels(state.models);
+      })
+      .catch(() => live && setModels([]))
+      .finally(() => live && setModelsLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [projectHash, agentId]);
 
   const groups = groupFleet(rows);
   const bands: { key: string; label: string; list: FleetRow[] }[] = [
@@ -274,6 +311,21 @@ export default function FleetBoard({
             disabled={installed.length === 0}
             data-testid="fleet-agent-select"
           />
+          <Select
+            value={modelId}
+            onChange={setModelId}
+            data={models.map((m) => ({ value: m.id, label: m.name }))}
+            placeholder={
+              modelsLoading
+                ? "Loading models…"
+                : models.length
+                  ? "Model"
+                  : "No models offered"
+            }
+            aria-label="Model"
+            disabled={modelsLoading || models.length === 0}
+            data-testid="fleet-model-select"
+          />
           <SegmentedControl
             value={mode}
             onChange={(value) => setMode(value as "spec" | "go")}
@@ -283,6 +335,11 @@ export default function FleetBoard({
             ]}
             aria-label="Mode"
             data-testid="fleet-mode"
+            styles={MODE_SELECTOR_STYLES}
+            classNames={{
+              control: "mode-selector-control",
+              label: "mode-selector-label",
+            }}
           />
           <Switch
             checked={isolated}
@@ -297,6 +354,7 @@ export default function FleetBoard({
               onNewRun({
                 prompt: prompt.trim(),
                 agentId: agentId ?? undefined,
+                model: modelId ?? undefined,
                 mode,
                 isolated,
               });

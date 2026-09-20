@@ -734,14 +734,17 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
 
 /// Plan usage per installed agent. Blocking work (Keychain read, HTTP,
 /// rollout-log scan) runs off the UI thread; every provider fails soft.
+/// `force` bypasses the 60s per-agent cache — the manual refresh button and
+/// a pending sign-in's fast poll pass it so a completed login isn't hidden
+/// behind a stale cache hit.
 #[tauri::command]
-async fn agent_usage(app: tauri::AppHandle) -> Res<Vec<agent_usage::AgentUsage>> {
+async fn agent_usage(app: tauri::AppHandle, force: Option<bool>) -> Res<Vec<agent_usage::AgentUsage>> {
     Ok(tokio::task::spawn_blocking(move || {
         let ids: Vec<String> = {
             let harness: tauri::State<'_, Harness> = app.state();
             preflight_for_harness(&*harness, false).agents.iter().map(|a| a.id.clone()).collect()
         };
-        agent_usage::usage_for(&ids)
+        agent_usage::usage_for(&ids, force.unwrap_or(false))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
@@ -2458,7 +2461,14 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
             // panel lists. Read-only on purpose: reconciling a stale record is
             // `list_chain_runs`'s job, and a record no live run owns is over
             // either way — which is all the board needs to say.
-            for run in chain_history::list_runs(&home, &project.hash).unwrap_or_default() {
+            // Default excludes archived, matching `list_chain_runs`'s own
+            // convention (issue #53) — an archived run just isn't part of
+            // the board's default view.
+            for run in chain_history::list_runs(&home, &project.hash)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| !r.archived)
+            {
                 let live = live_runs.contains(&run.id);
                 let completed = matches!(
                     run.outcome,
@@ -3194,6 +3204,7 @@ async fn list_chain_runs(
     app: tauri::AppHandle,
     project_hash: String,
     chain_name: Option<String>,
+    include_archived: Option<bool>,
 ) -> Res<Vec<chain_history::ChainRunRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
@@ -3202,7 +3213,29 @@ async fn list_chain_runs(
         if let Some(name) = chain_name {
             records.retain(|record| record.chain_name == name);
         }
+        // Default excludes archived, same convention as the thread list
+        // (issue #53) — nothing is deleted, an archived run just isn't the
+        // default view.
+        if !include_archived.unwrap_or(false) {
+            records.retain(|record| !record.archived);
+        }
         Ok(records)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// Soft-flags a past run archived or unarchived (issue #53). Mirrors
+/// `set_thread_archived`: nothing is deleted, the append-only store just gets
+/// one more amendment with the flag flipped.
+#[tauri::command]
+async fn set_chain_run_archived(
+    project_hash: String,
+    run_id: String,
+    archived: bool,
+) -> Res<chain_history::ChainRunRecord> {
+    tokio::task::spawn_blocking(move || {
+        chain_history::set_archived(&palisade_home(), &project_hash, &run_id, archived)
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -4116,6 +4149,7 @@ pub fn run() {
             delete_chain,
             list_chain_runs,
             get_chain_run,
+            set_chain_run_archived,
             run_chain,
             rerun_chain_run,
             cancel_chain_run,

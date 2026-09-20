@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ActionIcon, Group, Menu, Stack, Text } from "@mantine/core";
-import { IconDots, IconExternalLink, IconRefresh } from "@tabler/icons-react";
+import { ActionIcon, Button, Group, Menu, Stack, Text } from "@mantine/core";
+import { IconArchive, IconDots, IconExternalLink, IconRefresh } from "@tabler/icons-react";
 import * as api from "./api";
 import { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
 import { describeError } from "./errors";
@@ -22,14 +22,18 @@ type Props = {
 export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onRerun }: Props) {
   const [runs, setRuns] = useState<api.ChainRunRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     let live = true;
     setRuns(null);
     setError(null);
+    // Always fetch every run, archived included, so the toggle below is a
+    // client-side filter rather than a second round trip — same shape as
+    // the thread list's "Show N archived" (App.tsx).
     const load = () =>
       api
-        .listChainRuns(projectHash, chainName)
+        .listChainRuns(projectHash, chainName, true)
         .then((next) => {
           if (live) setRuns(next);
         })
@@ -43,6 +47,17 @@ export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onR
       window.removeEventListener(CHAINS_CHANGED_EVENT, load);
     };
   }, [projectHash, chainName]);
+
+  const handleArchiveToggle = (runId: string, archived: boolean) => {
+    api
+      .setChainRunArchived(projectHash, runId, archived)
+      .then((updated) => {
+        setRuns((prev) => prev?.map((r) => (r.id === updated.id ? updated : r)) ?? prev);
+      })
+      .catch((err) => {
+        setError(describeError(err, { action: archived ? "archive this run" : "unarchive this run" }));
+      });
+  };
 
   if (error) {
     return (
@@ -68,15 +83,28 @@ export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onR
     );
   }
 
-  const sorted = [...runs].sort(
+  const archivedCount = runs.filter((r) => r.archived).length;
+  const visible = showArchived ? runs : runs.filter((r) => !r.archived);
+  const sorted = [...visible].sort(
     (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
   );
 
   return (
     <Stack gap="xs" p="xs" data-testid="chain-run-history">
       {sorted.map((run) => (
-        <RunRow key={run.id} run={run} onOpenRun={onOpenRun} onRerun={onRerun} />
+        <RunRow key={run.id} run={run} onOpenRun={onOpenRun} onRerun={onRerun} onArchiveToggle={handleArchiveToggle} />
       ))}
+      {archivedCount > 0 && (
+        <Button
+          size="xs"
+          variant="subtle"
+          color="neutral"
+          onClick={() => setShowArchived((v) => !v)}
+          data-testid="toggle-archived-runs"
+        >
+          {showArchived ? "Hide archived" : `Show ${archivedCount} archived`}
+        </Button>
+      )}
     </Stack>
   );
 }
@@ -126,10 +154,12 @@ function RunRow({
   run,
   onOpenRun,
   onRerun,
+  onArchiveToggle,
 }: {
   run: api.ChainRunRecord;
   onOpenRun?: (runId: string) => void;
   onRerun?: (runId: string, fromRole?: string) => void;
+  onArchiveToggle: (runId: string, archived: boolean) => void;
 }) {
   const outcome = outcomeLabel(run);
   const roles = Object.keys(run.chainSnapshot.nodes);
@@ -180,6 +210,13 @@ function RunRow({
                   Re-run from {role}
                 </Menu.Item>
               ))}
+              <Menu.Divider />
+              <Menu.Item
+                leftSection={<IconArchive size={14} />}
+                onClick={() => onArchiveToggle(run.id, !run.archived)}
+              >
+                {run.archived ? "Unarchive" : "Archive"}
+              </Menu.Item>
             </Menu.Dropdown>
           </Menu>
         </Group>

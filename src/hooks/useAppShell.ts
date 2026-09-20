@@ -67,18 +67,10 @@ export function useAppShell(projectHash: string | undefined) {
     []
   );
 
-  // Editor-only chat collapse (Amendment 9). Hidden in Vibe, where chat is
-  // the primary surface and the session-list toggle already reclaims width.
-  const [chatCollapsed, setChatCollapsed] = useState(false);
-  const toggleChat = useCallback(
-    () => setChatCollapsed((collapsed) => !collapsed),
-    []
-  );
-
-  // The mirror of the above for Vibe: there the editor column is the
-  // secondary pane, so that is what collapses. Separate state rather than one
-  // shared flag — collapsing chat in Editor should not hide the tabs the next
-  // time you switch to Vibe.
+  // The mirror of the chat-pane collapse below, for Editor: there the editor
+  // column is the secondary pane, so that is what collapses. Separate state
+  // rather than one shared flag — collapsing chat in Vibe should not hide the
+  // tabs the next time you switch to Editor.
   const [editorCollapsed, setEditorCollapsed] = useState(false);
   const toggleEditor = useCallback(
     () => setEditorCollapsed((collapsed) => !collapsed),
@@ -102,6 +94,20 @@ export function useAppShell(projectHash: string | undefined) {
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("terminal");
 
+  // Chat pane collapse (issue #51), Vibe's mirror of Editor's collapse above.
+  // Collapsing and resizing are two facets of one pane, so this reuses the
+  // chat pane's own resizable — one `useResizable` call, one localStorage
+  // key (`vibe-chat`) — instead of a second, unpersisted flag.
+  const vibeChat = useResizable({
+    storageKey: `palisade:layout:${layoutHash}:vibe-chat`,
+    defaultSize: 520,
+    min: 380,
+    max: 900,
+    axis: "horizontal",
+  });
+  const chatOpen = !vibeChat.collapsed;
+  const toggleChat = vibeChat.toggleCollapsed;
+
   // Which threads have a tab in the chat strip. Like editor tabs: selecting
   // a thread opens one, closing removes it, and the thread itself is
   // untouched either way (History still lists every thread).
@@ -113,8 +119,8 @@ export function useAppShell(projectHash: string | undefined) {
     // the one place that has to reclaim it, rather than each call site
     // remembering to. Only fires when the active thread actually changes,
     // so it never refights a deliberate collapse of the thread you're on.
-    setChatCollapsed(false);
-  }, []);
+    vibeChat.setCollapsed(false);
+  }, [vibeChat.setCollapsed]);
   const closeThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => prev.filter((existing) => existing !== id));
   }, []);
@@ -164,14 +170,6 @@ export function useAppShell(projectHash: string | undefined) {
     reverse: true,
     defaultCollapsed: true,
   });
-  const vibeChat = useResizable({
-    storageKey: `palisade:layout:${layoutHash}:vibe-chat`,
-    defaultSize: 520,
-    min: 380,
-    max: 900,
-    axis: "horizontal",
-  });
-
   // The terminal lives in the bottom panel, full stop. It used to be movable
   // into a right-panel tab, but the right panel stopped rendering a terminal
   // tab (Amendment 3) — so "move to sidebar" collapsed the terminal into
@@ -189,7 +187,7 @@ export function useAppShell(projectHash: string | undefined) {
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
-      chatCollapsed,
+      chatOpen,
       toggleChat,
       editorCollapsed,
       toggleEditor,
@@ -215,7 +213,7 @@ export function useAppShell(projectHash: string | undefined) {
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
-      chatCollapsed,
+      chatOpen,
       toggleChat,
       editorCollapsed,
       toggleEditor,

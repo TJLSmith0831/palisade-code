@@ -1323,18 +1323,28 @@ describe("Where a chain run lives (D3/D7/D7a)", () => {
   });
 });
 
-describe("Collapsing chat (Cmd+J)", () => {
-  it("leaves Vibe's chat alone — it is the primary surface there", async () => {
+describe("Collapsing panes (Cmd+J editor, Cmd+K chat — issue #51)", () => {
+  it("Cmd+J only collapses the editor column, leaving chat alone", async () => {
     render(<App />);
     await openProject();
     await screen.findByTestId("vibe-shell");
 
-    // No toggle to hide it with, and Cmd+J can't either: Vibe without chat
-    // is just Editor with the panels on the wrong side.
-    expect(screen.queryByTestId("toggle-chat")).toBeNull();
     fireEvent.keyDown(window, { key: "j", metaKey: true });
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
     expect(screen.getByTestId("vibe-shell")).not.toHaveAttribute("data-chat");
+  });
+
+  it("Cmd+K collapses the chat pane to its thin restore strip", async () => {
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("vibe-shell");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.getByTestId("right-sidebar")).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByTestId("chat-rail-restore")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("chat-rail-restore"));
+    expect(screen.getByTestId("right-sidebar")).not.toHaveAttribute("data-collapsed");
   });
 });
 
@@ -1896,6 +1906,11 @@ describe("Settings panel (D14/D15)", () => {
         if (cmd === "read_file_content")
           return Promise.resolve('{"formatOnSave":{}}');
         if (cmd === "write_file_content") writeCalls.push(args);
+        // Fleet is the default panel, so its board (and its model probe)
+        // mounts under this project regardless of which panel the test
+        // actually opens — same shape the default invoke mock returns.
+        if (cmd === "list_models")
+          return Promise.resolve({ configId: null, current: null, models: [] });
         return Promise.resolve([]);
       }
     );
@@ -1973,6 +1988,11 @@ describe("Settings panel (D14/D15)", () => {
           writeCalls.push(args ?? {});
           return Promise.resolve(null);
         }
+        // Fleet is the default panel, so its board (and its model probe)
+        // mounts under this project regardless of which panel the test
+        // actually opens — same shape the default invoke mock returns.
+        if (cmd === "list_models")
+          return Promise.resolve({ configId: null, current: null, models: [] });
         return Promise.resolve([]);
       }
     );
@@ -2024,10 +2044,10 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("resize-right-panel")).toBeDefined();
   });
 
-  it("offers no chat toggle — chat is the subject, the editor column is what collapses", async () => {
+  it("offers a chat toggle mirroring the editor toggle (issue #51)", async () => {
     render(<App />);
     await openProject();
-    expect(screen.queryByTestId("toggle-chat")).toBeNull();
+    expect(screen.getByTestId("toggle-chat")).toBeDefined();
     expect(screen.getByTestId("toggle-editor")).toBeDefined();
   });
 

@@ -41,6 +41,8 @@ import {
   IconBox,
   IconAppWindow,
   IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
   IconClockPause,
   IconDots,
   IconTrash,
@@ -187,9 +189,11 @@ import OnboardingScreen from "./OnboardingScreen";
 import NavRail from "./NavRail";
 import FleetBoard, { type NewRunInput } from "./FleetBoard";
 import ReviewPane, { type ReviewFile } from "./ReviewPane";
+import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
 import SessionList from "./SessionList";
 import { VerifyBadge } from "./fleetBadges";
+import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 import SearchPanel from "./SearchPanel";
 import SourceControlPanel from "./SourceControlPanel";
 import type { PanelId } from "./hooks/useAppShell";
@@ -2285,69 +2289,7 @@ export const ChatSurface = memo(
                   { label: "Go", value: "go" },
                 ]}
                 size="xs"
-                styles={{
-                  root: {
-                    // Flexible, not fixed: 190px is the comfortable size, but
-                    // a rigid block here is what forced the controls row to
-                    // wrap in a narrow chat pane.
-                    width: 190,
-                    minWidth: 104,
-                    height: 36,
-
-                    padding: 2,
-                    gap: 0,
-
-                    background: "transparent",
-                    border:
-                      "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
-                    borderRadius: 999,
-
-                    boxSizing: "border-box",
-                    overflow: "hidden",
-                  },
-
-                  indicator: {
-                    background: "var(--accent)",
-
-                    borderRadius: 999,
-
-                    boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
-                  },
-
-                  control: {
-                    flex: "1 1 0",
-                    width: "50%",
-                    minWidth: 0,
-
-                    height: 32,
-                    minHeight: 32,
-
-                    padding: 0,
-                    border: 0,
-                    borderRadius: 999,
-
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-
-                    background: "transparent",
-                  },
-
-                  label: {
-                    fontSize: 13,
-                    fontWeight: 500,
-                    lineHeight: 1,
-
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-
-                    width: "100%",
-                    height: "100%",
-
-                    color: "inherit",
-                  },
-                }}
+                styles={MODE_SELECTOR_STYLES}
                 classNames={{
                   control: "mode-selector-control",
                   label: "mode-selector-label",
@@ -4586,7 +4528,7 @@ export default function App() {
   // collapsed rail expands first and the scroll waits one frame for layout.
   const onChainTranscript = useCallback(
     (sessionId: string) => {
-      const collapsed = shell.chatCollapsed;
+      const collapsed = !shell.chatOpen;
       if (collapsed) shell.toggleChat();
       if (collapsed) requestAnimationFrame(() => scrollToSession(sessionId));
       else scrollToSession(sessionId);
@@ -5637,12 +5579,12 @@ export default function App() {
   /** A run started from the board is the same first send the composer does:
    *  create the thread, put the picks on it, send, and land on it. */
   const onNewRun = useCallback(
-    async ({ prompt, agentId, mode, isolated }: NewRunInput) => {
+    async ({ prompt, agentId, model, mode, isolated }: NewRunInput) => {
       if (!project) return;
       const hash = project.hash;
       try {
         const created = await api.createThread(hash, "New thread");
-        if (agentId) await api.setThreadExecutor(hash, created.id, agentId, null);
+        if (agentId) await api.setThreadExecutor(hash, created.id, agentId, model ?? null);
         let activeThread = await api.setThreadMode(hash, created.id, mode);
         try {
           activeThread = await api.setThreadWorktreeEnabled(
@@ -5717,11 +5659,11 @@ export default function App() {
   const renderReview = () => {
     if (!project || !thread)
       return (
-        <div className="review-pane" data-testid="review-empty">
-          <div className="ds-panel-body">
-            Pick a run on the Fleet board to review it.
-          </div>
-        </div>
+        <ReviewRunList
+          runs={fleet.rows.filter((r) => r.kind !== "playbook")}
+          onSelect={onFleetReview}
+          onGoToFleet={() => shell.openPanel("fleet")}
+        />
       );
     const row = fleet.rows.find((r) => r.threadId === thread.id);
     const worktree = worktrees.get(thread.id);
@@ -6548,6 +6490,29 @@ export default function App() {
                 </ActionIcon>
               </Tooltip>
             )}
+            {/* The mirror of the toggle above: chat is the pane that can be
+                sent away instead, when the editor is what you're focused on.
+                Same state the collapsed strip's own chevron drives — one
+                toggle, two entry points, like the terminal's. */}
+            {project && !boardPanel && (
+              <Tooltip label="Toggle chat panel (Cmd+K)">
+                <ActionIcon
+                  variant="subtle"
+                  className="ds-icon-btn"
+                  onClick={shell.toggleChat}
+                  aria-label="Toggle chat panel"
+                  aria-pressed={shell.chatOpen}
+                  data-testid="toggle-chat"
+                  data-tauri-drag-region-exclude
+                >
+                  {shell.chatOpen ? (
+                    <IconChevronLeft size={14} />
+                  ) : (
+                    <IconChevronRight size={14} />
+                  )}
+                </ActionIcon>
+              </Tooltip>
+            )}
             <Tooltip label="Theme: click to cycle auto → light → dark">
               <ActionIcon
                 variant="subtle"
@@ -6756,6 +6721,7 @@ export default function App() {
                   loading={fleet.loading}
                   error={fleet.error}
                   projectName={project?.displayName}
+                  projectHash={project?.hash}
                   agents={fleetAgents}
                   onOpen={onFleetOpen}
                   onReview={onFleetReview}
@@ -6828,8 +6794,9 @@ export default function App() {
 
                 {(
                   <>
-                    {/* Nothing to size against once the other pane is gone. */}
-                    {!editorCollapsed && (
+                    {/* Nothing to size against once the other pane is gone,
+                        or while the chat pane itself is the thin strip. */}
+                    {!editorCollapsed && shell.chatOpen && (
                       <div
                         className="ds-resize-handle ds-resize-handle-x"
                         data-testid="resize-right-panel"
@@ -6842,13 +6809,28 @@ export default function App() {
                     <aside
                       className="ds-chat-rail"
                       data-testid="right-sidebar"
+                      data-collapsed={shell.chatOpen ? undefined : "true"}
                       style={
-                        {
-                          "--panel-w": `${chatPanel.size}px`,
-                        } as CSSProperties
+                        shell.chatOpen
+                          ? ({ "--panel-w": `${chatPanel.size}px` } as CSSProperties)
+                          : undefined
                       }
                     >
-                      <ChatSurface {...chatProps} />
+                      {shell.chatOpen ? (
+                        <ChatSurface {...chatProps} />
+                      ) : (
+                        <Tooltip label="Show chat panel (Cmd+K)" position="left">
+                          <ActionIcon
+                            variant="subtle"
+                            className="ds-icon-btn"
+                            onClick={shell.toggleChat}
+                            aria-label="Show chat panel"
+                            data-testid="chat-rail-restore"
+                          >
+                            <IconChevronRight size={14} />
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
                     </aside>
                   </>
                 )}
