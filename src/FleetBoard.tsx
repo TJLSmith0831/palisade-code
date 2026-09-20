@@ -46,6 +46,7 @@ export type FleetBoardProps = {
   onOpenRun(runId: string): void;
   /** Stops a playbook run — the board's Stop for a `playbook` row. */
   onCancelRun(runId: string): void;
+  onArchiveRun(projectId: string, runId: string): void;
   onMerge(projectId: string, threadId: string): void;
   onOpenPr(projectId: string, threadId: string): void;
   onArchive(projectId: string, threadId: string): void;
@@ -89,6 +90,7 @@ function Row({
   onArchive,
   onOpenRun,
   onCancelRun,
+  onArchiveRun,
 }: { row: FleetRow } & Pick<
   FleetBoardProps,
   | "onOpen"
@@ -99,6 +101,7 @@ function Row({
   | "onArchive"
   | "onOpenRun"
   | "onCancelRun"
+  | "onArchiveRun"
 >) {
   const mergeable = row.merge === "clean" && row.verify.state === "pass";
   // A playbook run is not a thread: it opens and stops by run id, and it has
@@ -216,6 +219,9 @@ function Row({
           {!playbook && (
             <Menu.Item onClick={() => onArchive(row.projectId, row.threadId)}>Archive</Menu.Item>
           )}
+          {playbook && row.archivable && (
+            <Menu.Item onClick={() => onArchiveRun(row.projectId, runId)}>Archive</Menu.Item>
+          )}
         </Menu.Dropdown>
       </Menu>
     </div>
@@ -237,6 +243,7 @@ export default function FleetBoard({
   onArchive,
   onOpenRun,
   onCancelRun,
+  onArchiveRun,
   onNewRun,
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
@@ -262,7 +269,12 @@ export default function FleetBoard({
     setModelsLoading(true);
     listModels(projectHash ?? null, agentId)
       .then((state) => {
-        if (live) setModels(state.models);
+        if (live) {
+          setModels(state.models);
+          // `current` is the agent's own default. Showing it prevents the
+          // composer from looking unset while still honoring the agent.
+          setModelId(state.current && state.models.some((model) => model.id === state.current) ? state.current : null);
+        }
       })
       .catch(() => live && setModels([]))
       .finally(() => live && setModelsLoading(false));
@@ -395,6 +407,7 @@ export default function FleetBoard({
                   onArchive={onArchive}
                   onOpenRun={onOpenRun}
                   onCancelRun={onCancelRun}
+                  onArchiveRun={onArchiveRun}
                 />
               ))}
             </div>

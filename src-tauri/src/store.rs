@@ -325,6 +325,12 @@ pub struct ThreadMeta {
     /// the gate says out loud rather than guessing silently.
     #[serde(default)]
     pub worktree_base_branch: Option<String>,
+    /// Bootstrap status is durable so Review can explain a failed setup after
+    /// the background process and the app window have both gone away.
+    #[serde(default)]
+    pub worktree_setup_state: Option<String>,
+    #[serde(default)]
+    pub worktree_setup_output: Option<String>,
     /// When this thread's branch was last merged into its base by Palisade.
     /// A recorded fact, not an inference: "merged" in the sidebar means this
     /// merge happened, never that the diffs happen to look empty.
@@ -394,6 +400,8 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         worktree_path: None,
         worktree_branch: None,
         worktree_base_branch: None,
+        worktree_setup_state: None,
+        worktree_setup_output: None,
         merged_at: None,
         merge_overridden: false,
         worktree_enabled: true,
@@ -590,6 +598,13 @@ pub fn set_thread_worktree(
 /// can still say which branch its work is on.
 pub fn clear_thread_worktree(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| m.worktree_path = None)
+}
+
+pub fn set_thread_worktree_setup(home: &Path, hash: &str, id: &str, state: &str, output: Option<String>) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.worktree_setup_state = Some(state.to_string());
+        m.worktree_setup_output = output;
+    })
 }
 
 /// Record that this thread's branch landed on its base, when, and whether the

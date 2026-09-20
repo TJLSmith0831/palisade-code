@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ActionIcon, Button, Group, Menu, Stack, Text } from "@mantine/core";
 import { IconArchive, IconDots, IconExternalLink, IconRefresh } from "@tabler/icons-react";
 import * as api from "./api";
-import { CHAINS_CHANGED_EVENT } from "./ChainsPanel";
+import { announceChainsChanged, CHAINS_CHANGED_EVENT } from "./ChainsPanel";
 import { describeError } from "./errors";
 
 // Durable run history for one chain, rendered inline inside the Chains side
@@ -53,6 +53,7 @@ export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onR
       .setChainRunArchived(projectHash, runId, archived)
       .then((updated) => {
         setRuns((prev) => prev?.map((r) => (r.id === updated.id ? updated : r)) ?? prev);
+        announceChainsChanged();
       })
       .catch((err) => {
         setError(describeError(err, { action: archived ? "archive this run" : "unarchive this run" }));
@@ -211,12 +212,14 @@ function RunRow({
                 </Menu.Item>
               ))}
               <Menu.Divider />
-              <Menu.Item
-                leftSection={<IconArchive size={14} />}
-                onClick={() => onArchiveToggle(run.id, !run.archived)}
-              >
-                {run.archived ? "Unarchive" : "Archive"}
-              </Menu.Item>
+              {run.endedAt && (
+                <Menu.Item
+                  leftSection={<IconArchive size={14} />}
+                  onClick={() => onArchiveToggle(run.id, !run.archived)}
+                >
+                  {run.archived ? "Unarchive" : "Archive"}
+                </Menu.Item>
+              )}
             </Menu.Dropdown>
           </Menu>
         </Group>

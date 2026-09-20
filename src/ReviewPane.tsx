@@ -7,14 +7,16 @@ import {
   Modal,
   Stack,
   Text,
+  TextInput,
   UnstyledButton,
 } from "@mantine/core";
-import { IconExternalLink, IconGitPullRequest } from "@tabler/icons-react";
+import { IconArrowLeft, IconGitPullRequest } from "@tabler/icons-react";
 
 import type { FleetMerge, FleetVerify } from "./api";
 import { statusChip } from "./SourceControlPanel";
 import { relativeTime } from "./SessionList";
 import { loadViewed, setViewed } from "./reviewState";
+import * as api from "./api";
 
 /** One thread's work, in one place: what changed, what a reviewer has read,
  *  what was actually verified, and the two ways to land it.
@@ -53,6 +55,10 @@ export type ReviewPaneProps = {
   onOpenInEditor(path: string): void;
   /** The way out of an empty review: back to the board that sent you here. */
   onBackToFleet(): void;
+  projectHash: string;
+  onVerificationConfigured(): void;
+  setup?: { state?: "running" | "ready" | "failed" | null; output?: string | null };
+  onRerunSetup(): void;
 };
 
 /** Reuses Source Control's chip tones; git has no porcelain code for the
@@ -73,6 +79,9 @@ export function verifyLine(verify: FleetVerify, now = Date.now()): string {
   }
   if (verify.state === "fail") {
     return `Verify failed: ${verify.command ?? "verify"} at ${short(verify.commit)}`;
+  }
+  if (verify.state === "unconfigured") {
+    return "Verification not configured — choose checks before merging.";
   }
   return "Not verified";
 }
@@ -100,10 +109,21 @@ export default function ReviewPane({
   onOpenPr,
   onOpenInEditor,
   onBackToFleet,
+  projectHash,
+  onVerificationConfigured,
+  setup,
+  onRerunSetup,
 }: ReviewPaneProps) {
   const [viewed, setViewedSet] = useState<Set<string>>(() => loadViewed(threadId));
   const [selected, setSelected] = useState(0);
   const [overrideOpen, setOverrideOpen] = useState(false);
+  const [configureOpen, setConfigureOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<[string, string][]>([]);
+  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
+  const [manualName, setManualName] = useState("");
+  const [manualCommand, setManualCommand] = useState("");
+  const [configuring, setConfiguring] = useState(false);
+  const [configureError, setConfigureError] = useState<string | null>(null);
 
   useEffect(() => {
     setViewedSet(loadViewed(threadId));
@@ -142,7 +162,9 @@ export default function ReviewPane({
   );
 
   const mergeBlocker = MERGE_BLOCKER[merge];
-  const canMerge = mergeBlocker === null && verify.state === "pass";
+  // Merge owns the verification gate: when checks are missing it runs them,
+  // then lands only the unchanged commit it verified.
+  const canMerge = mergeBlocker === null && verify.state !== "unconfigured";
   const missing = [
     mergeBlocker,
     verify.state === "pass" ? null : verify.state === "fail"
@@ -150,9 +172,39 @@ export default function ReviewPane({
       : "No verification has been run on this branch.",
   ].filter(Boolean) as string[];
 
+  const openConfigure = () => {
+    setConfigureOpen(true);
+    setConfigureError(null);
+    api.detectVerifyCommands(projectHash).then((next) => {
+      setSuggestions(next);
+      setSelectedSuggestions(new Set(next.map(([name]) => name)));
+    }).catch(() => setSuggestions([]));
+  };
+  const saveVerification = async () => {
+    const picked = suggestions.filter(([name]) => selectedSuggestions.has(name));
+    const commands = manualName.trim() && manualCommand.trim()
+      ? [...picked, [manualName.trim(), manualCommand.trim()] as [string, string]]
+      : picked;
+    if (!commands.length) return;
+    setConfiguring(true);
+    try {
+      await api.saveVerifyCommands(projectHash, commands);
+      await api.runVerify(projectHash, commands[0][0], threadId);
+      setConfigureOpen(false);
+      onVerificationConfigured();
+    } catch {
+      setConfigureError("Could not save verification. Check the command and try again.");
+    } finally {
+      setConfiguring(false);
+    }
+  };
+
   return (
     <div className="review-pane" data-testid="review-pane">
       <div className="review-header">
+        <Button size="compact-xs" variant="subtle" leftSection={<IconArrowLeft size={13} />} onClick={onBackToFleet}>
+          All reviews
+        </Button>
         <Text size="sm" fw={600} data-testid="review-title">
           {title}
         </Text>
@@ -167,12 +219,23 @@ export default function ReviewPane({
         <Text size="sm" data-testid="review-verify-line" data-state={verify.state}>
           {verifyLine(verify)}
         </Text>
-        {verify.state === "pass" ? null : (
+        {verify.state === "unconfigured" ? (
+          <Button size="xs" variant="default" onClick={openConfigure}>
+            Configure Verification
+          </Button>
+        ) : verify.state === "pass" ? null : (
           <Button size="xs" variant="default" onClick={onRunVerify}>
             Run verify
           </Button>
         )}
       </Group>
+      {setup?.state === "running" && <Text size="xs" c="dimmed">Setting up worktree…</Text>}
+      {setup?.state === "failed" && (
+        <Group gap="xs" wrap="nowrap">
+          <Text size="xs" c="red" lineClamp={1}>Setup failed{setup.output ? `: ${setup.output}` : ""}</Text>
+          <Button size="compact-xs" variant="default" onClick={onRerunSetup}>Re-run setup</Button>
+        </Group>
+      )}
 
       <div className="review-body">
         <div className="review-files">
@@ -229,18 +292,6 @@ export default function ReviewPane({
         <div className="review-diff">
           <Group justify="space-between" className="review-diff-header" wrap="nowrap">
             <Text size="xs" c="dimmed">{selectedFile?.path ?? "No file selected"}</Text>
-            <Group gap="xs" wrap="nowrap">
-              {selectedFile ? (
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  leftSection={<IconExternalLink size={14} />}
-                  onClick={() => onOpenInEditor(selectedFile.path)}
-                >
-                  Open
-                </Button>
-              ) : null}
-            </Group>
           </Group>
           {selectedFile ? renderDiff(selectedFile.path) : null}
         </div>
@@ -256,8 +307,10 @@ export default function ReviewPane({
             {/* A disabled button that never says why is a dead end. Name the
                 one thing that would enable it. */}
             <Text size="xs" c="dimmed" data-testid="review-merge-blocker">
-              {merge === "clean"
-                ? "Merge needs a passing verify"
+              {verify.state === "unconfigured"
+                ? "Configure verification before merging"
+                : merge === "clean"
+                ? "Merge will verify this branch first"
                 : "Merge needs a clean base"}
             </Text>
             <Button size="xs" disabled>
@@ -299,6 +352,26 @@ export default function ReviewPane({
               Merge anyway
             </Button>
           </Group>
+        </Stack>
+      </Modal>
+      <Modal opened={configureOpen} onClose={() => setConfigureOpen(false)} title="Configure verification">
+        <Stack gap="sm">
+          <Text size="sm">Choose the checks Palisade should record before merging this work.</Text>
+          {suggestions.map(([name, command]) => (
+            <Checkbox key={name} checked={selectedSuggestions.has(name)} label={`${name} · ${command}`}
+              onChange={(event) => setSelectedSuggestions((previous) => {
+                const next = new Set(previous);
+                event.currentTarget.checked ? next.add(name) : next.delete(name);
+                return next;
+              })} />
+          ))}
+          {!suggestions.length && <Text size="xs" c="dimmed">No conventional checks were found. Add one below.</Text>}
+          {configureError && <Text size="xs" c="red">{configureError}</Text>}
+          <TextInput label="Check name" value={manualName} onChange={(event) => setManualName(event.currentTarget.value)} placeholder="test" />
+          <TextInput label="Command" value={manualCommand} onChange={(event) => setManualCommand(event.currentTarget.value)} placeholder="cargo test" />
+          <Button loading={configuring} disabled={!selectedSuggestions.size && !(manualName.trim() && manualCommand.trim())} onClick={() => void saveVerification()}>
+            Save and run first check
+          </Button>
         </Stack>
       </Modal>
     </div>

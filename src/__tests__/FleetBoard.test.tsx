@@ -46,6 +46,7 @@ const props = (over: Partial<FleetBoardProps> = {}): FleetBoardProps => ({
   onMerge: vi.fn(),
   onOpenPr: vi.fn(),
   onArchive: vi.fn(),
+  onArchiveRun: vi.fn(),
   onOpenRun: vi.fn(),
   onCancelRun: vi.fn(),
   onNewRun: vi.fn(),
@@ -64,6 +65,7 @@ const playbookRow = (over: Partial<FleetRow> = {}): FleetRow =>
     diff: { added: 0, removed: 0, files: 0 },
     filesTouched: [],
     merge: "no_worktree",
+    archivable: true,
     ...over,
   });
 
@@ -227,7 +229,7 @@ describe("FleetBoard", () => {
     render(
       <FleetBoard
         {...props({
-          rows: [playbookRow({ status: "running" })],
+          rows: [playbookRow({ status: "running", archivable: false })],
           onOpen,
           onStop,
           onOpenRun,
@@ -244,14 +246,17 @@ describe("FleetBoard", () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it("hides Merge, Open PR and Archive on a playbook row", async () => {
-    render(<FleetBoard {...props({ rows: [playbookRow()] })} />);
+  it("offers Archive for a finished playbook run", async () => {
+    const onArchiveRun = vi.fn();
+    render(<FleetBoard {...props({ rows: [playbookRow()], onArchiveRun })} />);
     fireEvent.click(screen.getByTestId("fleet-actions"));
     expect(await screen.findByText("Open")).toBeInTheDocument();
     expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.queryByTestId("fleet-merge-disabled")).toBeNull();
     expect(screen.queryByText("Open PR")).toBeNull();
-    expect(screen.queryByText("Archive")).toBeNull();
+    expect(screen.getByText("Archive")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Archive"));
+    expect(onArchiveRun).toHaveBeenCalledWith("p1", "run-1");
   });
 
   it("heads the board with the project and what the fleet is doing", () => {

@@ -80,6 +80,17 @@ describe("useThreadActions", () => {
     expect(deps.setBar).not.toHaveBeenCalled();
   });
 
+  it("moves Chat to the next visible thread after archiving the active one", async () => {
+    const current = thread({ id: "t2" });
+    const { result, deps } = setup({ activeThread: current });
+    api.listThreads
+      .mockResolvedValueOnce([thread({ id: "t1" }), current, thread({ id: "t3" })])
+      .mockResolvedValueOnce([thread({ id: "t1" }), thread({ id: "t3" })]);
+    await act(async () => { result.current.onArchiveThread(current); });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deps.selectThread).toHaveBeenCalledWith("h", expect.objectContaining({ id: "t3" }));
+  });
+
   it("asks before destroying unmerged work", async () => {
     const worktrees = new Map([["t1", { clean: false, ahead: 2, baseBranch: "main" }]]);
     const { result, deps, bars } = setup({ worktrees });

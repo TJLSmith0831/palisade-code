@@ -49,6 +49,16 @@ process. Local `package.sh` builds never publish updates.
 - **OpenSpec is authoritative for specs.** Palisade shells out to `openspec list/show/validate --json` and never writes a spec file itself.
 - **Verification is the only evidence of done.** A spec is complete because a named `verify` command exited 0 at a named commit — never because a model said so.
 
+### Worktree settings
+
+`.palisade/project-settings.json` can set `worktreeSetup`, `worktreeCopy`, and
+`cargoTarget`. `cargoTarget: "shared"` keeps Cargo artifacts in Palisade's
+per-project home directory; another string is an explicit path (relative paths
+are project-relative). Cargo locks a shared target during concurrent builds,
+so worktrees may report “Blocking waiting for file lock”; use `sccache` through
+`RUSTC_WRAPPER` if lock-free compiler caching is needed. Palisade does not
+configure `sccache` itself.
+
 ## Notes
 
 - No headless test mode — the app uses WKWebView, not Chromium, so Playwright can't drive it. Use the Tauri MCP against the debug-only bridge on `127.0.0.1:9223`.

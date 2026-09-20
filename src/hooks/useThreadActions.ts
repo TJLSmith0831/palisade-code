@@ -82,9 +82,24 @@ export function useThreadActions({
       const worktree = worktrees.get(target.id);
       const unmerged =
         archiving && worktree && (!worktree.clean || worktree.ahead > 0);
-      setThreadArchived(projectHash, target.id, archiving)
-        .then(() => {
+      void (async () => {
+        // Capture sidebar order before archiving removes the target from the
+        // default list; it defines what "next" means to the person reading it.
+        const before = await api.listThreads(projectHash);
+        await setThreadArchived(projectHash, target.id, archiving);
           loadWorktrees();
+          // An archived thread must never remain in the chat pane. Pick its
+          // visible neighbour from the pre-refresh order so the transition is
+          // predictable, then reconcile the list from the store.
+          const nextThreads = await api.listThreads(projectHash);
+          setThreads(nextThreads);
+          if (archiving && activeThread?.id === target.id) {
+            const visible = nextThreads.filter((thread) => !thread.archived);
+            const oldIndex = before.findIndex((thread) => thread.id === target.id);
+            const nextId = before.slice(oldIndex + 1).find((thread) => !thread.archived)?.id
+              ?? before.slice(0, oldIndex).reverse().find((thread) => !thread.archived)?.id;
+            await selectThread(projectHash, visible.find((thread) => thread.id === nextId) ?? null);
+          }
           if (!unmerged) return;
           setBar({
             kind: "confirm",
@@ -100,10 +115,9 @@ export function useThreadActions({
               }
             },
           });
-        })
-        .catch(fail);
+      })().catch(fail);
     },
-    [projectHash, worktrees, setThreadArchived, loadWorktrees, setBar, fail]
+    [projectHash, activeThread?.id, worktrees, setThreadArchived, loadWorktrees, setThreads, selectThread, setBar, fail]
   );
 
   const onDeleteThread = useCallback(

@@ -554,6 +554,7 @@ pub struct AcpSpawn {
     /// chosen one and the agent offers it.
     pub model: Option<String>,
     pub palisade_home: PathBuf,
+    pub extra_env: Vec<(String, String)>,
 }
 
 // ------------------------------------------------------------- bridge
@@ -1651,6 +1652,7 @@ pub fn probe_models(
         bypass: false,
         model: None,
         palisade_home: PathBuf::new(),
+        extra_env: vec![],
     };
     let agent = agent_config(&spawn);
     let (_id, models, _cmd_tx, _busy, _acp_id, _pending) =
@@ -1687,6 +1689,7 @@ pub fn authenticate_agent(
         bypass: false,
         model: None,
         palisade_home: PathBuf::new(),
+        extra_env: vec![],
     };
     let agent = agent_config(&spawn);
     start_with_transport(agent, spawn, Arc::new(NullSink), false, Some(method_id))?;
@@ -1861,6 +1864,9 @@ fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
     // anything it shells out to) needs the user's real one.
     if let Some(path) = crate::executor::login_shell_path() {
         config = config.env("PATH", path.to_string_lossy().into_owned());
+    }
+    for (key, value) in &spawn.extra_env {
+        config = config.env(key.clone(), value.clone());
     }
     acp::AcpAgent::new(config)
 }
@@ -2934,6 +2940,7 @@ mod tests {
             bypass: false,
             model,
             palisade_home: PathBuf::from("/tmp/palisade"),
+            extra_env: vec![],
         }
     }
 

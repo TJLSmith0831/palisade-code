@@ -65,6 +65,9 @@ type Props = {
   /** A caller-supplied read-only patch. Review uses this for the complete
    *  merge-base diff, including commits that a working-tree diff cannot see. */
   reviewPatch?: string;
+  /** Review supplies this so each read-only change block can jump to its
+   * editable source without putting a disconnected action in the pane header. */
+  onOpenInEditor?: (path: string) => void;
   /** Bumped when something outside this pane changed the working tree — an
    * agent turn finishing, or a save. Without it the diff is whatever it was
    * when the pane mounted, which is stale the moment the agent writes. */
@@ -177,6 +180,7 @@ function FileDiff({
   onDiscard,
   busy,
   view,
+  onOpenInEditor,
 }: {
   file: StructuredPatch;
   actionLabel: string;
@@ -185,6 +189,7 @@ function FileDiff({
   onDiscard?: () => void;
   busy: boolean;
   view: DiffView;
+  onOpenInEditor?: (path: string) => void;
 }) {
   // An added or deleted file has no opposite side, so side-by-side would put
   // a full-height column of blank cells next to it — indistinguishable from a
@@ -198,6 +203,11 @@ function FileDiff({
       <div className="diff-file-head">
         <span className="diff-file-path">{pathFromPatch(file)}</span>
         <span className="diff-spacer" />
+        {onOpenInEditor && (
+          <Button size="compact-xs" variant="subtle" onClick={() => onOpenInEditor(pathFromPatch(file))}>
+            Open
+          </Button>
+        )}
         {onDiscard && (
           <Button
             size="compact-xs"
@@ -262,6 +272,7 @@ export default function DiffPane({
   commit,
   onClearCommit,
   reviewPatch,
+  onOpenInEditor,
 }: Props) {
   /** A thread's worktree is the ordinary case now, not a special read-only
    *  one — used only to word the empty state for whose tree it is. */
@@ -383,6 +394,16 @@ export default function DiffPane({
       : files;
     return (
       <div className="diff-pane" data-testid="diff-pane">
+        <Group justify="flex-end" px="xs" py={4}>
+          <SegmentedControl
+            size="xs"
+            value={view}
+            onChange={(next) => pickView(next as DiffView)}
+            data={[{ value: "inline", label: "Inline" }, { value: "split", label: "Split" }]}
+            aria-label="Diff view"
+            data-testid="review-diff-view"
+          />
+        </Group>
         {shown.length === 0 ? (
           <p className="empty">No diff available for this file.</p>
         ) : (
@@ -393,6 +414,7 @@ export default function DiffPane({
               actionLabel=""
               busy={false}
               view={view}
+              onOpenInEditor={onOpenInEditor}
             />
           ))
         )}

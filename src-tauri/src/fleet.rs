@@ -175,6 +175,8 @@ pub struct FleetRow {
     pub verify: FleetVerify,
     pub merge: FleetMerge,
     pub updated_at: String,
+    /// Playbook history is archivable only after its runner has stopped.
+    pub archivable: bool,
 }
 
 /// Everything status derivation looks at, gathered by the caller so this stays
@@ -551,6 +553,7 @@ mod tests {
             overlap: vec![],
             verify: FleetVerify::not_run(),
             merge: FleetMerge::NoWorktree,
+            archivable: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
         }
     }

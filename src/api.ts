@@ -482,6 +482,8 @@ export type WorktreeStatus = {
   /** The worktree's HEAD — what a verification run has to have run at for
    *  its result to still be about this code. */
   head: string | null;
+  setupState?: "running" | "ready" | "failed" | null;
+  setupOutput?: string | null;
 };
 
 /** What a merge-back attempt did. A conflict is not an error: the half-merged
@@ -497,6 +499,8 @@ export type MergeResult = {
  *  projects are simply absent. */
 export const threadWorktrees = (projectHash: string) =>
   invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
+export const rerunWorktreeSetup = (projectHash: string, threadId: string) =>
+  invoke<void>("rerun_worktree_setup", { projectHash, threadId });
 /** Merge a thread's branch into the branch it was cut from. Rejects a busy
  *  thread and an uncommitted worktree — what lands must be what was reviewed. */
 export const mergeThreadWorktree = (
@@ -509,6 +513,8 @@ export const mergeThreadWorktree = (
     threadId,
     overrideVerify,
   });
+export const cancelMergeVerification = (projectHash: string, threadId: string) =>
+  invoke<void>("cancel_merge_verification", { projectHash, threadId });
 
 /** Push the thread's branch and open a PR for it, returning the URL to open.
  *  Uses `gh` when it is on PATH, and the host's compare page when it isn't. */
@@ -547,7 +553,7 @@ export type FleetAttention =
 /** Evidence, never opinion: a pass is a named command that exited 0 at a
  *  named commit. `not_run` is the honest default. */
 export type FleetVerify = {
-  state: "pass" | "fail" | "not_run";
+  state: "pass" | "fail" | "not_run" | "unconfigured";
   command?: string;
   commit?: string;
   at?: string;
@@ -589,6 +595,7 @@ export type FleetRow = {
   verify: FleetVerify;
   merge: FleetMerge;
   updatedAt: string;
+  archivable?: boolean;
 };
 
 /** Every unarchived thread in every open project, newest first. One call for
@@ -824,6 +831,10 @@ export const listVerifications = (projectHash: string) =>
 /** `[name, command]` pairs from the project's `.palisade/project-settings.json`. */
 export const verifyCommands = (projectHash: string) =>
   invoke<[string, string][]>("verify_commands", { projectHash });
+export const detectVerifyCommands = (projectHash: string) =>
+  invoke<[string, string][]>("detect_verify_commands", { projectHash });
+export const saveVerifyCommands = (projectHash: string, commands: [string, string][]) =>
+  invoke<void>("save_verify_commands", { projectHash, commands });
 
 // ------------------------------------------------------------ agent chains
 

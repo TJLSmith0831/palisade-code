@@ -41,7 +41,6 @@ import {
   IconBox,
   IconAppWindow,
   IconChevronDown,
-  IconChevronLeft,
   IconChevronRight,
   IconClockPause,
   IconDots,
@@ -58,6 +57,7 @@ import {
   IconLayoutBottombar,
   IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
+  IconMessageCircle,
   IconPlayerStopFilled,
   IconRoute,
   IconSettings,
@@ -4328,6 +4328,10 @@ export default function App() {
       setWorktrees(new Map());
     }
   }, []);
+  useEffect(() => {
+    const unlisten = listen("worktree-setup-finished", () => { void loadWorktrees(); });
+    return () => { unlisten.then((un) => un()); };
+  }, [loadWorktrees]);
 
   const { onRenameThread, onArchiveThread, onDeleteThread } = useThreadActions({
     projectHash: project?.hash ?? null,
@@ -5523,6 +5527,9 @@ export default function App() {
   const onFleetCancelRun = useCallback((runId: string) => {
     void api.cancelChainRun(runId);
   }, []);
+  const onFleetArchiveRun = useCallback((projectId: string, runId: string) => {
+    void api.setChainRunArchived(projectId, runId, true).then(() => fleet.refresh()).catch(fail);
+  }, [fleet.refresh, fail]);
   const onFleetArchive = useCallback(
     (projectId: string, threadId: string) => {
       const found = projectId === project?.hash
@@ -5676,7 +5683,7 @@ export default function App() {
         diff={row?.diff ?? { added: 0, removed: 0, files: 0, untracked: 0 }}
         files={reviewFiles}
         loadingFiles={reviewLoading}
-        verify={row?.verify ?? { state: "not_run" }}
+        verify={verifyPairs.length ? (row?.verify ?? { state: "not_run" }) : { state: "unconfigured" }}
         merge={row?.merge ?? (worktree ? "clean" : "no_worktree")}
         renderDiff={(path) => (
           <DiffPane
@@ -5685,6 +5692,10 @@ export default function App() {
             focusPath={path}
             refreshToken={diffRefreshToken}
             reviewPatch={reviewPatch}
+            onOpenInEditor={(file) => {
+              shell.openPanel(null);
+              selectFile(file);
+            }}
           />
         )}
         onRunVerify={() => {
@@ -5693,10 +5704,7 @@ export default function App() {
           const name =
             verifyPairs.find(([, cmd]) => cmd === row?.verify.command)?.[0] ??
             verifyPairs[0]?.[0];
-          if (!name) {
-            warn("No verify command is configured for this project.");
-            return;
-          }
+          if (!name) return;
           api.runVerify(project.hash, name, thread.id).catch(fail);
         }}
         onMerge={({ override }) =>
@@ -5707,7 +5715,19 @@ export default function App() {
           shell.openPanel(null);
           selectFile(path);
         }}
-        onBackToFleet={() => shell.openPanel("fleet")}
+        onBackToFleet={() => {
+          setThread(null);
+          shell.openPanel("review");
+        }}
+        projectHash={project.hash}
+        setup={{ state: worktree?.setupState, output: worktree?.setupOutput }}
+        onRerunSetup={() => {
+          api.rerunWorktreeSetup(project.hash, thread.id).then(loadWorktrees, fail);
+        }}
+        onVerificationConfigured={() => {
+          api.verifyCommands(project.hash).then(setVerifyPairs, () => {});
+          void fleet.refresh();
+        }}
       />
     );
   };
@@ -6385,12 +6405,13 @@ export default function App() {
                   variant="subtle"
                   className="ds-icon-btn"
                   onClick={shell.toggleSessionList}
-                  aria-label="Toggle session list"
+                  aria-label={shell.sessionListOpen ? "Hide threads" : "Show threads"}
                   aria-pressed={shell.sessionListOpen}
                   data-testid="toggle-session-list"
                   data-tauri-drag-region-exclude
                 >
                   <IconLayoutSidebar size={14} />
+                  <span className="ds-chrome-label">Threads</span>
                 </ActionIcon>
               </Indicator>
             </Tooltip>
@@ -6459,6 +6480,7 @@ export default function App() {
                 bottom panel's own inline chevron both call toggleTerminal.
                 Both panel toggles need a project to have a panel at all. */}
             {project && (
+            <div className="ds-workspace-group" aria-label="Workspace panels">
             <Tooltip label="Toggle terminal panel (Cmd+`)">
               <ActionIcon
                 variant="subtle"
@@ -6472,7 +6494,6 @@ export default function App() {
                 <IconLayoutBottombar size={14} />
               </ActionIcon>
             </Tooltip>
-            )}
             {/* The secondary pane is the editor column — chat is the
                 subject, so that is the side that can be sent away. */}
             {project && !boardPanel && (
@@ -6495,24 +6516,24 @@ export default function App() {
                 Same state the collapsed strip's own chevron drives — one
                 toggle, two entry points, like the terminal's. */}
             {project && !boardPanel && (
-              <Tooltip label="Toggle chat panel (Cmd+K)">
+              <Tooltip label={`${shell.chatOpen ? "Hide" : "Show"} chat panel (Cmd+K)`}>
                 <ActionIcon
                   variant="subtle"
                   className="ds-icon-btn"
                   onClick={shell.toggleChat}
-                  aria-label="Toggle chat panel"
+                  aria-label={shell.chatOpen ? "Hide chat panel" : "Show chat panel"}
                   aria-pressed={shell.chatOpen}
                   data-testid="toggle-chat"
                   data-tauri-drag-region-exclude
                 >
-                  {shell.chatOpen ? (
-                    <IconChevronLeft size={14} />
-                  ) : (
-                    <IconChevronRight size={14} />
-                  )}
+                  <IconMessageCircle size={14} />
+                  <span className="ds-chrome-label">Chat</span>
                 </ActionIcon>
               </Tooltip>
             )}
+            </div>
+            )}
+            <div className="ds-utility-group" aria-label="Application controls">
             <Tooltip label="Theme: click to cycle auto → light → dark">
               <ActionIcon
                 variant="subtle"
@@ -6553,6 +6574,7 @@ export default function App() {
                 <IconSettings size={14} />
               </ActionIcon>
             </Tooltip>
+            </div>
           </div>
         </header>
         {flight && flight.warnings.length > 0 && (
@@ -6731,6 +6753,7 @@ export default function App() {
                   onArchive={onFleetArchive}
                   onOpenRun={onFleetOpenRun}
                   onCancelRun={onFleetCancelRun}
+                  onArchiveRun={onFleetArchiveRun}
                   onNewRun={onNewRun}
                 />
               ) : shell.activePanel === "review" ? (

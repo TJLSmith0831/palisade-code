@@ -46,6 +46,9 @@ const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) =>
       onOpenPr={onOpenPr}
       onOpenInEditor={onOpenInEditor}
       onBackToFleet={onBackToFleet}
+      projectHash="p1"
+      onVerificationConfigured={vi.fn()}
+      onRerunSetup={vi.fn()}
       {...over}
     />,
   );
@@ -95,7 +98,7 @@ describe("ReviewPane", () => {
     expect(screen.getByRole("button", { name: "Run verify" })).toBeInTheDocument();
   });
 
-  it("enables Merge only on a clean merge with a passing verify", () => {
+  it("lets a clean merge run its missing configured verification", () => {
     const clean = mount();
     expect(mergeButton()).toBeEnabled();
     fireEvent.click(mergeButton());
@@ -107,7 +110,7 @@ describe("ReviewPane", () => {
     conflicted.unmount();
 
     mount({ verify: { state: "not_run" } });
-    expect(mergeButton()).toBeDisabled();
+    expect(mergeButton()).toBeEnabled();
   });
 
   it("names what is missing in the override modal and merges with override", async () => {
@@ -172,18 +175,22 @@ describe("ReviewPane", () => {
     expect(onBackToFleet).toHaveBeenCalled();
   });
 
-  /** A disabled button that never says why is a dead end. */
-  it("names the one thing a blocked merge is waiting on", () => {
+  it("lets merge own missing checks but names a real merge blocker", () => {
     const unverified = mount({ verify: { state: "not_run" } });
-    expect(screen.getByTestId("review-merge-blocker")).toHaveTextContent(
-      "Merge needs a passing verify",
-    );
+    expect(mergeButton()).toBeEnabled();
+    expect(screen.queryByTestId("review-merge-blocker")).toBeNull();
     unverified.unmount();
-
     mount({ merge: "conflicts" });
     expect(screen.getByTestId("review-merge-blocker")).toHaveTextContent(
       "Merge needs a clean base",
     );
+  });
+
+  it("offers guided configuration when verification is unconfigured", () => {
+    mount({ verify: { state: "unconfigured" } });
+    expect(screen.getByTestId("review-verify-line")).toHaveTextContent("Verification not configured");
+    expect(screen.getByRole("button", { name: "Configure Verification" })).toBeEnabled();
+    expect(mergeButton()).toBeDisabled();
   });
 
   it("shows a loading state and Open PR", () => {

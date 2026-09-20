@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "../api";
 import type { Envelope, FleetRow } from "../api";
+import { CHAINS_CHANGED_EVENT } from "../ChainsPanel";
 
 /** The fleet board's rows, kept fresh three ways: once on mount, on every
  *  executor envelope (the only event that means a run moved), and on a slow
@@ -41,9 +42,12 @@ export function useFleet({
   useEffect(() => {
     if (!active) return;
     const un = listen<Envelope>("executor-event", () => void refresh());
+    const chainsChanged = () => void refresh();
+    window.addEventListener(CHAINS_CHANGED_EVENT, chainsChanged);
     const timer = setInterval(() => void refresh(), pollMs);
     return () => {
       clearInterval(timer);
+      window.removeEventListener(CHAINS_CHANGED_EVENT, chainsChanged);
       void un.then((off) => off());
     };
   }, [active, pollMs, refresh]);

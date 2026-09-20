@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::Res;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectSettings {
     /// Regex pattern (matched against the saved file's project-relative
@@ -44,6 +44,27 @@ pub struct ProjectSettings {
     /// these, the rail's Run panel edits them. Distinct from `verify` —
     /// `verify` is the evidence a spec is green, `run` is only a shortcut.
     pub run: HashMap<String, String>,
+    /// Optional install/bootstrap command run in a newly-created worktree.
+    pub worktree_setup: Option<String>,
+    /// Ignored root files copied into a worktree before setup. Secrets stay
+    /// copies, never links, and are never synchronized back.
+    #[serde(default = "default_worktree_copy")]
+    pub worktree_copy: Vec<String>,
+    /// `shared` uses Palisade's per-project target directory; another value
+    /// is an explicit target path. Absent preserves Cargo's per-worktree default.
+    pub cargo_target: Option<String>,
+}
+
+fn default_worktree_copy() -> Vec<String> { vec![".env".into(), ".env.local".into()] }
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            format_on_save: HashMap::new(), executor_override: None, verify: HashMap::new(),
+            verify_pins: HashMap::new(), run: HashMap::new(), worktree_setup: None,
+            worktree_copy: default_worktree_copy(), cargo_target: None,
+        }
+    }
 }
 
 /// Lives under `.palisade/` alongside `chains/` — one folder for everything
@@ -52,7 +73,27 @@ pub struct ProjectSettings {
 const FILE_NAME: &str = ".palisade/project-settings.json";
 
 const DEFAULT_CONTENTS: &str =
-    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {},\n  \"verifyPins\": {},\n  \"run\": {}\n}\n";
+    "{\n  \"formatOnSave\": {},\n  \"executorOverride\": null,\n  \"verify\": {},\n  \"verifyPins\": {},\n  \"run\": {},\n  \"worktreeSetup\": null,\n  \"worktreeCopy\": [\".env\", \".env.local\"],\n  \"cargoTarget\": null\n}\n";
+
+/// Resolves the configured shared target once, before a command enters a
+/// worktree. Relative explicit paths are project-relative for stable reuse.
+pub fn cargo_target_dir(settings: &ProjectSettings, project_root: &Path, home: &Path, project_hash: &str) -> Option<std::path::PathBuf> {
+    match settings.cargo_target.as_deref() {
+        None => None,
+        Some("shared") => Some(home.join("targets").join(project_hash)),
+        Some(path) => {
+            let path = std::path::PathBuf::from(path);
+            Some(if path.is_absolute() { path } else { project_root.join(path) })
+        }
+    }
+}
+
+pub fn default_worktree_setup(project_root: &Path) -> Option<String> {
+    if project_root.join("pnpm-lock.yaml").exists() { Some("pnpm install --frozen-lockfile --prefer-offline".into()) }
+    else if project_root.join("yarn.lock").exists() { Some("yarn install --frozen-lockfile".into()) }
+    else if project_root.join("package-lock.json").exists() { Some("npm ci --prefer-offline".into()) }
+    else { None }
+}
 
 /// Loads `.palisade/project-settings.json` from `project_root`. A missing file isn't
 /// an error — it's the common case (e.g. before `ensure_file` has run, or
@@ -175,6 +216,36 @@ pub fn save_run(project_root: &Path, commands: HashMap<String, String>) -> Res<(
     write_doc(project_root, doc)
 }
 
+/// Replaces the verification map without disturbing unrelated project settings.
+pub fn save_verify(project_root: &Path, commands: HashMap<String, String>) -> Res<()> {
+    let mut doc = read_doc(project_root);
+    doc["verify"] = serde_json::to_value(commands).map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+    write_doc(project_root, doc)
+}
+
+/// Conservative checks suggested from conventional project manifests. This is
+/// deliberately separate from `detect_run`: a dev server is not evidence.
+pub fn detect_verify(project_root: &Path) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    if let Ok(raw) = std::fs::read_to_string(project_root.join("package.json")) {
+        let runner = if project_root.join("pnpm-lock.yaml").exists() { "pnpm run" }
+            else if project_root.join("yarn.lock").exists() { "yarn" } else { "npm run" };
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
+                for name in ["test", "typecheck", "lint", "build"] {
+                    if scripts.contains_key(name) { found.push((name.into(), format!("{runner} {name}"))); }
+                }
+            }
+        }
+    }
+    if project_root.join("Cargo.toml").exists() { found.push(("cargo test".into(), "cargo test".into())); }
+    if project_root.join("Makefile").exists() { found.push(("make test".into(), "make test".into())); }
+    if project_root.join("pyproject.toml").exists() || project_root.join("pytest.ini").exists() {
+        found.push(("pytest".into(), "pytest".into()));
+    }
+    found
+}
+
 /// Replaces the `verifyPins` map (D8: spec change name → pinned verify
 /// command names), leaving every other setting alone. The single writer for
 /// this field — the frontend calls this instead of reading, merging, and
@@ -259,17 +330,24 @@ pub struct VerifyOutcome {
 /// exit status. Palisade runs it and reports what happened — it never decides that
 /// a non-zero exit "doesn't count".
 pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -> Res<VerifyOutcome> {
+    run_verify_with_env(settings, project_root, name, None)
+}
+
+pub fn run_verify_with_env(
+    settings: &ProjectSettings,
+    project_root: &Path,
+    name: &str,
+    cargo_target: Option<&Path>,
+) -> Res<VerifyOutcome> {
     let command = settings
         .verify
         .get(name)
         .ok_or_else(|| format!("no verify command named `{name}` in {FILE_NAME}"))?
         .clone();
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(project_root)
-        .stdin(Stdio::null())
-        .output()
+    let mut process = Command::new("sh");
+    process.arg("-c").arg(&command).current_dir(project_root).stdin(Stdio::null());
+    if let Some(target) = cargo_target { process.env("CARGO_TARGET_DIR", target); }
+    let output = process.output()
         .map_err(|err| crate::PalisadeError::from(format!("{command} failed to start: {err}")))?;
 
     let mut body = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -284,7 +362,7 @@ pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -
 }
 
 /// The last `limit` bytes, on a char boundary, marked when anything was cut.
-fn tail(body: &str, limit: usize) -> String {
+pub(crate) fn tail(body: &str, limit: usize) -> String {
     if body.len() <= limit {
         return body.to_string();
     }
@@ -368,6 +446,39 @@ mod tests {
         assert!(warning.is_none());
         assert_eq!(settings.format_on_save.get(r"\.rs$"), Some(&"cargo fmt".to_string()));
         assert_eq!(settings.executor_override, Some("codex".to_string()));
+    }
+
+    #[test]
+    fn detects_conventional_verification_without_writing_settings() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("package.json"), r#"{"scripts":{"build":"vite build","lint":"eslint .","test":"vitest","typecheck":"tsc"}}"#).unwrap();
+        std::fs::write(root.path().join("pnpm-lock.yaml"), "lockfileVersion: '9.0'").unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[package]").unwrap();
+        std::fs::write(root.path().join("Makefile"), "test:").unwrap();
+        std::fs::write(root.path().join("pytest.ini"), "[pytest]").unwrap();
+
+        assert_eq!(detect_verify(root.path()), vec![
+            ("test".into(), "pnpm run test".into()),
+            ("typecheck".into(), "pnpm run typecheck".into()),
+            ("lint".into(), "pnpm run lint".into()),
+            ("build".into(), "pnpm run build".into()),
+            ("cargo test".into(), "cargo test".into()),
+            ("make test".into(), "make test".into()),
+            ("pytest".into(), "pytest".into()),
+        ]);
+        assert!(!root.path().join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn resolves_shared_and_project_relative_cargo_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let mut settings = ProjectSettings::default();
+        assert_eq!(cargo_target_dir(&settings, root.path(), home.path(), "hash"), None);
+        settings.cargo_target = Some("shared".into());
+        assert_eq!(cargo_target_dir(&settings, root.path(), home.path(), "hash"), Some(home.path().join("targets/hash")));
+        settings.cargo_target = Some(".cache/cargo".into());
+        assert_eq!(cargo_target_dir(&settings, root.path(), home.path(), "hash"), Some(root.path().join(".cache/cargo")));
     }
 
     #[test]
