@@ -4,6 +4,8 @@ import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import SessionList, {
+  activityLabel,
+  groupByFleet,
   relativeTime,
   filterThreads,
   threadState,
@@ -53,6 +55,36 @@ describe("relativeTime", () => {
 
   it("renders an unparseable timestamp as empty rather than NaN", () => {
     expect(relativeTime("not-a-date", now)).toBe("");
+  });
+});
+
+describe("activityLabel", () => {
+  const now = new Date("2026-08-14T12:00:00Z").getTime();
+
+  it("says both when the thread was created and when it last spoke", () => {
+    expect(activityLabel("2026-08-12T12:00:00Z", "2026-08-14T10:00:00Z", now)).toBe(
+      "Created 2d ago · Last active 2h ago",
+    );
+  });
+
+  it("says a thread that never spoke has not run", () => {
+    expect(activityLabel("2026-08-14T09:00:00Z", undefined, now)).toBe("Created 3h ago · Not run yet");
+  });
+});
+
+describe("groupByFleet ordering", () => {
+  it("puts the most recently touched thread first within a band", () => {
+    const old = thread({ id: "old", updatedAt: "2026-08-01T00:00:00Z" });
+    const fresh = thread({ id: "fresh", updatedAt: "2026-08-02T00:00:00Z" });
+    const bands = groupByFleet([old, fresh], new Map());
+    expect(bands[0].list.map((t) => t.id)).toEqual(["fresh", "old"]);
+  });
+
+  it("orders by the fleet row's touch time when there is one", () => {
+    const a = thread({ id: "a", updatedAt: "2026-08-01T00:00:00Z" });
+    const b = thread({ id: "b", updatedAt: "2026-08-02T00:00:00Z" });
+    const rows = new Map([["a", { status: "idle", updatedAt: "2026-08-09T00:00:00Z" } as FleetRow]]);
+    expect(groupByFleet([b, a], rows)[0].list.map((t) => t.id)).toEqual(["a", "b"]);
   });
 });
 

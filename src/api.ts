@@ -583,8 +583,11 @@ export type FleetRow = {
   attention?: FleetAttention;
   branch?: string;
   worktreePath?: string;
-  /** `files` counts tracked files that differ from HEAD and nothing else, so
-   *  it always describes the same measurement `added`/`removed` do.
+  /** The branch a merge lands in, present only when it is not the branch
+   *  checked out in the project now. */
+  mergeTarget?: string;
+  /** `files` counts tracked files that differ from the thread's merge base;
+   *  `added` also includes the lines of untracked files.
    *  `untracked` is the files the thread created that git does not track yet
    *  — they contribute no line counts. Optional only so fixtures written
    *  before it existed still typecheck; the backend always sends it. */
@@ -594,7 +597,12 @@ export type FleetRow = {
   overlap: { threadId: string; files: string[] }[];
   verify: FleetVerify;
   merge: FleetMerge;
+  /** Last touched — a message or the user opening the thread, whichever is
+   *  newer. The board's sort key, not a time to show. */
   updatedAt: string;
+  createdAt: string;
+  /** When the thread last spoke. Absent if it has never run. */
+  lastActivityAt?: string;
   archivable?: boolean;
 };
 

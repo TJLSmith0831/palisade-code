@@ -28,6 +28,15 @@ export function relativeTime(iso: string, now = Date.now()): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** The two times a thread row shows. Sorting uses "last touched", which
+ *  includes opening the thread; these say what actually happened. */
+export function activityLabel(createdAt: string, lastActivityAt?: string, now = Date.now()): string {
+  const created = `Created ${relativeTime(createdAt, now)}`;
+  return lastActivityAt
+    ? `${created} · Last active ${relativeTime(lastActivityAt, now)}`
+    : `${created} · Not run yet`;
+}
+
 /** Live threads matching `query`. Archived ones are out of this list by
  *  design — it is the browse surface, and the History panel is where an
  *  archived thread is found again and brought back. */
@@ -92,7 +101,7 @@ export const FLEET_BANDS = [
   { key: "idle", label: "Idle" },
 ] as const;
 
-/** Split threads into those bands, keeping each band in the order it came in.
+/** Split threads into those bands, newest-touched first within each.
  *  Empty bands are dropped so the sidebar never heads a group over nothing. */
 export function groupByFleet(
   threads: ThreadMeta[],
@@ -101,7 +110,13 @@ export function groupByFleet(
   return FLEET_BANDS.map(({ key, label }) => ({
     key,
     label,
-    list: threads.filter((t) => (rows.get(t.id)?.status ?? "idle") === key),
+    list: threads
+      .filter((t) => (rows.get(t.id)?.status ?? "idle") === key)
+      .sort(
+        (a, b) =>
+          Date.parse(rows.get(b.id)?.updatedAt ?? b.updatedAt) -
+          Date.parse(rows.get(a.id)?.updatedAt ?? a.updatedAt)
+      ),
   })).filter((band) => band.list.length > 0);
 }
 
@@ -261,8 +276,10 @@ export default function SessionList({
                   )}
                   {thread.title}
                 </div>
+                <div className="ds-session-meta" data-testid="session-times">
+                  {activityLabel(thread.createdAt, row?.lastActivityAt)}
+                </div>
                 <div className="ds-session-meta">
-                  <span>{relativeTime(thread.updatedAt)}</span>
                   {diff && diff.added + diff.removed > 0 && (
                     <span className="ds-session-diff" data-testid="session-diff">
                       <span className="added">+{diff.added}</span>
@@ -280,8 +297,12 @@ export default function SessionList({
                   </div>
                 )}
                 {worktree && (
-                  <div className="ds-session-branch" title={worktree.branch}>
+                  <div
+                    className="ds-session-branch"
+                    title={row?.mergeTarget ? `${worktree.branch} → ${row.mergeTarget}` : worktree.branch}
+                  >
                     {worktree.branch}
+                    {row?.mergeTarget && ` → ${row.mergeTarget}`}
                     {READINESS[worktree.state] && (
                       <Tooltip label={READINESS[worktree.state]!.tip} openDelay={400}>
                         <Badge

@@ -28,12 +28,14 @@ const row = (over: Partial<FleetRow> = {}): FleetRow => ({
   mode: "go",
   status: "idle",
   branch: "pal/t1",
+  worktreePath: "/wt/t1",
   diff: { added: 12, removed: 3, files: 2 },
   filesTouched: ["src/App.tsx"],
   overlap: [],
   verify: { state: "not_run" },
   merge: "clean",
   updatedAt: new Date().toISOString(),
+  createdAt: new Date().toISOString(),
   ...over,
 });
 
@@ -293,6 +295,42 @@ describe("FleetBoard", () => {
 
     render(<FleetBoard {...props()} />);
     expect(screen.getByTestId("fleet-diff")).not.toHaveTextContent("new");
+  });
+
+  /** A branch with no worktree is a thread whose worktree is gone. Whatever
+   *  the backend measured there is not this thread's work. */
+  it("shows no diff for a thread whose worktree is gone", () => {
+    render(<FleetBoard {...props({ rows: [row({ worktreePath: undefined })] })} />);
+    expect(screen.queryByTestId("fleet-diff")).toBeNull();
+  });
+
+  it("names the merge target only when it is not the current branch", () => {
+    const withTarget = render(<FleetBoard {...props({ rows: [row({ mergeTarget: "main" })] })} />);
+    expect(screen.getByText("palisade \u00b7 pal/t1 \u2192 main")).toBeInTheDocument();
+    withTarget.unmount();
+
+    render(<FleetBoard {...props()} />);
+    expect(screen.getByText("palisade \u00b7 pal/t1")).toBeInTheDocument();
+  });
+
+  /** The row is ordered by last touched, which includes opening the thread.
+   *  What it shows is when the thread was made and when it last spoke. */
+  it("shows created and last-active times, not the touch time", () => {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    render(
+      <FleetBoard
+        {...props({
+          rows: [
+            row({
+              updatedAt: ago(1000),
+              createdAt: ago(11 * 86_400_000),
+              lastActivityAt: ago(2 * 86_400_000),
+            }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getByTestId("fleet-times")).toHaveTextContent("Created 11d ago · Last active 2d ago");
   });
 
   it("keeps Start run disabled when no agent is installed", () => {

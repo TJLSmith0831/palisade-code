@@ -2324,11 +2324,7 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
             if !path.is_dir() {
                 continue;
             }
-            let base = thread
-                .worktree_base_branch
-                .clone()
-                .or_else(|| git::current_branch_name(&bin, &root).ok())
-                .unwrap_or_else(|| "HEAD".into());
+            let base = git::base_or_current(&bin, &root, thread.worktree_base_branch.as_deref());
             // The same helper the Fleet board and the Review lane read, so
             // the three surfaces cannot report different numbers for the
             // same thread: work since the base, committed or not, minus the
@@ -2427,18 +2423,29 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
             let root = PathBuf::from(&project.root);
             let verifications = store::read_verifications(&home, &project.hash).unwrap_or_default();
             let threads = store::list_threads(&home, &project.hash)?;
+            let current_branch = git::current_branch_name(&bin, &root).ok();
             for thread in threads.into_iter().filter(|t| !t.archived) {
                 // A thread with no worktree of its own edits the project
                 // checkout, so that is the tree its diff is measured in.
                 let worktree = thread.worktree_path.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
+                // A thread that had a worktree and lost it (pruned, or the
+                // folder deleted) is not editing the checkout. Measuring the
+                // checkout for it would show the user's own uncommitted work
+                // as this thread's, identically on every such thread.
+                let worktree_gone = thread.worktree_branch.is_some() && worktree.is_none();
                 let tree = worktree.clone().unwrap_or_else(|| root.clone());
-                // One helper for the board and the Review lane, and the only
-                // place the skip-list and the inherited-file rule live. The
-                // base branch is only meaningful for a thread that has its
+                // The merge target, only meaningful for a thread that has its
                 // own worktree; without one the measurement stays vs HEAD.
-                let base =
-                    worktree.as_ref().and(thread.worktree_base_branch.as_deref());
-                let changes = fleet::thread_changes(&bin, &tree, &root, base);
+                let base = worktree
+                    .as_ref()
+                    .map(|_| git::base_or_current(&bin, &root, thread.worktree_base_branch.as_deref()));
+                // One helper for the board and the Review lane, and the only
+                // place the skip-list and the inherited-file rule live.
+                let changes = if worktree_gone {
+                    fleet::ThreadChanges::default()
+                } else {
+                    fleet::thread_changes(&bin, &tree, &root, base.as_deref())
+                };
                 // Overlap must also see files already committed on the
                 // thread's branch but not yet merged back — a thread that
                 // commits as it goes would otherwise vanish from overlap
@@ -2452,20 +2459,15 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     _ => vec![],
                 };
                 let files_touched = fleet::union_files_touched(changes.paths(), committed_paths);
-                let merge = match (&worktree, &thread.worktree_branch) {
-                    (Some(path), Some(branch)) => {
-                        let base = thread
-                            .worktree_base_branch
-                            .clone()
-                            .or_else(|| git::current_branch_name(&bin, &root).ok())
-                            .unwrap_or_else(|| "HEAD".into());
-                        let ready = git::merge_readiness(&bin, &root, path, &base, branch)
+                let merge = match (&worktree, &thread.worktree_branch, &base) {
+                    (Some(path), Some(branch), Some(base)) => {
+                        let ready = git::merge_readiness(&bin, &root, path, base, branch)
                             .unwrap_or(git::MergeReadiness { ahead: 0, clean: true, mergeable: true });
                         if !ready.mergeable {
                             fleet::FleetMerge::Conflicts
                         // Commits on the base this branch does not have: the
                         // same rev-list, asked the other way round.
-                        } else if git::ahead_of(&bin, &root, branch, &base).unwrap_or(0) > 0 {
+                        } else if git::ahead_of(&bin, &root, branch, base).unwrap_or(0) > 0 {
                             fleet::FleetMerge::Behind
                         } else {
                             fleet::FleetMerge::Clean
@@ -2473,14 +2475,19 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     }
                     _ => fleet::FleetMerge::NoWorktree,
                 };
+                let last_activity = store::last_activity(&home, &project.hash, &thread.id);
                 let sessions = store::read_sessions(&home, &project.hash, &thread.id).unwrap_or_default();
                 let last = sessions.last();
-                let verify = fleet::current_verify(
-                    &verifications,
-                    &thread.id,
-                    git::rev_parse_head(&bin, &tree).as_deref(),
-                    git::status(&bin, &tree).is_ok_and(|status| status.is_empty()),
-                );
+                let verify = if worktree_gone {
+                    fleet::FleetVerify::not_run()
+                } else {
+                    fleet::current_verify(
+                        &verifications,
+                        &thread.id,
+                        git::rev_parse_head(&bin, &tree).as_deref(),
+                        git::status(&bin, &tree).is_ok_and(|status| status.is_empty()),
+                    )
+                };
                 let live = live.get(&thread.id).cloned().unwrap_or_default();
                 let (status, attention) = fleet::derive_status(&fleet::StatusInput {
                     awaiting_permission: live.awaiting_permission,
@@ -2511,6 +2518,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     attention,
                     branch: thread.worktree_branch.clone(),
                     worktree_path: worktree.map(|p| p.to_string_lossy().into_owned()),
+                    merge_target: base.filter(|b| Some(b) != current_branch.as_ref()),
                     diff: fleet::FleetDiff {
                         added: changes.added,
                         removed: changes.removed,
@@ -2521,7 +2529,16 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     overlap: vec![],
                     verify,
                     merge,
-                    updated_at: thread.updated_at.clone(),
+                    // Sort key: last touched. `thread.updated_at` moves when
+                    // the thread is opened but not when it speaks, so the
+                    // newer of the two is the whole story. Both are RFC 3339
+                    // UTC from the same clock, which orders as text.
+                    updated_at: last_activity
+                        .clone()
+                        .filter(|at| *at > thread.updated_at)
+                        .unwrap_or_else(|| thread.updated_at.clone()),
+                    created_at: thread.created_at.clone(),
+                    last_activity_at: last_activity,
                     archivable: false,
                 });
             }
@@ -2565,6 +2582,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     attention,
                     branch: None,
                     worktree_path: None,
+                    merge_target: None,
                     // A run has no worktree of its own — its nodes write in
                     // the thread's tree — so there is nothing git can measure
                     // here that the thread's own row doesn't already show.
@@ -2574,6 +2592,8 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     verify: fleet::FleetVerify::not_run(),
                     merge: fleet::FleetMerge::NoWorktree,
                     updated_at: run.ended_at.clone().unwrap_or_else(|| run.started_at.clone()),
+                    created_at: run.started_at.clone(),
+                    last_activity_at: None,
                     archivable: !live && run.ended_at.is_some(),
                 });
             }
@@ -2617,11 +2637,15 @@ async fn thread_review_files(
             .and_then(|t| t.worktree_path.clone())
             .map(PathBuf::from)
             .filter(|p| p.is_dir());
-        let base = worktree
-            .as_ref()
-            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let base = worktree.as_ref().map(|_| {
+            git::base_or_current(
+                &bin,
+                &root,
+                thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()),
+            )
+        });
         let tree = worktree.clone().unwrap_or_else(|| root.clone());
-        Ok(fleet::review_files(&bin, &tree, &root, base))
+        Ok(fleet::review_files(&bin, &tree, &root, base.as_deref()))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2642,11 +2666,15 @@ async fn thread_review_diff(project_hash: String, thread_id: String) -> Res<Stri
             .and_then(|t| t.worktree_path.clone())
             .map(PathBuf::from)
             .filter(|p| p.is_dir());
-        let base = worktree
-            .as_ref()
-            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let base = worktree.as_ref().map(|_| {
+            git::base_or_current(
+                &bin,
+                &root,
+                thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()),
+            )
+        });
         let tree = worktree.unwrap_or_else(|| root.clone());
-        Ok(fleet::review_diff(&bin, &tree, base))
+        Ok(fleet::review_diff(&bin, &tree, base.as_deref()))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2963,11 +2991,7 @@ fn sweep_archived_worktrees(project_hash: &str) {
         if !path.is_dir() {
             continue;
         }
-        let base = thread
-            .worktree_base_branch
-            .clone()
-            .or_else(|| git::current_branch_name(&bin, &root).ok())
-            .unwrap_or_else(|| "HEAD".into());
+        let base = git::base_or_current(&bin, &root, thread.worktree_base_branch.as_deref());
         let Ok(ready) = git::merge_readiness(&bin, &root, &path, &base, &branch) else {
             continue;
         };

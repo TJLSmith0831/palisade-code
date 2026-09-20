@@ -12,7 +12,7 @@ import {
 import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
 import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
-import { relativeTime } from "./SessionList";
+import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 
@@ -156,12 +156,16 @@ function Row({
           <span>
             {playbook
               ? playbookSubtitle(row)
-              : `${row.projectName}${row.branch ? ` · ${row.branch}` : ""}`}
+              : `${row.projectName}${row.branch ? ` · ${row.branch}` : ""}${
+                  row.mergeTarget ? ` → ${row.mergeTarget}` : ""
+                }`}
           </span>
           {/* A run writes in its thread's tree, so its own diff is always
               zero — a "+0 −0 · 0 files" on every playbook row is noise, not
               evidence. */}
-          {!playbook && (
+          {/* A branch with no worktree means the worktree is gone: there is
+              nothing left to measure, so nothing is shown. */}
+          {!playbook && !(row.branch && !row.worktreePath) && (
             <span className="fleet-diff" data-testid="fleet-diff">
               <span className="added">+{row.diff.added}</span>{" "}
               <span className="removed">−{row.diff.removed}</span> ·{" "}
@@ -171,8 +175,15 @@ function Row({
               {(row.diff.untracked ?? 0) > 0 && ` · ${row.diff.untracked} new`}
             </span>
           )}
-          <span>{relativeTime(row.updatedAt)}</span>
+          {playbook && <span>{relativeTime(row.updatedAt)}</span>}
         </div>
+        {/* Rows are ordered by last touched, which includes opening the
+            thread, so the times shown are the two that are facts. */}
+        {!playbook && (
+          <div className="fleet-row-meta" data-testid="fleet-times">
+            {activityLabel(row.createdAt, row.lastActivityAt)}
+          </div>
+        )}
       </div>
 
       <div className="fleet-row-badges">
