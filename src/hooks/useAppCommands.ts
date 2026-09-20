@@ -393,6 +393,15 @@ export function useAppCommands({
         run: () => toggleSidePane(),
       },
       {
+        id: "view.chat",
+        group: "View",
+        label: shell.chatCollapsed ? "Expand thread" : "Collapse thread",
+        chord: "Mod+Shift+J",
+        keywords: "chat conversation rail sidebar hide show",
+        enabled: !shell.editorCollapsed,
+        run: () => shell.toggleChat(),
+      },
+      {
         // A thread is a page inside Fleet, so the way out of it is back.
         id: "view.backToFleet",
         group: "View",
@@ -468,6 +477,9 @@ export function useAppCommands({
       shell.activePanel,
       shell.toggleTerminal,
       shell.theme,
+      shell.chatCollapsed,
+      shell.editorCollapsed,
+      shell.toggleChat,
       shell.setTheme,
       newFileAtRoot,
       onNewThread,

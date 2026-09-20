@@ -265,7 +265,7 @@ function AgentsTab({ projectHash, onLogin }: { projectHash: string; onLogin: Con
         const signedIn = mineUsage?.state === "ok";
         const plan = mineUsage?.state === "ok" ? mineUsage.plan : undefined;
         return (
-          <Card key={agent.id} withBorder padding="sm" data-testid="connections-agent">
+          <Card key={agent.id} withBorder padding="sm" radius={10} data-testid="connections-agent">
             {/* Stacked, not side by side: at the side-panel width a row of
                 name + badges + button truncates all three. */}
             <Group justify="space-between" wrap="nowrap" gap="xs" align="baseline">
@@ -296,11 +296,14 @@ function AgentsTab({ projectHash, onLogin }: { projectHash: string; onLogin: Con
               const state = signIn[agent.id];
               return (
                 <>
-                  {mine.map((login) => (
+                  {mine.map((login, index) => (
                     <Tooltip key={login.methodId} label={login.label} openDelay={300}>
                       <Button
                         size="xs"
-                        variant="light"
+                        // The first method is the one to reach for; a second
+                        // filled twin would make the choice look equal.
+                        variant={index === 0 ? "light" : "default"}
+                        radius={4}
                         fullWidth
                         mt={8}
                         loading={state === "pending"}

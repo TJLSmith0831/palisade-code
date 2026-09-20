@@ -1600,7 +1600,7 @@ describe("Bottom panel (shell-redesign Phase 2)", () => {
 });
 
 describe("Left icon rail (shell-redesign Amendment 3)", () => {
-  it("mounts the rail with all nine panel icons", async () => {
+  it("mounts the rail with its panel icons, and Settings lives in the top bar only", async () => {
     render(<App />);
     await openProject();
     const rail = screen.getByTestId("nav-rail");
@@ -1612,10 +1612,11 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
       "run",
       "history",
       "workspace",
-      "settings",
     ]) {
       expect(within(rail).getByTestId(`rail-${id}`)).toBeDefined();
     }
+    expect(within(rail).queryByTestId("rail-settings")).toBeNull();
+    expect(screen.getByTestId("open-settings")).toBeDefined();
   });
 
   it("opens the Fleet board on a project first seen here, and the rail toggles the Explorer", async () => {

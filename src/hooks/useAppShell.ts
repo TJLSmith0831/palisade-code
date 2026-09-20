@@ -69,10 +69,19 @@ export function useAppShell(projectHash: string | undefined) {
 
   // The editor column is the secondary pane, so it is what can be sent away.
   const [editorCollapsed, setEditorCollapsed] = useState(false);
-  const toggleEditor = useCallback(
-    () => setEditorCollapsed((collapsed) => !collapsed),
+  // Chat collapses to a rail, not away — it is the other pane, so the two
+  // can never be collapsed at once: sending the editor away first reopens
+  // chat, and `chatCollapsed` below reads false while the editor is gone.
+  const [chatCollapsedRaw, setChatCollapsed] = useState(false);
+  const chatCollapsed = chatCollapsedRaw && !editorCollapsed;
+  const toggleChat = useCallback(
+    () => setChatCollapsed((collapsed) => !collapsed),
     []
   );
+  const toggleEditor = useCallback(() => {
+    setChatCollapsed(false);
+    setEditorCollapsed((collapsed) => !collapsed);
+  }, []);
 
   // Opening the diff has to reclaim the pane that renders it. The diff is a
   // mode of the editor column, which Vibe lets you collapse — so "View diff"
@@ -177,6 +186,8 @@ export function useAppShell(projectHash: string | undefined) {
       toggleSessionList,
       editorCollapsed,
       toggleEditor,
+      chatCollapsed,
+      toggleChat,
       bottomTab,
       setBottomTab,
       openThreadIds,
@@ -201,6 +212,8 @@ export function useAppShell(projectHash: string | undefined) {
       toggleSessionList,
       editorCollapsed,
       toggleEditor,
+      chatCollapsed,
+      toggleChat,
       bottomTab,
       openThreadIds,
       openThread,

@@ -46,6 +46,8 @@ import {
   IconTrash,
   IconBrandTelegram,
   IconListCheck,
+  IconChevronLeft,
+  IconChevronRight,
   IconCommand,
   IconFile,
   IconPlayerPlay,
@@ -512,6 +514,56 @@ function ModeCard({
         {done && <span className="cursor" />}
       </span>
     </button>
+  );
+}
+
+/** Chevron that collapses the thread pane to a rail and back. The tooltip is
+ *  controlled: an uncontrolled one stays open after the click (the pointer is
+ *  still over the button, and the label under it has just changed) until you
+ *  leave and re-enter, so the click closes it and hover/keyboard focus reopen. */
+function ChatPaneToggle({
+  collapsed,
+  editorCollapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  editorCollapsed: boolean;
+  onToggle: () => void;
+}) {
+  const [tipOpen, setTipOpen] = useState(false);
+  return (
+    <Tooltip
+      opened={tipOpen}
+      label={
+        editorCollapsed
+          ? "Show the editor to collapse the thread"
+          : collapsed
+            ? "Expand thread (⌘⇧J)"
+            : "Collapse thread (⌘⇧J)"
+      }
+      position="right"
+    >
+      <ActionIcon
+        variant="subtle"
+        size="sm"
+        className="ds-chat-rail-toggle"
+        aria-label={collapsed ? "Expand thread" : "Collapse thread"}
+        aria-expanded={!collapsed}
+        disabled={editorCollapsed}
+        onMouseEnter={() => setTipOpen(true)}
+        onMouseLeave={() => setTipOpen(false)}
+        onFocus={(event) => setTipOpen(event.currentTarget.matches(":focus-visible"))}
+        onBlur={() => setTipOpen(false)}
+        onClick={(event) => {
+          event.stopPropagation();
+          setTipOpen(false);
+          onToggle();
+        }}
+        data-testid="toggle-chat-pane"
+      >
+        {collapsed ? <IconChevronRight size={14} /> : <IconChevronLeft size={14} />}
+      </ActionIcon>
+    </Tooltip>
   );
 }
 
@@ -2659,27 +2711,34 @@ const WorkspacePicker = memo(function WorkspacePicker({
           ))}
         </select>
         <div className="ds-rail-actions">
-          <button onClick={onAddProject} data-testid="add-project">
+          <Button
+            size="compact-sm"
+            variant="default"
+            onClick={onAddProject}
+            data-testid="add-project"
+          >
             Add project
-          </button>
+          </Button>
           {project && (
-            <button
-              className="ds-rail-action-subtle"
+            <Button
+              size="compact-sm"
+              variant="default"
               onClick={onRenameProject}
               data-testid="rename-project"
             >
               Rename
-            </button>
+            </Button>
           )}
           {project && (
-            <button
-              className="ds-rail-action-subtle"
+            <Button
+              size="compact-sm"
+              variant="default"
               onClick={() => onOpenProjectWindow(project)}
               data-testid="open-project-window"
               title="Open this project in a second window"
             >
               New window
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -2712,6 +2771,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                 >
                   <IconFolder size={14} className="ds-chevron" />
                   <span className="ds-tree-label">{p.displayName}</span>
+                  <span className="ds-tree-row-actions">
                   <Menu position="bottom-end" withinPortal>
                     <Menu.Target>
                       <ActionIcon
@@ -2749,6 +2809,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                       </Menu.Item>
                     </Menu.Dropdown>
                   </Menu>
+                  </span>
                 </li>
               );
             })}
@@ -6772,6 +6833,7 @@ export default function App() {
                       shell.setDiffOpen(false);
                       tabs.openChain(null);
                     }}
+                    onGoToFile={() => void openFilePalette()}
                   />
                   {!shell.diffOpen ? (
                     renderCenterTab()
@@ -6805,7 +6867,7 @@ export default function App() {
                 )}
 
                 {/* Nothing to size against once the editor pane is gone. */}
-                {!editorCollapsed && (
+                {!editorCollapsed && !shell.chatCollapsed && (
                   <div
                     className="ds-resize-handle ds-resize-handle-x"
                     data-testid="resize-right-panel"
@@ -6815,11 +6877,37 @@ export default function App() {
                     )}
                   />
                 )}
+                {/* Collapsing hides ChatSurface with CSS, never unmounts it:
+                    scroll position and a streaming turn survive. The whole
+                    rail is a click target for reopening, not just the icon. */}
                 <aside
                   className="ds-chat-rail"
                   data-testid="right-sidebar"
+                  data-collapsed={shell.chatCollapsed ? "true" : undefined}
                   style={{ "--panel-w": `${chatPanel.size}px` } as CSSProperties}
+                  onClick={shell.chatCollapsed ? shell.toggleChat : undefined}
                 >
+                  <div className="ds-chat-rail-head">
+                    <span className="ds-chat-rail-title">Thread</span>
+                    <ChatPaneToggle
+                      collapsed={shell.chatCollapsed}
+                      editorCollapsed={editorCollapsed}
+                      onToggle={shell.toggleChat}
+                    />
+                    {shell.chatCollapsed && (attentionThreads.size > 0 || hasLiveSession) && (
+                      <span
+                        className="ds-chat-rail-dot"
+                        data-attention={attentionThreads.size > 0 ? "true" : undefined}
+                        data-testid="chat-rail-dot"
+                        role="img"
+                        aria-label={
+                          attentionThreads.size > 0
+                            ? "An agent is waiting on you"
+                            : "An agent is working"
+                        }
+                      />
+                    )}
+                  </div>
                   <ChatSurface {...chatProps} />
                 </aside>
               </div>

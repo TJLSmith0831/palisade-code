@@ -9,7 +9,7 @@ import {
   Textarea,
   Tooltip,
 } from "@mantine/core";
-import { IconBox, IconDots, IconRoute } from "@tabler/icons-react";
+import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
 import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { relativeTime } from "./SessionList";
@@ -145,7 +145,7 @@ function Row({
           {playbook ? (
             <IconRoute size={14} aria-label="Playbook" />
           ) : (
-            <IconBox size={14} aria-label={row.agentName ?? "Agent"} />
+            <IconAiAgent size={14} aria-label={row.agentName ?? "Agent"} />
           )}
         </span>
       </Tooltip>

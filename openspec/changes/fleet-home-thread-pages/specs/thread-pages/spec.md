@@ -11,12 +11,16 @@ Opening a thread from the Fleet board SHALL show that thread's chat beside the e
 - **WHEN** the user picks another thread in Agent Access
 - **THEN** that thread's chat is shown and the Fleet board is not
 
-### Requirement: Chat cannot be closed
-The shell SHALL always show the chat pane while a thread page is open. Editor and terminal panes MAY be toggled; chat MAY NOT, and a previously saved collapsed state SHALL be ignored.
+### Requirement: Chat collapses to a rail, never closes
+The shell SHALL always show the chat pane, or its collapsed rail, while a thread page is open. The chat pane MAY collapse to a rail from a chevron in its header; the rail SHALL reopen it on click and SHALL show a dot while an agent is working or waiting. Chat and editor SHALL NOT both be collapsed, and a collapsed state SHALL NOT be saved across launches.
 
 #### Scenario: Editor closed
 - **WHEN** the user closes the editor pane on a thread page
-- **THEN** the chat pane remains visible and the canvas is never empty
+- **THEN** the chat pane is expanded and visible, and the canvas is never empty
+
+#### Scenario: Chat collapsed
+- **WHEN** the user collapses chat with its chevron
+- **THEN** a rail remains that reopens chat when clicked
 
 ### Requirement: Back to Fleet is one chord
 The Mod+K chord SHALL return to the Fleet board from a thread page.

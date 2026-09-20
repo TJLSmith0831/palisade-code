@@ -203,4 +203,23 @@ describe("TabBar — closing a tab without a mouse", () => {
     expect(onClose).toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it("offers Go to file beside the + menu when wired", () => {
+    const onGoToFile = vi.fn();
+    render_(
+      <TabBar
+        tabs={[tab("README.md")]}
+        activePath="README.md"
+        onSelect={() => {}}
+        onClose={() => {}}
+        diffOpen={false}
+        onToggleDiff={() => {}}
+        activeMdPreview={false}
+        onToggleMdPreview={() => {}}
+        onGoToFile={onGoToFile}
+      />
+    );
+    fireEvent.click(screen.getByTestId("go-to-file"));
+    expect(onGoToFile).toHaveBeenCalledTimes(1);
+  });
 });

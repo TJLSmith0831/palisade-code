@@ -30,3 +30,9 @@ who had collapsed chat does not land in a thread with no way to reopen it.
 The label named a concept (threads); the button is quick access to the fleet
 from inside a thread. It drops its text and carries an "Agent Access" tooltip,
 so the pill reads `← Fleet` + one icon. `← Fleet` and Agent Access share one pill.
+
+## D8: Chat may collapse to a rail (amends "Chat cannot be closed")
+Asked for so the editor can take the full width. D6's worry was a thread with no
+way back, so the rail is the way back: whole-rail click, chevron, `Cmd+Shift+J`,
+and a dot when an agent is busy or waiting. Still never saved (D6 stands), and
+collapsing the editor first reopens chat, so the canvas is never empty.

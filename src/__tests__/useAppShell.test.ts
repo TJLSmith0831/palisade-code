@@ -81,11 +81,28 @@ describe("session list (Vibe preset only)", () => {
   });
 });
 
-describe("chat pane (a thread's page — sized, never closed)", () => {
-  it("offers no way to close or hide it", () => {
-    const shell = render().result.current as Record<string, unknown>;
-    expect(shell.chatOpen).toBeUndefined();
-    expect(shell.toggleChat).toBeUndefined();
+describe("chat pane (a thread's page — sized, collapses to a rail, never gone)", () => {
+  it("collapses to a rail and expands again", () => {
+    const { result } = render();
+    expect(result.current.chatCollapsed).toBe(false);
+    act(() => result.current.toggleChat());
+    expect(result.current.chatCollapsed).toBe(true);
+    act(() => result.current.toggleChat());
+    expect(result.current.chatCollapsed).toBe(false);
+  });
+
+  it("never leaves both panes collapsed", () => {
+    const { result } = render();
+    act(() => result.current.toggleChat());
+    act(() => result.current.toggleEditor());
+    expect(result.current.editorCollapsed).toBe(true);
+    expect(result.current.chatCollapsed).toBe(false);
+  });
+
+  it("does not save the collapsed state", () => {
+    const { result } = render();
+    act(() => result.current.toggleChat());
+    expect(render().result.current.chatCollapsed).toBe(false);
   });
 
   it("still remembers its width, per project", () => {

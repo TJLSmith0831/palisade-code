@@ -5,6 +5,7 @@ import {
   IconMarkdown,
   IconNotebook,
   IconPlus,
+  IconSearch,
   IconTable,
   IconTerminal2,
   IconRoute,
@@ -30,6 +31,9 @@ type Props = {
   onNewPreview: () => void;
   /** "+" menu: opens a blank agent-chain tab (D16). */
   onNewChain: () => void;
+  /** Opens the file palette (Cmd+P). Shown beside "+" so the quick way in is
+   *  visible, not just a chord. */
+  onGoToFile?: () => void;
 };
 
 /** `src/components/Foo.tsx` -> `Foo.tsx`. The full path is the tooltip. */
@@ -97,6 +101,7 @@ export default function TabBar({
   onNewFile,
   onNewPreview,
   onNewChain,
+  onGoToFile,
 }: Props) {
   return (
     <div className="ds-editor-tabs" data-testid="editor-tabs">
@@ -218,6 +223,22 @@ export default function TabBar({
           </Menu>
         </Tabs.List>
       </Tabs>
+
+      {/* Outside the scrolling tab list, with the other right-hand controls:
+          inline after the last tab it clipped off in a narrow pane. */}
+      {onGoToFile && (
+        <Tooltip label="Go to file (⌘P)" withinPortal>
+          <ActionIcon
+            variant="subtle"
+            aria-label="Go to file"
+            data-testid="go-to-file"
+            onClick={onGoToFile}
+            style={{ marginBottom: "0.25rem" }}
+          >
+            <IconSearch size={16} />
+          </ActionIcon>
+        </Tooltip>
+      )}
 
       {isMarkdownPath(activePath) && (
         <Tooltip

@@ -195,7 +195,7 @@ export default function RunPanel({
             {suggestions.map(([name, command]) => (
               <div
                 key={name}
-                className="ds-run-row"
+                className="ds-run-row ds-run-row-static"
                 data-testid={`run-suggestion-${name}`}
               >
                 <span className="ds-run-text">

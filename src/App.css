@@ -646,6 +646,17 @@ input[type="checkbox"] {
   padding: 0;
 }
 
+/* Same row recipe as Playbooks and Run: 8px, faded hover, pressed state. */
+.ds-recent-projects .ds-tree-row {
+  --ai-radius: 4px;
+  border-radius: 8px;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+.ds-recent-projects .ds-tree-row:active {
+  background: color-mix(in oklab, var(--surface-warm), var(--fg) 6%);
+}
+
 .ds-threads-panel {
   padding: 6px;
   display: flex;
@@ -670,15 +681,6 @@ input[type="checkbox"] {
 
 .ds-rail-actions button {
   flex: 1;
-  font-size: 10px;
-  padding: 3px 6px;
-}
-
-/* Rename is secondary to Add: same color and background (full contrast,
-   clearly clickable), lighter font-weight only. A muted/transparent
-   treatment here read as disabled instead of "less common". */
-.ds-rail-action-subtle {
-  font-weight: 400;
 }
 
 .ds-branch-btn svg {
@@ -1078,7 +1080,8 @@ input[type="checkbox"] {
 }
 
 .ds-tree-row:hover .ds-tree-row-actions,
-.ds-tree-row:focus-within .ds-tree-row-actions {
+.ds-tree-row:focus-within .ds-tree-row-actions,
+.ds-tree-row-actions:has([aria-expanded="true"]) {
   opacity: 1;
 }
 
@@ -3121,8 +3124,8 @@ input[type="checkbox"] {
   flex: 1;
 }
 
-/* Splits workspace-navigation icons from agent-facing ones (D-layout-fix):
-   two groups of ≤4 read as a decision, not one unbroken run of 7. */
+/* Splits the rail into run loop / code / setup: groups of ≤5 read as a
+   decision, not one unbroken run of 11. */
 .ds-rail-divider {
   width: 20px;
   height: 1px;
@@ -3205,6 +3208,9 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  /* Panels with an icon button in the head are 37px; the ones without were
+     35px, so switching panels nudged everything by 2px. */
+  min-height: 37px;
   padding: 9px 10px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
@@ -3393,6 +3399,67 @@ input[type="checkbox"] {
   width: auto;
   flex: 1 1 auto;
   border-right: none;
+}
+
+/* Chat collapses to a rail, never away: the whole rail reopens it, and a dot
+   says an agent is working or waiting. ChatSurface stays mounted (hidden) so
+   scroll position and a streaming turn survive. */
+.ds-chat-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  height: 28px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-chat-rail-title {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ds-chat-rail[data-collapsed] {
+  width: 44px;
+  flex: none;
+  cursor: pointer;
+}
+
+.ds-chat-rail[data-collapsed]:hover {
+  background: var(--surface-warm);
+}
+
+/* !important: the composer sets `display: flex` inline, which a stylesheet
+   rule can't beat. */
+.ds-chat-rail[data-collapsed] > :not(.ds-chat-rail-head) {
+  display: none !important;
+}
+
+.ds-chat-rail[data-collapsed] .ds-chat-rail-head {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 12px;
+  height: auto;
+  padding: 8px 0;
+  border-bottom: none;
+}
+
+.ds-chat-rail[data-collapsed] .ds-chat-rail-title {
+  order: 1;
+  writing-mode: vertical-rl;
+  letter-spacing: 0.04em;
+}
+
+.ds-chat-rail-dot {
+  order: 2;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ds-chat-rail-dot[data-attention] {
+  background: var(--danger);
 }
 
 /* --- Vibe session list --------------------------------------------------- */
@@ -4675,12 +4742,23 @@ button.ds-onboarding-status {
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
-  border-radius: 4px;
+  /* Concentric: 4px buttons + 4px padding = 8px row. */
+  --ai-radius: 4px;
+  --button-radius: 4px;
+  border-radius: 8px;
+  transition: background-color 120ms ease-out;
 }
 
 .ds-run-row:hover,
 .ds-run-row:focus-within {
   background: var(--surface-warm);
+}
+
+/* Proposals answer only through their Add button, so the row must not
+   light up as if the whole thing were clickable. */
+.ds-run-row-static:hover,
+.ds-run-row-static:focus-within {
+  background: transparent;
 }
 
 .ds-run-text {
@@ -5520,14 +5598,49 @@ button.ds-onboarding-status {
 /* Two lines: the name gets the panel's whole width, the node count and the
    row's controls share the line below it. Side by side at 215px the name
    was the only thing that could give, and every playbook read "gated-l…". */
+/* The whole row opens the playbook: the name button is stretched over it with
+   ::after, and the row's own controls sit above that. Hover, press and focus
+   all describe the same target, so nothing highlights that doesn't respond. */
 .ds-chain-row {
+  position: relative;
   display: flex;
   flex-direction: column;
+  margin: 1px 4px;
   padding: 4px 4px 5px;
+  /* Concentric: 4px icon buttons + 4px padding = 8px row. */
+  --ai-radius: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 120ms;
 }
 
 .ds-chain-row:hover {
   background: var(--surface-warm);
+}
+
+.ds-chain-row:active {
+  background: color-mix(in oklab, var(--surface-warm), var(--fg) 6%);
+}
+
+.ds-chain-row:has(.ds-chain-row-main:focus-visible) {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+}
+
+.ds-chain-row-main:focus-visible {
+  box-shadow: none;
+}
+
+.ds-chain-row-main::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.ds-chain-row-meta button {
+  position: relative;
+  z-index: 1;
+  cursor: pointer;
 }
 
 .ds-chain-row-main {
@@ -5568,6 +5681,13 @@ button.ds-onboarding-status {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
+}
+
+/* Icons beside 11-12px regular text carry regular weight: 1.5, not Tabler's
+   default 2. Scoped to the setup panels so the file tree and the rail (1.6)
+   keep their own. */
+.ds-side-panel:is([data-panel="chains"], [data-panel="mcp"], [data-panel="run"], [data-panel="database"], [data-panel="workspace"]) svg.tabler-icon {
+  stroke-width: 1.5;
 }
 
 .ds-chain-canvas-wrap {
