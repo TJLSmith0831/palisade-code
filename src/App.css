@@ -6148,6 +6148,79 @@ button.ds-onboarding-status {
   color: var(--warn);
 }
 
+.ds-spec-change {
+  position: relative;
+  margin: 1px 0;
+  padding: 8px 36px 8px 6px;
+  border: 1px solid transparent;
+  border-inline-start-width: 3px;
+  border-radius: 8px;
+  transition: background-color 120ms ease-out;
+}
+
+.ds-spec-change[data-openable="true"] {
+  cursor: pointer;
+}
+
+.ds-spec-change[data-openable="true"]:hover {
+  background: var(--surface-warm);
+}
+
+.ds-spec-change[data-openable="true"]:active {
+  background: color-mix(in oklab, var(--surface-warm), var(--fg) 6%);
+}
+
+.ds-spec-change[data-linked="true"] {
+  background: var(--active-row);
+}
+
+.ds-spec-change[data-tasks-complete="true"] {
+  border-color: color-mix(in oklab, var(--success), transparent 60%);
+  border-inline-start-color: var(--success);
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--success), transparent 84%),
+    color-mix(in oklab, var(--success), transparent 96%)
+  );
+}
+
+.ds-spec-change[data-tasks-complete="true"][data-openable="true"]:hover {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--success), transparent 76%),
+    color-mix(in oklab, var(--success), transparent 92%)
+  );
+}
+
+.ds-spec-change:has(.ds-spec-change-open:focus-visible) {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+}
+
+.ds-spec-change-open {
+  display: block;
+  width: 100%;
+  color: var(--fg);
+  text-align: left;
+}
+
+.ds-spec-change-open:focus-visible {
+  box-shadow: none;
+}
+
+.ds-spec-change-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.ds-spec-change-action {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+}
+
 .ds-spec-request {
   display: flex;
   flex-direction: column;

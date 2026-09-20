@@ -41,6 +41,13 @@ describe("SpecPane", () => {
             lastModified: "2026-08-09T00:00:00Z",
             status: "in-progress",
           },
+          {
+            name: "all-ticked",
+            completedTasks: 2,
+            totalTasks: 2,
+            lastModified: "2026-08-08T00:00:00Z",
+            status: "complete",
+          },
         ]);
       }
       if (cmd === "validate_spec_changes") return Promise.resolve(true);
@@ -60,6 +67,10 @@ describe("SpecPane", () => {
     // openspec's own status is attributed, never presented as Palisade's verdict.
     expect(screen.getByText(/openspec: in-progress/)).toBeDefined();
     expect(screen.queryByText(/^complete$/i)).toBeNull();
+    expect(screen.getByText(/2\/2 tasks ticked/).closest('[data-testid="spec-change"]')).toHaveAttribute(
+      "data-tasks-complete",
+      "true"
+    );
   });
 
   it("forwards the active thread's id so a proposal in its isolated worktree is visible (OPE-01)", async () => {
@@ -159,7 +170,7 @@ describe("SpecPane", () => {
     expect(marked[0]).toHaveTextContent("linked");
   });
 
-  it("calls onOpenSpec when a change name is clicked", async () => {
+  it("opens a change from its full row", async () => {
     const onOpenSpec = vi.fn();
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "list_spec_changes") {
@@ -182,7 +193,7 @@ describe("SpecPane", () => {
     await waitFor(() =>
       expect(screen.getByText("agent-session-architecture")).toBeDefined()
     );
-    fireEvent.click(screen.getByText("agent-session-architecture"));
+    fireEvent.click(screen.getByTestId("spec-change-open"));
     expect(onOpenSpec).toHaveBeenCalledWith("agent-session-architecture");
   });
 
