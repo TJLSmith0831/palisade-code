@@ -51,6 +51,7 @@ const mount = (w: WorktreeStatus, props: Record<string, unknown> = {}) =>
       projectHash="p"
       threadId="t1"
       worktree={w}
+      verify={{ state: "pass", commit: w.head ?? undefined }}
       onChanged={vi.fn()}
       onError={vi.fn()}
       {...props}
@@ -78,15 +79,19 @@ describe("hasWorkToLand", () => {
 });
 
 describe("MergeGate", () => {
-  // Only one question is asked, and it is about the merge — no test result
-  // gates the button, and none is displayed as if it did.
-  it("checks mergeability and nothing else", () => {
+  it("shows the mergeability check", () => {
     mount(worktree());
     expand();
     expect(screen.getByTestId("gate-check-mergeable")).toHaveTextContent(
       "Merges cleanly into main",
     );
     expect(screen.queryByTestId("gate-check-verify")).toBeNull();
+  });
+
+  it("blocks merging without current verification", () => {
+    mount(worktree(), { verify: { state: "not_run" } });
+    expand();
+    expect(screen.getByTestId("merge-thread")).toBeDisabled();
   });
 
   it("requires an explicit commit for uncommitted agent work", () => {

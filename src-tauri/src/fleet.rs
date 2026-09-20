@@ -75,6 +75,33 @@ impl FleetVerify {
     }
 }
 
+/// The newest verification that proves this thread's current clean commit.
+/// A successful run from another checkout, an older commit, or any dirty tree
+/// is history, not permission to merge what is on screen now.
+pub fn current_verify(
+    runs: &[crate::store::VerificationRun],
+    thread_id: &str,
+    current_head: Option<&str>,
+    clean: bool,
+) -> FleetVerify {
+    let Some(head) = current_head.filter(|_| clean) else {
+        return FleetVerify::not_run();
+    };
+    runs.iter()
+        .filter(|run| {
+            run.thread_id.as_deref() == Some(thread_id)
+                && run.git_head.as_deref() == Some(head)
+        })
+        .max_by(|a, b| a.at.cmp(&b.at))
+        .map(|run| FleetVerify {
+            state: if run.exit_code == 0 { VerifyState::Pass } else { VerifyState::Fail },
+            command: (!run.command.is_empty()).then(|| run.command.clone()),
+            commit: run.git_head.clone(),
+            at: Some(run.at.clone()),
+        })
+        .unwrap_or_else(FleetVerify::not_run)
+}
+
 /// How close this thread's branch is to landing. `Behind` is a measured
 /// rev-list count, `Conflicts` a real trial merge — the same probes the merge
 /// gate runs, so the board can never promise a merge git would refuse.
@@ -416,6 +443,15 @@ pub fn review_files(bin: &Path, tree: &Path, root: &Path, base: Option<&str>) ->
     thread_changes(bin, tree, root, base).files
 }
 
+/// The Review lane's patch, measured from the same merge base as its file
+/// list so committed work cannot disappear from a clean worktree.
+pub fn review_diff(bin: &Path, tree: &Path, base: Option<&str>) -> String {
+    let from = base
+        .and_then(|b| crate::git::merge_base(bin, tree, b))
+        .unwrap_or_else(|| "HEAD".to_string());
+    crate::git::diff_from(bin, tree, &from).unwrap_or_default()
+}
+
 /// The files a thread has touched: whatever is dirty in its tree right now,
 /// plus whatever it already committed on its worktree branch but hasn't
 /// merged back yet. A thread that commits as it goes would otherwise drop
@@ -516,6 +552,22 @@ mod tests {
             verify: FleetVerify::not_run(),
             merge: FleetMerge::NoWorktree,
             updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn verification(thread_id: &str, head: &str, exit_code: i32, at: &str) -> crate::store::VerificationRun {
+        crate::store::VerificationRun {
+            id: at.into(),
+            project_hash: "p1".into(),
+            thread_id: Some(thread_id.into()),
+            session_id: None,
+            name: "test".into(),
+            command: "pnpm test".into(),
+            exit_code,
+            output_tail: String::new(),
+            git_head: Some(head.into()),
+            at: at.into(),
+            tests: None,
         }
     }
 
@@ -659,6 +711,23 @@ mod tests {
     #[test]
     fn a_quiet_thread_is_idle() {
         assert_eq!(derive_status(&StatusInput::default()), (FleetStatus::Idle, None));
+    }
+
+    #[test]
+    fn verify_only_applies_to_the_current_clean_head() {
+        let runs = vec![
+            verification("t1", "old", 0, "2026-01-01T00:00:00Z"),
+            verification("t1", "current", 0, "2026-01-02T00:00:00Z"),
+        ];
+        assert_eq!(current_verify(&runs, "t1", Some("current"), true).state, VerifyState::Pass);
+        assert_eq!(current_verify(&runs, "t1", Some("newer"), true).state, VerifyState::NotRun);
+        assert_eq!(current_verify(&runs, "t1", Some("current"), false).state, VerifyState::NotRun);
+    }
+
+    #[test]
+    fn current_failed_verify_stays_failed() {
+        let runs = vec![verification("t1", "current", 1, "2026-01-01T00:00:00Z")];
+        assert_eq!(current_verify(&runs, "t1", Some("current"), true).state, VerifyState::Fail);
     }
 
     #[test]
@@ -847,6 +916,20 @@ mod tests {
         assert_eq!(vs_base.added, 3);
         assert_eq!(vs_base.tracked, 1);
         assert_eq!(vs_base.paths(), vec!["added_then_committed.rs"]);
+    }
+
+    #[test]
+    fn review_diff_includes_committed_work_on_a_clean_branch() {
+        let (dir, wt) = repo_with_worktree();
+        std::fs::write(wt.join("committed.rs"), "review me\n").unwrap();
+        crate::git::stage_file(Path::new("git"), &wt, "committed.rs").unwrap();
+        crate::git::commit(Path::new("git"), &wt, "thread work").unwrap();
+
+        let patch = review_diff(Path::new("git"), &wt, Some("main"));
+        assert!(patch.contains("diff --git a/committed.rs b/committed.rs"), "{patch}");
+        assert!(patch.contains("+review me"), "{patch}");
+        assert!(crate::git::status(Path::new("git"), &wt).unwrap().is_empty());
+        drop(dir);
     }
 
     /// A thread with no worktree of its own has no base branch to diverge

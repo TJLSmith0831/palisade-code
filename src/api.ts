@@ -36,6 +36,8 @@ export type ThreadMeta = {
   /** When Palisade merged this thread's branch into its base. A recorded
    *  fact, not an inference from an empty diff. */
   mergedAt?: string | null;
+  /** True when the latest merge explicitly bypassed current-commit verify. */
+  mergeOverridden?: boolean;
   /** False when the user opted out of worktree isolation at thread creation:
    *  the thread edits the project root live and has no merge/PR/prune step. */
   worktreeEnabled?: boolean;
@@ -494,8 +496,16 @@ export const threadWorktrees = (projectHash: string) =>
   invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
 /** Merge a thread's branch into the branch it was cut from. Rejects a busy
  *  thread and an uncommitted worktree — what lands must be what was reviewed. */
-export const mergeThreadWorktree = (projectHash: string, threadId: string) =>
-  invoke<MergeResult>("merge_thread_worktree", { projectHash, threadId });
+export const mergeThreadWorktree = (
+  projectHash: string,
+  threadId: string,
+  overrideVerify = false,
+) =>
+  invoke<MergeResult>("merge_thread_worktree", {
+    projectHash,
+    threadId,
+    overrideVerify,
+  });
 
 /** Push the thread's branch and open a PR for it, returning the URL to open.
  *  Uses `gh` when it is on PATH, and the host's compare page when it isn't. */
@@ -596,6 +606,11 @@ export type ReviewFileRow = {
  *  used to parse the working diff itself, which sees neither. */
 export const threadReviewFiles = (projectHash: string, threadId: string) =>
   invoke<ReviewFileRow[]>("thread_review_files", { projectHash, threadId });
+
+/** The full merge-base patch behind `threadReviewFiles`, including work the
+ * thread already committed. */
+export const threadReviewDiff = (projectHash: string, threadId: string) =>
+  invoke<string>("thread_review_diff", { projectHash, threadId });
 
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });

@@ -1523,6 +1523,7 @@ export const ChatSurface = memo(
               projectHash={project.hash}
               threadId={thread.id}
               worktree={worktree}
+              verify={verify}
               onViewDiff={onViewDiff}
               onArchive={onArchiveSelf}
               onChanged={onWorktreeChanged}
@@ -5581,17 +5582,29 @@ export default function App() {
     void api.cancelChainRun(runId);
   }, []);
   const onFleetArchive = useCallback(
-    (threadId: string) => {
-      const found = threads.find((t) => t.id === threadId);
-      if (found) onArchiveThread(found);
+    (projectId: string, threadId: string) => {
+      const found = projectId === project?.hash
+        ? threads.find((t) => t.id === threadId)
+        : undefined;
+      if (found) {
+        onArchiveThread(found);
+        return;
+      }
+      void api
+        .setThreadArchived(projectId, threadId, true)
+        .then(() => fleet.refresh())
+        .catch(fail);
     },
-    [threads, onArchiveThread]
+    [project?.hash, threads, onArchiveThread, fleet.refresh, fail]
   );
   const onMergeThread = useCallback(
-    async (threadId: string) => {
-      if (!project) return;
+    async (projectId: string, threadId: string, overrideVerify = false) => {
       try {
-        const result = await api.mergeThreadWorktree(project.hash, threadId);
+        const result = await api.mergeThreadWorktree(
+          projectId,
+          threadId,
+          overrideVerify
+        );
         if (!result.merged) {
           // A conflict is a place to work, not an error — say where it is.
           banner(
@@ -5601,26 +5614,25 @@ export default function App() {
             "error"
           );
         }
-        await loadWorktrees();
+        if (projectId === project?.hash) await loadWorktrees();
         await fleet.refresh();
       } catch (err) {
         fail(err);
       }
     },
-    [project, loadWorktrees, fleet.refresh]
+    [project?.hash, loadWorktrees, fleet.refresh]
   );
   const onOpenThreadPr = useCallback(
-    async (threadId: string) => {
-      if (!project) return;
+    async (projectId: string, threadId: string) => {
       try {
-        const url = await api.openThreadPr(project.hash, threadId);
-        await loadWorktrees();
+        const url = await api.openThreadPr(projectId, threadId);
+        if (projectId === project?.hash) await loadWorktrees();
         await openUrl(url);
       } catch (err) {
         fail(err);
       }
     },
-    [project, loadWorktrees]
+    [project?.hash, loadWorktrees]
   );
   /** A run started from the board is the same first send the composer does:
    *  create the thread, put the picks on it, send, and land on it. */
@@ -5669,10 +5681,12 @@ export default function App() {
 
   // ---------------------------------------------------------------- review
   const [reviewFiles, setReviewFiles] = useState<ReviewFile[]>([]);
+  const [reviewPatch, setReviewPatch] = useState("");
   const [reviewLoading, setReviewLoading] = useState(false);
   useEffect(() => {
     if (shell.activePanel !== "review" || !project || !thread) {
       setReviewFiles([]);
+      setReviewPatch("");
       return;
     }
     let cancelled = false;
@@ -5680,10 +5694,20 @@ export default function App() {
     // The same helper the Fleet board measures with — the lane used to parse
     // the working diff itself, which sees no untracked file and nothing of
     // the skip-list, so the two surfaces could disagree about one thread.
-    api
-      .threadReviewFiles(project.hash, thread.id)
-      .then((rows) => !cancelled && setReviewFiles(rows))
-      .catch(() => !cancelled && setReviewFiles([]))
+    Promise.all([
+      api.threadReviewFiles(project.hash, thread.id),
+      api.threadReviewDiff(project.hash, thread.id),
+    ])
+      .then(([rows, patch]) => {
+        if (cancelled) return;
+        setReviewFiles(rows);
+        setReviewPatch(patch);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setReviewFiles([]);
+        setReviewPatch("");
+      })
       .finally(() => !cancelled && setReviewLoading(false));
     return () => {
       cancelled = true;
@@ -5718,6 +5742,7 @@ export default function App() {
             threadId={thread.id}
             focusPath={path}
             refreshToken={diffRefreshToken}
+            reviewPatch={reviewPatch}
           />
         )}
         onRunVerify={() => {
@@ -5732,8 +5757,10 @@ export default function App() {
           }
           api.runVerify(project.hash, name, thread.id).catch(fail);
         }}
-        onMerge={() => void onMergeThread(thread.id)}
-        onOpenPr={() => void onOpenThreadPr(thread.id)}
+        onMerge={({ override }) =>
+          void onMergeThread(project.hash, thread.id, override)
+        }
+        onOpenPr={() => void onOpenThreadPr(project.hash, thread.id)}
         onOpenInEditor={(path) => {
           shell.openPanel(null);
           selectFile(path);

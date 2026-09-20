@@ -130,7 +130,28 @@ describe("FleetBoard", () => {
     expect(screen.getByTestId("fleet-verify")).toHaveTextContent("Verified at abcdef1");
     fireEvent.click(screen.getByTestId("fleet-actions"));
     fireEvent.click(await screen.findByText("Merge"));
-    expect(onMerge).toHaveBeenCalledWith("t1");
+    expect(onMerge).toHaveBeenCalledWith("p1", "t1");
+  });
+
+  it("keeps the row project on cross-project actions", async () => {
+    const onOpenPr = vi.fn();
+    const onArchive = vi.fn();
+    render(
+      <FleetBoard
+        {...props({
+          rows: [row({ projectId: "other-project" })],
+          onOpenPr,
+          onArchive,
+        })}
+      />
+    );
+    fireEvent.click(screen.getByTestId("fleet-actions"));
+    fireEvent.click(await screen.findByText("Open PR"));
+    expect(onOpenPr).toHaveBeenCalledWith("other-project", "t1");
+
+    fireEvent.click(screen.getByTestId("fleet-actions"));
+    fireEvent.click(await screen.findByText("Archive"));
+    expect(onArchive).toHaveBeenCalledWith("other-project", "t1");
   });
 
   it("names the overlapping threads", () => {

@@ -2405,21 +2405,12 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                 };
                 let sessions = store::read_sessions(&home, &project.hash, &thread.id).unwrap_or_default();
                 let last = sessions.last();
-                let verify = verifications
-                    .iter()
-                    .filter(|run| run.thread_id.as_deref() == Some(thread.id.as_str()))
-                    .max_by(|a, b| a.at.cmp(&b.at))
-                    .map(|run| fleet::FleetVerify {
-                        state: if run.exit_code == 0 {
-                            fleet::VerifyState::Pass
-                        } else {
-                            fleet::VerifyState::Fail
-                        },
-                        command: (!run.command.is_empty()).then(|| run.command.clone()),
-                        commit: run.git_head.clone(),
-                        at: Some(run.at.clone()),
-                    })
-                    .unwrap_or_else(fleet::FleetVerify::not_run);
+                let verify = fleet::current_verify(
+                    &verifications,
+                    &thread.id,
+                    git::rev_parse_head(&bin, &tree).as_deref(),
+                    git::status(&bin, &tree).is_ok_and(|status| status.is_empty()),
+                );
                 let live = live.get(&thread.id).cloned().unwrap_or_default();
                 let (status, attention) = fleet::derive_status(&fleet::StatusInput {
                     awaiting_permission: live.awaiting_permission,
@@ -2557,6 +2548,31 @@ async fn thread_review_files(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// The full patch one thread has made since it branched, including committed
+/// work and any staged, unstaged, or untracked changes still in its tree.
+#[tauri::command]
+async fn thread_review_diff(project_hash: String, thread_id: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        let thread = store::list_threads(&palisade_home(), &project_hash)?
+            .into_iter()
+            .find(|t| t.id == thread_id);
+        let worktree = thread
+            .as_ref()
+            .and_then(|t| t.worktree_path.clone())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+        let base = worktree
+            .as_ref()
+            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let tree = worktree.unwrap_or_else(|| root.clone());
+        Ok(fleet::review_diff(&bin, &tree, base))
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// Turn this thread's worktree isolation on or off.
 ///
 /// Decided once, at thread creation, and locked by the UI after the first
@@ -2617,6 +2633,7 @@ async fn merge_thread_worktree(
     app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
+    override_verify: bool,
 ) -> Res<MergeResult> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
@@ -2632,9 +2649,29 @@ async fn merge_thread_worktree(
                     .into(),
             );
         }
+        if !override_verify {
+            let runs = store::read_verifications(&palisade_home(), &project_hash)?;
+            let verify = fleet::current_verify(
+                &runs,
+                &thread_id,
+                git::rev_parse_head(&bin, &path).as_deref(),
+                true,
+            );
+            if verify.state != fleet::VerifyState::Pass {
+                return Err(
+                    "This thread needs a passing verification at its current commit before merging. Open Review to run it or explicitly merge anyway."
+                        .into(),
+                );
+            }
+        }
         let out = git::merge_into_base(&bin, &root, &base, &branch)?;
         if out.merged {
-            let _ = store::set_thread_merged(&palisade_home(), &project_hash, &thread_id);
+            let _ = store::set_thread_merged(
+                &palisade_home(),
+                &project_hash,
+                &thread_id,
+                override_verify,
+            );
         }
         Ok(MergeResult {
             merged: out.merged,
@@ -2878,17 +2915,18 @@ pub(crate) fn record_verification(
     session_id: Option<String>,
 ) -> Res<i32> {
     let root = project_root(project_hash)?;
+    let tree = commands::git_cmds::tree_root(project_hash, thread_id.as_deref())?;
     let (settings, _) = settings::load(&root);
     // `-dirty` follows git-describe: a run against an uncommitted tree
     // cannot claim the commit it started from, or the evidence is a lie.
     let head = git_bin().ok().and_then(|bin| {
-        let head = git::rev_parse_head(&bin, &root)?;
-        Some(match git::porcelain_snapshot(&bin, &root).is_empty() {
+        let head = git::rev_parse_head(&bin, &tree)?;
+        Some(match git::porcelain_snapshot(&bin, &tree).is_empty() {
             true => head,
             false => format!("{head}-dirty"),
         })
     });
-    let run = match settings::run_verify(&settings, &root, name) {
+    let run = match settings::run_verify(&settings, &tree, name) {
         Ok(outcome) => store::VerificationRun {
             id: ulid::Ulid::new().to_string(),
             project_hash: project_hash.to_string(),
@@ -3980,6 +4018,7 @@ pub fn run() {
             thread_worktrees,
             fleet_overview,
             thread_review_files,
+            thread_review_diff,
             merge_thread_worktree,
             open_thread_pr,
             prune_thread_worktree,
@@ -4487,6 +4526,7 @@ mod tests {
             worktree_branch: None,
             worktree_base_branch: None,
             merged_at: None,
+            merge_overridden: false,
             worktree_enabled: true,
             title_source: "manual".into(),
             auth_blocked: None,

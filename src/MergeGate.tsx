@@ -28,11 +28,9 @@ import { describeError } from "./errors";
 /** The in-chat merge gate: what this thread changed, and the two ways to put
  *  it into the project.
  *
- *  It gates on exactly one thing — does this branch merge cleanly into the
- *  branch it was cut from — because that is the only question a merge can
- *  answer. No test result appears here and none is treated as permission:
- *  whether the work is *right* is the reviewer's call, and a card that showed
- *  a green tick next to Merge would be making that call for them.
+ *  Local merge requires both a clean trial merge and current-commit verify
+ *  evidence. The dedicated Review lane owns running and explaining verify;
+ *  this compact card only enforces the same gate.
  *
  *  Uncommitted work is not a wall either. An agent's edits are committed on
  *  the way through, carrying a message drafted by the local model that the
@@ -42,6 +40,7 @@ type Props = {
   projectHash: string;
   threadId: string;
   worktree: api.WorktreeStatus;
+  verify?: api.FleetVerify;
   /** Opens the Source Control panel on this thread's worktree. */
   onViewDiff?: () => void;
   /** The worktree changed (a commit, a merge): re-poll. */
@@ -61,6 +60,7 @@ export default function MergeGate({
   projectHash,
   threadId,
   worktree,
+  verify,
   onViewDiff,
   onChanged,
   onArchive,
@@ -94,7 +94,12 @@ export default function MergeGate({
   const workToLand = hasWorkToLand(worktree);
   const baseState = worktree.baseState ?? "unavailable";
   const baseBlocked = baseState !== "clean";
-  const canMerge = workToLand && worktree.clean && worktree.mergeable && !baseBlocked;
+  const canMerge =
+    workToLand &&
+    worktree.clean &&
+    worktree.mergeable &&
+    !baseBlocked &&
+    verify?.state === "pass";
   const canOpenPr = workToLand && worktree.clean;
 
   /** Commit whatever is uncommitted, so what lands is everything on screen.
@@ -335,6 +340,8 @@ export default function MergeGate({
                     ? `Cannot check whether ${worktree.baseBranch} is safe to update`
                   : !worktree.mergeable
                     ? "Resolve the conflicts with the base branch first"
+                    : verify?.state !== "pass"
+                      ? "Run verification for this commit in Review before merging"
                     : `Merge into ${worktree.baseBranch}`
               }
             >

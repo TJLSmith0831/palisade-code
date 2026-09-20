@@ -64,6 +64,19 @@ describe("DiffPane", () => {
     await waitFor(() => expect(screen.getByText(/working tree clean/i)).toBeDefined());
   });
 
+  it("renders a supplied merge-base review patch without reading the working diff", () => {
+    render(
+      <DiffPane
+        projectHash="proj-1"
+        threadId="t1"
+        focusPath="tracked.txt"
+        reviewPatch={ONE_HUNK_DIFF}
+      />,
+    );
+    expect(screen.getByTestId("diff-file")).toHaveTextContent("CHANGED");
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
   it("stages a hunk: calls git_stage_hunk with a valid patch, then reflects staged state after refresh", async () => {
     const user = userEvent.setup();
     let staged = false;

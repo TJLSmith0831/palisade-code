@@ -119,6 +119,23 @@ describe("ConnectionsPanel", () => {
     expect(onLogin).toHaveBeenCalledWith(login);
   });
 
+  it("names each sign-in method when an agent offers a choice", async () => {
+    apiMock.agentUsage.mockResolvedValue([
+      { agentId: "claude", state: "not_signed_in", reason: "no credential" },
+    ]);
+    apiMock.agentLogins.mockResolvedValue([
+      { ...login, methodId: "subscription", label: "Claude Subscription" },
+      { ...login, methodId: "console", label: "Anthropic Console" },
+    ]);
+    mount();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("connections-sign-in").map((button) => button.textContent)).toEqual([
+        "Sign in with Claude Subscription",
+        "Sign in with Anthropic Console",
+      ])
+    );
+  });
+
   // A reported usage window is proof of a session; prompting to sign in over
   // it would be the panel arguing with its own data.
   it("drops the sign-in button once usage proves a session", async () => {

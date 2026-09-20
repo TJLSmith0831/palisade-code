@@ -330,6 +330,10 @@ pub struct ThreadMeta {
     /// merge happened, never that the diffs happen to look empty.
     #[serde(default)]
     pub merged_at: Option<String>,
+    /// Whether the most recent Palisade merge explicitly bypassed the
+    /// current-commit verification gate. Absent on older records.
+    #[serde(default)]
+    pub merge_overridden: bool,
     /// `false` when the user turned isolation off at thread creation: the
     /// thread's sessions run in the project root and it gets no merge, PR or
     /// prune step. Absent on older records, which all had worktrees.
@@ -391,6 +395,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         worktree_branch: None,
         worktree_base_branch: None,
         merged_at: None,
+        merge_overridden: false,
         worktree_enabled: true,
         // A brand new thread's title is a placeholder ("New thread"), not a
         // choice — the first turn replaces it.
@@ -587,9 +592,18 @@ pub fn clear_thread_worktree(home: &Path, hash: &str, id: &str) -> Res<ThreadMet
     update_thread(home, hash, id, |m| m.worktree_path = None)
 }
 
-/// Record that this thread's branch landed on its base, and when.
-pub fn set_thread_merged(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
-    update_thread(home, hash, id, |m| m.merged_at = Some(now()))
+/// Record that this thread's branch landed on its base, when, and whether the
+/// user explicitly bypassed verification.
+pub fn set_thread_merged(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    overridden: bool,
+) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.merged_at = Some(now());
+        m.merge_overridden = overridden;
+    })
 }
 
 /// Whether this thread runs in its own worktree. Set once, at creation, and
@@ -1971,6 +1985,19 @@ mod tests {
         // Calling it again only advances the stamp; it never errors or resets.
         let viewed_again = mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
         assert!(viewed_again.last_viewed_at >= first);
+    }
+
+    #[test]
+    fn merged_thread_records_whether_verification_was_overridden() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+
+        let merged = set_thread_merged(home.path(), &project.hash, &thread.id, true).unwrap();
+        assert!(merged.merged_at.is_some());
+        assert!(merged.merge_overridden);
+        assert!(list_threads(home.path(), &project.hash).unwrap()[0].merge_overridden);
     }
 
     #[test]

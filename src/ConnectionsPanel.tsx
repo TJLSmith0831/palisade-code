@@ -212,7 +212,7 @@ function AgentsTab({ projectHash, onLogin }: { projectHash: string; onLogin: Con
                     onClick={() => onLogin(login)}
                     data-testid="connections-sign-in"
                   >
-                    Sign in
+                    {mine.length > 1 ? `Sign in with ${login.label}` : "Sign in"}
                   </Button>
                 </Tooltip>
               ))}

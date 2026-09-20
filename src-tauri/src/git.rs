@@ -62,6 +62,10 @@ pub fn working_tree_diff(_bin: &Path, root: &Path) -> Res<String> {
     git_repo::shared_git_repo().working_tree_diff(root)
 }
 
+pub fn diff_from(_bin: &Path, root: &Path, rev: &str) -> Res<String> {
+    git_repo::shared_git_repo().diff_from(root, rev)
+}
+
 pub fn staged_diff(_bin: &Path, root: &Path) -> Res<String> {
     git_repo::shared_git_repo().staged_diff(root)
 }

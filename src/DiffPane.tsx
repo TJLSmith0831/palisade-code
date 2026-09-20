@@ -62,6 +62,9 @@ type Props = {
    *  questions ("what changed here" vs "what's still uncommitted"). */
   commit?: GraphCommit | null;
   onClearCommit?: () => void;
+  /** A caller-supplied read-only patch. Review uses this for the complete
+   *  merge-base diff, including commits that a working-tree diff cannot see. */
+  reviewPatch?: string;
   /** Bumped when something outside this pane changed the working tree — an
    * agent turn finishing, or a save. Without it the diff is whatever it was
    * when the pane mounted, which is stale the moment the agent writes. */
@@ -258,6 +261,7 @@ export default function DiffPane({
   onClearFocus,
   commit,
   onClearCommit,
+  reviewPatch,
 }: Props) {
   /** A thread's worktree is the ordinary case now, not a special read-only
    *  one — used only to word the empty state for whose tree it is. */
@@ -291,6 +295,10 @@ export default function DiffPane({
   };
 
   const refresh = useCallback(async () => {
+    if (reviewPatch !== undefined) {
+      setError(null);
+      return;
+    }
     try {
       const repo = await api.gitIsRepo(projectHash);
       setIsRepo(repo);
@@ -313,7 +321,7 @@ export default function DiffPane({
     } catch (err) {
       setError(describeError(err, { loading: "the working diff" }));
     }
-  }, [projectHash, threadId]);
+  }, [projectHash, threadId, reviewPatch]);
 
   useEffect(() => {
     refresh();
@@ -367,6 +375,30 @@ export default function DiffPane({
     setConfirmDiscard(null);
     run(() => api.gitDiscardFile(projectHash, path, untracked, threadId));
   };
+
+  if (reviewPatch !== undefined) {
+    const files = parseFilePatches(reviewPatch);
+    const shown = focusPath
+      ? files.filter((file) => pathFromPatch(file) === focusPath)
+      : files;
+    return (
+      <div className="diff-pane" data-testid="diff-pane">
+        {shown.length === 0 ? (
+          <p className="empty">No diff available for this file.</p>
+        ) : (
+          shown.map((file) => (
+            <FileDiff
+              key={pathFromPatch(file)}
+              file={file}
+              actionLabel=""
+              busy={false}
+              view={view}
+            />
+          ))
+        )}
+      </div>
+    );
+  }
 
   if (!isRepo) {
     return (

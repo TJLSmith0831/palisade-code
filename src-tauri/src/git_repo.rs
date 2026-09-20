@@ -85,6 +85,29 @@ fn untracked_patch(root: &Path, path: &str) -> String {
         .unwrap_or_default()
 }
 
+fn append_untracked(root: &Path, out: &mut String, status: &[FileStatus]) {
+    let mut budget = UNTRACKED_DIFF_FILE_LIMIT;
+    for entry in status.iter().filter(|f| f.code == "??") {
+        if budget == 0 {
+            break;
+        }
+        let too_big = std::fs::metadata(root.join(&entry.path))
+            .map(|meta| meta.len() > UNTRACKED_DIFF_BYTE_LIMIT)
+            .unwrap_or(true);
+        if too_big {
+            continue;
+        }
+        budget -= 1;
+        let patch = untracked_patch(root, &entry.path);
+        if !patch.is_empty() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&patch);
+        }
+    }
+}
+
 /// Read-only git operations used by the harness.
 pub trait GitRepo: Send + Sync + 'static {
     /// Whether `root` is inside a git worktree.
@@ -105,6 +128,10 @@ pub trait GitRepo: Send + Sync + 'static {
     /// Unified diff of unstaged changes, untracked files included as
     /// synthesized "new file" patches.
     fn working_tree_diff(&self, root: &Path) -> Res<String>;
+
+    /// Unified diff from `rev` through the current tree, including committed,
+    /// staged, unstaged, and untracked changes.
+    fn diff_from(&self, root: &Path, rev: &str) -> Res<String>;
 
     /// Unified diff of staged changes.
     fn staged_diff(&self, root: &Path) -> Res<String>;
@@ -213,26 +240,13 @@ impl GitRepo for ShellGitRepo {
         // unbounded loop there would hang the pane and exhaust memory before
         // rendering anything. Files past either bound keep their status row,
         // which is how untracked files displayed before this existed.
-        let mut budget = UNTRACKED_DIFF_FILE_LIMIT;
-        for entry in self.status(root)?.iter().filter(|f| f.code == "??") {
-            if budget == 0 {
-                break;
-            }
-            let too_big = std::fs::metadata(root.join(&entry.path))
-                .map(|meta| meta.len() > UNTRACKED_DIFF_BYTE_LIMIT)
-                .unwrap_or(true);
-            if too_big {
-                continue;
-            }
-            budget -= 1;
-            let patch = untracked_patch(root, &entry.path);
-            if !patch.is_empty() {
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
-                }
-                out.push_str(&patch);
-            }
-        }
+        append_untracked(root, &mut out, &self.status(root)?);
+        Ok(out)
+    }
+
+    fn diff_from(&self, root: &Path, rev: &str) -> Res<String> {
+        let mut out = run_git_res(root, &["diff", "--no-color", rev])?;
+        append_untracked(root, &mut out, &self.status(root)?);
         Ok(out)
     }
 
@@ -336,6 +350,10 @@ impl GitRepo for InMemoryGitRepo {
         Ok(self.working_diff.clone())
     }
 
+    fn diff_from(&self, _root: &Path, _rev: &str) -> Res<String> {
+        Ok(self.working_diff.clone())
+    }
+
     fn staged_diff(&self, _root: &Path) -> Res<String> {
         Ok(self.staged_diff.clone())
     }
@@ -384,6 +402,10 @@ impl GitRepo for GixRepo {
 
     fn working_tree_diff(&self, _root: &Path) -> Res<String> {
         todo!("gix working_tree_diff")
+    }
+
+    fn diff_from(&self, _root: &Path, _rev: &str) -> Res<String> {
+        todo!("gix diff_from")
     }
 
     fn staged_diff(&self, _root: &Path) -> Res<String> {

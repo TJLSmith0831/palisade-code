@@ -36,9 +36,9 @@ export type FleetBoardProps = {
   onOpenRun(runId: string): void;
   /** Stops a playbook run — the board's Stop for a `playbook` row. */
   onCancelRun(runId: string): void;
-  onMerge(threadId: string): void;
-  onOpenPr(threadId: string): void;
-  onArchive(threadId: string): void;
+  onMerge(projectId: string, threadId: string): void;
+  onOpenPr(projectId: string, threadId: string): void;
+  onArchive(projectId: string, threadId: string): void;
   onNewRun(input: NewRunInput): void;
 };
 
@@ -190,7 +190,7 @@ function Row({
               no branch of its own. */}
           {!playbook &&
             (mergeable ? (
-              <Menu.Item onClick={() => onMerge(row.threadId)}>Merge</Menu.Item>
+              <Menu.Item onClick={() => onMerge(row.projectId, row.threadId)}>Merge</Menu.Item>
             ) : (
               <Tooltip label="Merge needs a passing verify">
                 <div>
@@ -201,10 +201,10 @@ function Row({
               </Tooltip>
             ))}
           {!playbook && (
-            <Menu.Item onClick={() => onOpenPr(row.threadId)}>Open PR</Menu.Item>
+            <Menu.Item onClick={() => onOpenPr(row.projectId, row.threadId)}>Open PR</Menu.Item>
           )}
           {!playbook && (
-            <Menu.Item onClick={() => onArchive(row.threadId)}>Archive</Menu.Item>
+            <Menu.Item onClick={() => onArchive(row.projectId, row.threadId)}>Archive</Menu.Item>
           )}
         </Menu.Dropdown>
       </Menu>
