@@ -1,6 +1,6 @@
 ---
 name: Palisade Code
-description: A minimalist, intuitive workbench for orchestrating ACP agents.
+description: A minimalist, intuitive Agentic Development Environment for orchestrating and reviewing ACP agents.
 colors:
   backdrop: "oklch(11% 0.015 var(--accent-hue, 145))"
   chrome-bg: "oklch(15% 0.004 250)"
@@ -227,7 +227,7 @@ Borders are functional separators. Editor and panel surfaces remain square where
 
 ### Cards / Containers
 
-- **Corner Style:** Medium curves for onboarding choices, Graphify canvases, composers, and floating containers; fitted workspace panes remain square.
+- **Corner Style:** Medium curves for onboarding choices, playbook canvases, composers, and floating containers; fitted workspace panes remain square.
 - **Background:** Surface at rest and Warm Surface on interactive lift.
 - **Shadow Strategy:** Flat by default; shadow follows the elevation rules above.
 - **Border:** One-pixel structural boundaries, strengthened with an Agent Signal mix for primary or focused state.

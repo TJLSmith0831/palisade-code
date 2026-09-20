@@ -34,7 +34,7 @@ export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onR
           if (live) setRuns(next);
         })
         .catch((err) => {
-          if (live) setError(describeError(err, { loading: "this chain's run history" }));
+          if (live) setError(describeError(err, { loading: "this playbook's run history" }));
         });
     void load();
     window.addEventListener(CHAINS_CHANGED_EVENT, load);
@@ -63,7 +63,7 @@ export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onR
   if (runs.length === 0) {
     return (
       <Text size="xs" c="dimmed" p="xs" data-testid="chain-run-history-empty">
-        No runs yet for this chain.
+        No runs yet for this playbook.
       </Text>
     );
   }

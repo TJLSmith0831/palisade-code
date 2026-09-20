@@ -57,6 +57,22 @@ describe("ChainsPanel", () => {
     expect(onOpen).toHaveBeenCalledWith("review");
   });
 
+  /// At 215px a name beside the count and the controls read "gated-l…", so
+  /// the count moved to its own line and says what it counts.
+  it("gives the name its own line and labels the node count", async () => {
+    apiMock.listChains.mockResolvedValue([chain]);
+
+    render(
+      <MantineProvider>
+        <ChainsPanel projectHash="proj-1" onOpen={vi.fn()} />
+      </MantineProvider>
+    );
+
+    const name = await screen.findByTestId("chain-row-review");
+    expect(name.textContent).toBe("review");
+    expect(screen.getByText("2 nodes")).toBeTruthy();
+  });
+
   it("calls onRun with the chain name and a seed argument", async () => {
     apiMock.listChains.mockResolvedValue([chain]);
     const onRun = vi.fn();
@@ -108,7 +124,7 @@ describe("ChainsPanel", () => {
       </MantineProvider>
     );
 
-    expect(await screen.findByText(/No chains yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No playbooks yet/)).toBeInTheDocument();
   });
 
   it("empty state offers a worked example that saves and opens it (D16)", async () => {

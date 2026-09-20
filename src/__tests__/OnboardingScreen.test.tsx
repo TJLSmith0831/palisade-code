@@ -17,7 +17,6 @@ const flight = {
   openspec: true,
   grillApply: true,
   ponytail: true,
-  graphify: true,
   ready: true,
   warnings: [],
   checkedAt: "2026-08-06T00:00:00Z",

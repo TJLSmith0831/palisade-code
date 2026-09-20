@@ -97,9 +97,9 @@ describe("the app's own chrome is painted from tokens, not literals", () => {
   // Scoped deliberately to hexes in a *style property* position. The app has
   // three legitimate hex tables that are data, not chrome, and banning those
   // would be wrong: icons.tsx's language brand colours (intentional per
-  // icons.tsx:53-56), SettingsPanel's user-pickable appearance palette, and
-  // GraphView's node-category colours. None of them theme; all of them are
-  // chosen values a user or a language owns.
+  // icons.tsx:53-56) and SettingsPanel's user-pickable appearance palette.
+  // Neither of them themes; both are chosen values a user or a language
+  // owns.
   const STYLE_HEX = /\b(color|background|backgroundColor|border|borderColor|outline|fill|stroke|boxShadow)\s*:\s*"#[0-9a-fA-F]{3,8}"/;
 
   /** Literals that are correct, each for a reason that is not "we forgot". */

@@ -1,13 +1,14 @@
 import type { ReactElement } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import SessionList, {
   relativeTime,
   filterThreads,
   threadState,
 } from "../SessionList";
-import type { ThreadMeta, WorktreeStatus } from "../api";
+import type { FleetRow, ThreadMeta, WorktreeStatus } from "../api";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MantineProvider });
 
@@ -93,8 +94,6 @@ describe("SessionList row actions", () => {
     render(
       <SessionList
         threads={[thread(over)]}
-        projects={[]}
-        activeProject={undefined}
         activeThread={undefined}
         liveThreadIds={liveThreadIds}
         worktrees={worktrees}
@@ -169,8 +168,6 @@ describe("SessionList needs-attention rendering", () => {
     render(
       <SessionList
         threads={[thread({})]}
-        projects={[]}
-        activeProject={undefined}
         activeThread={undefined}
         liveThreadIds={new Set(["t1"])}
         attentionThreadIds={attentionThreadIds}
@@ -217,8 +214,6 @@ describe("SessionList worktree isolation", () => {
     render(
       <SessionList
         threads={[thread(over)]}
-        projects={[]}
-        activeProject={undefined}
         activeThread={undefined}
         liveThreadIds={live}
         worktrees={worktrees}
@@ -265,5 +260,131 @@ describe("SessionList worktree isolation", () => {
     renderWith(new Map([["t1", worktree()]]));
     expect(screen.getByTestId("session-rename")).toBeTruthy();
     expect(screen.getByTestId("session-archive")).toBeTruthy();
+  });
+});
+
+// The sidebar carries the same signals as the Fleet board, from the same
+// rows — a thread must not read one way on the board and another here.
+describe("SessionList fleet rows", () => {
+  const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
+    kind: "thread",
+    threadId: "t1",
+    title: "Add a status-bar indicator",
+    projectId: "p",
+    projectName: "palisade",
+    mode: "go",
+    status: "idle",
+    diff: { added: 0, removed: 0, files: 0 },
+    filesTouched: [],
+    overlap: [],
+    verify: { state: "not_run" },
+    merge: "no_worktree",
+    updatedAt: "2026-08-14T09:00:00Z",
+    ...over,
+  });
+
+  const renderRows = (threads: ThreadMeta[], fleetRows: FleetRow[]) =>
+    render(
+      <SessionList
+        threads={threads}
+        activeThread={undefined}
+        liveThreadIds={new Set()}
+        worktrees={new Map()}
+        fleetRows={fleetRows}
+        onNewThread={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+
+  it("colours the dot from the fleet status, not the local worktree", () => {
+    renderRows([thread({})], [fleetRow({ status: "attention", attention: "permission" })]);
+    expect(screen.getByTestId("session-dot").getAttribute("data-state")).toBe(
+      "needs-attention",
+    );
+    renderRows([thread({})], [fleetRow({ status: "running" })]);
+    expect(screen.getAllByTestId("session-dot")[1].getAttribute("data-state")).toBe(
+      "running",
+    );
+  });
+
+  // The board's diff is measured in the thread's tree by the backend; a
+  // sidebar that disagreed with it would be a second, quieter truth.
+  it("shows the fleet row's diff stat", () => {
+    renderRows([thread({})], [fleetRow({ diff: { added: 9, removed: 4, files: 2 } })]);
+    expect(screen.getByText("+9")).toBeTruthy();
+    expect(screen.getByText("−4")).toBeTruthy();
+  });
+
+  it("uses the board's own wording for the attention pill", () => {
+    renderRows([thread({})], [fleetRow({ status: "attention", attention: "verify_failed" })]);
+    expect(screen.getByTestId("fleet-attention").textContent).toBe("Verify failed");
+  });
+
+  it("names the count and the overlapping files in the overlap icon's tooltip", async () => {
+    renderRows(
+      [thread({})],
+      [fleetRow({ overlap: [{ threadId: "t2", files: ["src/App.tsx"] }] })],
+    );
+    const icon = screen.getByTestId("fleet-overlap-icon");
+    expect(screen.queryByTestId("fleet-overlap")).toBeNull();
+    await userEvent.hover(icon);
+    expect(
+      await screen.findByRole("tooltip", { name: "Overlaps 1 thread: src/App.tsx" }),
+    ).toBeTruthy();
+  });
+
+  // Three lines is the row's whole budget. Attention gets the pill; overlap
+  // gets the glyph on the meta line, and never a pill of its own.
+  it("shows at most one pill on a row, even when it also overlaps", () => {
+    renderRows(
+      [thread({})],
+      [
+        fleetRow({
+          status: "attention",
+          attention: "permission",
+          overlap: [{ threadId: "t2", files: ["src/App.tsx"] }],
+        }),
+      ],
+    );
+    expect(screen.getAllByTestId("fleet-attention")).toHaveLength(1);
+    expect(screen.queryByTestId("fleet-overlap")).toBeNull();
+    expect(screen.getByTestId("fleet-overlap-icon")).toBeTruthy();
+  });
+
+  it("groups attention over running over idle, and heads only what exists", () => {
+    renderRows(
+      [
+        thread({ id: "t1", title: "idle one" }),
+        thread({ id: "t2", title: "running one" }),
+        thread({ id: "t3", title: "blocked one" }),
+      ],
+      [
+        fleetRow({ threadId: "t2", status: "running" }),
+        fleetRow({ threadId: "t3", status: "attention", attention: "permission" }),
+      ],
+    );
+    expect(
+      screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+    ).toEqual(["Needs attention", "Running", "Idle"]);
+    expect(screen.queryByTestId("session-group-attention")).toBeTruthy();
+    // A thread with no fleet row of its own is idle, not missing.
+    expect(
+      screen.getByTestId("session-group-idle").textContent,
+    ).toContain("idle one");
+  });
+
+  it("heads no group the fleet left empty", () => {
+    renderRows([thread({})], [fleetRow({ status: "running" })]);
+    expect(
+      screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+    ).toEqual(["Running"]);
+  });
+
+  // A playbook run is not a thread and has no row in this list to decorate.
+  it("ignores playbook rows", () => {
+    renderRows([thread({})], [fleetRow({ kind: "playbook", threadId: "t1", status: "attention", attention: "gate" })]);
+    expect(screen.queryByTestId("fleet-attention")).toBeNull();
   });
 });

@@ -530,17 +530,15 @@ pub struct AgentState {
 /// Everything scoped to an open project or window.
 ///
 /// Lifecycle: created when a window opens a project and torn down when the
-/// last window showing that project closes — which is why `watch` and
-/// `fswatch` are maps keyed by project hash rather than single slots (#33).
+/// last window showing that project closes — which is why `fswatch` is a
+/// map keyed by project hash rather than a single slot (#33).
 pub struct WorkspaceState {
-    /// Graphify watchers, keyed by project hash. A map, not a slot: every
-    /// project window shares this process (#33), and a single slot meant
-    /// opening a second window silently stopped watching the first project.
-    pub watch: Mutex<HashMap<String, crate::integrations::Watcher>>,
     /// Which project each window is showing, keyed by window label. The
-    /// watchers above live exactly as long as some window still needs them.
+    /// watchers below live exactly as long as some window still needs them.
     pub window_projects: Mutex<HashMap<String, String>>,
-    /// Filesystem watchers, keyed by project hash — see `watch`.
+    /// Filesystem watchers, keyed by project hash. A map, not a slot: every
+    /// project window shares this watcher (#33), and a single slot meant
+    /// opening a second window silently stopped watching the first project.
     pub fswatch: Mutex<HashMap<String, crate::fswatch::FsWatcher>>,
     /// Buffered JSONL writer for session and thread logs; flushed on turn-done
     /// and app-quit (D9).
@@ -683,7 +681,7 @@ mod harness_shape_tests {
             .iter()
             .map(|n| counts[*n])
             .sum();
-        assert_eq!(grouped, 21, "a field was dropped or added without a home");
+        assert_eq!(grouped, 20, "a field was dropped or added without a home");
     }
 
     /// The field comments are why this codebase is auditable; a refactor that
@@ -782,7 +780,6 @@ mod turn_watch_tests {
 impl Default for WorkspaceState {
     fn default() -> Self {
         Self {
-            watch: Default::default(),
             window_projects: Default::default(),
             fswatch: Default::default(),
             session_log_writer: crate::session_log_writer::shared_session_log_writer(),

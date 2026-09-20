@@ -5,20 +5,20 @@ import {
   IconGitBranch,
   IconDeviceWorkstation,
   IconClipboardList,
-  IconTopologyStar3,
   IconPlayerPlay,
   IconPlug,
   IconDatabase,
   IconRoute,
   IconHistory,
   IconSettings,
+  IconLayoutGrid,
+  IconChecklist,
 } from "@tabler/icons-react";
 import type { PanelId } from "./hooks/useAppShell";
 
-// The left icon rail (Amendment 3). Mounted ONCE and shared by both presets —
-// CSS `order` moves it to the right edge in Vibe rather than a second copy
-// (Governing Rule: same panel inventory, different arrangement). Icons are
-// Tabler, buttons are the shell's own `ds-icon-btn` family per DESIGN.md.
+// The icon rail (Amendment 3). Mounted once; CSS `order` puts it at the
+// right edge of the shell. Icons are Tabler, buttons are the shell's own
+// `ds-icon-btn` family per DESIGN.md.
 
 type RailItem = {
   id: PanelId;
@@ -26,28 +26,28 @@ type RailItem = {
   Icon: typeof IconFolder;
 };
 
-// Split by what the icon is for, not just visual balance: workspace
-// navigation (generic to any IDE) vs. the agent-facing surfaces that are
-// specifically Palisade's (spec-then-build orchestration, the codebase map,
-// run configs, MCP). Two groups of ≤4 instead of one run of 7 — the
-// cognitive-load guideline groups decision points at 4 items or fewer.
+// Split by what the icon is for, not just visual balance: the agent
+// surfaces this app exists for come first (the fleet, its review, the
+// playbooks and connections that shape a run, the specs it works from),
+// then the workbench any IDE has. The ADE's own question — "what are my
+// runs doing" — is answered by the first icon, not the fifth.
+const TOP_AGENT: RailItem[] = [
+  { id: "fleet", label: "Fleet", Icon: IconLayoutGrid },
+  { id: "review", label: "Review", Icon: IconChecklist },
+  { id: "chains", label: "Playbooks", Icon: IconRoute },
+  { id: "mcp", label: "Connections", Icon: IconPlug },
+  { id: "specs", label: "Specs", Icon: IconClipboardList },
+];
+
 const TOP_NAV: RailItem[] = [
   { id: "explorer", label: "Explorer", Icon: IconFolder },
   { id: "search", label: "Search", Icon: IconSearch },
   { id: "git", label: "Source Control", Icon: IconGitBranch },
-  // Workspace lives here, not in BOTTOM: it's the project/branch picker for
-  // this machine, grouped with the other "where am I" controls rather than
-  // buried below the agent-orchestration group where it was easy to miss.
-  { id: "workspace", label: "Workspace", Icon: IconDeviceWorkstation },
-];
-
-const TOP_AGENT: RailItem[] = [
-  { id: "specs", label: "Specs", Icon: IconClipboardList },
-  { id: "codemap", label: "Codebase Map", Icon: IconTopologyStar3 },
   { id: "run", label: "Run configurations", Icon: IconPlayerPlay },
-  { id: "mcp", label: "MCP Servers", Icon: IconPlug },
   { id: "database", label: "Database", Icon: IconDatabase },
-  { id: "chains", label: "Agent Chains", Icon: IconRoute },
+  // Kept: the Fleet board's project column labels a row, it can't add,
+  // rename or switch a project — this is the only place that can.
+  { id: "workspace", label: "Workspace", Icon: IconDeviceWorkstation },
 ];
 
 const BOTTOM: RailItem[] = [
@@ -86,9 +86,9 @@ export default function NavRail({
 
   return (
     <nav className="ds-rail" data-testid="nav-rail" aria-label="Panels">
-      <div className="ds-rail-group">{TOP_NAV.map(button)}</div>
-      <div className="ds-rail-divider" role="separator" />
       <div className="ds-rail-group">{TOP_AGENT.map(button)}</div>
+      <div className="ds-rail-divider" role="separator" />
+      <div className="ds-rail-group">{TOP_NAV.map(button)}</div>
       <div className="ds-rail-spacer" />
       <div className="ds-rail-group">{BOTTOM.map(button)}</div>
     </nav>

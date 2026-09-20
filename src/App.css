@@ -352,51 +352,16 @@ input[type="checkbox"] {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  /* The left inset clears the (native, non-DOM) traffic lights. It used to
+     live on the shell toggle, which was the first child; with that gone the
+     bar itself has to reserve the space. */
+  padding: 0 12px 0 max(92px, 5%);
   position: relative;
   flex-shrink: 0;
 }
 
 /* .ds-mode-selector removed from top chrome — mode toggle is now a Mantine
    SegmentedControl in the composer. */
-
-/* Vibe/Editor workspace-shell toggle — layout switch only, independent of a
-   thread's own Spec/Go mode. Sits directly after the (native, non-DOM)
-   traffic lights, before the chrome utility cluster. */
-.ds-shell-toggle {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 9999px;
-  padding: 2px;
-  margin-left: max(92px, 5%);
-}
-
-.ds-shell-toggle button {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px 3px 8px;
-  border-radius: 9999px;
-  cursor: pointer;
-  transition: all 120ms ease-out;
-}
-
-.ds-shell-toggle button.active {
-  background: var(--accent);
-  color: var(--accent-on);
-}
-
-.ds-shell-toggle button:not(.active):hover {
-  color: var(--fg);
-}
 
 .ds-chrome-utils {
   margin-left: auto;
@@ -2311,241 +2276,6 @@ input[type="checkbox"] {
   border-top: 1px solid var(--border);
 }
 
-/* --- graphify ----------------------------------------------------------- */
-
-.graph-pane {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-.graph-pane .pane-head {
-  flex-wrap: wrap;
-}
-
-.scope {
-  min-width: 220px;
-  background: var(--bg);
-}
-
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.toggle input {
-  accent-color: var(--accent);
-}
-
-.graph-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.graph-body > *:not(.graph-view) {
-  flex-shrink: 0;
-}
-
-details.graph-report-wrap > summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  padding: 6px 0;
-  list-style-position: inside;
-}
-
-.graph-stats {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.graph-stats code {
-  color: var(--fg);
-}
-
-.graph-stats .dim {
-  font-style: italic;
-}
-
-.graph-query {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.graph-query select {
-  flex-shrink: 0;
-}
-
-.graph-query input {
-  flex: 1;
-  min-width: 120px;
-}
-
-/* --- graph view --------------------------------------------------------- */
-
-.graph-view {
-  display: flex;
-  position: relative;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--surface-warm);
-  /* The graph is the hero of this pane: fill exactly the height available
-     (no more) so it never pushes the query box/report below the fold — pan
-     and zoom the canvas instead of growing the container. */
-  flex: 1 1 0;
-  min-height: 200px;
-}
-
-.graph-canvas-wrap {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-}
-
-.graph-canvas-wrap canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  cursor: grab;
-}
-
-.graph-canvas-wrap canvas:active {
-  cursor: grabbing;
-}
-
-.graph-tooltip {
-  position: absolute;
-  pointer-events: none;
-  background: var(--surface-warm);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 9px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  max-width: 280px;
-  box-shadow: var(--shadow-float);
-}
-
-.graph-tooltip span {
-  color: var(--muted);
-}
-
-.graph-hint {
-  position: absolute;
-  left: 10px;
-  bottom: 8px;
-  font-size: 11px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.communities {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 5;
-  max-height: calc(100% - 20px);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 10px 12px;
-  box-shadow: var(--shadow-lift);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.communities[open] {
-  width: 220px;
-}
-
-.communities .community-list {
-  flex: 1;
-}
-
-.communities summary {
-  margin: 0 0 10px;
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.communities:not([open]) summary {
-  margin-bottom: 0;
-  white-space: nowrap;
-}
-
-.community-list {
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.community {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 2px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.community.all {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
-  margin-bottom: 8px;
-  color: var(--muted);
-}
-
-.community .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.community-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.community-count {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.graph-report {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
-  background: var(--surface);
-}
-
-.graph-report .wmde-markdown {
-  background: transparent;
-}
-
 .composer {
   display: flex;
   gap: 12px;
@@ -3539,22 +3269,12 @@ details.graph-report-wrap > summary {
   flex-direction: column;
 }
 
-/* --- preset arrangement --------------------------------------------------
-   Editor: rail → panel → editor → chat.
-   Vibe:   sessions → chat → editor → panel → rail.
-   Same children, different order — never a different set. */
+/* --- shell arrangement ---------------------------------------------------
+   sessions → chat → editor → panel → rail. */
 
 /* Each handle is ordered against its OWN row. Ordering every `.ds-resize-x`
    together stacked the chat handle on top of the side panel's, so grabbing
    the sidebar edge silently resized the chat instead. */
-[data-preset="editor"] .ds-rail { order: -2; }
-[data-preset="editor"] .ds-side-panel { order: -1; }
-[data-preset="editor"] .ds-shell-contents > .ds-resize-handle-x { order: -1; }
-[data-preset="editor"] .ds-main { order: 1; }
-[data-preset="editor"] .ds-editor-col { order: 1; flex: 1 1 auto; }
-[data-preset="editor"] .ds-work-row > .ds-resize-handle-x { order: 2; }
-[data-preset="editor"] .ds-chat-rail { order: 3; }
-
 [data-preset="vibe"] .ds-sessions { order: -2; }
 [data-preset="vibe"] .ds-main { order: -1; }
 [data-preset="vibe"] .ds-side-panel {
@@ -3647,10 +3367,13 @@ details.graph-report-wrap > summary {
   line-height: 1.35;
   color: var(--fg);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* One line, so the row's three-line budget holds even for a long
+     auto-named title. */
+  overflow-wrap: anywhere;
 }
 
 .ds-session-meta {
@@ -3661,6 +3384,14 @@ details.graph-report-wrap > summary {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Overlap, as a glyph on the meta line rather than a second pill — the row
+   has three lines to spend and attention has first claim on one. */
+.ds-session-overlap {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
 }
 
 /* Marks a title Palisade wrote rather than one the user typed. */
@@ -3723,6 +3454,23 @@ details.graph-report-wrap > summary {
   background: var(--danger);
   width: 8px;
   height: 8px;
+}
+
+/* Only rendered once the fleet has a verdict for this thread: a quiet dot
+   saying "the backend looked, and there is nothing pending". */
+.ds-session-dot[data-state="idle"] {
+  background: var(--muted);
+  opacity: 0.5;
+}
+
+/* The board's attention pill, in a sidebar row. At most one — overlap rides
+   the meta line as an icon instead. */
+.ds-session-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
 }
 
 .ds-sessions-header {
@@ -5525,7 +5273,7 @@ button.ds-onboarding-status {
 }
 
 /* A command or URL is one long unbroken token, so it ellipsizes rather than
-   wrapping — breaking `/…/bin/graphify-mcp` mid-word reads as two paths.
+   wrapping — breaking `/…/bin/some-mcp-server` mid-word reads as two paths.
    The full value is on hover and in the edit form. */
 .ds-mcp-cmd {
   margin-top: 2px;
@@ -5679,11 +5427,13 @@ button.ds-onboarding-status {
 /* still Mantine, and every colour here is a documented token.                 */
 /* -------------------------------------------------------------------------- */
 
+/* Two lines: the name gets the panel's whole width, the node count and the
+   row's controls share the line below it. Side by side at 215px the name
+   was the only thing that could give, and every playbook read "gated-l…". */
 .ds-chain-row {
   display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-right: 4px;
+  flex-direction: column;
+  padding: 4px 4px 5px;
 }
 
 .ds-chain-row:hover {
@@ -5691,14 +5441,20 @@ button.ds-onboarding-status {
 }
 
 .ds-chain-row-main {
-  flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 0 4px;
   font-size: 12px;
   color: var(--fg);
+}
+
+.ds-chain-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 24px;
 }
 
 .ds-chain-row-icon {
@@ -5715,8 +5471,10 @@ button.ds-onboarding-status {
   text-align: left;
 }
 
-/* Node count, not a status — quiet by design. */
+/* Node count, not a status — quiet by design. Takes the slack so the
+   controls sit hard right. */
 .ds-chain-row-count {
+  flex: 1;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
@@ -6263,4 +6021,228 @@ button.ds-onboarding-status {
 
 .ds-chain-node[data-state="cancelled"] {
   border-color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- fleet
+   The cross-project board: every unarchived thread, grouped by whether it
+   wants you. Rows are focusable, so they lean on the shell's focus ring. */
+.fleet-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+  /* It is the center pane, not a column in it: take the row the work row
+     would have had, above the bottom panel. */
+  flex: 1;
+  min-height: 0;
+}
+
+/* Says where a new run would land, before you type it. Tight to the
+   composer it labels — it is that block's heading, not a separate band. */
+.fleet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: -4px;
+}
+
+.fleet-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.fleet-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fleet-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.fleet-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 24px 0;
+}
+
+.fleet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fleet-row:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.fleet-agent {
+  display: flex;
+  color: var(--muted);
+}
+
+.fleet-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.fleet-row-title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-row-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.fleet-diff .added {
+  color: var(--success);
+}
+
+.fleet-diff .removed {
+  color: var(--danger);
+}
+
+.fleet-row-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Review pane — one thread's work: files read, diff, evidence, land. */
+.review-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* What is being reviewed, said before how it was measured. */
+.review-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-header [data-testid="review-subtitle"] {
+  font-variant-numeric: tabular-nums;
+}
+
+.review-verify {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-verify [data-state="fail"] { color: var(--danger); }
+.review-verify [data-state="not_run"] { color: var(--muted); }
+
+.review-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.review-files {
+  width: 280px;
+  flex: none;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.review-files-header,
+.review-files-loading,
+.review-files-empty {
+  padding: 8px 12px;
+}
+
+.review-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.review-file-row[data-selected] { background: var(--active-row); }
+.review-file-row:hover { background: var(--surface-warm); }
+
+.review-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.review-file-stat {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-diff {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.review-diff-header {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-actions {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Connections panel: Agents · MCP servers · Skills. */
+.connections-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+}
+
+.connections-usage {
+  margin-top: 8px;
+}
+
+.connections-usage-window + .connections-usage-window {
+  margin-top: 4px;
+}
+
+/* A flex item's min-width is `auto`, so a long skill name would push the
+   copy button off the card instead of truncating. */
+.connections-skills .mantine-Group-root > * {
+  min-width: 0;
 }

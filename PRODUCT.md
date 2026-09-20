@@ -14,21 +14,25 @@ Users are expected to be comfortable with software-development concepts such as 
 
 ## Product Purpose
 
-Palisade Code is a desktop agent workbench built around the Agent Client Protocol (ACP). It discovers compatible agents, lets a developer work with more than one of them, preserves their sessions, and can compose agents into reusable chains with handoffs and gates.
+Palisade Code is an Agentic Development Environment (ADE): one shell that drives several ACP-compatible coding agents in parallel, each in its own isolated worktree, reviews what they produce, and gates merge on recorded verification evidence rather than agent narration.
 
-The workbench surrounds agent collaboration with the tools needed to inspect and complete real development work: source editing, Git and diff review, integrated terminals, specifications and verification, run and debug configurations, notebooks, database access, code maps, previews, and MCP connections.
+The shell surrounds that fleet of agents with the tools needed to inspect and complete real development work: a fleet board of concurrent runs, per-thread diff review, source editing, Git, integrated terminals, specifications and verification, run and debug configurations, notebooks, database access, previews, and MCP connections.
 
-Success means a developer can move from intent to verified code inside one project-aware environment while retaining control over which agent acts, what it may do, what context leaves the machine, and whether the work is actually complete.
+Success means a developer can run several agents at once, see at a glance which runs need attention, review and merge the ones that are done, and drop into any single thread's editor and terminal when hands-on work is needed, all without leaving one project-aware environment.
 
 ## Positioning
 
-Palisade Code is an ACP-native multi-agent development environment. Its core advantage is not access to one proprietary model; it is a common orchestration layer over the developer's installed ACP agents, including concurrent sessions, provider-aware session continuity, explicit handoffs, and reusable multi-agent chains.
+Palisade Code is an Agentic Development Environment: one shell that drives N parallel ACP agents in isolated worktrees, reviews their output, and gates merge on verification evidence. It is not an AI IDE built around a single chat pane, and not a chat client with a file tree bolted on.
 
-It pairs that orchestration with a capable local workbench instead of reducing the experience to chat. The same application exposes the repository, editor, terminal, Git state, OpenSpec changes, verification results, run/debug tools, notebooks, databases, Graphify maps, previews, and project-scoped MCP servers.
+Its core advantage is not access to one proprietary model; it is a common orchestration layer over the developer's installed ACP agents, including concurrent sessions in isolated worktrees, provider-aware session continuity, explicit handoffs, and reusable multi-agent playbooks. The fleet board is home: every thread and worktree in one list, with status, agent, diff stat, verify evidence, merge readiness, and cross-thread file overlap, so a developer supervising several agents can tell what needs attention without opening each thread.
+
+Review is a first-class lane, not an afterthought. A thread's diff, per-file viewed state, and verify evidence sit together, and merge stays disabled until a named verify command has actually passed (or a human explicitly overrides it).
+
+It pairs that orchestration with a capable local workbench instead of reducing the experience to chat. The same application exposes the repository, editor, terminal, Git state, OpenSpec changes, verification results, run/debug tools, notebooks, databases, previews, and project-scoped MCP servers as a "Workbench" a developer reaches from any thread or diff, demoted in priority behind the fleet and review surfaces but not removed.
 
 Privacy is legible rather than implied. Fill-in-the-middle completion and small editor-assistance tasks use a bundled local model, so Palisade does not silently send a code index to a cloud service for those features. A developer-selected agent or MCP server may still communicate with its own external service; Palisade must make those choices and boundaries visible rather than claiming the entire workflow is offline.
 
-Cross-machine consistency is useful, but it is not the primary product claim.
+Cross-machine consistency is useful, but it is not the primary product claim. Competitive rationale and the market survey behind this positioning are recorded in `docs/research/ade-market-survey-2026-09.md`; that survey is not itself a claim this document makes.
 
 ## Operating Context
 
@@ -42,9 +46,11 @@ Cross-machine consistency is useful, but it is not the primary product claim.
 
 ### Agent orchestration
 
-- Named agent chains are project-scoped directed graphs. Each node selects an installed agent and gives it a role and instruction; upstream outputs become downstream context.
-- Chains support automatic handoffs, verification gates, human approval gates, iteration caps, timeouts, fresh-session crash retries, and inspection of each node's transcript.
-- Palisade does not silently substitute an unavailable agent selected by a chain.
+- The fleet board is home: every thread and its worktree, with status (attention, running, idle), agent, diff stat, verify evidence, merge readiness, and cross-thread file overlap in one list.
+- The review lane pairs a thread's diff with per-file viewed state and its verify evidence; merge stays disabled until a named verify command has passed at that commit, or a human explicitly overrides it.
+- Named playbooks are project-scoped directed graphs of agent runs, launched from the fleet board. Each node selects an installed agent and gives it a role and instruction; upstream outputs become downstream context. A playbook run appears on the fleet board like any other thread.
+- Playbooks support automatic handoffs, verification gates, human approval gates, iteration caps, timeouts, fresh-session crash retries, and inspection of each node's transcript. Scheduling and event triggers are not yet built.
+- Palisade does not silently substitute an unavailable agent selected by a playbook.
 - MCP server configuration is project-scoped and passed to compatible agents through ACP. Stdio works as the common baseline; remote transports are gated by the capabilities an agent advertises.
 
 ### Development workflow
@@ -52,7 +58,7 @@ Cross-machine consistency is useful, but it is not the primary product claim.
 - Spec and Go are the two execution modes. Spec work is constrained to planning and OpenSpec artifacts; Go work permits implementation while retaining prompts for execution and destructive operations unless the user explicitly enables bypass.
 - OpenSpec is the source of truth for change artifacts. Palisade reads, validates, links, and archives OpenSpec changes rather than inventing a competing specification format.
 - Verification is evidence of completion: a named command must exit successfully at a recorded Git commit. Agent self-report alone is not proof that work is done.
-- Git-backed threads can use dedicated branches and worktrees for isolation. Merge checks and conflict handling avoid contaminating the user's main checkout.
+- Every thread runs in its own dedicated branch and worktree for isolation. Merge checks and conflict handling avoid contaminating the user's main checkout.
 - Source control includes working and staged diffs, hunk and file staging, commits, branches, remote synchronization, history, and change attribution with explicit ambiguity when concurrent uncommitted work prevents certainty.
 
 ### Built-in workbench
@@ -63,7 +69,6 @@ Cross-machine consistency is useful, but it is not the primary product claim.
 - Jupyter notebook files open as cell-based documents backed by local kernel processes and can be edited, run, interrupted, restarted, and saved.
 - Postgres and SQLite connections support schema browsing, paginated data grids, SQL queries, staged row edits, SQL previews, transactional application, optimistic conflict checks, and confirmation for destructive-looking statements.
 - Local development URLs can open in an embedded preview surface or the external browser.
-- Graphify maps the active target project and can expose the same project graph to compatible agents through MCP.
 
 ## Capabilities and Constraints
 
@@ -88,7 +93,7 @@ No additional durable voice, visual, licensing, pricing, customer, or market cla
 ## Evidence on Hand
 
 - The runnable frontend and backend live in `src/` and `src-tauri/src/`, with focused frontend and Rust tests beside the implementation.
-- Behavioral specifications live in `openspec/specs/`, covering agent discovery, concurrent sessions, chains, verification, source control, editor behavior, local completion, databases, previews, Graphify, and workspace structure.
+- Behavioral specifications live in `openspec/specs/`, covering agent discovery, concurrent sessions, playbooks, verification, source control, editor behavior, local completion, databases, previews, and workspace structure.
 - `README.md` documents the current architecture and development commands.
 - `docs/ACP-AUTH.md` records observed authentication behavior across installed ACP agents.
 - `docs/PREVIEW.md` documents the agent-to-preview contract.
@@ -98,7 +103,7 @@ No additional durable voice, visual, licensing, pricing, customer, or market cla
 ## Product Principles
 
 1. **ACP is the center.** Prefer protocol-level interoperability and advertised capabilities over provider-specific assumptions.
-2. **Agents work better together.** Make agent selection, parallel sessions, handoffs, chains, gates, and transcripts understandable and controllable.
+2. **Agents work better together.** Make agent selection, parallel sessions, handoffs, playbooks, gates, and transcripts understandable and controllable.
 3. **Local by default where Palisade owns the computation.** Keep editor assistance and Palisade metadata on-device, and make every external boundary attributable to a chosen integration.
 4. **The workbench shows real state.** Surface actual files, diffs, processes, permissions, specs, tests, and database actions instead of replacing them with optimistic agent narration.
 5. **Verification outranks confidence.** Completion claims require recorded evidence or an explicit human decision.

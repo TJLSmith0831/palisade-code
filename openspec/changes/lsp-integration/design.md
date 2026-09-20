@@ -1,6 +1,6 @@
 ## Context
 
-Palisade's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM completion. The backend already has process management patterns (executor, terminal, Graphify watcher) that can be extended for LSP servers. The frontend uses Tauri IPC for Rust communication and has existing WebSocket infrastructure via the Tauri MCP bridge pattern.
+Palisade's editor currently uses CodeMirror 6 with basic syntax highlighting and FIM completion. The backend already has process management patterns (executor, terminal, filesystem watcher) that can be extended for LSP servers. The frontend uses Tauri IPC for Rust communication and has existing WebSocket infrastructure via the Tauri MCP bridge pattern.
 
 ## Goals / Non-Goals
 
@@ -34,7 +34,7 @@ Palisade's editor currently uses CodeMirror 6 with basic syntax highlighting and
 
 **Decision:** Rust backend manages LSP server processes via stdio transport, frontend uses Tauri WebSocket plugin for communication.
 
-**Rationale:** Palisade already has Rust process management patterns (executor, terminal, Graphify watcher). Managing LSP servers in Rust gives proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security. The Tauri WebSocket plugin provides battle-tested WebSocket handling.
+**Rationale:** Palisade already has Rust process management patterns (executor, terminal, filesystem watcher). Managing LSP servers in Rust gives proper lifecycle control, environment isolation, and integration with existing project settings. The frontend can't directly spawn processes due to Tauri security. The Tauri WebSocket plugin provides battle-tested WebSocket handling.
 
 **Alternatives considered:**
 - Frontend-managed LSP servers via WebAssembly: Rejected because it limits us to WASM-compiled language servers, excluding most mature LSP servers

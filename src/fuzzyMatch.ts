@@ -23,7 +23,7 @@ export function fuzzyMatch(query: string, target: string): number | null {
  * How much a hit inside the file's own name is worth over one scattered
  * through its directories. Large enough that no path match can outrank a
  * name match: without it, typing `rea` offers
- * `graphify-out/cache/ast/5bb3c671….json` before `README.md`, because a long
+ * `build-out/cache/ast/5bb3c671….json` before `README.md`, because a long
  * path simply gives a short query more places to land.
  */
 const NAME_BONUS = 1000;

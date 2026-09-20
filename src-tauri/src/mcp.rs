@@ -8,7 +8,7 @@
 //! Palisade learning a second config format per agent.
 //!
 //! Only Palisade-managed keys are ever rewritten; anything else already in the
-//! file is preserved, the same contract `integrations.rs` keeps for `graphify`.
+//! file is preserved.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -144,9 +144,9 @@ pub fn list(project_root: &Path) -> Vec<McpServer> {
                 .unwrap_or_default()
         })
         .collect();
-    // A name can appear in both maps: `integrations.rs` re-adds `graphify` to
-    // `mcpServers` on every project load, so disabling it leaves a stale copy
-    // under the disabled key. Group by name so the duplicates are adjacent,
+    // A name can appear in both maps: an outside writer (or a hand edit) can
+    // re-add a server to `mcpServers` after it was disabled, leaving a stale
+    // copy under the disabled key. Group by name so the duplicates are adjacent,
     // enabled first, and keep the copy the agent will actually start.
     servers.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| b.enabled.cmp(&a.enabled)));
     servers.dedup_by(|a, b| a.name == b.name);
@@ -620,13 +620,13 @@ mod tests {
         let root = TempDir::new().unwrap();
         std::fs::write(
             root.path().join(".mcp.json"),
-            r#"{"mcpServers":{"graphify":{"command":"graphify-mcp"}},"otherTool":{"keep":1}}"#,
+            r#"{"mcpServers":{"docs":{"command":"docs-mcp"}},"otherTool":{"keep":1}}"#,
         )
         .unwrap();
         save(root.path(), &stdio("fs")).unwrap();
         let raw = std::fs::read_to_string(root.path().join(".mcp.json")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(doc["mcpServers"]["graphify"]["command"], "graphify-mcp");
+        assert_eq!(doc["mcpServers"]["docs"]["command"], "docs-mcp");
         assert_eq!(doc["otherTool"]["keep"], 1);
     }
 
@@ -710,7 +710,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         std::fs::write(
             root.path().join(".mcp.json"),
-            r#"{"mcpServers":{"g":{"command":"graphify-mcp"}}}"#,
+            r#"{"mcpServers":{"g":{"command":"docs-mcp"}}}"#,
         )
         .unwrap();
         assert_eq!(list(root.path())[0].transport, "stdio");
@@ -718,22 +718,21 @@ mod tests {
 
     #[test]
     fn a_server_in_both_maps_reads_as_enabled() {
-        // `integrations.rs` writes `graphify` straight into `mcpServers` on
-        // every project load. Disabling it here parks a copy under the
-        // disabled key, and the next load puts the original back — so the
-        // same name can legitimately appear in both. The enabled copy is the
-        // one the agent will actually start, so that is the truth to show.
+        // Disabling a server parks a copy under the disabled key; anything
+        // that writes `.mcp.json` from outside can put the original back — so
+        // the same name can legitimately appear in both. The enabled copy is
+        // the one the agent will actually start, so that is the truth to show.
         let root = TempDir::new().unwrap();
         std::fs::write(
             root.path().join(".mcp.json"),
-            r#"{"mcpServers":{"graphify":{"command":"graphify-mcp"}},
-                "disabledMcpServers":{"graphify":{"command":"stale"}}}"#,
+            r#"{"mcpServers":{"docs":{"command":"docs-mcp"}},
+                "disabledMcpServers":{"docs":{"command":"stale"}}}"#,
         )
         .unwrap();
         let listed = list(root.path());
         assert_eq!(listed.len(), 1);
         assert!(listed[0].enabled);
-        assert_eq!(listed[0].command, "graphify-mcp");
+        assert_eq!(listed[0].command, "docs-mcp");
     }
 
     #[test]

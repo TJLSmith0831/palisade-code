@@ -36,6 +36,8 @@ export type ThreadMeta = {
   /** When Palisade merged this thread's branch into its base. A recorded
    *  fact, not an inference from an empty diff. */
   mergedAt?: string | null;
+  /** True when the latest merge explicitly bypassed current-commit verify. */
+  mergeOverridden?: boolean;
   /** False when the user opted out of worktree isolation at thread creation:
    *  the thread edits the project root live and has no merge/PR/prune step. */
   worktreeEnabled?: boolean;
@@ -119,6 +121,10 @@ export const setThreadArchived = (
   invoke<ThreadMeta>("set_thread_archived", { projectHash, threadId, archived });
 export const deleteThread = (projectHash: string, threadId: string) =>
   invoke<void>("delete_thread", { projectHash, threadId });
+/** Records that the user just looked at this thread, so the Fleet board
+ *  stops flagging it as "Turn finished". Idempotent. */
+export const markThreadViewed = (projectHash: string, threadId: string) =>
+  invoke<void>("mark_thread_viewed", { projectHash, threadId });
 
 export const appendMessage = (
   projectHash: string,
@@ -154,7 +160,6 @@ export type Preflight = {
   /** The id of the first available agent. */
   selected: string | null;
   openspec: boolean;
-  graphify: boolean;
   ready: boolean;
   warnings: string[];
   checkedAt: string;
@@ -232,6 +237,45 @@ export type AgentCommands = {
 
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
+
+/** One plan-usage window an agent reports. `usedPercent` is 0–100. */
+export type AgentUsageWindow = {
+  label: "5h" | "Week" | "Month";
+  usedPercent: number;
+  resetsAt?: string;
+};
+
+/**
+ * Plan usage for one agent, or an honest reason there is none. Sources are
+ * undocumented per-agent surfaces, so every provider fails soft rather than
+ * claiming a number it doesn't have.
+ */
+export type AgentUsage =
+  | {
+      agentId: string;
+      state: "ok";
+      plan?: string;
+      windows: AgentUsageWindow[];
+      balanceUsd?: number;
+      fetchedAt: string;
+      source: string;
+    }
+  | { agentId: string; state: "not_signed_in" | "unavailable"; reason: string };
+
+/** One entry per agent the cached preflight reports as installed. Cached 60s. */
+export const agentUsage = () => invoke<AgentUsage[]>("agent_usage");
+
+/** A user-level skill directory containing a `SKILL.md`. */
+export type Skill = {
+  name: string;
+  path: string;
+  description?: string;
+  owner: "claude" | "agents" | "other";
+};
+
+/** Skills installed under `~/.claude/skills` and `~/.agents/skills`, by name.
+ *  Read-only: the CLIs own these files, Palisade only mirrors them. */
+export const listSkills = () => invoke<Skill[]>("list_skills");
 
 /** One selectable model an agent reported through its ACP config options. */
 export type ModelInfo = { id: string; name: string };
@@ -452,8 +496,16 @@ export const threadWorktrees = (projectHash: string) =>
   invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
 /** Merge a thread's branch into the branch it was cut from. Rejects a busy
  *  thread and an uncommitted worktree — what lands must be what was reviewed. */
-export const mergeThreadWorktree = (projectHash: string, threadId: string) =>
-  invoke<MergeResult>("merge_thread_worktree", { projectHash, threadId });
+export const mergeThreadWorktree = (
+  projectHash: string,
+  threadId: string,
+  overrideVerify = false,
+) =>
+  invoke<MergeResult>("merge_thread_worktree", {
+    projectHash,
+    threadId,
+    overrideVerify,
+  });
 
 /** Push the thread's branch and open a PR for it, returning the URL to open.
  *  Uses `gh` when it is on PATH, and the host's compare page when it isn't. */
@@ -475,6 +527,90 @@ export const setThreadWorktreeEnabled = (
   threadId: string,
   enabled: boolean,
 ) => invoke<ThreadMeta>("set_thread_worktree_enabled", { projectHash, threadId, enabled });
+
+// ------------------------------------------------------------------ fleet
+
+/** `attention` always carries a reason — a dot that says "look" without
+ *  saying why is noise. */
+export type FleetStatus = "attention" | "running" | "idle";
+export type FleetAttention =
+  | "permission"
+  /** A playbook run is suspended at a human approval gate. */
+  | "gate"
+  | "turn_done"
+  | "verify_failed"
+  | "merge_conflict"
+  | "crashed";
+/** Evidence, never opinion: a pass is a named command that exited 0 at a
+ *  named commit. `not_run` is the honest default. */
+export type FleetVerify = {
+  state: "pass" | "fail" | "not_run";
+  command?: string;
+  commit?: string;
+  at?: string;
+};
+/** Measured, not inferred: `conflicts` is a real trial merge and `behind` a
+ *  rev-list count — the same probes the merge gate runs. */
+export type FleetMerge = "clean" | "conflicts" | "behind" | "no_worktree";
+
+export type FleetRow = {
+  /** A thread someone is working in, or one run of a playbook. */
+  kind: "thread" | "playbook";
+  /** The thread — or, on a playbook row, the run id. One key either way. */
+  threadId: string;
+  /** Playbook rows only: the run this row is. */
+  runId?: string;
+  /** Playbook rows only: the saved playbook the run came from. */
+  playbookName?: string;
+  /** Playbook rows only: the prompt the run was seeded with. */
+  seed?: string;
+  title: string;
+  projectId: string;
+  projectName: string;
+  agentId?: string;
+  agentName?: string;
+  mode: Mode;
+  status: FleetStatus;
+  attention?: FleetAttention;
+  branch?: string;
+  worktreePath?: string;
+  /** `files` counts tracked files that differ from HEAD and nothing else, so
+   *  it always describes the same measurement `added`/`removed` do.
+   *  `untracked` is the files the thread created that git does not track yet
+   *  — they contribute no line counts. Optional only so fixtures written
+   *  before it existed still typecheck; the backend always sends it. */
+  diff: { added: number; removed: number; files: number; untracked?: number };
+  filesTouched: string[];
+  /** Other threads in the same project writing some of the same files. */
+  overlap: { threadId: string; files: string[] }[];
+  verify: FleetVerify;
+  merge: FleetMerge;
+  updatedAt: string;
+};
+
+/** Every unarchived thread in every open project, newest first. One call for
+ *  the whole board: cross-thread file overlap can only be computed with all
+ *  the rows in hand. */
+export const fleetOverview = () => invoke<FleetRow[]>("fleet_overview");
+
+/** One changed file in a thread's tree, as the Review lane lists it. */
+export type ReviewFileRow = {
+  path: string;
+  added: number;
+  removed: number;
+  status: "added" | "modified" | "deleted";
+};
+
+/** The files one thread changed, measured by the same helper the Fleet board
+ *  uses — untracked files included, machine-local paths excluded. The lane
+ *  used to parse the working diff itself, which sees neither. */
+export const threadReviewFiles = (projectHash: string, threadId: string) =>
+  invoke<ReviewFileRow[]>("thread_review_files", { projectHash, threadId });
+
+/** The full merge-base patch behind `threadReviewFiles`, including work the
+ * thread already committed. */
+export const threadReviewDiff = (projectHash: string, threadId: string) =>
+  invoke<string>("thread_review_diff", { projectHash, threadId });
 
 export const listSessions = (projectHash: string, threadId: string) =>
   invoke<SessionRecord[]>("list_sessions", { projectHash, threadId });
@@ -984,39 +1120,6 @@ export const setSpecChange = (
   threadId: string,
   name: string | null
 ) => invoke<ThreadMeta>("set_spec_change", { projectHash, threadId, name });
-
-// ----------------------------------------------------------------- graphify
-
-export type GraphifyOptions = {
-  incremental: boolean;
-  codeOnly: boolean;
-  deep: boolean;
-};
-
-export type GraphifyRun = {
-  outDir: string;
-  report: string;
-  graph: { nodes?: unknown[]; links?: unknown[] } | null;
-  summary: string;
-};
-
-export const runGraphify = (
-  projectHash: string,
-  subpath: string,
-  options: GraphifyOptions
-) =>
-  invoke<GraphifyRun>("run_graphify", {
-    projectHash,
-    subpath,
-    options,
-  });
-export const loadGraphify = (projectHash: string) =>
-  invoke<GraphifyRun>("load_graphify", { projectHash });
-export const queryGraphify = (
-  projectHash: string,
-  subcommand: string,
-  args: string[]
-) => invoke<string>("query_graphify", { projectHash, subcommand, args });
 
 // ---------------------------------------------------------------- terminal
 

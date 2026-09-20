@@ -1,10 +1,9 @@
 //! PTY-backed terminals: several per project, each its own tab (D4, D17, D18).
 //!
-//! Mirrors `integrations::Watcher`'s shape: a background thread owns the
-//! PTY + child, forwards raw output bytes to a caller-supplied callback, and
-//! is torn down by `terminate()` / `Drop` — the same swap-and-drop pattern
-//! `lib.rs` already uses to replace one project's `graphify watch` with
-//! another's.
+//! A background thread owns the PTY + child, forwards raw output bytes to a
+//! caller-supplied callback, and is torn down by `terminate()` / `Drop` — the
+//! same swap-and-drop pattern `lib.rs` already uses for a project's
+//! filesystem watcher.
 
 use std::io::{Read, Write};
 use std::path::Path;

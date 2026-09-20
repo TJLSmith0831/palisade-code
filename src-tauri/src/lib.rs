@@ -2,6 +2,7 @@ mod acp_client;
 mod acp_events;
 mod acp_preflight;
 mod acp_registry;
+mod agent_usage;
 mod chain_exec;
 mod chain_runner;
 mod chains;
@@ -10,14 +11,13 @@ mod completion;
 mod db;
 mod error;
 mod executor;
-mod graph_nudge;
 mod grill_inject;
 mod handoff;
 mod permissions;
+mod fleet;
 mod fswatch;
 mod git;
 mod git_repo;
-mod integrations;
 mod locks;
 mod lsp;
 mod mcp;
@@ -27,6 +27,7 @@ mod pidguard;
 mod session_log_writer;
 mod openspec_cache;
 mod settings;
+mod skills;
 mod store;
 mod project_path;
 mod project_windows;
@@ -164,7 +165,7 @@ pub(crate) struct DirEntry {
 
 /// Resolves a project's root from the global index rather than trusting the
 /// frontend — used by every command that reads/writes inside the project
-/// filesystem (file editing, git, Graphify, format-on-save).
+/// filesystem (file editing, git, format-on-save).
 pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
     let home = palisade_home();
     store::list_projects(&home)?
@@ -268,23 +269,13 @@ async fn switch_project(window: tauri::Window, app: tauri::AppHandle, hash: Stri
         let harness: tauri::State<'_, Harness> = app.state();
         // Which window is showing what decides which watchers stay alive (#33).
         project_windows::track(&harness, &label, &project.hash);
-        start_watcher(&app, &harness, &project);
         start_fs_watcher(&app, &harness, &project);
-        ensure_graphify_mcp(&app, &harness, &project);
 
         let root = Path::new(&project.root);
         // Auto-create .palisade/project-settings.json (D14/D15) so there's always a real
         // file to open from the settings button — a no-op once it exists.
         if let Err(message) = settings::ensure_file(root) {
             let _ = app.emit("harness-warning", message);
-        }
-        // Keep the code graph out of git: unignored, it shows up in the diff
-        // pane as untracked work and lands in whatever the agent stages. A
-        // no-op once anything already ignores it, and skipped in a non-repo.
-        if let Ok(bin) = git_bin() {
-            if let Err(message) = integrations::ensure_graph_ignored(&bin, root) {
-                let _ = app.emit("harness-warning", message);
-            }
         }
         // Surface malformed settings immediately on load, rather than only when
         // a save or an executor-override lookup happens to re-read them.
@@ -296,74 +287,6 @@ async fn switch_project(window: tauri::Window, app: tauri::AppHandle, hash: Stri
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
-}
-
-/// Idempotently registers Graphify's MCP server (D9/D21) with whichever
-/// executor is detected, so the agent gets graph tools mid-turn instead of
-/// a pre-injected summary. A missing `graphify-mcp` binary or no detected
-/// executor is skipped silently — the general `graphify` PATH warning
-/// already covers a missing install. A registration failure (e.g. an
-/// unwritable project dir) surfaces through the same `harness-warning`
-/// event a failed watcher spawn already uses.
-fn ensure_graphify_mcp(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
-    let Some(bin) = executor::find_on_path("graphify-mcp") else {
-        return;
-    };
-    let Ok((agent, _)) = selected_executor(app, harness, &project.hash, None) else {
-        return;
-    };
-
-    let root = PathBuf::from(&project.root);
-    let graph_path = integrations::default_out_dir(&root).join("graph.json");
-    // Kept as an explicit per-agent match (task 3.6): each agent's MCP config
-    // file has its own real format, which is not BYOA friction to abstract
-    // away. An agent with no MCP story is simply skipped.
-    let result = match agent.id.as_str() {
-        "claude-acp" => integrations::ensure_claude_mcp(&root, &bin, &graph_path),
-        "codex-acp" => {
-            integrations::ensure_codex_mcp(&root, &bin, &graph_path, &executor::home().join(".codex"))
-        }
-        _ => return,
-    };
-    if let Err(message) = result {
-        let _ = app.emit("harness-warning", format!("Graphify MCP registration failed: {message}"));
-    }
-}
-
-/// Replaces whatever `graphify watch` was running (if any — `Watcher`'s
-/// `Drop` terminates it) with one scoped to the newly active project. A
-/// missing `graphify` binary is already covered by the persistent preflight
-/// warning, so it's silently skipped here rather than also flashing a
-/// one-off error every time the user switches projects; a watcher that
-/// fails to spawn for some other reason, or crashes later, surfaces once
-/// through the `harness-warning` event instead.
-fn start_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
-    // Keyed by project, not a single slot: a second project window used to
-    // stop the first window's watcher (#33). Retire first, so switching away
-    // from a project no window still shows also stops its graphify process.
-    project_windows::retire_unwatched(harness);
-    let mut watchers = harness.workspace.watch.lock_or_recover();
-    if watchers.contains_key(&project.hash) {
-        return;
-    }
-
-    let Some(bin) = executor::find_on_path("graphify") else {
-        return;
-    };
-
-    let app_update = app.clone();
-    let hash_update = project.hash.clone();
-    let app_crash = app.clone();
-    watchers.insert(project.hash.clone(), integrations::Watcher::spawn(
-        bin,
-        PathBuf::from(&project.root),
-        move || {
-            let _ = app_update.emit("graphify-updated", &hash_update);
-        },
-        move |message| {
-            let _ = app_crash.emit("harness-warning", message);
-        },
-    ));
 }
 
 /// Payload for the `fs-changed` event. Carries the project hash so a late
@@ -381,8 +304,7 @@ struct FsChanged {
 /// changes something underneath them. One watcher per project, shared by
 /// every window showing it and dropped once the last of them moves on. A
 /// watcher that can't start surfaces once through `harness-warning` and
-/// leaves the app working without reconciliation — the same degradation as a
-/// missing `graphify`.
+/// leaves the app working without reconciliation.
 fn start_fs_watcher(app: &tauri::AppHandle, harness: &tauri::State<'_, Harness>, project: &Project) {
     project_windows::retire_unwatched(harness);
     let mut watchers = harness.workspace.fswatch.lock_or_recover();
@@ -474,6 +396,18 @@ async fn set_thread_archived(
             sweep_archived_worktrees(&project_hash);
         }
         Ok(meta)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// Record that the user has just looked at this thread. Idempotent — the
+/// Fleet board calls it whenever the thread becomes the active one.
+#[tauri::command]
+async fn mark_thread_viewed(project_hash: String, thread_id: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        store::mark_thread_viewed(&palisade_home(), &project_hash, &thread_id)?;
+        Ok(())
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -796,6 +730,30 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
+}
+
+/// Plan usage per installed agent. Blocking work (Keychain read, HTTP,
+/// rollout-log scan) runs off the UI thread; every provider fails soft.
+#[tauri::command]
+async fn agent_usage(app: tauri::AppHandle) -> Res<Vec<agent_usage::AgentUsage>> {
+    Ok(tokio::task::spawn_blocking(move || {
+        let ids: Vec<String> = {
+            let harness: tauri::State<'_, Harness> = app.state();
+            preflight_for_harness(&*harness, false).agents.iter().map(|a| a.id.clone()).collect()
+        };
+        agent_usage::usage_for(&ids)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
+}
+
+/// User-level skills installed under `~/.claude/skills` and `~/.agents/skills`.
+/// Read-only: Palisade lists what the CLIs own, it never writes a skill.
+#[tauri::command]
+async fn list_skills() -> Res<Vec<skills::Skill>> {
+    Ok(tokio::task::spawn_blocking(skills::list_skills)
+        .await
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
 }
 
 /// Pure decision: which executor a project should use, given a preflight
@@ -1153,31 +1111,21 @@ fn ensure_session(
             (Some(reinjection), None) => Some(reinjection),
             (None, tp) => tp,
         };
-        park_prefix(harness, &new_id, &agent.id, project_hash, prefix);
+        park_prefix(harness, &new_id, prefix);
         return Ok(new_id);
     }
     let id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
-    park_prefix(harness, &id, &agent.id, project_hash, None);
+    park_prefix(harness, &id, None);
     Ok(id)
 }
 
-/// Park a new session's first-turn prefix, with the graph-tool nudge ahead of
-/// it. Both live here because every new session gets the nudge — spec and go
-/// alike — while only a handoff has a transcript to carry. `send_to` drains and
-/// clears the slot, so the nudge lands exactly once per session; a `/go` that
-/// starts a session without prompting keeps it for the next real turn.
-fn park_prefix(
-    harness: &Harness,
-    session_id: &str,
-    agent_id: &str,
-    project_hash: &str,
-    prefix: Option<String>,
-) {
-    let nudge = project_root(project_hash)
-        .ok()
-        .and_then(|root| graph_nudge::nudge(agent_id, &root));
-    if let Some(combined) = graph_nudge::compose(nudge, prefix) {
-        harness.agent.pending_prefix.lock_or_recover().insert(session_id.to_string(), combined);
+/// Park a new session's first-turn prefix — only a handoff has a transcript to
+/// carry. `send_to` drains and clears the slot, so it lands exactly once per
+/// session; a `/go` that starts a session without prompting keeps it for the
+/// next real turn.
+fn park_prefix(harness: &Harness, session_id: &str, prefix: Option<String>) {
+    if let Some(prefix) = prefix {
+        harness.agent.pending_prefix.lock_or_recover().insert(session_id.to_string(), prefix);
     }
 }
 
@@ -2308,12 +2256,17 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
             if !path.is_dir() {
                 continue;
             }
-            let (added, removed) = git::diff_stat(&bin, &path).unwrap_or((0, 0));
             let base = thread
                 .worktree_base_branch
                 .clone()
                 .or_else(|| git::current_branch_name(&bin, &root).ok())
                 .unwrap_or_else(|| "HEAD".into());
+            // The same helper the Fleet board and the Review lane read, so
+            // the three surfaces cannot report different numbers for the
+            // same thread: work since the base, committed or not, minus the
+            // machine-local paths nobody authored.
+            let changes = fleet::thread_changes(&bin, &path, &root, Some(&base));
+            let (added, removed) = (changes.added, changes.removed);
             // A readiness probe must never fail the whole list: a repo git
             // can't answer for reports as "nothing to land", not as an error.
             let ready = git::merge_readiness(&bin, &root, &path, &base, &branch)
@@ -2348,6 +2301,273 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
             });
         }
         Ok(out)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// What one thread's live sessions say about it. Collapsed across sessions:
+/// a thread can hold several at once, and the board shows one dot per thread.
+#[derive(Debug, Clone, Default)]
+struct LiveThread {
+    busy: bool,
+    awaiting_permission: bool,
+    agent_id: Option<String>,
+    agent_name: Option<String>,
+}
+
+/// Every unarchived thread in every open project, with what it is doing, what
+/// it has changed, whether that lands, and who else is writing the same files.
+///
+/// One call for the whole board on purpose: the alternative is the frontend
+/// fanning `thread_worktrees` + `list_sessions` + `list_verifications` out per
+/// project and stitching them, and the cross-thread file overlap would have
+/// nowhere to be computed. Every git probe here is best-effort — a project
+/// that is not a repo reports no diff rather than failing the board.
+#[tauri::command]
+async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let open = project_windows::open_project_hashes(&harness);
+        // One pass over the live sessions, guard dropped before any git call:
+        // `acp_sessions` is the lock every subsystem eventually wants.
+        let live: std::collections::HashMap<String, LiveThread> = {
+            let sessions = harness.agent.acp_sessions.lock_or_recover();
+            let mut map: std::collections::HashMap<String, LiveThread> = Default::default();
+            for session in sessions.values() {
+                let entry = map.entry(session.thread_id.clone()).or_default();
+                entry.busy |= session.is_busy();
+                entry.awaiting_permission |= session.needs_attention();
+                entry.agent_id = Some(session.agent_id.clone());
+                entry.agent_name = Some(session.agent_name.clone());
+            }
+            map
+        };
+        // Playbook runs share the board with threads. Both live maps are read
+        // here, before any git call, for the same reason the session pass
+        // above is: a held lock and a subprocess don't mix.
+        let live_runs: std::collections::HashSet<String> =
+            harness.chain.chain_cancels.lock_or_recover().keys().cloned().collect();
+        let gated_runs: std::collections::HashSet<String> =
+            harness.chain.chain_gates.lock_or_recover().keys().cloned().collect();
+        let home = palisade_home();
+        let bin = git_bin()?;
+        let mut rows = vec![];
+        for project in store::list_projects(&home)?.into_iter().filter(|p| open.contains(&p.hash)) {
+            let root = PathBuf::from(&project.root);
+            let verifications = store::read_verifications(&home, &project.hash).unwrap_or_default();
+            let threads = store::list_threads(&home, &project.hash)?;
+            for thread in threads.into_iter().filter(|t| !t.archived) {
+                // A thread with no worktree of its own edits the project
+                // checkout, so that is the tree its diff is measured in.
+                let worktree = thread.worktree_path.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
+                let tree = worktree.clone().unwrap_or_else(|| root.clone());
+                // One helper for the board and the Review lane, and the only
+                // place the skip-list and the inherited-file rule live. The
+                // base branch is only meaningful for a thread that has its
+                // own worktree; without one the measurement stays vs HEAD.
+                let base =
+                    worktree.as_ref().and(thread.worktree_base_branch.as_deref());
+                let changes = fleet::thread_changes(&bin, &tree, &root, base);
+                // Overlap must also see files already committed on the
+                // thread's branch but not yet merged back — a thread that
+                // commits as it goes would otherwise vanish from overlap
+                // detection the moment its tree goes clean.
+                let committed_paths = match (&thread.worktree_base_branch, &thread.worktree_branch) {
+                    (Some(base), Some(branch)) => git::changed_between(&bin, &tree, base, branch)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|path| !fleet::is_skipped_path(path))
+                        .collect(),
+                    _ => vec![],
+                };
+                let files_touched = fleet::union_files_touched(changes.paths(), committed_paths);
+                let merge = match (&worktree, &thread.worktree_branch) {
+                    (Some(path), Some(branch)) => {
+                        let base = thread
+                            .worktree_base_branch
+                            .clone()
+                            .or_else(|| git::current_branch_name(&bin, &root).ok())
+                            .unwrap_or_else(|| "HEAD".into());
+                        let ready = git::merge_readiness(&bin, &root, path, &base, branch)
+                            .unwrap_or(git::MergeReadiness { ahead: 0, clean: true, mergeable: true });
+                        if !ready.mergeable {
+                            fleet::FleetMerge::Conflicts
+                        // Commits on the base this branch does not have: the
+                        // same rev-list, asked the other way round.
+                        } else if git::ahead_of(&bin, &root, branch, &base).unwrap_or(0) > 0 {
+                            fleet::FleetMerge::Behind
+                        } else {
+                            fleet::FleetMerge::Clean
+                        }
+                    }
+                    _ => fleet::FleetMerge::NoWorktree,
+                };
+                let sessions = store::read_sessions(&home, &project.hash, &thread.id).unwrap_or_default();
+                let last = sessions.last();
+                let verify = fleet::current_verify(
+                    &verifications,
+                    &thread.id,
+                    git::rev_parse_head(&bin, &tree).as_deref(),
+                    git::status(&bin, &tree).is_ok_and(|status| status.is_empty()),
+                );
+                let live = live.get(&thread.id).cloned().unwrap_or_default();
+                let (status, attention) = fleet::derive_status(&fleet::StatusInput {
+                    awaiting_permission: live.awaiting_permission,
+                    busy: live.busy,
+                    turn_ended: last.is_some() && !live.busy,
+                    has_diff: changes.added + changes.removed > 0 || !files_touched.is_empty(),
+                    viewed_since_turn: fleet::viewed_since_turn(
+                        thread.last_viewed_at.as_deref(),
+                        last.and_then(|s| s.ended_at.as_deref()),
+                    ),
+                    verify_failed: verify.state == fleet::VerifyState::Fail,
+                    merge_conflict: merge == fleet::FleetMerge::Conflicts,
+                    crashed: last.is_some_and(|s| s.outcome.as_deref() == Some("crashed")),
+                });
+                rows.push(fleet::FleetRow {
+                    kind: fleet::FleetKind::Thread,
+                    thread_id: thread.id.clone(),
+                    run_id: None,
+                    playbook_name: None,
+                    seed: None,
+                    title: thread.title.clone(),
+                    project_id: project.hash.clone(),
+                    project_name: project.display_name.clone(),
+                    agent_id: live.agent_id.or_else(|| last.map(|s| s.agent_id.clone())),
+                    agent_name: live.agent_name,
+                    mode: thread.current_mode.clone(),
+                    status,
+                    attention,
+                    branch: thread.worktree_branch.clone(),
+                    worktree_path: worktree.map(|p| p.to_string_lossy().into_owned()),
+                    diff: fleet::FleetDiff {
+                        added: changes.added,
+                        removed: changes.removed,
+                        files: changes.tracked,
+                        untracked: changes.untracked,
+                    },
+                    files_touched,
+                    overlap: vec![],
+                    verify,
+                    merge,
+                    updated_at: thread.updated_at.clone(),
+                });
+            }
+            // One row per playbook run, from the same records the Playbooks
+            // panel lists. Read-only on purpose: reconciling a stale record is
+            // `list_chain_runs`'s job, and a record no live run owns is over
+            // either way — which is all the board needs to say.
+            for run in chain_history::list_runs(&home, &project.hash).unwrap_or_default() {
+                let live = live_runs.contains(&run.id);
+                let completed = matches!(
+                    run.outcome,
+                    Some(chain_history::OutcomeSnapshot::Completed { .. })
+                );
+                let (status, attention) = fleet::derive_playbook_status(&fleet::PlaybookInput {
+                    awaiting_gate: gated_runs.contains(&run.id),
+                    ended: !live,
+                    failed: !live && !completed,
+                });
+                rows.push(fleet::FleetRow {
+                    kind: fleet::FleetKind::Playbook,
+                    // The run id is this row's identity, so the board keys and
+                    // opens it the same way it does a thread.
+                    thread_id: run.id.clone(),
+                    run_id: Some(run.id.clone()),
+                    playbook_name: Some(run.chain_name.clone()),
+                    seed: (!run.seed.trim().is_empty()).then(|| run.seed.clone()),
+                    title: run.chain_name.clone(),
+                    project_id: project.hash.clone(),
+                    project_name: project.display_name.clone(),
+                    agent_id: None,
+                    agent_name: None,
+                    mode: "go".into(),
+                    status,
+                    attention,
+                    branch: None,
+                    worktree_path: None,
+                    // A run has no worktree of its own — its nodes write in
+                    // the thread's tree — so there is nothing git can measure
+                    // here that the thread's own row doesn't already show.
+                    diff: fleet::FleetDiff::default(),
+                    files_touched: vec![],
+                    overlap: vec![],
+                    verify: fleet::FleetVerify::not_run(),
+                    merge: fleet::FleetMerge::NoWorktree,
+                    updated_at: run.ended_at.clone().unwrap_or_else(|| run.started_at.clone()),
+                });
+            }
+        }
+        // Finished runs are history, and history is the Playbooks panel's job.
+        // The board keeps the newest few so a run that just ended is still
+        // where you left it; a run still walking, or stuck at a gate, is never
+        // dropped.
+        fleet::cap_finished_playbooks(&mut rows, fleet::FINISHED_PLAYBOOK_LIMIT);
+        fleet::compute_overlap(&mut rows);
+        // Most recently touched first: the board's own ordering, so two
+        // clients render the same fleet in the same order.
+        rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// The files one thread has changed, measured exactly as the Fleet board
+/// measures them.
+///
+/// The Review lane used to parse `git_working_diff` itself, which sees no
+/// untracked file and knows nothing of the skip-list — so the lane and the
+/// board could disagree about what a thread had done. One helper now answers
+/// both.
+#[tauri::command]
+async fn thread_review_files(
+    project_hash: String,
+    thread_id: String,
+) -> Res<Vec<fleet::ReviewFile>> {
+    tokio::task::spawn_blocking(move || {
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        // A thread with no worktree of its own edits the project checkout,
+        // and has no base branch to measure against either.
+        let thread =
+            store::list_threads(&palisade_home(), &project_hash)?.into_iter().find(|t| t.id == thread_id);
+        let worktree = thread
+            .as_ref()
+            .and_then(|t| t.worktree_path.clone())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+        let base = worktree
+            .as_ref()
+            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let tree = worktree.clone().unwrap_or_else(|| root.clone());
+        Ok(fleet::review_files(&bin, &tree, &root, base))
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// The full patch one thread has made since it branched, including committed
+/// work and any staged, unstaged, or untracked changes still in its tree.
+#[tauri::command]
+async fn thread_review_diff(project_hash: String, thread_id: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let bin = git_bin()?;
+        let root = project_root(&project_hash)?;
+        let thread = store::list_threads(&palisade_home(), &project_hash)?
+            .into_iter()
+            .find(|t| t.id == thread_id);
+        let worktree = thread
+            .as_ref()
+            .and_then(|t| t.worktree_path.clone())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+        let base = worktree
+            .as_ref()
+            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let tree = worktree.unwrap_or_else(|| root.clone());
+        Ok(fleet::review_diff(&bin, &tree, base))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2413,6 +2633,7 @@ async fn merge_thread_worktree(
     app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
+    override_verify: bool,
 ) -> Res<MergeResult> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
@@ -2428,9 +2649,29 @@ async fn merge_thread_worktree(
                     .into(),
             );
         }
+        if !override_verify {
+            let runs = store::read_verifications(&palisade_home(), &project_hash)?;
+            let verify = fleet::current_verify(
+                &runs,
+                &thread_id,
+                git::rev_parse_head(&bin, &path).as_deref(),
+                true,
+            );
+            if verify.state != fleet::VerifyState::Pass {
+                return Err(
+                    "This thread needs a passing verification at its current commit before merging. Open Review to run it or explicitly merge anyway."
+                        .into(),
+                );
+            }
+        }
         let out = git::merge_into_base(&bin, &root, &base, &branch)?;
         if out.merged {
-            let _ = store::set_thread_merged(&palisade_home(), &project_hash, &thread_id);
+            let _ = store::set_thread_merged(
+                &palisade_home(),
+                &project_hash,
+                &thread_id,
+                override_verify,
+            );
         }
         Ok(MergeResult {
             merged: out.merged,
@@ -2674,17 +2915,18 @@ pub(crate) fn record_verification(
     session_id: Option<String>,
 ) -> Res<i32> {
     let root = project_root(project_hash)?;
+    let tree = commands::git_cmds::tree_root(project_hash, thread_id.as_deref())?;
     let (settings, _) = settings::load(&root);
     // `-dirty` follows git-describe: a run against an uncommitted tree
     // cannot claim the commit it started from, or the evidence is a lie.
     let head = git_bin().ok().and_then(|bin| {
-        let head = git::rev_parse_head(&bin, &root)?;
-        Some(match git::porcelain_snapshot(&bin, &root).is_empty() {
+        let head = git::rev_parse_head(&bin, &tree)?;
+        Some(match git::porcelain_snapshot(&bin, &tree).is_empty() {
             true => head,
             false => format!("{head}-dirty"),
         })
     });
-    let run = match settings::run_verify(&settings, &root, name) {
+    let run = match settings::run_verify(&settings, &tree, name) {
         Ok(outcome) => store::VerificationRun {
             id: ulid::Ulid::new().to_string(),
             project_hash: project_hash.to_string(),
@@ -3654,8 +3896,7 @@ async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::Compl
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
-// ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity// ------------------------------------------------------------- graphify
-
+// ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
@@ -3723,6 +3964,8 @@ pub fn run() {
         .manage(lsp::SharedLsp::new(lsp::LspServers::new()))
         .invoke_handler(tauri::generate_handler![
             complete_code,
+            agent_usage,
+            list_skills,
             set_completion_enabled,
             set_completion_keybinding,
             get_completion_settings,
@@ -3755,6 +3998,7 @@ pub fn run() {
             agent_authenticate,
             delete_thread,
             set_thread_archived,
+            mark_thread_viewed,
             append_message,
             read_thread,
             preflight,
@@ -3772,6 +4016,9 @@ pub fn run() {
             executor_status,
             list_sessions,
             thread_worktrees,
+            fleet_overview,
+            thread_review_files,
+            thread_review_diff,
             merge_thread_worktree,
             open_thread_pr,
             prune_thread_worktree,
@@ -3809,9 +4056,6 @@ pub fn run() {
             commands::openspec_cmds::validate_spec_changes,
             commands::openspec_cmds::archive_spec_change,
             commands::openspec_cmds::set_spec_change,
-            commands::graphify_cmds::run_graphify,
-            commands::graphify_cmds::load_graphify,
-            commands::graphify_cmds::query_graphify,
             commands::terminal_cmds::terminal_spawn,
             commands::terminal_cmds::terminal_input,
             commands::terminal_cmds::terminal_resize,
@@ -4222,7 +4466,6 @@ mod tests {
             selected: agents.first().map(|a| a.id.clone()),
             agents,
             openspec: true,
-            graphify: true,
             ready: true,
             warnings: vec![],
             checked_at: "2026-08-07T00:00:00Z".into(),
@@ -4283,9 +4526,11 @@ mod tests {
             worktree_branch: None,
             worktree_base_branch: None,
             merged_at: None,
+            merge_overridden: false,
             worktree_enabled: true,
             title_source: "manual".into(),
             auth_blocked: None,
+            last_viewed_at: None,
         }
     }
 

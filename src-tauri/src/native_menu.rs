@@ -164,8 +164,6 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<NativeMenu<R>> {
     let edit = Submenu::with_items(app, TOP_LEVEL_MENUS[2], true, &[&undo, &redo, &sep()?, &cut, &copy, &paste, &select_all, &sep()?, &find, &find_next, &find_previous, &find_project])?;
 
     let palette = native.normal(app, "help.commands", "Command Palette…", Some("CmdOrCtrl+Shift+P"))?;
-    let layout_editor = native.check(app, "view.layout.editor", "Editor", None)?; let layout_vibe = native.check(app, "view.layout.vibe", "Vibe", None)?;
-    let layouts = Submenu::with_items(app, "Workspace Layout", true, &[&layout_editor, &layout_vibe])?;
     let theme_system = native.check(app, "view.theme.auto", "System", None)?; let theme_light = native.check(app, "view.theme.light", "Light", None)?; let theme_dark = native.check(app, "view.theme.dark", "Dark", None)?;
     let appearance = Submenu::with_items(app, "Appearance", true, &[&theme_system, &theme_light, &theme_dark])?;
     let side = native.normal(app, "view.leftRail", "Show/Hide Side Panel", Some("CmdOrCtrl+\\"))?;
@@ -174,7 +172,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<NativeMenu<R>> {
     let changes = native.normal(app, "view.diff", "Show/Hide Changes", None)?;
     let markdown = native.normal(app, "view.markdownPreview", "Toggle Markdown Preview", Some("CmdOrCtrl+Shift+V"))?;
     let fullscreen = PredefinedMenuItem::fullscreen(app, Some("Enter Full Screen"))?;
-    let view = Submenu::with_items(app, TOP_LEVEL_MENUS[3], true, &[&palette, &sep()?, &layouts, &appearance, &sep()?, &side, &secondary, &terminal, &changes, &markdown, &sep()?, &fullscreen])?;
+    let view = Submenu::with_items(app, TOP_LEVEL_MENUS[3], true, &[&palette, &sep()?, &appearance, &sep()?, &side, &secondary, &terminal, &changes, &markdown, &sep()?, &fullscreen])?;
 
     let go_file = native.normal(app, "file.open", "Go to File…", Some("CmdOrCtrl+P"))?;
     let go_line = native.normal(app, "editor.goToLine", "Go to Line…", Some("Ctrl+G"))?;

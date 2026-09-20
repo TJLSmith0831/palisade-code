@@ -526,7 +526,7 @@ describe("ChainCanvas — cursor-anchored wheel zoom", () => {
         <ChainCanvas projectHash="proj-1" chainName={null} agents={[]} verifyCommands={[]} />
       </MantineProvider>
     );
-    const surface = screen.getByLabelText("Chain graph");
+    const surface = screen.getByLabelText("Playbook graph");
     fireEvent.wheel(surface, { ctrlKey: true, deltaY: -100, clientX: 300, clientY: 250 });
     const { x, y, zoom } = planeTransform();
     // Cursor at (200, 200) relative to the surface; zoom goes 1 -> 1.2.
@@ -843,7 +843,7 @@ describe("ChainCanvas — undo", () => {
     renderCanvas();
     fireEvent.click(screen.getByRole("button", { name: "Node" }));
     fireEvent.click(screen.getByRole("button", { name: "Node" }));
-    const name = screen.getByPlaceholderText("Chain name");
+    const name = screen.getByPlaceholderText("Playbook name");
     fireEvent.change(name, { target: { value: "my chain" } });
 
     act(() => { fireEvent.keyDown(name, { key: "z", metaKey: true }); });
