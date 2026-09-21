@@ -263,7 +263,10 @@ export type AgentUsage =
   | { agentId: string; state: "not_signed_in" | "unavailable"; reason: string };
 
 /** One entry per agent the cached preflight reports as installed. Cached 60s. */
-export const agentUsage = () => invoke<AgentUsage[]>("agent_usage");
+/** `force` bypasses the backend's 60s per-agent cache — pass it from the
+ *  manual refresh and while a sign-in is unconfirmed so a completed login
+ *  doesn't sit behind a stale `not_signed_in` hit for up to a minute. */
+export const agentUsage = (force?: boolean) => invoke<AgentUsage[]>("agent_usage", { force });
 
 /** A user-level skill directory containing a `SKILL.md`. */
 export type Skill = {
@@ -479,6 +482,8 @@ export type WorktreeStatus = {
   /** The worktree's HEAD — what a verification run has to have run at for
    *  its result to still be about this code. */
   head: string | null;
+  setupState?: "running" | "ready" | "failed" | null;
+  setupOutput?: string | null;
 };
 
 /** What a merge-back attempt did. A conflict is not an error: the half-merged
@@ -494,6 +499,8 @@ export type MergeResult = {
  *  projects are simply absent. */
 export const threadWorktrees = (projectHash: string) =>
   invoke<WorktreeStatus[]>("thread_worktrees", { projectHash });
+export const rerunWorktreeSetup = (projectHash: string, threadId: string) =>
+  invoke<void>("rerun_worktree_setup", { projectHash, threadId });
 /** Merge a thread's branch into the branch it was cut from. Rejects a busy
  *  thread and an uncommitted worktree — what lands must be what was reviewed. */
 export const mergeThreadWorktree = (
@@ -506,6 +513,8 @@ export const mergeThreadWorktree = (
     threadId,
     overrideVerify,
   });
+export const cancelMergeVerification = (projectHash: string, threadId: string) =>
+  invoke<void>("cancel_merge_verification", { projectHash, threadId });
 
 /** Push the thread's branch and open a PR for it, returning the URL to open.
  *  Uses `gh` when it is on PATH, and the host's compare page when it isn't. */
@@ -544,7 +553,7 @@ export type FleetAttention =
 /** Evidence, never opinion: a pass is a named command that exited 0 at a
  *  named commit. `not_run` is the honest default. */
 export type FleetVerify = {
-  state: "pass" | "fail" | "not_run";
+  state: "pass" | "fail" | "not_run" | "unconfigured";
   command?: string;
   commit?: string;
   at?: string;
@@ -574,8 +583,11 @@ export type FleetRow = {
   attention?: FleetAttention;
   branch?: string;
   worktreePath?: string;
-  /** `files` counts tracked files that differ from HEAD and nothing else, so
-   *  it always describes the same measurement `added`/`removed` do.
+  /** The branch a merge lands in, present only when it is not the branch
+   *  checked out in the project now. */
+  mergeTarget?: string;
+  /** `files` counts tracked files that differ from the thread's merge base;
+   *  `added` also includes the lines of untracked files.
    *  `untracked` is the files the thread created that git does not track yet
    *  — they contribute no line counts. Optional only so fixtures written
    *  before it existed still typecheck; the backend always sends it. */
@@ -585,7 +597,13 @@ export type FleetRow = {
   overlap: { threadId: string; files: string[] }[];
   verify: FleetVerify;
   merge: FleetMerge;
+  /** Last touched — a message or the user opening the thread, whichever is
+   *  newer. The board's sort key, not a time to show. */
   updatedAt: string;
+  createdAt: string;
+  /** When the thread last spoke. Absent if it has never run. */
+  lastActivityAt?: string;
+  archivable?: boolean;
 };
 
 /** Every unarchived thread in every open project, newest first. One call for
@@ -821,6 +839,10 @@ export const listVerifications = (projectHash: string) =>
 /** `[name, command]` pairs from the project's `.palisade/project-settings.json`. */
 export const verifyCommands = (projectHash: string) =>
   invoke<[string, string][]>("verify_commands", { projectHash });
+export const detectVerifyCommands = (projectHash: string) =>
+  invoke<[string, string][]>("detect_verify_commands", { projectHash });
+export const saveVerifyCommands = (projectHash: string, commands: [string, string][]) =>
+  invoke<void>("save_verify_commands", { projectHash, commands });
 
 // ------------------------------------------------------------ agent chains
 
@@ -966,6 +988,8 @@ export type ChainRunRecord = {
   endedAt: string | null;
   outcome: ChainRunOutcome | null;
   nodes: Record<string, ChainRunNodeHistory>;
+  /** Soft-flag archive (issue #53) — never a delete; hidden from the default list. */
+  archived: boolean;
 };
 
 /**
@@ -1001,13 +1025,25 @@ export const rerunChainRun = (
 export const cancelChainRun = (runId: string) =>
   invoke<void>("cancel_chain_run", { runId });
 
-/** Durable history, optionally restricted to one chain definition. */
-export const listChainRuns = (projectHash: string, chainName?: string) =>
-  invoke<ChainRunRecord[]>("list_chain_runs", { projectHash, chainName: chainName ?? null });
+/**
+ * Durable history, optionally restricted to one chain definition. Archived
+ * runs are excluded unless `includeArchived` is true (default excludes,
+ * mirroring `listThreads`'s archive convention).
+ */
+export const listChainRuns = (projectHash: string, chainName?: string, includeArchived?: boolean) =>
+  invoke<ChainRunRecord[]>("list_chain_runs", {
+    projectHash,
+    chainName: chainName ?? null,
+    includeArchived: includeArchived ?? null,
+  });
 
 /** One durable run by id, or null when it does not belong to this project. */
 export const getChainRun = (projectHash: string, runId: string) =>
   invoke<ChainRunRecord | null>("get_chain_run", { projectHash, runId });
+
+/** Soft-flags a run archived or unarchived (issue #53) — never a delete. */
+export const setChainRunArchived = (projectHash: string, runId: string, archived: boolean) =>
+  invoke<ChainRunRecord>("set_chain_run_archived", { projectHash, runId, archived });
 
 /** The three things a human can do at a paused approval gate (D9). */
 export const resolveChainGate = (

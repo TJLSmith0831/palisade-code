@@ -1,10 +1,18 @@
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
 import type { FleetBoardProps } from "../FleetBoard";
 import type { FleetRow } from "../api";
+import { ArchivingContext } from "../archiving";
+
+const { apiMock } = vi.hoisted(() => ({
+  apiMock: {
+    listModels: vi.fn().mockResolvedValue({ configId: null, current: null, models: [] }),
+  },
+}));
+vi.mock("../api", () => apiMock);
 
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
@@ -20,12 +28,14 @@ const row = (over: Partial<FleetRow> = {}): FleetRow => ({
   mode: "go",
   status: "idle",
   branch: "pal/t1",
+  worktreePath: "/wt/t1",
   diff: { added: 12, removed: 3, files: 2 },
   filesTouched: ["src/App.tsx"],
   overlap: [],
   verify: { state: "not_run" },
   merge: "clean",
   updatedAt: new Date().toISOString(),
+  createdAt: new Date().toISOString(),
   ...over,
 });
 
@@ -39,6 +49,7 @@ const props = (over: Partial<FleetBoardProps> = {}): FleetBoardProps => ({
   onMerge: vi.fn(),
   onOpenPr: vi.fn(),
   onArchive: vi.fn(),
+  onArchiveRun: vi.fn(),
   onOpenRun: vi.fn(),
   onCancelRun: vi.fn(),
   onNewRun: vi.fn(),
@@ -57,6 +68,7 @@ const playbookRow = (over: Partial<FleetRow> = {}): FleetRow =>
     diff: { added: 0, removed: 0, files: 0 },
     filesTouched: [],
     merge: "no_worktree",
+    archivable: true,
     ...over,
   });
 
@@ -220,7 +232,7 @@ describe("FleetBoard", () => {
     render(
       <FleetBoard
         {...props({
-          rows: [playbookRow({ status: "running" })],
+          rows: [playbookRow({ status: "running", archivable: false })],
           onOpen,
           onStop,
           onOpenRun,
@@ -237,17 +249,20 @@ describe("FleetBoard", () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it("hides Merge, Open PR and Archive on a playbook row", async () => {
-    render(<FleetBoard {...props({ rows: [playbookRow()] })} />);
+  it("offers Archive for a finished playbook run", async () => {
+    const onArchiveRun = vi.fn();
+    render(<FleetBoard {...props({ rows: [playbookRow()], onArchiveRun })} />);
     fireEvent.click(screen.getByTestId("fleet-actions"));
     expect(await screen.findByText("Open")).toBeInTheDocument();
     expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.queryByTestId("fleet-merge-disabled")).toBeNull();
     expect(screen.queryByText("Open PR")).toBeNull();
-    expect(screen.queryByText("Archive")).toBeNull();
+    expect(screen.getByText("Archive")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Archive"));
+    expect(onArchiveRun).toHaveBeenCalledWith("p1", "run-1");
   });
 
-  it("heads the board with the project and what the fleet is doing", () => {
+  it("heads the board with the project and its three status counts", () => {
     render(
       <FleetBoard
         {...props({
@@ -262,9 +277,9 @@ describe("FleetBoard", () => {
       />
     );
     expect(screen.getByText("palisade")).toBeInTheDocument();
-    expect(screen.getByTestId("fleet-counts")).toHaveTextContent(
-      "1 need attention \u00b7 1 running \u00b7 2 idle"
-    );
+    expect(screen.getByTestId("fleet-count-attention")).toHaveTextContent("1Needs attention");
+    expect(screen.getByTestId("fleet-count-running")).toHaveTextContent("1Running");
+    expect(screen.getByTestId("fleet-count-idle")).toHaveTextContent("2Idle");
   });
 
   /** New files carry no line counts, so the stat says them rather than
@@ -282,6 +297,42 @@ describe("FleetBoard", () => {
     expect(screen.getByTestId("fleet-diff")).not.toHaveTextContent("new");
   });
 
+  /** A branch with no worktree is a thread whose worktree is gone. Whatever
+   *  the backend measured there is not this thread's work. */
+  it("shows no diff for a thread whose worktree is gone", () => {
+    render(<FleetBoard {...props({ rows: [row({ worktreePath: undefined })] })} />);
+    expect(screen.queryByTestId("fleet-diff")).toBeNull();
+  });
+
+  it("names the merge target only when it is not the current branch", () => {
+    const withTarget = render(<FleetBoard {...props({ rows: [row({ mergeTarget: "main" })] })} />);
+    expect(screen.getByText("palisade \u00b7 pal/t1 \u2192 main")).toBeInTheDocument();
+    withTarget.unmount();
+
+    render(<FleetBoard {...props()} />);
+    expect(screen.getByText("palisade \u00b7 pal/t1")).toBeInTheDocument();
+  });
+
+  /** The row is ordered by last touched, which includes opening the thread.
+   *  What it shows is when the thread was made and when it last spoke. */
+  it("shows created and last-active times, not the touch time", () => {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    render(
+      <FleetBoard
+        {...props({
+          rows: [
+            row({
+              updatedAt: ago(1000),
+              createdAt: ago(11 * 86_400_000),
+              lastActivityAt: ago(2 * 86_400_000),
+            }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getByTestId("fleet-times")).toHaveTextContent("Created 11d ago · Last active 2d ago");
+  });
+
   it("keeps Start run disabled when no agent is installed", () => {
     render(
       <FleetBoard
@@ -292,6 +343,134 @@ describe("FleetBoard", () => {
       target: { value: "ship it" },
     });
     expect(screen.getByTestId("fleet-start")).toBeDisabled();
+  });
+
+  it("offers the selected agent's advertised models, and the pick reaches the start-run payload", async () => {
+    apiMock.listModels.mockResolvedValueOnce({
+      configId: "model",
+      current: null,
+      models: [{ id: "m1", name: "Model One" }],
+    });
+    const onNewRun = vi.fn();
+    render(<FleetBoard {...props({ onNewRun })} />);
+
+    const select = screen.getByTestId("fleet-model-select");
+    await waitFor(() => expect(select).not.toBeDisabled());
+    expect(apiMock.listModels).toHaveBeenCalledWith(null, "a1");
+
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByRole("option", { name: "Model One", hidden: true }));
+
+    fireEvent.change(screen.getByTestId("fleet-prompt"), {
+      target: { value: "ship it" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-start"));
+
+    expect(onNewRun).toHaveBeenCalledWith({
+      prompt: "ship it",
+      agentId: "a1",
+      model: "m1",
+      mode: "spec",
+      isolated: true,
+    });
+  });
+
+  it("preselects the agent's default option over its settings-resolved current model", async () => {
+    apiMock.listModels.mockResolvedValueOnce({
+      configId: "model",
+      current: "claude-fable-5-1",
+      models: [
+        { id: "default", name: "Default (recommended)" },
+        { id: "claude-fable-5-1", name: "Fable 5.1" },
+      ],
+    });
+    const onNewRun = vi.fn();
+    render(<FleetBoard {...props({ onNewRun })} />);
+    await waitFor(() => expect(screen.getByTestId("fleet-model-select")).toHaveValue("Default (recommended)"));
+  });
+
+  it("falls back to the agent's current model when it offers no default option", async () => {
+    apiMock.listModels.mockResolvedValueOnce({
+      configId: "model",
+      current: "m2",
+      models: [
+        { id: "m1", name: "Model One" },
+        { id: "m2", name: "Model Two" },
+      ],
+    });
+    render(<FleetBoard {...props()} />);
+    await waitFor(() => expect(screen.getByTestId("fleet-model-select")).toHaveValue("Model Two"));
+  });
+
+  it("shows skeleton rows only after a short delay on the first load, never over real rows", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<FleetBoard {...props({ rows: [], loading: true })} />);
+      expect(screen.queryByTestId("fleet-skeleton")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.getByTestId("fleet-skeleton")).toBeInTheDocument();
+      expect(screen.queryByTestId("fleet-empty")).toBeNull();
+      expect(screen.getByTestId("fleet-board")).toHaveAttribute("aria-busy", "true");
+      rerender(<FleetBoard {...props({ rows: [], loading: false })} />);
+      expect(screen.queryByTestId("fleet-skeleton")).toBeNull();
+      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("toggles isolation with the thread-style badge, and the choice reaches the start-run payload", () => {
+    const onNewRun = vi.fn();
+    render(<FleetBoard {...props({ onNewRun })} />);
+    const badge = screen.getByTestId("fleet-isolated");
+    expect(badge).toHaveTextContent("Isolated");
+    expect(badge).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(badge);
+    expect(badge).toHaveTextContent("Project root");
+    expect(badge).toHaveAttribute("aria-pressed", "false");
+    fireEvent.change(screen.getByTestId("fleet-prompt"), { target: { value: "ship it" } });
+    fireEvent.click(screen.getByTestId("fleet-start"));
+    expect(onNewRun).toHaveBeenCalledWith(expect.objectContaining({ isolated: false }));
+  });
+
+  it("disables the model select with a clear placeholder while loading, and when the agent offers none", async () => {
+    let resolveModels: (state: { configId: null; current: null; models: never[] }) => void =
+      () => {};
+    apiMock.listModels.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveModels = resolve;
+        })
+    );
+    render(<FleetBoard {...props()} />);
+
+    const select = screen.getByTestId("fleet-model-select");
+    expect(select).toBeDisabled();
+    expect(select).toHaveAttribute("placeholder", "Loading models…");
+
+    resolveModels({ configId: null, current: null, models: [] });
+    await waitFor(() =>
+      expect(select).toHaveAttribute("placeholder", "No models offered")
+    );
+    expect(select).toBeDisabled();
+  });
+
+  it("renders no effort control — no ACP channel advertises one", () => {
+    render(<FleetBoard {...props()} />);
+    expect(screen.queryByLabelText(/effort/i)).toBeNull();
+    expect(document.querySelector('[data-testid*="effort"]')).toBeNull();
+  });
+
+  it("colors the Spec/Go control like the main composer's, active segment filled", () => {
+    render(<FleetBoard {...props()} />);
+    const specActive = document.querySelector(".mode-selector-control[data-active]");
+    expect(specActive).toHaveTextContent("Spec");
+
+    fireEvent.click(screen.getByText("Go"));
+    const goActive = document.querySelector(".mode-selector-control[data-active]");
+    expect(goActive).toHaveTextContent("Go");
   });
 });
 
@@ -309,5 +488,31 @@ describe("playbookSubtitle", () => {
   it("falls back when the run records no seed", () => {
     expect(playbookSubtitle(playbookRow())).toBe("Playbook run");
     expect(playbookSubtitle(playbookRow({ seed: "   " }))).toBe("Playbook run");
+  });
+});
+
+describe("FleetBoard — archive in flight", () => {
+  const withArchiving = (ids: string[], rows: FleetRow[]) =>
+    render(
+      <ArchivingContext.Provider value={new Set(ids)}>
+        <FleetBoard {...props({ rows })} />
+      </ArchivingContext.Provider>,
+    );
+
+  it("swaps a thread row's actions button for a spinner and disables it", () => {
+    withArchiving(["t1"], [row()]);
+    expect(screen.getByLabelText("Archiving")).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-actions")).toBeDisabled();
+    expect(screen.getByTestId("fleet-row")).toHaveAttribute("data-busy", "true");
+  });
+
+  it("keys a playbook run by its run id, the id it is archived by", () => {
+    withArchiving(["run-1"], [playbookRow({ threadId: "thread-of-run", runId: "run-1" })]);
+    expect(screen.getByLabelText("Archiving")).toBeInTheDocument();
+  });
+
+  it("leaves other rows alone", () => {
+    withArchiving(["t1"], [row(), row({ threadId: "t2" })]);
+    expect(screen.getAllByLabelText("Archiving")).toHaveLength(1);
   });
 });

@@ -1323,18 +1323,49 @@ describe("Where a chain run lives (D3/D7/D7a)", () => {
   });
 });
 
-describe("Collapsing chat (Cmd+J)", () => {
-  it("leaves Vibe's chat alone — it is the primary surface there", async () => {
+describe("Panes (Cmd+J editor, Cmd+K back to Fleet)", () => {
+  it("Cmd+J only collapses the editor column, leaving chat alone", async () => {
     render(<App />);
     await openProject();
     await screen.findByTestId("vibe-shell");
 
-    // No toggle to hide it with, and Cmd+J can't either: Vibe without chat
-    // is just Editor with the panels on the wrong side.
-    expect(screen.queryByTestId("toggle-chat")).toBeNull();
     fireEvent.keyDown(window, { key: "j", metaKey: true });
     expect(screen.getByTestId("right-sidebar")).toBeDefined();
     expect(screen.getByTestId("vibe-shell")).not.toHaveAttribute("data-chat");
+  });
+
+  it("Cmd+K leaves the thread page for Fleet", async () => {
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("vibe-shell");
+    expect(screen.queryByTestId("fleet-board")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(await screen.findByTestId("fleet-board")).toBeDefined();
+  });
+
+  // Chat used to collapse to a strip and remember that. It can't any more, so
+  // a saved collapse must not strand anyone on a page with no chat.
+  it("ignores a saved 'chat collapsed' flag — chat is always on screen", async () => {
+    localStorage.setItem(
+      "palisade:layout:proj-1:vibe-chat",
+      JSON.stringify({ size: 520, collapsed: true })
+    );
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("vibe-shell");
+
+    expect(screen.queryByTestId("chat-rail-restore")).toBeNull();
+    expect(within(screen.getByTestId("right-sidebar")).getByTestId("mode-picker")).toBeDefined();
+  });
+
+  it("keeps chat on screen with the editor pane closed", async () => {
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("vibe-shell");
+
+    fireEvent.click(screen.getByTestId("toggle-editor"));
+    expect(screen.getByTestId("right-sidebar")).toBeDefined();
   });
 });
 
@@ -1569,7 +1600,7 @@ describe("Bottom panel (shell-redesign Phase 2)", () => {
 });
 
 describe("Left icon rail (shell-redesign Amendment 3)", () => {
-  it("mounts the rail with all nine panel icons", async () => {
+  it("mounts the rail with its panel icons, and Settings lives in the top bar only", async () => {
     render(<App />);
     await openProject();
     const rail = screen.getByTestId("nav-rail");
@@ -1581,10 +1612,11 @@ describe("Left icon rail (shell-redesign Amendment 3)", () => {
       "run",
       "history",
       "workspace",
-      "settings",
     ]) {
       expect(within(rail).getByTestId(`rail-${id}`)).toBeDefined();
     }
+    expect(within(rail).queryByTestId("rail-settings")).toBeNull();
+    expect(screen.getByTestId("open-settings")).toBeDefined();
   });
 
   it("opens the Fleet board on a project first seen here, and the rail toggles the Explorer", async () => {
@@ -1896,6 +1928,11 @@ describe("Settings panel (D14/D15)", () => {
         if (cmd === "read_file_content")
           return Promise.resolve('{"formatOnSave":{}}');
         if (cmd === "write_file_content") writeCalls.push(args);
+        // Fleet is the default panel, so its board (and its model probe)
+        // mounts under this project regardless of which panel the test
+        // actually opens — same shape the default invoke mock returns.
+        if (cmd === "list_models")
+          return Promise.resolve({ configId: null, current: null, models: [] });
         return Promise.resolve([]);
       }
     );
@@ -1973,6 +2010,11 @@ describe("Settings panel (D14/D15)", () => {
           writeCalls.push(args ?? {});
           return Promise.resolve(null);
         }
+        // Fleet is the default panel, so its board (and its model probe)
+        // mounts under this project regardless of which panel the test
+        // actually opens — same shape the default invoke mock returns.
+        if (cmd === "list_models")
+          return Promise.resolve({ configId: null, current: null, models: [] });
         return Promise.resolve([]);
       }
     );
@@ -2024,11 +2066,42 @@ describe("Right sidebar (merged-design v2)", () => {
     expect(screen.getByTestId("resize-right-panel")).toBeDefined();
   });
 
-  it("offers no chat toggle — chat is the subject, the editor column is what collapses", async () => {
+  it("has no Chat toggle — a thread's page always shows chat — but keeps Threads and the editor toggle", async () => {
     render(<App />);
     await openProject();
     expect(screen.queryByTestId("toggle-chat")).toBeNull();
+    expect(screen.getByTestId("toggle-session-list")).toBeDefined();
     expect(screen.getByTestId("toggle-editor")).toBeDefined();
+  });
+
+  it("groups Back to Fleet and Threads together, apart from the editor and terminal", async () => {
+    render(<App />);
+    await openProject();
+    const group = screen.getByTestId("back-to-fleet").closest(".ds-pill-group");
+    expect(group).not.toBeNull();
+    // A label on a bare div is ignored by assistive tech; the group role is
+    // what makes it a named region.
+    expect(group).toHaveAttribute("role", "group");
+    expect(screen.getByRole("group", { name: "Fleet navigation" })).toBe(group);
+
+    // Agent Access is icon-only: no visible text, but an accessible name.
+    const access = screen.getByTestId("toggle-session-list");
+    expect(access).toHaveAccessibleName("Hide agent access");
+    expect(access).toHaveTextContent("");
+    expect(group).toContainElement(screen.getByTestId("toggle-session-list"));
+    expect(group).not.toContainElement(screen.getByTestId("toggle-editor"));
+    expect(group).not.toContainElement(screen.getByTestId("toggle-terminal"));
+  });
+
+  it("puts a Back to Fleet button in the top bar on a thread page, and none on Fleet", async () => {
+    render(<App />);
+    await openProject();
+    const back = screen.getByTestId("back-to-fleet");
+    expect(back).toHaveAccessibleName("Back to Fleet");
+
+    fireEvent.click(back);
+    expect(await screen.findByTestId("fleet-board")).toBeDefined();
+    expect(screen.queryByTestId("back-to-fleet")).toBeNull();
   });
 
   it("sizes chat from its own resizable, so the handle actually works", async () => {
@@ -4356,6 +4429,28 @@ describe("Project switching", () => {
     await waitFor(() => expect(screen.getByText("b.ts")).toBeDefined());
     expect(screen.queryByTestId("file-editor")).toBeNull();
     expect(screen.getByTestId("editor-empty")).toBeDefined();
+  });
+
+  it("shows the selected project while the backend switch is still pending", async () => {
+    let finishSwitch!: (project: typeof projB) => void;
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "switch_project" && args?.hash === projB.hash)
+        return new Promise((resolve) => {
+          finishSwitch = resolve;
+        });
+      if (cmd === "switch_project") return Promise.resolve(projA);
+      if (cmd === "list_projects") return Promise.resolve([projA, projB]);
+      if (cmd === "list_threads") return Promise.resolve([]);
+      return defaultInvoke(cmd, args);
+    });
+
+    render(<App />);
+    await openProject();
+
+    fireEvent.change(openWorkspacePanel(), { target: { value: projB.hash } });
+
+    await waitFor(() => expect(openWorkspacePanel()).toHaveValue(projB.hash));
+    finishSwitch(projB);
   });
 });
 

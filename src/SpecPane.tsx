@@ -10,8 +10,9 @@ import {
   Stack,
   Text,
   Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
-import { IconArchive, IconRefresh } from "@tabler/icons-react";
+import { IconArchive, IconCircleCheck, IconRefresh } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
 
 import * as api from "./api";
@@ -239,95 +240,96 @@ export default function SpecPane({
         </Text>
       )}
 
-      {sorted.map((change) => (
-        <Stack
-          key={change.name}
-          gap={4}
-          data-testid="spec-change"
-          data-linked={change.name === linkedChange ? "true" : undefined}
-        >
-          <Group justify="space-between" wrap="nowrap" gap="xs">
-            <Text
-              size="xs"
-              fw={change.name === linkedChange ? 700 : 400}
-              truncate
+      {sorted.map((change) => {
+        const tasksComplete =
+          change.totalTasks > 0 && change.completedTasks === change.totalTasks;
+
+        return (
+          <div
+            key={change.name}
+            className="ds-spec-change"
+            data-testid="spec-change"
+            data-linked={change.name === linkedChange ? "true" : undefined}
+            data-openable={onOpenSpec ? "true" : undefined}
+            data-tasks-complete={tasksComplete ? "true" : undefined}
+          >
+            <UnstyledButton
+              className="ds-spec-change-open"
               onClick={() => onOpenSpec?.(change.name)}
-              style={{ cursor: onOpenSpec ? "pointer" : undefined }}
-              role={onOpenSpec ? "button" : undefined}
-              tabIndex={onOpenSpec ? 0 : undefined}
-              onKeyDown={(event) => {
-                if (
-                  onOpenSpec &&
-                  (event.key === "Enter" || event.key === " ")
-                ) {
-                  event.preventDefault();
-                  onOpenSpec(change.name);
-                }
-              }}
+              disabled={!onOpenSpec}
+              aria-label={`Open ${change.name} spec change`}
+              data-testid="spec-change-open"
             >
-              {change.name}
-            </Text>
-            <Group gap="xs" wrap="nowrap">
-              {archiving.has(change.name) ? (
-                <Loader
-                  color="neutral"
-                  type="dots"
-                  size="xs"
-                  data-testid="archive-loader"
-                />
-              ) : (
-                <Tooltip label="Archive change">
-                  <ActionIcon
-                    size="sm"
-                    variant="subtle"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      archiveChange(change.name);
-                    }}
-                    aria-label={`Archive ${change.name}`}
-                    data-testid="spec-archive"
+              <Stack gap={4}>
+                <Text size="xs" fw={change.name === linkedChange ? 700 : 400} truncate>
+                  {change.name}
+                </Text>
+                {change.totalTasks > 0 && (
+                  <Tooltip
+                    label={`${change.completedTasks} of ${change.totalTasks} task checkboxes ticked by the agent — a self-report, not verification.`}
+                    multiline
                   >
-                    <IconArchive size={14} />
-                  </ActionIcon>
-                </Tooltip>
-              )}
-            </Group>
-          </Group>
-          {change.totalTasks > 0 && (
-            <Tooltip
-              label={`${change.completedTasks} of ${change.totalTasks} task checkboxes ticked by the agent — a self-report, not verification.`}
-              multiline
-            >
-              <div>
-                <Progress
-                  size="xs"
-                  color="neutral"
-                  value={(change.completedTasks / change.totalTasks) * 100}
-                />
-                <Stack gap={2} mt={2} align="flex-start">
-                  {change.status && (
-                    // openspec's own word, attributed. `complete` here means
-                    // every task checkbox is ticked — an agent's self-report,
-                    // not evidence that anything runs. Kept off the name row
-                    // so neither the name nor the word gets truncated.
-                    <Tooltip
-                      label={`openspec reports this change as "${change.status}", derived from task checkboxes. Only a verify command's exit code shows whether the work runs.`}
-                      multiline
-                    >
-                      <Badge size="xs" variant="light" color="neutral" tt="none">
-                        openspec: {change.status}
-                      </Badge>
-                    </Tooltip>
-                  )}
-                  <Text size="10px" c="dimmed">
-                    {change.completedTasks}/{change.totalTasks} tasks ticked (agent-reported)
-                  </Text>
-                </Stack>
-              </div>
-            </Tooltip>
-          )}
-        </Stack>
-      ))}
+                    <div>
+                      <Progress
+                        size="xs"
+                        color={tasksComplete ? "success" : "neutral"}
+                        value={(change.completedTasks / change.totalTasks) * 100}
+                      />
+                      <Stack gap={2} mt={2} align="flex-start">
+                        {change.status && (
+                          // openspec's own word, attributed. `complete` here means
+                          // every task checkbox is ticked — an agent's self-report,
+                          // not evidence that anything runs. Kept off the name row
+                          // so neither the name nor the word gets truncated.
+                          <Tooltip
+                            label={`openspec reports this change as "${change.status}", derived from task checkboxes. Only a verify command's exit code shows whether the work runs.`}
+                            multiline
+                          >
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color={tasksComplete ? "success" : "neutral"}
+                              leftSection={tasksComplete ? <IconCircleCheck size={11} /> : undefined}
+                              tt="none"
+                            >
+                              openspec: {change.status}
+                            </Badge>
+                          </Tooltip>
+                        )}
+                        <Text size="10px" c="dimmed">
+                          {change.completedTasks}/{change.totalTasks} tasks ticked (agent-reported)
+                        </Text>
+                      </Stack>
+                    </div>
+                  </Tooltip>
+                )}
+              </Stack>
+            </UnstyledButton>
+            {archiving.has(change.name) ? (
+              <Loader
+                className="ds-spec-change-action"
+                color="neutral"
+                type="dots"
+                size="xs"
+                data-testid="archive-loader"
+              />
+            ) : (
+              <Tooltip label="Archive change">
+                <ActionIcon
+                  className="ds-spec-change-action"
+                  size="sm"
+                  variant="subtle"
+                  onClick={() => archiveChange(change.name)}
+                  aria-label={`Archive ${change.name}`}
+                  data-testid="spec-archive"
+                >
+                  <IconArchive size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+          </div>
+        );
+      })}
     </Stack>
   );
 }

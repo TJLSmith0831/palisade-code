@@ -223,9 +223,9 @@ pub fn worktree_paths(root: &Path, thread_id: &str) -> (std::path::PathBuf, Stri
 
 /// Raw `git diff --numstat <rev>`: one `added\tremoved\tpath` line per tracked
 /// file in the working tree that differs from `rev`. Callers that need the
-/// paths (the Fleet board, the Review lane) parse this; `diff_stat` only sums
-/// it. `rev` is `HEAD` for "what is uncommitted right here" and a merge base
-/// for "what this thread has done since it branched".
+/// paths (the Fleet board, the Review lane) parse this. `rev` is `HEAD` for
+/// "what is uncommitted right here" and a merge base for "what this thread
+/// has done since it branched".
 pub fn diff_numstat(bin: &Path, root: &Path, rev: &str) -> Res<String> {
     run(bin, root, &["diff", "--numstat", rev])
 }
@@ -242,32 +242,15 @@ pub fn merge_base(bin: &Path, root: &Path, base: &str) -> Option<String> {
     (!rev.is_empty()).then_some(rev)
 }
 
-/// Lines added and removed in this worktree against HEAD — the "+12 −3" the
-/// sidebar shows for what a thread has actually done.
-///
-/// Untracked files count as pure additions. `git diff` never lists them, and
-/// a file the agent just created is the most visible change there is, so
-/// leaving them out would report "+0 −0" for a thread that wrote a new module.
-///
-/// ponytail: an untracked *directory* reports as one porcelain entry and is
-/// counted as zero. Recurse it if new-directory changes start reading wrong.
-pub fn diff_stat(bin: &Path, root: &Path) -> Res<(u32, u32)> {
-    let raw = diff_numstat(bin, root, "HEAD")?;
-    let (mut added, mut removed) = (0u32, 0u32);
-    for line in raw.lines() {
-        let mut cols = line.split('\t');
-        // A binary file reports "-\t-": no line counts to add.
-        if let (Some(a), Some(r)) = (cols.next(), cols.next()) {
-            added += a.parse::<u32>().unwrap_or(0);
-            removed += r.parse::<u32>().unwrap_or(0);
-        }
-    }
-    for file in status(bin, root)?.iter().filter(|f| f.code == "??") {
-        if let Ok(body) = std::fs::read_to_string(root.join(&file.path)) {
-            added += body.lines().count() as u32;
-        }
-    }
-    Ok((added, removed))
+/// The branch a thread's work would merge into: the one recorded when its
+/// worktree was cut, else the branch checked out in `root` now, else `HEAD`.
+/// Every surface that measures or merges a thread reads this one rule, so a
+/// thread cannot show one diff on the board and another in the Review lane.
+pub fn base_or_current(bin: &Path, root: &Path, recorded: Option<&str>) -> String {
+    recorded
+        .map(str::to_string)
+        .or_else(|| current_branch_name(bin, root).ok())
+        .unwrap_or_else(|| "HEAD".into())
 }
 
 /// Create the thread's worktree, branching from the project's current HEAD.
@@ -1389,35 +1372,13 @@ world
         assert!(!path.join("already_here.txt").exists(), "orphan worktree carries nothing over");
     }
 
-    /// A new file is the most visible thing an agent does, and `git diff`
-    /// never lists untracked paths — so an unmodified counter would report
-    /// "+0 −0" for a thread that just wrote a module.
     #[test]
-    fn diff_stat_counts_edits_and_untracked_new_files() {
-        let (dir, tracked) = init_test_repo();
+    fn base_or_current_prefers_the_recorded_base() {
+        let (dir, _) = init_test_repo();
         let root = dir.path();
-        assert_eq!(diff_stat(git(), root).unwrap(), (0, 0));
-
-        // Was 3 lines; now 2 lines with one of them new.
-        fs::write(root.join(&tracked), "line one\nchanged\n").unwrap();
-        assert_eq!(diff_stat(git(), root).unwrap(), (1, 2));
-
-        fs::write(root.join("brand_new.txt"), "a\nb\nc\n").unwrap();
-        assert_eq!(diff_stat(git(), root).unwrap(), (4, 2));
-    }
-
-    /// Each thread's stat reflects only its own worktree.
-    #[test]
-    fn diff_stat_is_per_worktree() {
-        let (dir, tracked) = init_test_repo();
-        let root = dir.path();
-        let (path_a, _) = add_worktree(git(), root, "01THREADAAAA").unwrap();
-        let (path_b, _) = add_worktree(git(), root, "01THREADBBBB").unwrap();
-
-        fs::write(path_a.join(&tracked), "only A edited this\n").unwrap();
-
-        assert_eq!(diff_stat(git(), &path_a).unwrap(), (1, 3));
-        assert_eq!(diff_stat(git(), &path_b).unwrap(), (0, 0));
+        assert_eq!(base_or_current(git(), root, Some("release")), "release");
+        let current = current_branch_name(git(), root).unwrap();
+        assert_eq!(base_or_current(git(), root, None), current);
     }
 
     /// The multi-worktree promise: a thread can stage and commit its own work
@@ -1436,7 +1397,6 @@ world
         assert_eq!(log(git(), &wt, 1).unwrap()[0].subject, "worktree commit");
         assert_ne!(log(git(), root, 1).unwrap()[0].subject, "worktree commit");
         assert!(!root.join("only_here.md").exists());
-        assert_eq!(diff_stat(git(), &wt).unwrap(), (0, 0), "committed, nothing left");
 
         // And an edit in the root stays in the root.
         fs::write(root.join(&tracked), "root only\n").unwrap();

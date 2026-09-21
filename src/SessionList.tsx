@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, TextInput, Tooltip } from "@mantine/core";
 import {
-  IconArchive,
   IconPencil,
   IconPlus,
   IconSearch,
@@ -9,6 +8,7 @@ import {
 } from "@tabler/icons-react";
 import type { FleetRow, ThreadMeta, WorktreeStatus } from "./api";
 import { AttentionPill, OverlapIcon } from "./fleetBadges";
+import { ArchiveIcon } from "./archiving";
 
 // Amendment 3's Vibe-only session list: the browse/search surface, distinct
 // from the in-conversation thread-tab strip (which stays as the quick
@@ -26,6 +26,24 @@ export function relativeTime(iso: string, now = Date.now()): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** The two times a thread row shows. Sorting uses "last touched", which
+ *  includes opening the thread; these say what actually happened. `compact`
+ *  drops the "ago" so the sidebar's narrow row keeps it to one line. */
+export function activityLabel(
+  createdAt: string,
+  lastActivityAt?: string,
+  now = Date.now(),
+  compact = false,
+): string {
+  const t = (iso: string) => {
+    const rel = relativeTime(iso, now);
+    return compact ? rel.replace(/ ago$/, "") : rel;
+  };
+  const created = `Created ${t(createdAt)}`;
+  if (!lastActivityAt) return `${created} · Not run yet`;
+  return `${created} · ${compact ? "Active" : "Last active"} ${t(lastActivityAt)}`;
 }
 
 /** Live threads matching `query`. Archived ones are out of this list by
@@ -92,7 +110,7 @@ export const FLEET_BANDS = [
   { key: "idle", label: "Idle" },
 ] as const;
 
-/** Split threads into those bands, keeping each band in the order it came in.
+/** Split threads into those bands, newest-touched first within each.
  *  Empty bands are dropped so the sidebar never heads a group over nothing. */
 export function groupByFleet(
   threads: ThreadMeta[],
@@ -101,7 +119,13 @@ export function groupByFleet(
   return FLEET_BANDS.map(({ key, label }) => ({
     key,
     label,
-    list: threads.filter((t) => (rows.get(t.id)?.status ?? "idle") === key),
+    list: threads
+      .filter((t) => (rows.get(t.id)?.status ?? "idle") === key)
+      .sort(
+        (a, b) =>
+          Date.parse(rows.get(b.id)?.updatedAt ?? b.updatedAt) -
+          Date.parse(rows.get(a.id)?.updatedAt ?? a.updatedAt)
+      ),
   })).filter((band) => band.list.length > 0);
 }
 
@@ -171,7 +195,7 @@ export default function SessionList({
       className="ds-sessions"
       data-testid="session-list"
       data-user-opened={userOpened || undefined}
-      aria-label="Threads"
+      aria-label="Agent Access"
     >
       <div className="ds-sessions-header">
         <Button
@@ -261,8 +285,10 @@ export default function SessionList({
                   )}
                   {thread.title}
                 </div>
+                <div className="ds-session-meta" data-testid="session-times">
+                  {activityLabel(thread.createdAt, row?.lastActivityAt, Date.now(), true)}
+                </div>
                 <div className="ds-session-meta">
-                  <span>{relativeTime(thread.updatedAt)}</span>
                   {diff && diff.added + diff.removed > 0 && (
                     <span className="ds-session-diff" data-testid="session-diff">
                       <span className="added">+{diff.added}</span>
@@ -280,7 +306,10 @@ export default function SessionList({
                   </div>
                 )}
                 {worktree && (
-                  <div className="ds-session-branch" title={worktree.branch}>
+                  <div
+                    className="ds-session-branch"
+                    title={row?.mergeTarget ? `${worktree.branch} → ${row.mergeTarget}` : worktree.branch}
+                  >
                     {worktree.branch}
                     {READINESS[worktree.state] && (
                       <Tooltip label={READINESS[worktree.state]!.tip} openDelay={400}>
@@ -297,6 +326,8 @@ export default function SessionList({
                         </Badge>
                       </Tooltip>
                     )}
+                    {/* After the badge, so a narrow row clips this first. */}
+                    {row?.mergeTarget && ` → ${row.mergeTarget}`}
                   </div>
                 )}
                 {/* Same two verbs the Editor preset's History panel offers.
@@ -324,7 +355,7 @@ export default function SessionList({
                     aria-label="Archive thread"
                     data-testid="session-archive"
                   >
-                    <IconArchive size={13} />
+                    <ArchiveIcon threadId={thread.id} />
                   </button>
                 </div>
                 {(state !== "idle" || row) && (

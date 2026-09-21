@@ -325,6 +325,12 @@ pub struct ThreadMeta {
     /// the gate says out loud rather than guessing silently.
     #[serde(default)]
     pub worktree_base_branch: Option<String>,
+    /// Bootstrap status is durable so Review can explain a failed setup after
+    /// the background process and the app window have both gone away.
+    #[serde(default)]
+    pub worktree_setup_state: Option<String>,
+    #[serde(default)]
+    pub worktree_setup_output: Option<String>,
     /// When this thread's branch was last merged into its base by Palisade.
     /// A recorded fact, not an inference: "merged" in the sidebar means this
     /// merge happened, never that the diffs happen to look empty.
@@ -394,6 +400,8 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         worktree_path: None,
         worktree_branch: None,
         worktree_base_branch: None,
+        worktree_setup_state: None,
+        worktree_setup_output: None,
         merged_at: None,
         merge_overridden: false,
         worktree_enabled: true,
@@ -590,6 +598,13 @@ pub fn set_thread_worktree(
 /// can still say which branch its work is on.
 pub fn clear_thread_worktree(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
     update_thread(home, hash, id, |m| m.worktree_path = None)
+}
+
+pub fn set_thread_worktree_setup(home: &Path, hash: &str, id: &str, state: &str, output: Option<String>) -> Res<ThreadMeta> {
+    update_thread(home, hash, id, |m| {
+        m.worktree_setup_state = Some(state.to_string());
+        m.worktree_setup_output = output;
+    })
 }
 
 /// Record that this thread's branch landed on its base, when, and whether the
@@ -1126,6 +1141,17 @@ pub fn read_thread(home: &Path, hash: &str, id: &str) -> Res<Vec<Message>> {
     read_thread_impl(home, hash, id, buffered)
 }
 
+/// When the thread last did something: the time of its newest message.
+/// `updated_at` cannot say this — it is stamped by every metadata write, so
+/// merely opening a thread moves it to "just now". `None` for a thread that
+/// has never spoken.
+///
+/// ponytail: parses the whole log. Read only the tail if a thread's log ever
+/// gets big enough to slow the fleet refresh.
+pub fn last_activity(home: &Path, hash: &str, id: &str) -> Option<String> {
+    read_thread(home, hash, id).ok()?.last().map(|m| m.ts.clone())
+}
+
 /// Inner reader that takes the buffered bytes directly, so callers already
 /// holding the writer lock (e.g. `append_message`'s seq-cache fallback) can
 /// read without re-locking and deadlocking.
@@ -1623,6 +1649,19 @@ mod tests {
     /// send_message appends the user's turn, before the turn's Done flushes.
     /// A read that only sees disk returns stale history and the user's bubble
     /// vanishes for the whole turn.
+    #[test]
+    fn last_activity_is_the_newest_message_and_ignores_viewing() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert_eq!(last_activity(home.path(), &project.hash, &thread.id), None);
+
+        let sent = append_message(home.path(), &project.hash, &thread.id, "user", "go", "hi", None).unwrap();
+        mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
+
+        assert_eq!(last_activity(home.path(), &project.hash, &thread.id), Some(sent.ts));
+    }
+
     #[test]
     fn read_thread_sees_unflushed_buffered_messages() {
         let home = home();

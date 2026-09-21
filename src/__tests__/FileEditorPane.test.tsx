@@ -967,6 +967,9 @@ describe("FileEditorPane", () => {
         expect(screen.getByTestId("md-editor")).toBeDefined()
       );
       const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
+      await waitFor(() =>
+        expect(editor.value).toBe("line one\nline two\n")
+      );
 
       fireEvent.change(editor, { target: { value: "- item\n- " } });
       editor.focus();

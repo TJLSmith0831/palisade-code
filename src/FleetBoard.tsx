@@ -1,22 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Menu,
   Select,
   SegmentedControl,
-  Switch,
+  Skeleton,
   Text,
   Textarea,
   Tooltip,
+  VisuallyHidden,
 } from "@mantine/core";
-import { IconBox, IconDots, IconRoute } from "@tabler/icons-react";
-import type { FleetRow } from "./api";
+import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
+import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
-import { relativeTime } from "./SessionList";
+import { activityLabel, relativeTime } from "./SessionList";
+import { ArchivingSpinner, useIsArchiving } from "./archiving";
+import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
+import WorktreeModeBadge from "./WorktreeModeBadge";
 
 export type NewRunInput = {
   prompt: string;
   agentId?: string;
+  /** Flows into the same `setThreadExecutor` model field the main
+   *  composer's model picker writes. Undefined when the agent offers no
+   *  models (or none is picked yet) — same as the main composer's default. */
+  model?: string;
   mode: "spec" | "go";
   isolated: boolean;
 };
@@ -28,6 +36,11 @@ export type FleetBoardProps = {
   /** The open project, named above the composer so the board says where a new
    *  run would land before you type it. */
   projectName?: string;
+  /** Scopes the model probe to the open project, same as the main
+   *  composer's `api.listModels(project.hash, agentId)` call. Wired from
+   *  App.tsx as `project?.hash` — undefined falls back to the backend's
+   *  home-directory probe. */
+  projectHash?: string | null;
   agents: { id: string; name: string; installed: boolean }[];
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
@@ -36,6 +49,7 @@ export type FleetBoardProps = {
   onOpenRun(runId: string): void;
   /** Stops a playbook run — the board's Stop for a `playbook` row. */
   onCancelRun(runId: string): void;
+  onArchiveRun(projectId: string, runId: string): void;
   onMerge(projectId: string, threadId: string): void;
   onOpenPr(projectId: string, threadId: string): void;
   onArchive(projectId: string, threadId: string): void;
@@ -79,6 +93,7 @@ function Row({
   onArchive,
   onOpenRun,
   onCancelRun,
+  onArchiveRun,
 }: { row: FleetRow } & Pick<
   FleetBoardProps,
   | "onOpen"
@@ -89,18 +104,22 @@ function Row({
   | "onArchive"
   | "onOpenRun"
   | "onCancelRun"
+  | "onArchiveRun"
 >) {
   const mergeable = row.merge === "clean" && row.verify.state === "pass";
   // A playbook run is not a thread: it opens and stops by run id, and it has
   // no branch to merge, no PR to open and nothing to archive.
   const playbook = row.kind === "playbook";
   const runId = row.runId ?? row.threadId;
+  // Keyed like the archive call itself: a playbook run archives by run id.
+  const archiving = useIsArchiving(runId);
   const open = () => (playbook ? onOpenRun(runId) : onOpen(row.threadId));
   const stop = () => (playbook ? onCancelRun(runId) : onStop(row.threadId));
 
   return (
     <div
       className="fleet-row"
+      data-busy={archiving || undefined}
       role="button"
       tabIndex={0}
       data-testid="fleet-row"
@@ -128,7 +147,7 @@ function Row({
           {playbook ? (
             <IconRoute size={14} aria-label="Playbook" />
           ) : (
-            <IconBox size={14} aria-label={row.agentName ?? "Agent"} />
+            <IconAiAgent size={14} aria-label={row.agentName ?? "Agent"} />
           )}
         </span>
       </Tooltip>
@@ -139,12 +158,16 @@ function Row({
           <span>
             {playbook
               ? playbookSubtitle(row)
-              : `${row.projectName}${row.branch ? ` · ${row.branch}` : ""}`}
+              : `${row.projectName}${row.branch ? ` · ${row.branch}` : ""}${
+                  row.mergeTarget ? ` → ${row.mergeTarget}` : ""
+                }`}
           </span>
           {/* A run writes in its thread's tree, so its own diff is always
               zero — a "+0 −0 · 0 files" on every playbook row is noise, not
               evidence. */}
-          {!playbook && (
+          {/* A branch with no worktree means the worktree is gone: there is
+              nothing left to measure, so nothing is shown. */}
+          {!playbook && !(row.branch && !row.worktreePath) && (
             <span className="fleet-diff" data-testid="fleet-diff">
               <span className="added">+{row.diff.added}</span>{" "}
               <span className="removed">−{row.diff.removed}</span> ·{" "}
@@ -154,8 +177,15 @@ function Row({
               {(row.diff.untracked ?? 0) > 0 && ` · ${row.diff.untracked} new`}
             </span>
           )}
-          <span>{relativeTime(row.updatedAt)}</span>
+          {playbook && <span>{relativeTime(row.updatedAt)}</span>}
         </div>
+        {/* Rows are ordered by last touched, which includes opening the
+            thread, so the times shown are the two that are facts. */}
+        {!playbook && (
+          <div className="fleet-row-meta" data-testid="fleet-times">
+            {activityLabel(row.createdAt, row.lastActivityAt)}
+          </div>
+        )}
       </div>
 
       <div className="fleet-row-badges">
@@ -173,9 +203,10 @@ function Row({
             className="ds-icon-btn"
             aria-label={`Actions for ${row.title}`}
             data-testid="fleet-actions"
+            disabled={archiving}
             onClick={(e) => e.stopPropagation()}
           >
-            <IconDots size={14} />
+            {archiving ? <ArchivingSpinner /> : <IconDots size={14} />}
           </button>
         </Menu.Target>
         <Menu.Dropdown onClick={(e) => e.stopPropagation()}>
@@ -206,8 +237,45 @@ function Row({
           {!playbook && (
             <Menu.Item onClick={() => onArchive(row.projectId, row.threadId)}>Archive</Menu.Item>
           )}
+          {playbook && row.archivable && (
+            <Menu.Item onClick={() => onArchiveRun(row.projectId, runId)}>Archive</Menu.Item>
+          )}
         </Menu.Dropdown>
       </Menu>
+    </div>
+  );
+}
+
+/** Fast loads never flash the skeleton. */
+const SKELETON_DELAY_MS = 150;
+
+/** ACP agents that offer a "default" model option (Claude's "Default
+ *  (recommended)") use this id for it. */
+const AGENT_DEFAULT_MODEL_ID = "default";
+
+/** Placeholder rows shaped like `Row`, so the board doesn't jump when real
+ *  ones land. Delayed so a fast load never flashes them. */
+function FleetSkeleton() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setVisible(true), SKELETON_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  if (!visible) return null;
+  return (
+    <div data-testid="fleet-skeleton">
+      <VisuallyHidden role="status">Loading runs…</VisuallyHidden>
+      <Skeleton height={12} width={72} mb="xs" />
+      {[0, 1, 2].map((i) => (
+        <div className="fleet-row" data-skeleton key={i}>
+          <Skeleton circle height={16} />
+          <div className="fleet-row-main" style={{ flex: 1 }}>
+            <Skeleton height={12} width="45%" mb={8} />
+            <Skeleton height={10} width="70%" />
+          </div>
+          <Skeleton height={18} width={64} radius="xl" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -217,6 +285,7 @@ export default function FleetBoard({
   loading,
   error,
   projectName,
+  projectHash,
   agents,
   onOpen,
   onReview,
@@ -226,13 +295,49 @@ export default function FleetBoard({
   onArchive,
   onOpenRun,
   onCancelRun,
+  onArchiveRun,
   onNewRun,
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
   const [prompt, setPrompt] = useState("");
   const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
+  const [modelId, setModelId] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [mode, setMode] = useState<"spec" | "go">("spec");
   const [isolated, setIsolated] = useState(true);
+
+  // Same `list_models` probe the main composer's model picker and the
+  // playbook canvas's node editor use, re-read whenever the agent changes —
+  // an old model choice means nothing to a new agent.
+  useEffect(() => {
+    setModelId(null);
+    if (!agentId) {
+      setModels([]);
+      setModelsLoading(false);
+      return;
+    }
+    let live = true;
+    setModelsLoading(true);
+    listModels(projectHash ?? null, agentId)
+      .then((state) => {
+        if (live) {
+          setModels(state.models);
+          // Prefer the agent's "default" option (Claude: "Default
+          // (recommended)"). `current` is the agent's resolved pick, which for
+          // Claude is whatever model the user's own settings pinned.
+          const pick = state.models.some((model) => model.id === AGENT_DEFAULT_MODEL_ID)
+            ? AGENT_DEFAULT_MODEL_ID
+            : state.current;
+          setModelId(pick && state.models.some((model) => model.id === pick) ? pick : null);
+        }
+      })
+      .catch(() => live && setModels([]))
+      .finally(() => live && setModelsLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [projectHash, agentId]);
 
   const groups = groupFleet(rows);
   const bands: { key: string; label: string; list: FleetRow[] }[] = [
@@ -244,15 +349,39 @@ export default function FleetBoard({
   const canStart = prompt.trim().length > 0 && installed.length > 0;
 
   return (
-    <section className="fleet-board" aria-label="Fleet" data-testid="fleet-board">
+    <section
+      className="fleet-board"
+      aria-label="Fleet"
+      aria-busy={loading && rows.length === 0}
+      data-testid="fleet-board"
+    >
       <div className="fleet-header">
-        <Text size="sm" fw={600} className="fleet-header-project">
+        <Text className="fleet-header-project">
           {projectName ?? "Fleet"}
         </Text>
-        <Text size="xs" c="dimmed" data-testid="fleet-counts">
-          {groups.attention.length} need attention · {groups.running.length}{" "}
-          running · {groups.idle.length} idle
-        </Text>
+        <div className="fleet-statuses" aria-label="Fleet status" data-testid="fleet-counts">
+          <div className="fleet-status" data-testid="fleet-count-attention">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="attention" aria-hidden="true" />
+              {groups.attention.length}
+            </span>
+            <span className="fleet-status-label">Needs attention</span>
+          </div>
+          <div className="fleet-status" data-testid="fleet-count-running">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="running" aria-hidden="true" />
+              {groups.running.length}
+            </span>
+            <span className="fleet-status-label">Running</span>
+          </div>
+          <div className="fleet-status" data-testid="fleet-count-idle">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="idle" aria-hidden="true" />
+              {groups.idle.length}
+            </span>
+            <span className="fleet-status-label">Idle</span>
+          </div>
+        </div>
       </div>
 
       <div className="fleet-composer">
@@ -274,6 +403,21 @@ export default function FleetBoard({
             disabled={installed.length === 0}
             data-testid="fleet-agent-select"
           />
+          <Select
+            value={modelId}
+            onChange={setModelId}
+            data={models.map((m) => ({ value: m.id, label: m.name }))}
+            placeholder={
+              modelsLoading
+                ? "Loading models…"
+                : models.length
+                  ? "Model"
+                  : "No models offered"
+            }
+            aria-label="Model"
+            disabled={modelsLoading || models.length === 0}
+            data-testid="fleet-model-select"
+          />
           <SegmentedControl
             value={mode}
             onChange={(value) => setMode(value as "spec" | "go")}
@@ -283,11 +427,20 @@ export default function FleetBoard({
             ]}
             aria-label="Mode"
             data-testid="fleet-mode"
+            styles={MODE_SELECTOR_STYLES}
+            classNames={{
+              control: "mode-selector-control",
+              label: "mode-selector-label",
+            }}
           />
-          <Switch
-            checked={isolated}
-            onChange={(e) => setIsolated(e.currentTarget.checked)}
-            label="Isolated worktree"
+          <WorktreeModeBadge
+            isolated={isolated}
+            tooltip={
+              isolated
+                ? "Runs in its own git worktree — click to edit the project directly"
+                : "Edits the project directory directly, so uncommitted changes there can be overwritten — click to isolate this run"
+            }
+            onClick={() => setIsolated(!isolated)}
             data-testid="fleet-isolated"
           />
           <Button
@@ -297,6 +450,7 @@ export default function FleetBoard({
               onNewRun({
                 prompt: prompt.trim(),
                 agentId: agentId ?? undefined,
+                model: modelId ?? undefined,
                 mode,
                 isolated,
               });
@@ -307,6 +461,8 @@ export default function FleetBoard({
           </Button>
         </div>
       </div>
+
+      {loading && rows.length === 0 && !error && <FleetSkeleton />}
 
       {error && (
         <p className="fleet-error" role="alert" data-testid="fleet-error">
@@ -337,6 +493,7 @@ export default function FleetBoard({
                   onArchive={onArchive}
                   onOpenRun={onOpenRun}
                   onCancelRun={onCancelRun}
+                  onArchiveRun={onArchiveRun}
                 />
               ))}
             </div>

@@ -6,14 +6,11 @@ import {
   IconChevronRight,
   IconCircleCheck,
   IconCircleX,
-  IconGhost3Filled,
   IconLoader2,
   IconRefresh,
   IconRoute,
-  IconTerminal2,
 } from "@tabler/icons-react";
 
-import { onActivateKey } from "./a11y";
 import type { AgentLogin, ExecutorEvent, Message, Preflight } from "./api";
 import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
@@ -25,18 +22,6 @@ export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
   return tab === "diff"
     ? items.filter((item) => item.kind === "fileEdit")
     : items;
-}
-
-function ChatAvatar({ executor }: { executor: Preflight["selected"] }) {
-  return (
-    <div className="ds-chat-avatar">
-      {executor === "claude" ? (
-        <IconGhost3Filled size={18} />
-      ) : (
-        <IconTerminal2 size={18} />
-      )}
-    </div>
-  );
 }
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
@@ -173,11 +158,10 @@ function ReasoningBlock({
       data-testid="reasoning-block"
       style={{ maxWidth: "100%", overflow: "hidden" }}
     >
-      <Box
+      <button
+        type="button"
+        className="ds-event-disclosure-header"
         onClick={() => setOpen(!open)}
-        onKeyDown={onActivateKey(() => setOpen(!open))}
-        role="button"
-        tabIndex={0}
         aria-expanded={open}
         data-testid="reasoning-block-header"
         style={{
@@ -186,7 +170,6 @@ function ReasoningBlock({
           gap: 8,
           width: "100%",
           padding: "6px 12px",
-          cursor: "pointer",
           userSelect: "none",
           boxSizing: "border-box",
         }}
@@ -214,7 +197,7 @@ function ReasoningBlock({
         >
           Thought for {event.elapsedSecs}s
         </Box>
-      </Box>
+      </button>
       {open && (
         <Box
           p="sm"
@@ -282,11 +265,10 @@ function ToolBlock({
           : { maxWidth: "100%", overflow: "hidden" }
       }
     >
-      <Box
+      <button
+        type="button"
+        className="ds-event-disclosure-header"
         onClick={() => setOpen(!open)}
-        onKeyDown={onActivateKey(() => setOpen(!open))}
-        role="button"
-        tabIndex={0}
         aria-expanded={expanded}
         data-testid="tool-block-header"
         style={{
@@ -295,7 +277,6 @@ function ToolBlock({
           gap: 8,
           width: "100%",
           padding: "6px 12px",
-          cursor: "pointer",
           userSelect: "none",
           boxSizing: "border-box",
         }}
@@ -336,47 +317,7 @@ function ToolBlock({
         >
           {preview}
         </Box>
-        {pending ? (
-          <Group
-            gap={4}
-            wrap="nowrap"
-            data-testid="permission-prompt"
-            role="group"
-            aria-label={`Permission requested for ${event.name}`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Button
-              size="compact-xs"
-              variant="light"
-              color="success"
-              data-testid="permission-allow"
-              onClick={() => onAnswer?.(pending.id, "allow")}
-            >
-              Allow
-            </Button>
-            <Button
-              size="compact-xs"
-              variant="light"
-              color="danger"
-              data-testid="permission-deny"
-              onClick={() => onAnswer?.(pending.id, "deny")}
-            >
-              Deny
-            </Button>
-            {/* Subtle, not `light`: this is the broadest of the three grants
-                and stands until the session ends, so it must not be as easy to
-                click reflexively as the single-shot Allow beside it. */}
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              color="neutral"
-              data-testid="permission-allow-session"
-              onClick={() => onAnswer?.(pending.id, "allow_session")}
-            >
-              Allow for session
-            </Button>
-          </Group>
-        ) : (
+        {!pending && (
           <>
             {running && (
               <IconLoader2
@@ -402,7 +343,46 @@ function ToolBlock({
             )}
           </>
         )}
-      </Box>
+      </button>
+      {pending && (
+        <Group
+          gap={4}
+          wrap="nowrap"
+          px="sm"
+          pb="sm"
+          data-testid="permission-prompt"
+          role="group"
+          aria-label={`Permission requested for ${event.name}`}
+        >
+          <Button
+            size="compact-xs"
+            variant="light"
+            color="success"
+            data-testid="permission-allow"
+            onClick={() => onAnswer?.(pending.id, "allow")}
+          >
+            Allow once
+          </Button>
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            color="neutral"
+            data-testid="permission-allow-session"
+            onClick={() => onAnswer?.(pending.id, "allow_session")}
+          >
+            Allow for session
+          </Button>
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            color="danger"
+            data-testid="permission-deny"
+            onClick={() => onAnswer?.(pending.id, "deny")}
+          >
+            Deny
+          </Button>
+        </Group>
+      )}
       {pending?.warning && (
         <Alert
           color="warn"
@@ -444,9 +424,165 @@ function ToolBlock({
   );
 }
 
+type ActivityEvent = Extract<
+  ExecutorEvent,
+  {
+    kind:
+      | "fileEdit"
+      | "reasoning"
+      | "toolCall"
+      | "toolOutputDelta"
+      | "toolResult"
+      | "permissionRequest";
+  }
+>;
+
+type TranscriptRow =
+  | { kind: "activity"; index: number; items: ActivityEvent[] }
+  | { kind: "item"; index: number; item: Item };
+
+/** Keep execution evidence together without changing its order or protocol. */
+function transcriptRows(items: Item[]): TranscriptRow[] {
+  const rows: TranscriptRow[] = [];
+  let activity: ActivityEvent[] = [];
+  let activityIndex = 0;
+  const flush = () => {
+    if (activity.length) rows.push({ kind: "activity", index: activityIndex, items: activity });
+    activity = [];
+  };
+
+  for (const [index, item] of items.entries()) {
+    if (
+      item.kind === "fileEdit" ||
+      item.kind === "reasoning" ||
+      item.kind === "toolCall" ||
+      item.kind === "toolOutputDelta" ||
+      item.kind === "toolResult" ||
+      item.kind === "permissionRequest"
+    ) {
+      if (!activity.length) activityIndex = index;
+      activity.push(item);
+      continue;
+    }
+    flush();
+    rows.push({ kind: "item", index, item });
+  }
+  flush();
+  return rows;
+}
+
+function FileEditBlock({
+  event,
+}: {
+  event: Extract<ExecutorEvent, { kind: "fileEdit" }>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="file-edit" data-testid="file-edit">
+      <button
+        type="button"
+        className="file-edit-head ds-event-disclosure-header"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        data-testid="file-edit-header"
+      >
+        {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+        {event.path}
+      </button>
+      {open && <DiffRows rows={rowsFromChange(event.before, event.after)} />}
+    </div>
+  );
+}
+
+function AssistantResponse({ mode, text }: { mode?: string; text: string }) {
+  return (
+    <article className="ds-assistant-response" data-testid="assistant-response">
+      <span className="ds-assistant-response-meta">
+        Assistant{mode ? ` · ${mode}` : ""}
+      </span>
+      <MDEditor.Markdown source={text} className="content" />
+    </article>
+  );
+}
+
+function ActivityGroup({
+  items,
+  results,
+  liveOutput,
+  pending,
+  onAnswer,
+}: {
+  items: ActivityEvent[];
+  results: Map<string, Extract<ExecutorEvent, { kind: "toolResult" }>>;
+  liveOutput: Map<string, string>;
+  pending: Map<string, Extract<ExecutorEvent, { kind: "permissionRequest" }>>;
+  onAnswer: (requestId: string, decision: "allow" | "deny" | "allow_session") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const actions = items.filter(
+    (item) => item.kind === "toolCall" || item.kind === "fileEdit" || item.kind === "reasoning"
+  );
+  const edits = actions.filter((item) => item.kind === "fileEdit").length;
+  const needsPermission = items.some(
+    (item) => item.kind === "toolCall" && pending.has(item.id)
+  );
+  const isRunning = items.some(
+    (item) => item.kind === "toolCall" && !results.has(item.id) && !pending.has(item.id)
+  );
+  const expanded = open || needsPermission;
+  const state = needsPermission ? "Permission needed" : isRunning ? "Working" : "Worked";
+  const summary = [
+    state,
+    `${actions.length} action${actions.length === 1 ? "" : "s"}`,
+    edits ? `edited ${edits} file${edits === 1 ? "" : "s"}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <section className="ds-activity-group" data-testid="activity-group">
+      <button
+        type="button"
+        className="ds-activity-summary"
+        aria-expanded={expanded}
+        onClick={() => setOpen(!open)}
+        data-testid="activity-summary"
+      >
+        {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+        <span>{summary}</span>
+      </button>
+      <div className="ds-activity-body" hidden={!expanded}>
+          {items.map((item, index) => {
+            switch (item.kind) {
+              case "toolCall":
+                return (
+                  <ToolBlock
+                    key={`${item.id}-${index}`}
+                    event={item}
+                    output={results.get(item.id)}
+                    liveOutput={liveOutput.get(item.id)}
+                    pending={pending.get(item.id)}
+                    onAnswer={onAnswer}
+                  />
+                );
+              case "fileEdit":
+                return <FileEditBlock key={`${item.id}-${index}`} event={item} />;
+              case "reasoning":
+                return <ReasoningBlock key={index} event={item} />;
+              case "toolOutputDelta":
+              case "toolResult":
+              case "permissionRequest":
+                return null;
+            }
+          })}
+      </div>
+    </section>
+  );
+}
+
 export const EventList = memo(function EventList({
   items,
-  executor,
+  executor: _executor,
   sessionId = null,
   onPermissionAnswered,
   onRetry,
@@ -540,7 +676,20 @@ export const EventList = memo(function EventList({
 
   return (
     <>
-      {items.map((item, index) => {
+      {transcriptRows(items).map((row) => {
+        if (row.kind === "activity") {
+          return (
+            <ActivityGroup
+              key={`activity-${row.index}`}
+              items={row.items}
+              results={results}
+              liveOutput={liveOutput}
+              pending={pending}
+              onAnswer={onAnswer}
+            />
+          );
+        }
+        const { item, index } = row;
         switch (item.kind) {
           // Laid out but zero-height: `scrollIntoView` is a no-op on a
           // `display: none` element, so this cannot use `hidden`.
@@ -658,15 +807,7 @@ export const EventList = memo(function EventList({
             }
             if (item.role === "assistant") {
               return (
-                <div key={index} className="ds-chat-bubble agent">
-                  <ChatAvatar executor={executor} />
-                  <div className="message assistant">
-                    <span className="meta">
-                      {item.role} · {item.mode}
-                    </span>
-                    <MDEditor.Markdown source={item.text} className="content" />
-                  </div>
-                </div>
+                <AssistantResponse key={index} mode={item.mode} text={item.text} />
               );
             }
             return (
@@ -679,18 +820,13 @@ export const EventList = memo(function EventList({
             );
           case "text":
             return (
-              <div key={index} className="ds-chat-bubble agent">
-                <ChatAvatar executor={executor} />
-                <div className="message assistant">
-                  <span className="meta">assistant</span>
-                  <MDEditor.Markdown source={item.text} className="content" />
-                </div>
-              </div>
+              <AssistantResponse key={index} text={item.text} />
             );
           case "reasoning":
-            // Per-turn disclosure, default collapsed (reasoning-collapse-ux
-            // D1) — supersedes the removed global show/hide toggle.
-            return <ReasoningBlock key={index} event={item} />;
+          case "fileEdit":
+          case "toolCall":
+          case "permissionRequest":
+            return null;
           // mergeDeltas always folds these into "text"/"reasoning" before
           // EventList sees them; kept here only so the switch documents
           // every Item kind instead of relying on the implicit fallthrough.
@@ -699,28 +835,6 @@ export const EventList = memo(function EventList({
           // Folded into `liveOutput` above, rendered on the tool block it
           // belongs to — not its own bubble.
           case "toolOutputDelta":
-            return null;
-          case "fileEdit":
-            return (
-              <div key={index} className="file-edit" data-testid="file-edit">
-                <div className="file-edit-head">{item.path}</div>
-                <DiffRows rows={rowsFromChange(item.before, item.after)} />
-              </div>
-            );
-          case "toolCall":
-            return (
-              <ToolBlock
-                key={index}
-                event={item}
-                output={results.get(item.id)}
-                liveOutput={liveOutput.get(item.id)}
-                pending={pending.get(item.id)}
-                onAnswer={onAnswer}
-              />
-            );
-          // Rendered inline on the tool call it belongs to (via `pending`),
-          // not as its own bubble.
-          case "permissionRequest":
             return null;
           case "crashed":
             return (

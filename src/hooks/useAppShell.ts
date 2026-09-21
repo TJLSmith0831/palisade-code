@@ -67,23 +67,21 @@ export function useAppShell(projectHash: string | undefined) {
     []
   );
 
-  // Editor-only chat collapse (Amendment 9). Hidden in Vibe, where chat is
-  // the primary surface and the session-list toggle already reclaims width.
-  const [chatCollapsed, setChatCollapsed] = useState(false);
+  // The editor column is the secondary pane, so it is what can be sent away.
+  const [editorCollapsed, setEditorCollapsed] = useState(false);
+  // Chat collapses to a rail, not away — it is the other pane, so the two
+  // can never be collapsed at once: sending the editor away first reopens
+  // chat, and `chatCollapsed` below reads false while the editor is gone.
+  const [chatCollapsedRaw, setChatCollapsed] = useState(false);
+  const chatCollapsed = chatCollapsedRaw && !editorCollapsed;
   const toggleChat = useCallback(
     () => setChatCollapsed((collapsed) => !collapsed),
     []
   );
-
-  // The mirror of the above for Vibe: there the editor column is the
-  // secondary pane, so that is what collapses. Separate state rather than one
-  // shared flag — collapsing chat in Editor should not hide the tabs the next
-  // time you switch to Vibe.
-  const [editorCollapsed, setEditorCollapsed] = useState(false);
-  const toggleEditor = useCallback(
-    () => setEditorCollapsed((collapsed) => !collapsed),
-    []
-  );
+  const toggleEditor = useCallback(() => {
+    setChatCollapsed(false);
+    setEditorCollapsed((collapsed) => !collapsed);
+  }, []);
 
   // Opening the diff has to reclaim the pane that renders it. The diff is a
   // mode of the editor column, which Vibe lets you collapse — so "View diff"
@@ -102,18 +100,23 @@ export function useAppShell(projectHash: string | undefined) {
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("terminal");
 
+  // Chat is a thread's page and is never closed — only sized. The saved
+  // `collapsed` flag from when it could be is deliberately never read, so a
+  // user who had collapsed it does not land on a thread with no way back.
+  const vibeChat = useResizable({
+    storageKey: `palisade:layout:${layoutHash}:vibe-chat`,
+    defaultSize: 520,
+    min: 380,
+    max: 900,
+    axis: "horizontal",
+  });
+
   // Which threads have a tab in the chat strip. Like editor tabs: selecting
   // a thread opens one, closing removes it, and the thread itself is
   // untouched either way (History still lists every thread).
   const [openThreadIds, setOpenThreadIds] = useState<string[]>([]);
   const openThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    // Editor lets you send the chat pane away, and every route to a thread
-    // (the strip's +, History, a brand-new thread) ends up here — so this is
-    // the one place that has to reclaim it, rather than each call site
-    // remembering to. Only fires when the active thread actually changes,
-    // so it never refights a deliberate collapse of the thread you're on.
-    setChatCollapsed(false);
   }, []);
   const closeThread = useCallback((id: string) => {
     setOpenThreadIds((prev) => prev.filter((existing) => existing !== id));
@@ -164,14 +167,6 @@ export function useAppShell(projectHash: string | undefined) {
     reverse: true,
     defaultCollapsed: true,
   });
-  const vibeChat = useResizable({
-    storageKey: `palisade:layout:${layoutHash}:vibe-chat`,
-    defaultSize: 520,
-    min: 380,
-    max: 900,
-    axis: "horizontal",
-  });
-
   // The terminal lives in the bottom panel, full stop. It used to be movable
   // into a right-panel tab, but the right panel stopped rendering a terminal
   // tab (Amendment 3) — so "move to sidebar" collapsed the terminal into
@@ -189,10 +184,10 @@ export function useAppShell(projectHash: string | undefined) {
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
-      chatCollapsed,
-      toggleChat,
       editorCollapsed,
       toggleEditor,
+      chatCollapsed,
+      toggleChat,
       bottomTab,
       setBottomTab,
       openThreadIds,
@@ -215,10 +210,10 @@ export function useAppShell(projectHash: string | undefined) {
       sessionListOpen,
       sessionListUserOpened,
       toggleSessionList,
-      chatCollapsed,
-      toggleChat,
       editorCollapsed,
       toggleEditor,
+      chatCollapsed,
+      toggleChat,
       bottomTab,
       openThreadIds,
       openThread,

@@ -65,6 +65,79 @@ describe("EventList markdown rendering", () => {
   });
 });
 
+describe("EventList reading-first activity", () => {
+  const toolCall: Item = {
+    kind: "toolCall",
+    id: "inspect-files",
+    name: "Bash",
+    command: "rg --files src\npnpm test",
+  };
+
+  it("keeps assistant prose in the pane while only the user keeps a bubble", () => {
+    const { container } = renderWithMantine(
+      <EventList
+        executor={null}
+        items={[
+          { kind: "plain", role: "user", mode: "spec", text: "Show the files." },
+          { kind: "plain", role: "assistant", mode: "spec", text: "I found the relevant files." },
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId("assistant-response")).toHaveTextContent("I found the relevant files.");
+    expect(container.querySelector(".message.user")).not.toBeNull();
+    expect(container.querySelector(".message.assistant")).toBeNull();
+  });
+
+  it("reveals exact tool details only after the work summary and tool line are expanded", () => {
+    renderWithMantine(
+      <EventList
+        executor={null}
+        items={[
+          toolCall,
+          { kind: "toolResult", id: "inspect-files", output: "src/App.tsx", isError: false },
+          { kind: "fileEdit", id: "edit-1", path: "src/App.tsx", before: "old", after: "new" },
+        ]}
+      />
+    );
+
+    const summary = screen.getByTestId("activity-summary");
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(summary).toHaveTextContent("2 actions · edited 1 file");
+    expect(screen.queryByTestId("tool-block-command")).toBeNull();
+
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByTestId("tool-block-header"));
+    expect(screen.getByTestId("tool-block-command").textContent).toBe("rg --files src\npnpm test");
+    expect(screen.getByTestId("tool-block-output")).toHaveTextContent("src/App.tsx");
+  });
+
+  it("automatically opens an activity group when a permission decision is needed", () => {
+    renderWithMantine(
+      <EventList
+        executor={null}
+        items={[
+          toolCall,
+          {
+            kind: "permissionRequest",
+            id: "approve-inspect",
+            toolCallId: "inspect-files",
+            toolKind: "execute",
+            command: toolCall.command,
+            paths: [],
+            warning: null,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId("activity-summary")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("permission-prompt")).toHaveTextContent("Allow once");
+    expect(screen.getByTestId("tool-block-command")).toHaveTextContent("rg --files src");
+  });
+});
+
 describe("ToolBlock rendering", () => {
   const toolCallItem: Item = {
     kind: "toolCall",
@@ -306,7 +379,7 @@ describe("EventList chat spacing", () => {
     const { container } = renderWithMantine(
       <EventList items={items} executor={null} />
     );
-    const content = container.querySelector(".message .content");
+    const content = container.querySelector(".ds-assistant-response .content");
     expect(content).not.toBeNull();
     expect(getComputedStyle(content!).whiteSpace).toBe("normal");
   });
@@ -318,7 +391,7 @@ describe("EventList chat spacing", () => {
     const { container } = renderWithMantine(
       <EventList items={items} executor={null} />
     );
-    const heading = container.querySelector(".message .content h2");
+    const heading = container.querySelector(".ds-assistant-response .content h2");
     expect(heading).not.toBeNull();
     const style = getComputedStyle(heading!);
     expect(style.marginTop).toBe("12px");
@@ -330,7 +403,7 @@ describe("EventList chat spacing", () => {
     const { container } = renderWithMantine(
       <EventList items={items} executor={null} />
     );
-    const p = container.querySelector(".message .content p");
+    const p = container.querySelector(".ds-assistant-response .content p");
     expect(p).not.toBeNull();
     expect(getComputedStyle(p!).marginBottom).toBe("8px");
   });
@@ -340,7 +413,7 @@ describe("EventList chat spacing", () => {
     const { container } = renderWithMantine(
       <EventList items={items} executor={null} />
     );
-    const li = container.querySelector(".message .content li");
+    const li = container.querySelector(".ds-assistant-response .content li");
     expect(li).not.toBeNull();
     expect(getComputedStyle(li!).marginBottom).toBe("4px");
   });

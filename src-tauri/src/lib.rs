@@ -734,14 +734,17 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
 
 /// Plan usage per installed agent. Blocking work (Keychain read, HTTP,
 /// rollout-log scan) runs off the UI thread; every provider fails soft.
+/// `force` bypasses the 60s per-agent cache — the manual refresh button and
+/// a pending sign-in's fast poll pass it so a completed login isn't hidden
+/// behind a stale cache hit.
 #[tauri::command]
-async fn agent_usage(app: tauri::AppHandle) -> Res<Vec<agent_usage::AgentUsage>> {
+async fn agent_usage(app: tauri::AppHandle, force: Option<bool>) -> Res<Vec<agent_usage::AgentUsage>> {
     Ok(tokio::task::spawn_blocking(move || {
         let ids: Vec<String> = {
             let harness: tauri::State<'_, Harness> = app.state();
             preflight_for_harness(&*harness, false).agents.iter().map(|a| a.id.clone()).collect()
         };
-        agent_usage::usage_for(&ids)
+        agent_usage::usage_for(&ids, force.unwrap_or(false))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
@@ -953,10 +956,66 @@ fn thread_worktree(
                 &branch,
                 &base,
             );
+            bootstrap_worktree(app, project_hash, thread_id, project, &path, &bin);
             path
         }
         Err(err) => pin(Some(format!("Could not create an isolated worktree ({err})"))),
     }
+}
+
+/// Copies opted-in ignored files before dependency installation, then runs the
+/// configured bootstrap away from the UI thread. No dependency directory is
+/// shared or linked between worktrees.
+fn bootstrap_worktree(app: &tauri::AppHandle, project_hash: &str, thread_id: &str, project: &Path, worktree: &Path, bin: &Path) {
+    let (settings, _) = settings::load(project);
+    let ignored = git::ignored_paths(bin, project);
+    for relative in &settings.worktree_copy {
+        if !ignored.contains(relative) { continue; }
+        let source = project.join(relative);
+        let destination = worktree.join(relative);
+        if source.is_file() && !destination.exists() {
+            if let Some(parent) = destination.parent() { let _ = std::fs::create_dir_all(parent); }
+            if let Err(err) = std::fs::copy(source, destination) {
+                let _ = store::set_thread_worktree_setup(&palisade_home(), project_hash, thread_id, "failed", Some(format!("Could not copy {relative}: {err}")));
+                let _ = app.emit("worktree-setup-finished", format!("{project_hash}:{thread_id}:failed"));
+                return;
+            }
+        }
+    }
+    let Some(command) = settings.worktree_setup.clone().or_else(|| settings::default_worktree_setup(project)) else {
+        let _ = store::set_thread_worktree_setup(&palisade_home(), project_hash, thread_id, "ready", None);
+        let _ = app.emit("worktree-setup-finished", format!("{project_hash}:{thread_id}:ready"));
+        return;
+    };
+    let _ = store::set_thread_worktree_setup(&palisade_home(), project_hash, thread_id, "running", None);
+    let app = app.clone();
+    let hash = project_hash.to_string();
+    let thread = thread_id.to_string();
+    let tree = worktree.to_path_buf();
+    let target = settings::cargo_target_dir(&settings, project, &palisade_home(), project_hash);
+    std::thread::spawn(move || {
+        let mut child = std::process::Command::new("sh");
+        child.arg("-c").arg(&command).current_dir(tree).stdin(std::process::Stdio::null()).env("PATH", executor::child_path_env());
+        if let Some(target) = target { child.env("CARGO_TARGET_DIR", target); }
+        let (result, output) = child.output().map(|out| {
+            let mut output = String::from_utf8_lossy(&out.stdout).into_owned();
+            output.push_str(&String::from_utf8_lossy(&out.stderr));
+            (if out.status.success() { "ready" } else { "failed" }, settings::tail(&output, 8 * 1024))
+        }).unwrap_or_else(|err| ("failed", err.to_string()));
+        let _ = store::set_thread_worktree_setup(&palisade_home(), &hash, &thread, result, if result == "ready" { None } else { Some(output) });
+        let _ = app.emit("worktree-setup-finished", format!("{hash}:{thread}:{result}"));
+    });
+}
+
+#[tauri::command]
+async fn rerun_worktree_setup(app: tauri::AppHandle, project_hash: String, thread_id: String) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let project = project_root(&project_hash)?;
+        let meta = thread_meta(&project_hash, &thread_id).ok_or("This thread has no worktree to set up.")?;
+        let path = meta.worktree_path.ok_or("This thread has no worktree to set up.")?;
+        bootstrap_worktree(&app, &project_hash, &thread_id, &project, Path::new(&path), &git_bin()?);
+        Ok(())
+    }).await.map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// Start a new ACP session on a thread and record it open.
@@ -1004,6 +1063,10 @@ fn start_session_as(
     // Palisade could do was warn that "git is the arbiter". Each thread now
     // runs in its own worktree instead, so there is nothing to warn about.
     let root = thread_worktree(app, &home, &project, project_hash, thread_id);
+    let (settings, _) = settings::load(&project);
+    let extra_env = settings::cargo_target_dir(&settings, &project, &home, project_hash)
+        .map(|target| vec![("CARGO_TARGET_DIR".into(), target.to_string_lossy().into_owned())])
+        .unwrap_or_default();
     let spawn = acp_client::AcpSpawn {
         agent_id: agent.id.clone(),
         agent_name: agent.name.clone(),
@@ -1017,6 +1080,7 @@ fn start_session_as(
         bypass,
         model,
         palisade_home: home.clone(),
+        extra_env,
     };
 
     let session = acp_client::start_acp_session(spawn, sink_for(app, project_hash))?;
@@ -1349,6 +1413,7 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
             bypass: false,
             model: None,
             palisade_home: palisade_home(),
+            extra_env: vec![],
         };
         let asked = format!(
             "Name this coding thread in 3-6 words, as a title. Reply with the title              and nothing else: no quotes, no punctuation at the end, no commentary.\n\n             Request: {prompt}"
@@ -2014,6 +2079,7 @@ async fn draft_commit_message(
             bypass: false,
             model,
             palisade_home: palisade_home(),
+            extra_env: vec![],
         };
         acp_client::agent_oneshot(
             spawn,
@@ -2233,6 +2299,8 @@ struct WorktreeStatus {
     /// The worktree's HEAD, so a verification run can be matched to the exact
     /// commit it ran at instead of being assumed still current.
     head: Option<String>,
+    setup_state: Option<String>,
+    setup_output: Option<String>,
 }
 
 /// What each thread's worktree holds, for the sidebar's diff stat and the
@@ -2256,11 +2324,7 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
             if !path.is_dir() {
                 continue;
             }
-            let base = thread
-                .worktree_base_branch
-                .clone()
-                .or_else(|| git::current_branch_name(&bin, &root).ok())
-                .unwrap_or_else(|| "HEAD".into());
+            let base = git::base_or_current(&bin, &root, thread.worktree_base_branch.as_deref());
             // The same helper the Fleet board and the Review lane read, so
             // the three surfaces cannot report different numbers for the
             // same thread: work since the base, committed or not, minus the
@@ -2298,6 +2362,8 @@ async fn thread_worktrees(project_hash: String) -> Res<Vec<WorktreeStatus>> {
                 mergeable: ready.mergeable,
                 state: state.into(),
                 head: git::rev_parse_head(&bin, &path),
+                setup_state: thread.worktree_setup_state,
+                setup_output: thread.worktree_setup_output,
             });
         }
         Ok(out)
@@ -2357,18 +2423,29 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
             let root = PathBuf::from(&project.root);
             let verifications = store::read_verifications(&home, &project.hash).unwrap_or_default();
             let threads = store::list_threads(&home, &project.hash)?;
+            let current_branch = git::current_branch_name(&bin, &root).ok();
             for thread in threads.into_iter().filter(|t| !t.archived) {
                 // A thread with no worktree of its own edits the project
                 // checkout, so that is the tree its diff is measured in.
                 let worktree = thread.worktree_path.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
+                // A thread that had a worktree and lost it (pruned, or the
+                // folder deleted) is not editing the checkout. Measuring the
+                // checkout for it would show the user's own uncommitted work
+                // as this thread's, identically on every such thread.
+                let worktree_gone = thread.worktree_branch.is_some() && worktree.is_none();
                 let tree = worktree.clone().unwrap_or_else(|| root.clone());
-                // One helper for the board and the Review lane, and the only
-                // place the skip-list and the inherited-file rule live. The
-                // base branch is only meaningful for a thread that has its
+                // The merge target, only meaningful for a thread that has its
                 // own worktree; without one the measurement stays vs HEAD.
-                let base =
-                    worktree.as_ref().and(thread.worktree_base_branch.as_deref());
-                let changes = fleet::thread_changes(&bin, &tree, &root, base);
+                let base = worktree
+                    .as_ref()
+                    .map(|_| git::base_or_current(&bin, &root, thread.worktree_base_branch.as_deref()));
+                // One helper for the board and the Review lane, and the only
+                // place the skip-list and the inherited-file rule live.
+                let changes = if worktree_gone {
+                    fleet::ThreadChanges::default()
+                } else {
+                    fleet::thread_changes(&bin, &tree, &root, base.as_deref())
+                };
                 // Overlap must also see files already committed on the
                 // thread's branch but not yet merged back — a thread that
                 // commits as it goes would otherwise vanish from overlap
@@ -2382,20 +2459,15 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     _ => vec![],
                 };
                 let files_touched = fleet::union_files_touched(changes.paths(), committed_paths);
-                let merge = match (&worktree, &thread.worktree_branch) {
-                    (Some(path), Some(branch)) => {
-                        let base = thread
-                            .worktree_base_branch
-                            .clone()
-                            .or_else(|| git::current_branch_name(&bin, &root).ok())
-                            .unwrap_or_else(|| "HEAD".into());
-                        let ready = git::merge_readiness(&bin, &root, path, &base, branch)
+                let merge = match (&worktree, &thread.worktree_branch, &base) {
+                    (Some(path), Some(branch), Some(base)) => {
+                        let ready = git::merge_readiness(&bin, &root, path, base, branch)
                             .unwrap_or(git::MergeReadiness { ahead: 0, clean: true, mergeable: true });
                         if !ready.mergeable {
                             fleet::FleetMerge::Conflicts
                         // Commits on the base this branch does not have: the
                         // same rev-list, asked the other way round.
-                        } else if git::ahead_of(&bin, &root, branch, &base).unwrap_or(0) > 0 {
+                        } else if git::ahead_of(&bin, &root, branch, base).unwrap_or(0) > 0 {
                             fleet::FleetMerge::Behind
                         } else {
                             fleet::FleetMerge::Clean
@@ -2403,14 +2475,19 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     }
                     _ => fleet::FleetMerge::NoWorktree,
                 };
+                let last_activity = store::last_activity(&home, &project.hash, &thread.id);
                 let sessions = store::read_sessions(&home, &project.hash, &thread.id).unwrap_or_default();
                 let last = sessions.last();
-                let verify = fleet::current_verify(
-                    &verifications,
-                    &thread.id,
-                    git::rev_parse_head(&bin, &tree).as_deref(),
-                    git::status(&bin, &tree).is_ok_and(|status| status.is_empty()),
-                );
+                let verify = if worktree_gone {
+                    fleet::FleetVerify::not_run()
+                } else {
+                    fleet::current_verify(
+                        &verifications,
+                        &thread.id,
+                        git::rev_parse_head(&bin, &tree).as_deref(),
+                        git::status(&bin, &tree).is_ok_and(|status| status.is_empty()),
+                    )
+                };
                 let live = live.get(&thread.id).cloned().unwrap_or_default();
                 let (status, attention) = fleet::derive_status(&fleet::StatusInput {
                     awaiting_permission: live.awaiting_permission,
@@ -2441,6 +2518,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     attention,
                     branch: thread.worktree_branch.clone(),
                     worktree_path: worktree.map(|p| p.to_string_lossy().into_owned()),
+                    merge_target: base.filter(|b| Some(b) != current_branch.as_ref()),
                     diff: fleet::FleetDiff {
                         added: changes.added,
                         removed: changes.removed,
@@ -2451,14 +2529,31 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     overlap: vec![],
                     verify,
                     merge,
-                    updated_at: thread.updated_at.clone(),
+                    // Sort key: last touched. `thread.updated_at` moves when
+                    // the thread is opened but not when it speaks, so the
+                    // newer of the two is the whole story. Both are RFC 3339
+                    // UTC from the same clock, which orders as text.
+                    updated_at: last_activity
+                        .clone()
+                        .filter(|at| *at > thread.updated_at)
+                        .unwrap_or_else(|| thread.updated_at.clone()),
+                    created_at: thread.created_at.clone(),
+                    last_activity_at: last_activity,
+                    archivable: false,
                 });
             }
             // One row per playbook run, from the same records the Playbooks
             // panel lists. Read-only on purpose: reconciling a stale record is
             // `list_chain_runs`'s job, and a record no live run owns is over
             // either way — which is all the board needs to say.
-            for run in chain_history::list_runs(&home, &project.hash).unwrap_or_default() {
+            // Default excludes archived, matching `list_chain_runs`'s own
+            // convention (issue #53) — an archived run just isn't part of
+            // the board's default view.
+            for run in chain_history::list_runs(&home, &project.hash)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| !r.archived)
+            {
                 let live = live_runs.contains(&run.id);
                 let completed = matches!(
                     run.outcome,
@@ -2487,6 +2582,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     attention,
                     branch: None,
                     worktree_path: None,
+                    merge_target: None,
                     // A run has no worktree of its own — its nodes write in
                     // the thread's tree — so there is nothing git can measure
                     // here that the thread's own row doesn't already show.
@@ -2496,6 +2592,9 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     verify: fleet::FleetVerify::not_run(),
                     merge: fleet::FleetMerge::NoWorktree,
                     updated_at: run.ended_at.clone().unwrap_or_else(|| run.started_at.clone()),
+                    created_at: run.started_at.clone(),
+                    last_activity_at: None,
+                    archivable: !live && run.ended_at.is_some(),
                 });
             }
         }
@@ -2538,11 +2637,15 @@ async fn thread_review_files(
             .and_then(|t| t.worktree_path.clone())
             .map(PathBuf::from)
             .filter(|p| p.is_dir());
-        let base = worktree
-            .as_ref()
-            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let base = worktree.as_ref().map(|_| {
+            git::base_or_current(
+                &bin,
+                &root,
+                thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()),
+            )
+        });
         let tree = worktree.clone().unwrap_or_else(|| root.clone());
-        Ok(fleet::review_files(&bin, &tree, &root, base))
+        Ok(fleet::review_files(&bin, &tree, &root, base.as_deref()))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2563,11 +2666,15 @@ async fn thread_review_diff(project_hash: String, thread_id: String) -> Res<Stri
             .and_then(|t| t.worktree_path.clone())
             .map(PathBuf::from)
             .filter(|p| p.is_dir());
-        let base = worktree
-            .as_ref()
-            .and(thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()));
+        let base = worktree.as_ref().map(|_| {
+            git::base_or_current(
+                &bin,
+                &root,
+                thread.as_ref().and_then(|t| t.worktree_base_branch.as_deref()),
+            )
+        });
         let tree = worktree.unwrap_or_else(|| root.clone());
-        Ok(fleet::review_diff(&bin, &tree, base))
+        Ok(fleet::review_diff(&bin, &tree, base.as_deref()))
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2650,18 +2757,54 @@ async fn merge_thread_worktree(
             );
         }
         if !override_verify {
+            let (settings, _) = settings::load(&root);
+            if settings.verify.is_empty() {
+                return Err("Verification is not configured for this project. Open Review and choose Configure Verification first.".into());
+            }
+            let head = git::rev_parse_head(&bin, &path)
+                .ok_or_else(|| crate::PalisadeError::from("Could not determine the worktree commit before verification."))?;
             let runs = store::read_verifications(&palisade_home(), &project_hash)?;
-            let verify = fleet::current_verify(
-                &runs,
-                &thread_id,
-                git::rev_parse_head(&bin, &path).as_deref(),
-                true,
-            );
-            if verify.state != fleet::VerifyState::Pass {
-                return Err(
-                    "This thread needs a passing verification at its current commit before merging. Open Review to run it or explicitly merge anyway."
-                        .into(),
-                );
+            let cancel_key = format!("merge:{project_hash}:{thread_id}");
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            harness.chain.chain_cancels.lock_or_recover().insert(cancel_key.clone(), cancel.clone());
+            let mut checks: Vec<_> = settings.verify.keys().cloned().collect();
+            checks.sort_by_key(|name| match name.as_str() {
+                "test" => 0,
+                "typecheck" => 1,
+                "lint" => 2,
+                "build" => 3,
+                _ => 4,
+            });
+            for name in checks {
+                if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("Verification cancelled. Completed passing checks remain recorded; merge was not attempted.".into());
+                }
+                let passed = runs.iter().any(|run|
+                    run.thread_id.as_deref() == Some(&thread_id)
+                        && run.name == name
+                        && run.exit_code == 0
+                        && run.git_head.as_deref() == Some(&head));
+                if passed { continue; }
+                if record_verification(&app, &project_hash, &name, Some(thread_id.clone()), None)? != 0 {
+                    let tail = store::read_verifications(&palisade_home(), &project_hash)?
+                        .into_iter().rev()
+                        .find(|run| run.thread_id.as_deref() == Some(&thread_id) && run.name == name)
+                        .map(|run| run.output_tail)
+                        .unwrap_or_default();
+                    return Err(format!("Verification {name} failed. {}\nChoose Merge anyway to override.", tail));
+                }
+            }
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("Verification cancelled. Completed passing checks remain recorded; merge was not attempted.".into());
+            }
+            if harness.thread_is_busy(&thread_id) {
+                return Err("This thread started a turn while verification ran — wait for it to finish before merging.".into());
+            }
+            if !git::status(&bin, &path)?.is_empty() {
+                return Err("The worktree changed while verification ran — commit or discard those changes, then merge again.".into());
+            }
+            if git::rev_parse_head(&bin, &path).as_deref() != Some(&head) {
+                return Err("The branch changed while verification ran — its evidence is no longer current. Merge again to verify the new commit.".into());
             }
         }
         let out = git::merge_into_base(&bin, &root, &base, &branch)?;
@@ -2682,6 +2825,17 @@ async fn merge_thread_worktree(
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+    .map_err(crate::PalisadeError::from)
+}
+
+#[tauri::command]
+async fn cancel_merge_verification(app: tauri::AppHandle, project_hash: String, thread_id: String) -> Res<()> {
+    let key = format!("merge:{project_hash}:{thread_id}");
+    app.state::<Harness>().chain.chain_cancels.lock_or_recover()
+        .get(&key)
+        .ok_or("No merge verification is running for this thread.")?
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
 }
 
 /// Push the thread's branch and open a pull request for it, returning the URL
@@ -2837,11 +2991,7 @@ fn sweep_archived_worktrees(project_hash: &str) {
         if !path.is_dir() {
             continue;
         }
-        let base = thread
-            .worktree_base_branch
-            .clone()
-            .or_else(|| git::current_branch_name(&bin, &root).ok())
-            .unwrap_or_else(|| "HEAD".into());
+        let base = git::base_or_current(&bin, &root, thread.worktree_base_branch.as_deref());
         let Ok(ready) = git::merge_readiness(&bin, &root, &path, &base, &branch) else {
             continue;
         };
@@ -2926,7 +3076,8 @@ pub(crate) fn record_verification(
             false => format!("{head}-dirty"),
         })
     });
-    let run = match settings::run_verify(&settings, &tree, name) {
+    let target = settings::cargo_target_dir(&settings, &root, &palisade_home(), project_hash);
+    let run = match settings::run_verify_with_env(&settings, &tree, name, target.as_deref()) {
         Ok(outcome) => store::VerificationRun {
             id: ulid::Ulid::new().to_string(),
             project_hash: project_hash.to_string(),
@@ -3128,6 +3279,15 @@ async fn save_run_commands(project_hash: String, commands: Vec<(String, String)>
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+#[tauri::command]
+async fn save_verify_commands(project_hash: String, commands: Vec<(String, String)>) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        settings::save_verify(&project_root(&project_hash)?, commands.into_iter().collect())
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// Replaces the project's `verifyPins` map. The whole map, not one entry:
 /// pin/unpin both read the current pins for a spec change and rewrite the
 /// list (D8).
@@ -3194,6 +3354,7 @@ async fn list_chain_runs(
     app: tauri::AppHandle,
     project_hash: String,
     chain_name: Option<String>,
+    include_archived: Option<bool>,
 ) -> Res<Vec<chain_history::ChainRunRecord>> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
@@ -3202,7 +3363,35 @@ async fn list_chain_runs(
         if let Some(name) = chain_name {
             records.retain(|record| record.chain_name == name);
         }
+        // Default excludes archived, same convention as the thread list
+        // (issue #53) — nothing is deleted, an archived run just isn't the
+        // default view.
+        if !include_archived.unwrap_or(false) {
+            records.retain(|record| !record.archived);
+        }
         Ok(records)
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// Soft-flags a past run archived or unarchived (issue #53). Mirrors
+/// `set_thread_archived`: nothing is deleted, the append-only store just gets
+/// one more amendment with the flag flipped.
+#[tauri::command]
+async fn set_chain_run_archived(
+    _app: tauri::AppHandle,
+    project_hash: String,
+    run_id: String,
+    archived: bool,
+) -> Res<chain_history::ChainRunRecord> {
+    tokio::task::spawn_blocking(move || {
+        let record = chain_history::get_run(&palisade_home(), &project_hash, &run_id)?
+            .ok_or_else(|| crate::PalisadeError::from(format!("no chain run `{run_id}` in this project")))?;
+        if archived && record.ended_at.is_none() {
+            return Err("A running Playbook run cannot be archived. Stop or wait for it first.".into());
+        }
+        chain_history::set_archived(&palisade_home(), &project_hash, &run_id, archived)
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -3547,6 +3736,13 @@ async fn verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+#[tauri::command]
+async fn detect_verify_commands(project_hash: String) -> Res<Vec<(String, String)>> {
+    tokio::task::spawn_blocking(move || Ok(settings::detect_verify(&project_root(&project_hash)?)))
+        .await
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------------ attribution
@@ -4016,10 +4212,12 @@ pub fn run() {
             executor_status,
             list_sessions,
             thread_worktrees,
+            rerun_worktree_setup,
             fleet_overview,
             thread_review_files,
             thread_review_diff,
             merge_thread_worktree,
+            cancel_merge_verification,
             open_thread_pr,
             prune_thread_worktree,
             set_thread_worktree_enabled,
@@ -4027,6 +4225,7 @@ pub fn run() {
             run_verify,
             list_verifications,
             verify_commands,
+            detect_verify_commands,
             lsp_start,
             lsp_send,
             lsp_status,
@@ -4035,6 +4234,7 @@ pub fn run() {
             lsp_shutdown,
             run_commands,
             save_run_commands,
+            save_verify_commands,
             save_verify_pins,
             save_appearance,
             detect_run_commands,
@@ -4116,6 +4316,7 @@ pub fn run() {
             delete_chain,
             list_chain_runs,
             get_chain_run,
+            set_chain_run_archived,
             run_chain,
             rerun_chain_run,
             cancel_chain_run,
@@ -4525,6 +4726,8 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             worktree_base_branch: None,
+            worktree_setup_state: None,
+            worktree_setup_output: None,
             merged_at: None,
             merge_overridden: false,
             worktree_enabled: true,

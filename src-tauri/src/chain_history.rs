@@ -262,6 +262,12 @@ pub struct ChainRunRecord {
     pub outcome: Option<OutcomeSnapshot>,
     #[serde(default)]
     pub nodes: HashMap<String, NodeHistory>,
+    /// Soft-flag archive (issue #53), mirroring `store::set_thread_archived`:
+    /// the record is never dropped or mutated away, only hidden from the
+    /// default list. `#[serde(default)]` reads every run recorded before
+    /// this field existed as not archived.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 impl ChainRunRecord {
@@ -283,6 +289,7 @@ impl ChainRunRecord {
             ended_at: None,
             outcome: None,
             nodes: HashMap::new(),
+            archived: false,
         }
     }
 }
@@ -375,6 +382,18 @@ pub fn end_run(home: &Path, hash: &str, run_id: &str, outcome: Outcome) -> Res<(
     amend_run(home, hash, run_id, |record| {
         record.ended_at = Some(now());
         record.outcome = Some(outcome.into());
+    })
+}
+
+/// Soft-flags a run archived or unarchived (issue #53), same amend-by-append
+/// convention as every other mutation in this file — the record is
+/// re-appended with the flag flipped, never rewritten or dropped in place.
+/// Mirrors `store::set_thread_archived` exactly rather than inventing a
+/// delete path (append-only history must never lose a past record).
+pub fn set_archived(home: &Path, hash: &str, run_id: &str, archived: bool) -> Res<ChainRunRecord> {
+    amend_run(home, hash, run_id, |record| {
+        record.archived = archived;
+        record.clone()
     })
 }
 
@@ -544,6 +563,49 @@ mod tests {
             let got = get_run(home.path(), hash, &id).unwrap().unwrap();
             assert_eq!(got.outcome, Some(OutcomeSnapshot::from(outcome)));
         }
+    }
+
+    // ---- 1b. archive is a soft flag, append-only (#53) ----
+
+    #[test]
+    fn a_run_starts_unarchived_and_archiving_sets_the_flag() {
+        let home = home();
+        let hash = "proj-archive";
+        start_run(home.path(), &record("run-1", hash)).unwrap();
+
+        let got = get_run(home.path(), hash, "run-1").unwrap().unwrap();
+        assert!(!got.archived, "a new run must not start archived");
+
+        let updated = set_archived(home.path(), hash, "run-1", true).unwrap();
+        assert!(updated.archived);
+        let got = get_run(home.path(), hash, "run-1").unwrap().unwrap();
+        assert!(got.archived);
+    }
+
+    #[test]
+    fn unarchiving_clears_the_flag_and_other_fields_survive_the_round_trip() {
+        let home = home();
+        let hash = "proj-unarchive";
+        start_run(home.path(), &record("run-1", hash)).unwrap();
+        record_output(home.path(), hash, "run-1", "designer", "designer output".into()).unwrap();
+        end_run(home.path(), hash, "run-1", Outcome::Completed { output: "done".into() }).unwrap();
+
+        set_archived(home.path(), hash, "run-1", true).unwrap();
+        let updated = set_archived(home.path(), hash, "run-1", false).unwrap();
+
+        assert!(!updated.archived);
+        // Archiving must never mutate or drop a past record — the append-only
+        // convention this whole module documents at the top.
+        assert_eq!(updated.nodes["designer"].output.as_deref(), Some("designer output"));
+        assert_eq!(updated.outcome, Some(OutcomeSnapshot::Completed { output: "done".into() }));
+    }
+
+    #[test]
+    fn set_archived_on_an_unknown_run_errors_rather_than_silently_no_opping() {
+        let home = home();
+        let hash = "proj-missing";
+        let err = set_archived(home.path(), hash, "no-such-run", true).unwrap_err();
+        assert!(err.to_string().contains("no chain run"));
     }
 
     // ---- 2. startup reconciliation closes an open record `interrupted` ----

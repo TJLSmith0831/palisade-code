@@ -81,15 +81,36 @@ describe("session list (Vibe preset only)", () => {
   });
 });
 
-describe("chat rail collapse (Editor preset only)", () => {
-  it("starts expanded", () => {
+describe("chat pane (a thread's page — sized, collapses to a rail, never gone)", () => {
+  it("collapses to a rail and expands again", () => {
+    const { result } = render();
+    expect(result.current.chatCollapsed).toBe(false);
+    act(() => result.current.toggleChat());
+    expect(result.current.chatCollapsed).toBe(true);
+    act(() => result.current.toggleChat());
+    expect(result.current.chatCollapsed).toBe(false);
+  });
+
+  it("never leaves both panes collapsed", () => {
+    const { result } = render();
+    act(() => result.current.toggleChat());
+    act(() => result.current.toggleEditor());
+    expect(result.current.editorCollapsed).toBe(true);
+    expect(result.current.chatCollapsed).toBe(false);
+  });
+
+  it("does not save the collapsed state", () => {
+    const { result } = render();
+    act(() => result.current.toggleChat());
     expect(render().result.current.chatCollapsed).toBe(false);
   });
 
-  it("toggles from the title-bar control", () => {
-    const { result } = render();
-    act(() => result.current.toggleChat());
-    expect(result.current.chatCollapsed).toBe(true);
+  it("still remembers its width, per project", () => {
+    localStorage.setItem(
+      "palisade:layout:proj:vibe-chat",
+      JSON.stringify({ size: 640, collapsed: true })
+    );
+    expect(render().result.current.vibeChat.size).toBe(640);
   });
 });
 
@@ -153,16 +174,11 @@ describe("opening the diff reclaims the pane that renders it", () => {
   });
 });
 
-describe("opening a thread reclaims a collapsed chat pane", () => {
-  // Editor lets you send the chat pane away, and every route to a thread
-  // ends up in openThread — so that is where the reclaim belongs.
-  it("uncollapses the chat pane when a thread is opened", () => {
+describe("opening a thread", () => {
+  it("adds it to the tab strip once", () => {
     const { result } = render();
-    act(() => result.current.toggleChat());
-    expect(result.current.chatCollapsed).toBe(true);
-
     act(() => result.current.openThread("t1"));
-    expect(result.current.openThreadIds).toContain("t1");
-    expect(result.current.chatCollapsed).toBe(false);
+    act(() => result.current.openThread("t1"));
+    expect(result.current.openThreadIds).toEqual(["t1"]);
   });
 });

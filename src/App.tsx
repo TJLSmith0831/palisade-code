@@ -35,8 +35,8 @@ import {
 } from "@mantine/core";
 import {
   IconAlertTriangle,
+  IconArrowLeft,
   IconFlask,
-  IconArchive,
   IconBolt,
   IconBox,
   IconAppWindow,
@@ -46,12 +46,13 @@ import {
   IconTrash,
   IconBrandTelegram,
   IconListCheck,
+  IconChevronLeft,
+  IconChevronRight,
   IconCommand,
   IconFile,
   IconPlayerPlay,
   IconFolder,
   IconFolders,
-  IconFolderOpen,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
@@ -80,6 +81,7 @@ import { useProjectManager } from "./hooks/useProjectManager";
 import { resolvePrefs, useThreadPrefs } from "./hooks/useThreadPrefs";
 import { useNewThreadFlow } from "./hooks/useNewThreadFlow";
 import { useThreadActions } from "./hooks/useThreadActions";
+import { ArchiveIcon, ArchivingContext } from "./archiving";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useExecutor } from "./hooks/useExecutor";
 import type {
@@ -186,10 +188,13 @@ import { languageForPath } from "./lsp";
 import OnboardingScreen from "./OnboardingScreen";
 import NavRail from "./NavRail";
 import FleetBoard, { type NewRunInput } from "./FleetBoard";
+import WorktreeModeBadge from "./WorktreeModeBadge";
 import ReviewPane, { type ReviewFile } from "./ReviewPane";
+import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
 import SessionList from "./SessionList";
 import { VerifyBadge } from "./fleetBadges";
+import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 import SearchPanel from "./SearchPanel";
 import SourceControlPanel from "./SourceControlPanel";
 import type { PanelId } from "./hooks/useAppShell";
@@ -509,6 +514,56 @@ function ModeCard({
         {done && <span className="cursor" />}
       </span>
     </button>
+  );
+}
+
+/** Chevron that collapses the thread pane to a rail and back. The tooltip is
+ *  controlled: an uncontrolled one stays open after the click (the pointer is
+ *  still over the button, and the label under it has just changed) until you
+ *  leave and re-enter, so the click closes it and hover/keyboard focus reopen. */
+function ChatPaneToggle({
+  collapsed,
+  editorCollapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  editorCollapsed: boolean;
+  onToggle: () => void;
+}) {
+  const [tipOpen, setTipOpen] = useState(false);
+  return (
+    <Tooltip
+      opened={tipOpen}
+      label={
+        editorCollapsed
+          ? "Show the editor to collapse the thread"
+          : collapsed
+            ? "Expand thread (⌘⇧J)"
+            : "Collapse thread (⌘⇧J)"
+      }
+      position="right"
+    >
+      <ActionIcon
+        variant="subtle"
+        size="sm"
+        className="ds-chat-rail-toggle"
+        aria-label={collapsed ? "Expand thread" : "Collapse thread"}
+        aria-expanded={!collapsed}
+        disabled={editorCollapsed}
+        onMouseEnter={() => setTipOpen(true)}
+        onMouseLeave={() => setTipOpen(false)}
+        onFocus={(event) => setTipOpen(event.currentTarget.matches(":focus-visible"))}
+        onBlur={() => setTipOpen(false)}
+        onClick={(event) => {
+          event.stopPropagation();
+          setTipOpen(false);
+          onToggle();
+        }}
+        data-testid="toggle-chat-pane"
+      >
+        {collapsed ? <IconChevronRight size={14} /> : <IconChevronLeft size={14} />}
+      </ActionIcon>
+    </Tooltip>
   );
 }
 
@@ -1615,6 +1670,7 @@ export const ChatSurface = memo(
             border: "1px solid var(--border)",
             borderRadius: 14,
             background: "var(--surface)",
+            boxShadow: "var(--shadow-float)",
             boxSizing: "border-box",
             position: "relative",
           }}
@@ -1758,8 +1814,11 @@ export const ChatSurface = memo(
                 style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
                 data-tauri-drag-region-exclude
               >
-                <Tooltip
-                  label={
+                <WorktreeModeBadge
+                  isolated={worktreeEnabled}
+                  locked={worktreeLocked}
+                  data-testid="worktree-mode-btn"
+                  tooltip={
                     worktreeLocked
                       ? `Set when this thread started — it runs ${
                           worktreeEnabled ? "in its own worktree" : "in the project directory"
@@ -1768,43 +1827,15 @@ export const ChatSurface = memo(
                         ? "Runs in its own git worktree — click to edit the project directly"
                         : "Edits the project directory directly — click to isolate this thread"
                   }
-                  openDelay={300}
-                  multiline
-                  w={240}
-                >
-                  <Button
-                    size="compact-xs"
-                    variant="light"
-                    color={worktreeEnabled ? "success" : "warn"}
-                    data-testid="worktree-mode-btn"
-                    data-locked={worktreeLocked ? "true" : undefined}
-                    aria-label={
-                      worktreeEnabled ? "Isolated worktree" : "Project root"
-                    }
-                    aria-disabled={worktreeLocked || !onToggleWorktree}
-                    style={worktreeLocked ? { opacity: 0.45, cursor: "default" } : undefined}
-                    onClick={() => {
-                      // Not `disabled`: a disabled control swallows the hover
-                      // too, and the tooltip explaining *why* it is locked is
-                      // the only thing that makes the lock legible.
-                      if (worktreeLocked || !onToggleWorktree) return;
-                      if (!worktreeEnabled) {
-                        onToggleWorktree();
-                      } else {
-                        setWorktreeOffConfirmOpen(true);
-                      }
-                    }}
-                    leftSection={
-                      worktreeEnabled ? (
-                        <IconGitBranch size={14} />
-                      ) : (
-                        <IconFolderOpen size={14} />
-                      )
-                    }
-                  >
-                    {worktreeEnabled ? "Isolated" : "Project root"}
-                  </Button>
-                </Tooltip>
+                  onClick={
+                    onToggleWorktree
+                      ? () => {
+                          if (!worktreeEnabled) onToggleWorktree();
+                          else setWorktreeOffConfirmOpen(true);
+                        }
+                      : undefined
+                  }
+                />
               </span>
             </Popover.Target>
             <Popover.Dropdown data-testid="worktree-mode-confirm">
@@ -2285,69 +2316,7 @@ export const ChatSurface = memo(
                   { label: "Go", value: "go" },
                 ]}
                 size="xs"
-                styles={{
-                  root: {
-                    // Flexible, not fixed: 190px is the comfortable size, but
-                    // a rigid block here is what forced the controls row to
-                    // wrap in a narrow chat pane.
-                    width: 190,
-                    minWidth: 104,
-                    height: 36,
-
-                    padding: 2,
-                    gap: 0,
-
-                    background: "transparent",
-                    border:
-                      "1px solid color-mix(in oklab, var(--accent), transparent 80%)",
-                    borderRadius: 999,
-
-                    boxSizing: "border-box",
-                    overflow: "hidden",
-                  },
-
-                  indicator: {
-                    background: "var(--accent)",
-
-                    borderRadius: 999,
-
-                    boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
-                  },
-
-                  control: {
-                    flex: "1 1 0",
-                    width: "50%",
-                    minWidth: 0,
-
-                    height: 32,
-                    minHeight: 32,
-
-                    padding: 0,
-                    border: 0,
-                    borderRadius: 999,
-
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-
-                    background: "transparent",
-                  },
-
-                  label: {
-                    fontSize: 13,
-                    fontWeight: 500,
-                    lineHeight: 1,
-
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-
-                    width: "100%",
-                    height: "100%",
-
-                    color: "inherit",
-                  },
-                }}
+                styles={MODE_SELECTOR_STYLES}
                 classNames={{
                   control: "mode-selector-control",
                   label: "mode-selector-label",
@@ -2391,7 +2360,7 @@ export const ChatSurface = memo(
                         opacity: 0.9,
                       },
                       "&:active": {
-                        transform: "scale(0.94)",
+                        transform: "scale(0.96)",
                       },
                     },
                   }}
@@ -2433,7 +2402,7 @@ export const ChatSurface = memo(
                         opacity: 0.9,
                       },
                       "&:active": {
-                        transform: "scale(0.94)",
+                        transform: "scale(0.96)",
                       },
                       "&:disabled": {
                         opacity: 0.4,
@@ -2581,7 +2550,7 @@ const ThreadRow = memo(function ThreadRow({
             aria-label={thread.archived ? "Unarchive thread" : "Archive thread"}
             data-testid="archive-thread"
           >
-            <IconArchive size={13} />
+            <ArchiveIcon threadId={thread.id} />
           </button>
           <button
             className="ds-thread-action delete"
@@ -2718,27 +2687,34 @@ const WorkspacePicker = memo(function WorkspacePicker({
           ))}
         </select>
         <div className="ds-rail-actions">
-          <button onClick={onAddProject} data-testid="add-project">
+          <Button
+            size="compact-sm"
+            variant="default"
+            onClick={onAddProject}
+            data-testid="add-project"
+          >
             Add project
-          </button>
+          </Button>
           {project && (
-            <button
-              className="ds-rail-action-subtle"
+            <Button
+              size="compact-sm"
+              variant="default"
               onClick={onRenameProject}
               data-testid="rename-project"
             >
               Rename
-            </button>
+            </Button>
           )}
           {project && (
-            <button
-              className="ds-rail-action-subtle"
+            <Button
+              size="compact-sm"
+              variant="default"
               onClick={() => onOpenProjectWindow(project)}
               data-testid="open-project-window"
               title="Open this project in a second window"
             >
               New window
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -2771,6 +2747,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                 >
                   <IconFolder size={14} className="ds-chevron" />
                   <span className="ds-tree-label">{p.displayName}</span>
+                  <span className="ds-tree-row-actions">
                   <Menu position="bottom-end" withinPortal>
                     <Menu.Target>
                       <ActionIcon
@@ -2808,6 +2785,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
                       </Menu.Item>
                     </Menu.Dropdown>
                   </Menu>
+                  </span>
                 </li>
               );
             })}
@@ -3566,6 +3544,14 @@ export default function App() {
           saved.activePanel !== undefined ? saved.activePanel : "fleet"
         );
 
+        // The backend starts watchers and checks settings before it replies.
+        // Switch the visible workspace now; its data continues loading below.
+        setProject(next);
+        setThreads([]);
+        void selectThread(next.hash, null);
+        currentProjectRef.current = next.hash;
+        tabsRef.current.closeAll();
+
         const refreshed = await api.switchProject(next.hash);
         setProject(refreshed);
         // Editing sessions are per-project; keeping them would leak memory
@@ -3576,9 +3562,6 @@ export default function App() {
           // a rust-analyzer indexing a directory nobody has open.
           void disposeProject(previous);
         }
-        currentProjectRef.current = refreshed.hash;
-        tabsRef.current.closeAll();
-
         // Reopen what was on screen last time. Files that have since gone
         // are dropped silently — an agent deleting one between sessions is
         // routine here. Spec tabs (keyed `spec:<name>`) are reopened without
@@ -4386,8 +4369,12 @@ export default function App() {
       setWorktrees(new Map());
     }
   }, []);
+  useEffect(() => {
+    const unlisten = listen("worktree-setup-finished", () => { void loadWorktrees(); });
+    return () => { unlisten.then((un) => un()); };
+  }, [loadWorktrees]);
 
-  const { onRenameThread, onArchiveThread, onDeleteThread } = useThreadActions({
+  const { onRenameThread, onArchiveThread, onDeleteThread, archivingIds, withArchiving } = useThreadActions({
     projectHash: project?.hash ?? null,
     activeThread: thread,
     setThread,
@@ -4582,16 +4569,9 @@ export default function App() {
   // A chain node's session IS a thread session (chain_exec.rs), so "click a
   // node, see what it actually did" means scrolling this thread's transcript
   // to where that session began — no second viewer, no new storage format.
-  // The rail has to be on screen before there is an anchor to scroll to, so a
-  // collapsed rail expands first and the scroll waits one frame for layout.
   const onChainTranscript = useCallback(
-    (sessionId: string) => {
-      const collapsed = shell.chatCollapsed;
-      if (collapsed) shell.toggleChat();
-      if (collapsed) requestAnimationFrame(() => scrollToSession(sessionId));
-      else scrollToSession(sessionId);
-    },
-    [shell]
+    (sessionId: string) => scrollToSession(sessionId),
+    []
   );
 
   /** Opens a past run (D8) from the chat card's own history section — same
@@ -5581,6 +5561,11 @@ export default function App() {
   const onFleetCancelRun = useCallback((runId: string) => {
     void api.cancelChainRun(runId);
   }, []);
+  const onFleetArchiveRun = useCallback((projectId: string, runId: string) => {
+    void withArchiving(runId, () => api.setChainRunArchived(projectId, runId, true))
+      .then(() => fleet.refresh())
+      .catch(fail);
+  }, [withArchiving, fleet.refresh, fail]);
   const onFleetArchive = useCallback(
     (projectId: string, threadId: string) => {
       const found = projectId === project?.hash
@@ -5590,12 +5575,11 @@ export default function App() {
         onArchiveThread(found);
         return;
       }
-      void api
-        .setThreadArchived(projectId, threadId, true)
+      void withArchiving(threadId, () => api.setThreadArchived(projectId, threadId, true))
         .then(() => fleet.refresh())
         .catch(fail);
     },
-    [project?.hash, threads, onArchiveThread, fleet.refresh, fail]
+    [project?.hash, threads, onArchiveThread, withArchiving, fleet.refresh, fail]
   );
   const onMergeThread = useCallback(
     async (projectId: string, threadId: string, overrideVerify = false) => {
@@ -5637,12 +5621,12 @@ export default function App() {
   /** A run started from the board is the same first send the composer does:
    *  create the thread, put the picks on it, send, and land on it. */
   const onNewRun = useCallback(
-    async ({ prompt, agentId, mode, isolated }: NewRunInput) => {
+    async ({ prompt, agentId, model, mode, isolated }: NewRunInput) => {
       if (!project) return;
       const hash = project.hash;
       try {
         const created = await api.createThread(hash, "New thread");
-        if (agentId) await api.setThreadExecutor(hash, created.id, agentId, null);
+        if (agentId) await api.setThreadExecutor(hash, created.id, agentId, model ?? null);
         let activeThread = await api.setThreadMode(hash, created.id, mode);
         try {
           activeThread = await api.setThreadWorktreeEnabled(
@@ -5717,11 +5701,11 @@ export default function App() {
   const renderReview = () => {
     if (!project || !thread)
       return (
-        <div className="review-pane" data-testid="review-empty">
-          <div className="ds-panel-body">
-            Pick a run on the Fleet board to review it.
-          </div>
-        </div>
+        <ReviewRunList
+          runs={fleet.rows.filter((r) => r.kind !== "playbook")}
+          onSelect={onFleetReview}
+          onGoToFleet={() => shell.openPanel("fleet")}
+        />
       );
     const row = fleet.rows.find((r) => r.threadId === thread.id);
     const worktree = worktrees.get(thread.id);
@@ -5734,7 +5718,7 @@ export default function App() {
         diff={row?.diff ?? { added: 0, removed: 0, files: 0, untracked: 0 }}
         files={reviewFiles}
         loadingFiles={reviewLoading}
-        verify={row?.verify ?? { state: "not_run" }}
+        verify={verifyPairs.length ? (row?.verify ?? { state: "not_run" }) : { state: "unconfigured" }}
         merge={row?.merge ?? (worktree ? "clean" : "no_worktree")}
         renderDiff={(path) => (
           <DiffPane
@@ -5743,6 +5727,10 @@ export default function App() {
             focusPath={path}
             refreshToken={diffRefreshToken}
             reviewPatch={reviewPatch}
+            onOpenInEditor={(file) => {
+              shell.openPanel(null);
+              selectFile(file);
+            }}
           />
         )}
         onRunVerify={() => {
@@ -5751,10 +5739,7 @@ export default function App() {
           const name =
             verifyPairs.find(([, cmd]) => cmd === row?.verify.command)?.[0] ??
             verifyPairs[0]?.[0];
-          if (!name) {
-            warn("No verify command is configured for this project.");
-            return;
-          }
+          if (!name) return;
           api.runVerify(project.hash, name, thread.id).catch(fail);
         }}
         onMerge={({ override }) =>
@@ -5765,7 +5750,19 @@ export default function App() {
           shell.openPanel(null);
           selectFile(path);
         }}
-        onBackToFleet={() => shell.openPanel("fleet")}
+        onBackToFleet={() => {
+          setThread(null);
+          shell.openPanel("review");
+        }}
+        projectHash={project.hash}
+        setup={{ state: worktree?.setupState, output: worktree?.setupOutput }}
+        onRerunSetup={() => {
+          api.rerunWorktreeSetup(project.hash, thread.id).then(loadWorktrees, fail);
+        }}
+        onVerificationConfigured={() => {
+          api.verifyCommands(project.hash).then(setVerifyPairs, () => {});
+          void fleet.refresh();
+        }}
       />
     );
   };
@@ -6414,6 +6411,7 @@ export default function App() {
   };
 
   return (
+    <ArchivingContext.Provider value={archivingIds}>
     <div className="ds-window" data-testid="window-shell">
       <div className="app" data-color-mode="dark">
         <header
@@ -6422,36 +6420,52 @@ export default function App() {
           onMouseDown={onTitlebarMouseDown}
         >
           <h1 className="sr-only">Palisade Code</h1>
-          {/* Chat is the primary surface, so the reclaimable width is the
-              session list's, not the chat rail's. */}
+          {/* A thread is a page inside Fleet: back leaves it, and Agent Access is
+              the compact Fleet beside it — quick access without leaving. Chat is
+              never closable, so hiding the list can never empty the canvas. */}
           {project && !boardPanel && (
-            <Tooltip
-              label={
-                attentionThreads.size > 0
-                  ? `${attentionThreads.size} thread${attentionThreads.size === 1 ? "" : "s"} waiting on you`
-                  : "Toggle session list"
-              }
-            >
-              <Indicator
-                label={attentionThreads.size}
-                size={16}
-                color="var(--danger)"
-                disabled={shell.sessionListOpen || attentionThreads.size === 0}
-                data-testid="session-list-attention-badge"
-              >
+            <div className="ds-pill-group" role="group" aria-label="Fleet navigation">
+              <Tooltip label="Back to Fleet (Cmd+K)">
                 <ActionIcon
                   variant="subtle"
                   className="ds-icon-btn"
-                  onClick={shell.toggleSessionList}
-                  aria-label="Toggle session list"
-                  aria-pressed={shell.sessionListOpen}
-                  data-testid="toggle-session-list"
+                  onClick={() => shell.openPanel("fleet")}
+                  aria-label="Back to Fleet"
+                  data-testid="back-to-fleet"
                   data-tauri-drag-region-exclude
                 >
-                  <IconLayoutSidebar size={14} />
+                  <IconArrowLeft size={14} />
+                  <span className="ds-chrome-label">Fleet</span>
                 </ActionIcon>
-              </Indicator>
-            </Tooltip>
+              </Tooltip>
+              <Tooltip
+                label={
+                  attentionThreads.size > 0
+                    ? `Agent Access · ${attentionThreads.size} thread${attentionThreads.size === 1 ? "" : "s"} waiting on you`
+                    : "Agent Access"
+                }
+              >
+                <Indicator
+                  label={attentionThreads.size}
+                  size={16}
+                  color="var(--danger)"
+                  disabled={shell.sessionListOpen || attentionThreads.size === 0}
+                  data-testid="session-list-attention-badge"
+                >
+                  <ActionIcon
+                    variant="subtle"
+                    className="ds-icon-btn"
+                    onClick={shell.toggleSessionList}
+                    aria-label={shell.sessionListOpen ? "Hide agent access" : "Show agent access"}
+                    aria-pressed={shell.sessionListOpen}
+                    data-testid="toggle-session-list"
+                    data-tauri-drag-region-exclude
+                  >
+                    <IconLayoutSidebar size={14} />
+                  </ActionIcon>
+                </Indicator>
+              </Tooltip>
+            </div>
           )}
           <div className="ds-chrome-utils">
             <BetaBadge onUpdateReady={setUpdateReady} />
@@ -6517,6 +6531,7 @@ export default function App() {
                 bottom panel's own inline chevron both call toggleTerminal.
                 Both panel toggles need a project to have a panel at all. */}
             {project && (
+            <div className="ds-pill-group" role="group" aria-label="Workspace panels">
             <Tooltip label="Toggle terminal panel (Cmd+`)">
               <ActionIcon
                 variant="subtle"
@@ -6530,7 +6545,6 @@ export default function App() {
                 <IconLayoutBottombar size={14} />
               </ActionIcon>
             </Tooltip>
-            )}
             {/* The secondary pane is the editor column — chat is the
                 subject, so that is the side that can be sent away. */}
             {project && !boardPanel && (
@@ -6548,6 +6562,9 @@ export default function App() {
                 </ActionIcon>
               </Tooltip>
             )}
+            </div>
+            )}
+            <div className="ds-pill-group" role="group" aria-label="Application controls">
             <Tooltip label="Theme: click to cycle auto → light → dark">
               <ActionIcon
                 variant="subtle"
@@ -6588,6 +6605,7 @@ export default function App() {
                 <IconSettings size={14} />
               </ActionIcon>
             </Tooltip>
+            </div>
           </div>
         </header>
         {flight && flight.warnings.length > 0 && (
@@ -6756,6 +6774,7 @@ export default function App() {
                   loading={fleet.loading}
                   error={fleet.error}
                   projectName={project?.displayName}
+                  projectHash={project?.hash}
                   agents={fleetAgents}
                   onOpen={onFleetOpen}
                   onReview={onFleetReview}
@@ -6765,6 +6784,7 @@ export default function App() {
                   onArchive={onFleetArchive}
                   onOpenRun={onFleetOpenRun}
                   onCancelRun={onFleetCancelRun}
+                  onArchiveRun={onFleetArchiveRun}
                   onNewRun={onNewRun}
                 />
               ) : shell.activePanel === "review" ? (
@@ -6794,6 +6814,7 @@ export default function App() {
                       shell.setDiffOpen(false);
                       tabs.openChain(null);
                     }}
+                    onGoToFile={() => void openFilePalette()}
                   />
                   {!shell.diffOpen ? (
                     renderCenterTab()
@@ -6826,32 +6847,50 @@ export default function App() {
                 </main>
                 )}
 
-                {(
-                  <>
-                    {/* Nothing to size against once the other pane is gone. */}
-                    {!editorCollapsed && (
-                      <div
-                        className="ds-resize-handle ds-resize-handle-x"
-                        data-testid="resize-right-panel"
-                        onPointerDown={bindDrag(
-                          chatPanel.handleProps,
-                          "col-resize"
-                        )}
+                {/* Nothing to size against once the editor pane is gone. */}
+                {!editorCollapsed && !shell.chatCollapsed && (
+                  <div
+                    className="ds-resize-handle ds-resize-handle-x"
+                    data-testid="resize-right-panel"
+                    onPointerDown={bindDrag(
+                      chatPanel.handleProps,
+                      "col-resize"
+                    )}
+                  />
+                )}
+                {/* Collapsing hides ChatSurface with CSS, never unmounts it:
+                    scroll position and a streaming turn survive. The whole
+                    rail is a click target for reopening, not just the icon. */}
+                <aside
+                  className="ds-chat-rail"
+                  data-testid="right-sidebar"
+                  data-collapsed={shell.chatCollapsed ? "true" : undefined}
+                  style={{ "--panel-w": `${chatPanel.size}px` } as CSSProperties}
+                  onClick={shell.chatCollapsed ? shell.toggleChat : undefined}
+                >
+                  <div className="ds-chat-rail-head">
+                    <span className="ds-chat-rail-title">Thread</span>
+                    <ChatPaneToggle
+                      collapsed={shell.chatCollapsed}
+                      editorCollapsed={editorCollapsed}
+                      onToggle={shell.toggleChat}
+                    />
+                    {shell.chatCollapsed && (attentionThreads.size > 0 || hasLiveSession) && (
+                      <span
+                        className="ds-chat-rail-dot"
+                        data-attention={attentionThreads.size > 0 ? "true" : undefined}
+                        data-testid="chat-rail-dot"
+                        role="img"
+                        aria-label={
+                          attentionThreads.size > 0
+                            ? "An agent is waiting on you"
+                            : "An agent is working"
+                        }
                       />
                     )}
-                    <aside
-                      className="ds-chat-rail"
-                      data-testid="right-sidebar"
-                      style={
-                        {
-                          "--panel-w": `${chatPanel.size}px`,
-                        } as CSSProperties
-                      }
-                    >
-                      <ChatSurface {...chatProps} />
-                    </aside>
-                  </>
-                )}
+                  </div>
+                  <ChatSurface {...chatProps} />
+                </aside>
               </div>
               )}
 
@@ -7209,5 +7248,6 @@ export default function App() {
         )}
       </div>
     </div>
+    </ArchivingContext.Provider>
   );
 }

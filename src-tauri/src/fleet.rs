@@ -119,8 +119,10 @@ pub enum FleetMerge {
 pub struct FleetDiff {
     pub added: u32,
     pub removed: u32,
-    /// Tracked files that differ from HEAD — `git diff --numstat` and nothing
-    /// else, so `+a −r` and `n files` always describe the same measurement.
+    /// Tracked files that differ from the thread's merge base — the
+    /// `git diff --numstat` rows. `added` also counts the lines of
+    /// `untracked` files, which have no numstat row, so `n files` is the
+    /// tracked share of `+a −r`, not all of it.
     pub files: u32,
     /// Files the thread created that git does not track yet, counted apart
     /// because they contribute no numstat lines.
@@ -169,12 +171,27 @@ pub struct FleetRow {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// The branch a merge lands in, set only when it is not the branch checked
+    /// out in the project now — the one case where the diff would otherwise
+    /// read as "what merging into my current branch changes".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_target: Option<String>,
     pub diff: FleetDiff,
     pub files_touched: Vec<String>,
     pub overlap: Vec<FleetOverlap>,
     pub verify: FleetVerify,
     pub merge: FleetMerge,
+    /// Last touched — a message or the user opening the thread, whichever is
+    /// newer. The board's sort key; the display times are the two below.
     pub updated_at: String,
+    /// When the thread was created.
+    pub created_at: String,
+    /// When the thread last spoke (its newest message). Absent for a thread
+    /// that has never run, and for a playbook row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    /// Playbook history is archivable only after its runner has stopped.
+    pub archivable: bool,
 }
 
 /// Everything status derivation looks at, gathered by the caller so this stays
@@ -546,12 +563,16 @@ mod tests {
             attention: None,
             branch: None,
             worktree_path: None,
+            merge_target: None,
             diff: FleetDiff::default(),
             files_touched: files.iter().map(|f| (*f).to_string()).collect(),
             overlap: vec![],
             verify: FleetVerify::not_run(),
             merge: FleetMerge::NoWorktree,
+            archivable: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            last_activity_at: None,
         }
     }
 
@@ -988,6 +1009,14 @@ mod tests {
             serde_json::to_value(row("a", "p1", &[])).unwrap().get("seed").is_none(),
             "a thread row carries no seed"
         );
+    }
+
+    #[test]
+    fn merge_target_is_sent_only_when_set() {
+        assert!(serde_json::to_value(row("a", "p1", &[])).unwrap().get("mergeTarget").is_none());
+        let mut r = row("a", "p1", &[]);
+        r.merge_target = Some("main".into());
+        assert_eq!(serde_json::to_value(r).unwrap()["mergeTarget"], "main");
     }
 
     fn playbook(run_id: &str, status: FleetStatus, updated_at: &str) -> FleetRow {

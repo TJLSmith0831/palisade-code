@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import * as api from "../api";
 import type { ThreadMeta } from "../api";
 import type { CommandBarRequest } from "../App";
@@ -54,6 +54,24 @@ export function useThreadActions({
   setThreadArchived,
   selectThread,
 }: Deps) {
+  // In-flight archives. The ref is the double-click guard (readable in the
+  // same tick, stable identity); the state exists only so rows re-render.
+  const inFlight = useRef(new Set<string>());
+  const [archivingIds, setArchivingIds] = useState<ReadonlySet<string>>(new Set());
+  /** Runs one archive while `id` shows as archiving. Every Archive entry
+   *  point goes through this, so none of them looks dead while it works. A
+   *  second call for the same id is dropped and resolves `undefined`. */
+  const withArchiving = useCallback(<T,>(id: string, work: () => Promise<T>) => {
+    if (inFlight.current.has(id)) return Promise.resolve(undefined);
+    const sync = () => setArchivingIds(new Set(inFlight.current));
+    inFlight.current.add(id);
+    sync();
+    return work().finally(() => {
+      inFlight.current.delete(id);
+      sync();
+    });
+  }, []);
+
   const onRenameThread = useCallback(
     (target: ThreadMeta) => {
       if (!projectHash) return;
@@ -82,9 +100,24 @@ export function useThreadActions({
       const worktree = worktrees.get(target.id);
       const unmerged =
         archiving && worktree && (!worktree.clean || worktree.ahead > 0);
-      setThreadArchived(projectHash, target.id, archiving)
-        .then(() => {
+      void withArchiving(target.id, async () => {
+        // Capture sidebar order before archiving removes the target from the
+        // default list; it defines what "next" means to the person reading it.
+        const before = await api.listThreads(projectHash);
+        await setThreadArchived(projectHash, target.id, archiving);
           loadWorktrees();
+          // An archived thread must never remain in the chat pane. Pick its
+          // visible neighbour from the pre-refresh order so the transition is
+          // predictable, then reconcile the list from the store.
+          const nextThreads = await api.listThreads(projectHash);
+          setThreads(nextThreads);
+          if (archiving && activeThread?.id === target.id) {
+            const visible = nextThreads.filter((thread) => !thread.archived);
+            const oldIndex = before.findIndex((thread) => thread.id === target.id);
+            const nextId = before.slice(oldIndex + 1).find((thread) => !thread.archived)?.id
+              ?? before.slice(0, oldIndex).reverse().find((thread) => !thread.archived)?.id;
+            await selectThread(projectHash, visible.find((thread) => thread.id === nextId) ?? null);
+          }
           if (!unmerged) return;
           setBar({
             kind: "confirm",
@@ -100,10 +133,9 @@ export function useThreadActions({
               }
             },
           });
-        })
-        .catch(fail);
+      }).catch(fail);
     },
-    [projectHash, worktrees, setThreadArchived, loadWorktrees, setBar, fail]
+    [projectHash, activeThread?.id, worktrees, setThreadArchived, loadWorktrees, setThreads, selectThread, setBar, fail, withArchiving]
   );
 
   const onDeleteThread = useCallback(
@@ -129,5 +161,5 @@ export function useThreadActions({
     [projectHash, activeThread?.id, setBar, setThreads, selectThread, fail]
   );
 
-  return { onRenameThread, onArchiveThread, onDeleteThread };
+  return { onRenameThread, onArchiveThread, onDeleteThread, archivingIds, withArchiving };
 }

@@ -4,14 +4,13 @@ import {
   IconSearch,
   IconGitBranch,
   IconDeviceWorkstation,
-  IconClipboardList,
+  IconFileDescription,
   IconPlayerPlay,
   IconPlug,
   IconDatabase,
   IconRoute,
   IconHistory,
-  IconSettings,
-  IconLayoutGrid,
+  IconAiAgents,
   IconChecklist,
 } from "@tabler/icons-react";
 import type { PanelId } from "./hooks/useAppShell";
@@ -26,23 +25,25 @@ type RailItem = {
   Icon: typeof IconFolder;
 };
 
-// Split by what the icon is for, not just visual balance: the agent
-// surfaces this app exists for come first (the fleet, its review, the
-// playbooks and connections that shape a run, the specs it works from),
-// then the workbench any IDE has. The ADE's own question — "what are my
-// runs doing" — is answered by the first icon, not the fifth.
+// Three groups, split by how often you reach for them: the run loop (define,
+// run, check), the code (files, search, git), then setup you configure once.
+// The ADE's own question — "what are my runs doing" — is answered by the
+// first icon, and files are the fourth, not the sixth.
 const TOP_AGENT: RailItem[] = [
-  { id: "fleet", label: "Fleet", Icon: IconLayoutGrid },
+  { id: "fleet", label: "Fleet", Icon: IconAiAgents },
+  { id: "specs", label: "Specs", Icon: IconFileDescription },
   { id: "review", label: "Review", Icon: IconChecklist },
-  { id: "chains", label: "Playbooks", Icon: IconRoute },
-  { id: "mcp", label: "Connections", Icon: IconPlug },
-  { id: "specs", label: "Specs", Icon: IconClipboardList },
 ];
 
-const TOP_NAV: RailItem[] = [
+const TOP_CODE: RailItem[] = [
   { id: "explorer", label: "Explorer", Icon: IconFolder },
   { id: "search", label: "Search", Icon: IconSearch },
   { id: "git", label: "Source Control", Icon: IconGitBranch },
+];
+
+const TOP_SETUP: RailItem[] = [
+  { id: "chains", label: "Playbooks", Icon: IconRoute },
+  { id: "mcp", label: "Connections", Icon: IconPlug },
   { id: "run", label: "Run configurations", Icon: IconPlayerPlay },
   { id: "database", label: "Database", Icon: IconDatabase },
   // Kept: the Fleet board's project column labels a row, it can't add,
@@ -52,7 +53,6 @@ const TOP_NAV: RailItem[] = [
 
 const BOTTOM: RailItem[] = [
   { id: "history", label: "History", Icon: IconHistory },
-  { id: "settings", label: "Settings", Icon: IconSettings },
 ];
 
 export default function NavRail({
@@ -88,7 +88,9 @@ export default function NavRail({
     <nav className="ds-rail" data-testid="nav-rail" aria-label="Panels">
       <div className="ds-rail-group">{TOP_AGENT.map(button)}</div>
       <div className="ds-rail-divider" role="separator" />
-      <div className="ds-rail-group">{TOP_NAV.map(button)}</div>
+      <div className="ds-rail-group">{TOP_CODE.map(button)}</div>
+      <div className="ds-rail-divider" role="separator" />
+      <div className="ds-rail-group">{TOP_SETUP.map(button)}</div>
       <div className="ds-rail-spacer" />
       <div className="ds-rail-group">{BOTTOM.map(button)}</div>
     </nav>
