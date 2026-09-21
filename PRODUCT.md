@@ -8,13 +8,13 @@ MacOS Desktop
 
 ## Users
 
-Palisade Code is for developers who have multiple ACP-compatible coding agents installed on their machine and want to use them from one coherent development environment. The primary job is to choose, direct, combine, and supervise those agents against real local projects without learning a separate workflow for each provider.
+Palisade is for developers who have multiple ACP-compatible coding agents installed on their machine and want to use them from one coherent development environment. The primary job is to choose, direct, combine, and supervise those agents against real local projects without learning a separate workflow for each provider.
 
 Users are expected to be comfortable with software-development concepts such as repositories, diffs, terminals, tests, databases, and agent permissions. The product should remain understandable to someone opening it for the first time, but it is a dense professional tool rather than a simplified chat client.
 
 ## Product Purpose
 
-Palisade Code is an Agentic Development Environment (ADE): one shell that drives several ACP-compatible coding agents in parallel, each in its own isolated worktree, reviews what they produce, and gates merge on recorded verification evidence rather than agent narration.
+Palisade is an Agentic Development Environment (ADE): one shell that drives several ACP-compatible coding agents in parallel, each in its own isolated worktree, reviews what they produce, and gates merge on recorded verification evidence rather than agent narration.
 
 The shell surrounds that fleet of agents with the tools needed to inspect and complete real development work: a fleet board of concurrent runs, per-thread diff review, source editing, Git, integrated terminals, specifications and verification, run and debug configurations, notebooks, database access, previews, and MCP connections.
 
@@ -22,7 +22,7 @@ Success means a developer can run several agents at once, see at a glance which 
 
 ## Positioning
 
-Palisade Code is an Agentic Development Environment: one shell that drives N parallel ACP agents in isolated worktrees, reviews their output, and gates merge on verification evidence. It is not an AI IDE built around a single chat pane, and not a chat client with a file tree bolted on.
+Palisade is an Agentic Development Environment: one shell that drives N parallel ACP agents in isolated worktrees, reviews their output, and gates merge on verification evidence. It is not an AI IDE built around a single chat pane, and not a chat client with a file tree bolted on.
 
 Its core advantage is not access to one proprietary model; it is a common orchestration layer over the developer's installed ACP agents, including concurrent sessions in isolated worktrees, provider-aware session continuity, explicit handoffs, and reusable multi-agent playbooks. The fleet board is home: every thread and worktree in one list, with status, agent, diff stat, verify evidence, merge readiness, and cross-thread file overlap, so a developer supervising several agents can tell what needs attention without opening each thread.
 
@@ -86,7 +86,7 @@ Cross-machine consistency is useful, but it is not the primary product claim. Co
 
 ## Brand Commitments
 
-The product name is **Palisade Code**. Product language should present it as a serious development workbench and orchestration environment, not as a generic chatbot or a proprietary-model wrapper.
+The product name is **Palisade**. Product language should present it as a serious development workbench and orchestration environment, not as a generic chatbot or a proprietary-model wrapper. Some surfaces (the app window title, `README.md`, the repository name) still say "Palisade Code" until they are renamed.
 
 No additional durable voice, visual, licensing, pricing, customer, or market claims are confirmed. Future work must not invent them.
 
