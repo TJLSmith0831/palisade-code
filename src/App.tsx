@@ -5496,7 +5496,7 @@ export default function App() {
   // thread rows all read these rows, and the sidebar is on screen far more
   // often than the board is. One source for "what does the backend actually
   // know about this thread".
-  const fleet = useFleet({ active: !!project });
+  const fleet = useFleet({ active: !!project && openingProject === null });
   /** The open thread's own row — what the header's verify badge reports. */
   const threadFleetRow = useMemo(
     () =>

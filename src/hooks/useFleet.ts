@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "../api";
 import type { Envelope, FleetRow } from "../api";
@@ -24,24 +24,38 @@ export function useFleet({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
 
+  // Bumped when the board goes inactive, so a fetch still in flight for the
+  // project being left can't land afterwards and put its rows back.
+  const generation = useRef(0);
+
   const refresh = useCallback(async () => {
+    const mine = generation.current;
     try {
-      setRows(await api.fleetOverview());
+      const next = await api.fleetOverview();
+      if (mine !== generation.current) return;
+      setRows(next);
       setError(undefined);
     } catch (e) {
+      if (mine !== generation.current) return;
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (mine === generation.current) setLoading(false);
     }
   }, []);
 
-  // Not on mount: `fleet_overview` only reports projects a window is showing,
-  // and the window isn't tracked until the project is open. A mount-time fetch
-  // answers `[]`, ends the loading state, and the board says "No runs yet"
-  // until the poll catches up. `loading` therefore stays true until the first
-  // fetch that has a project behind it.
+  // `fleet_overview` only reports projects a window is showing, and the window
+  // isn't tracked until a project has finished opening. So `active` means
+  // "tracked", not just "chosen": a fetch any earlier answers `[]`, ends the
+  // loading state, and the board says "No runs yet" (or keeps the last
+  // project's rows) until the poll catches up. Going inactive drops the rows
+  // and returns to loading, so a switch shows the skeleton, never stale rows.
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      generation.current += 1;
+      setRows([]);
+      setLoading(true);
+      return;
+    }
     void refresh();
     const un = listen<Envelope>("executor-event", () => void refresh());
     const chainsChanged = () => void refresh();

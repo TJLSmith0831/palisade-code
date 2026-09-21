@@ -60,6 +60,30 @@ describe("useFleet", () => {
     expect(mocked.fleetOverview).toHaveBeenCalledTimes(1);
   });
 
+  it("drops the rows and shows loading again while a project switch is in flight", async () => {
+    const row = { id: "t1" } as never;
+    mocked.fleetOverview.mockResolvedValue([row]);
+    const { result, rerender } = renderHook(({ active }) => useFleet({ active }), {
+      initialProps: { active: true },
+    });
+    await waitFor(() => expect(result.current.rows).toEqual([row]));
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    expect(result.current.rows).toEqual([]);
+  });
+
+  it("ignores a fetch that resolves after the board went inactive", async () => {
+    let resolve!: (rows: never[]) => void;
+    mocked.fleetOverview.mockReturnValue(new Promise((r) => (resolve = r)));
+    const { result, rerender } = renderHook(({ active }) => useFleet({ active }), {
+      initialProps: { active: true },
+    });
+    rerender({ active: false });
+    await act(async () => resolve([{ id: "old" } as never]));
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.loading).toBe(true);
+  });
+
   it("surfaces a failed load as an error", async () => {
     mocked.fleetOverview.mockRejectedValue(new Error("no backend"));
     const { result } = renderHook(() => useFleet({ active: true }));
