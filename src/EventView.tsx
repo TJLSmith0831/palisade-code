@@ -494,12 +494,9 @@ function FileEditBlock({
   );
 }
 
-function AssistantResponse({ mode, text }: { mode?: string; text: string }) {
+function AssistantResponse({ text }: { text: string }) {
   return (
     <article className="ds-assistant-response" data-testid="assistant-response">
-      <span className="ds-assistant-response-meta">
-        Assistant{mode ? ` · ${mode}` : ""}
-      </span>
       <MDEditor.Markdown source={text} className="content" />
     </article>
   );
@@ -807,14 +804,11 @@ export const EventList = memo(function EventList({
             }
             if (item.role === "assistant") {
               return (
-                <AssistantResponse key={index} mode={item.mode} text={item.text} />
+                <AssistantResponse key={index} text={item.text} />
               );
             }
             return (
               <div key={index} className={`message ${item.role}`}>
-                <span className="meta">
-                  {item.role} · {item.mode}
-                </span>
                 <MDEditor.Markdown source={item.text} className="content" />
               </div>
             );

@@ -1896,16 +1896,6 @@ input[type="checkbox"] {
   line-height: 1.6;
 }
 
-.ds-assistant-response-meta {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .ds-assistant-response .content.wmde-markdown {
   padding: 0;
   background: transparent;
@@ -2001,9 +1991,13 @@ input[type="checkbox"] {
 }
 
 .message.user {
-  align-self: flex-end;
-  background: var(--bg);
-  border-color: var(--border);
+  box-sizing: border-box;
+  width: min(100%, 84ch);
+  max-width: 100%;
+  align-self: center;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-color: color-mix(in oklab, var(--accent), var(--border) 82%);
 }
 
 .message.tool {
@@ -3492,6 +3486,19 @@ input[type="checkbox"] {
   border-right: none;
 }
 
+/* A collapsed editor turns chat into the main work surface. Keep every
+   transcript artifact on the same readable measure instead of letting
+   activity dividers run across the full canvas. */
+[data-preset="vibe"][data-editor="collapsed"] .messages {
+  padding: 28px clamp(24px, 8vw, 144px);
+  gap: 20px;
+}
+
+[data-preset="vibe"][data-editor="collapsed"] .messages > * {
+  width: min(100%, 84ch);
+  align-self: center;
+}
+
 /* Chat collapses to a rail, never away: the whole rail reopens it, and a dot
    says an agent is working or waiting. ChatSurface stays mounted (hidden) so
    scroll position and a streaming turn survive. */
@@ -3571,6 +3578,16 @@ input[type="checkbox"] {
   min-height: 0;
   overflow-y: auto;
   margin-top: 10px;
+}
+
+.ds-sessions-skeleton {
+  display: grid;
+  gap: 18px;
+  padding: 8px;
+}
+
+.ds-sessions-skeleton-row {
+  padding: 8px 0;
 }
 
 .ds-session-item {
@@ -5169,22 +5186,26 @@ button.ds-onboarding-status {
   flex-shrink: 0;
   max-width: 190px;
   padding: 4px 8px;
-  border: none;
+  box-sizing: border-box;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
+  transition-property: color, background-color, border-color;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
 }
 
 .ds-thread-tab:hover {
-  background: var(--surface-warm);
+  background: color-mix(in oklab, var(--surface), var(--fg) 6%);
+  color: var(--fg);
 }
 
 .ds-thread-tab.active {
-  background: var(--surface-warm);
+  background: var(--active-row);
   color: var(--fg);
-  /* Paired with the border so the active tab isn't colour-only. */
-  box-shadow: inset 2px 0 0 var(--accent);
+  border-color: color-mix(in oklab, var(--accent), transparent 72%);
 }
 
 .ds-thread-tab-title {
@@ -5195,12 +5216,11 @@ button.ds-onboarding-status {
 
 .ds-thread-tab-mode {
   flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--surface);
-  font-size: 10px;
+  padding: 0;
+  background: transparent;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--muted);
 }
 
@@ -6106,6 +6126,33 @@ button.ds-onboarding-status {
   color: var(--fg);
 }
 
+.ds-thread-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px clamp(24px, 8vw, 144px);
+}
+
+.ds-thread-loading-message,
+.ds-thread-loading-activity {
+  width: min(100%, 84ch);
+  align-self: center;
+  display: grid;
+  gap: 10px;
+}
+
+.ds-thread-loading-activity {
+  padding-block: 10px;
+  border-block: 1px solid var(--border);
+}
+
+.ds-panel-loading {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
 .ds-thread-starters {
   display: flex;
   flex-direction: column;
@@ -6531,11 +6578,24 @@ button.ds-onboarding-status {
 .fleet-composer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface);
+}
+
+.fleet-prompt-input {
+  min-height: 76px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--editor-bg);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  transition-property: border-color, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
 }
 
 .fleet-composer-row {

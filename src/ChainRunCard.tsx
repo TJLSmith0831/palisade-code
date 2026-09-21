@@ -167,10 +167,9 @@ export default function ChainRunCard({ run, projectHash, onTranscript, onGateRes
       radius="sm"
       p="xs"
       data-testid="chain-run-card"
-      // 2px accent left edge, per PLAN §4.5 — the existing active-thread
-      // inset idiom ([App.css] `.ds-thread-tab.active`,
-      // `box-shadow: inset 2px 0 0 var(--accent)`) reused as a value, not a
-      // new class: that class also carries thread-tab-only layout
+      // 2px accent left edge, per PLAN §4.5 — a chain waiting on a gate is
+      // the one place the transcript uses that stronger directional cue.
+      // It stays inline because `.ds-thread-tab.active` carries tab-only layout
       // (max-width, flex, padding) that doesn't belong on a card, and this
       // component may not edit App.css to give it a class of its own.
       style={gate && !gate.resolved ? { boxShadow: "inset 2px 0 0 var(--accent)", paddingLeft: 8 } : undefined}

@@ -181,6 +181,27 @@ describe("SessionList row actions", () => {
   });
 });
 
+describe("SessionList loading", () => {
+  it("does not present an in-flight thread list as an empty project", () => {
+    render(
+      <SessionList
+        threads={[]}
+        loading
+        activeThread={undefined}
+        liveThreadIds={new Set()}
+        worktrees={new Map()}
+        onNewThread={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("session-list-skeleton")).toBeTruthy();
+    expect(screen.queryByTestId("session-list-empty")).toBeNull();
+  });
+});
+
 describe("threadState", () => {
   const t = thread({});
   const wt = (added: number, removed: number): WorktreeStatus => ({

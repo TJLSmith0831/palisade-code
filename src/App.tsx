@@ -32,6 +32,7 @@ import {
   UnstyledButton,
   Indicator,
   Tabs,
+  Skeleton,
 } from "@mantine/core";
 import {
   IconAlertTriangle,
@@ -217,6 +218,8 @@ const nativeEventTarget = () => ({ target: getCurrentWindow().label });
 // Vibe/Spec new-thread picker in place of the thread view when active.
 type ChatSurfaceProps = {
   project: Project | null;
+  /** Project switch is still fetching threads; keep the old empty state hidden. */
+  loading?: boolean;
   thread: ThreadMeta | null;
   messages: Message[];
   live: ExecutorEvent[];
@@ -643,6 +646,7 @@ export const ChatSurface = memo(
     onChainTranscript,
     onChainGateResolved,
     onChainOpenRun,
+    loading = false,
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
@@ -1088,6 +1092,10 @@ export const ChatSurface = memo(
     // `transitioning` covers the async gap between clearing picker state and
     // the thread being selected — without it, showEmptyModePicker re-renders
     // the mode picker mid-transition (Vibe shell bug).
+    if (loading) {
+      return <ThreadLoadingSkeleton />;
+    }
+
     if (
       (newThreadPicker || showEmptyModePicker) &&
       !pendingMode &&
@@ -2333,7 +2341,7 @@ export const ChatSurface = memo(
                       data-testid="composer-queue"
                       aria-label="Queue message"
                       title="Queue — sends when this turn ends"
-                      size={30}
+                      size={36}
                       radius="md"
                       variant="default"
                       style={{ flexShrink: 0 }}
@@ -2346,7 +2354,7 @@ export const ChatSurface = memo(
                   onClick={onStop}
                   aria-label="Stop"
                   title="Stop"
-                  size={30}
+                  size={36}
                   radius="md"
                   variant="filled"
                   styles={{
@@ -2367,7 +2375,7 @@ export const ChatSurface = memo(
                     },
                   }}
                 >
-                  <IconPlayerStopFilled size={14} />
+                  <IconPlayerStopFilled size={16} />
                 </ActionIcon>
                 </Group>
               ) : (
@@ -2387,7 +2395,7 @@ export const ChatSurface = memo(
                       ? "No coding agent detected — install Claude Code or Codex, then reopen Palisade"
                       : "Send message"
                   }
-                  size={30}
+                  size={36}
                   radius="md"
                   variant="filled"
                   styles={{
@@ -2434,6 +2442,36 @@ export const ChatSurface = memo(
     );
   }
 );
+
+function ThreadLoadingSkeleton() {
+  return (
+    <div className="ds-thread-loading" data-testid="thread-loading" role="status" aria-label="Loading threads">
+      <div className="ds-thread-loading-message">
+        <Skeleton height={12} width="28%" />
+        <Skeleton height={14} width="82%" />
+        <Skeleton height={14} width="64%" />
+      </div>
+      <div className="ds-thread-loading-activity">
+        <Skeleton height={12} width="22%" />
+      </div>
+      <div className="ds-thread-loading-message">
+        <Skeleton height={12} width="24%" />
+        <Skeleton height={14} width="74%" />
+      </div>
+    </div>
+  );
+}
+
+function PanelLoadingSkeleton({ label }: { label: string }) {
+  return (
+    <div className="ds-panel-loading" role="status" aria-label={label}>
+      <Skeleton height={12} width="30%" />
+      <Skeleton height={14} width="88%" />
+      <Skeleton height={14} width="68%" />
+      <Skeleton height={96} />
+    </div>
+  );
+}
 
 // Keeps a resize drag alive after the pointer leaves the handle element.
 const bindDrag =
@@ -6132,7 +6170,7 @@ export default function App() {
     }
     if (tab?.type === "table") {
       return (
-        <Suspense fallback={<div style={{ padding: 12 }}>Loading table…</div>}>
+        <Suspense fallback={<PanelLoadingSkeleton label="Loading table" />}>
           <DataGridTab
             projectHash={project.hash}
             connectionId={tab.connectionId}
@@ -6145,7 +6183,7 @@ export default function App() {
     }
     if (tab?.type === "query") {
       return (
-        <Suspense fallback={<div style={{ padding: 12 }}>Loading editor…</div>}>
+        <Suspense fallback={<PanelLoadingSkeleton label="Loading editor" />}>
           <SqlQueryTab
             projectHash={project.hash}
             connectionId={tab.connectionId}
@@ -6182,7 +6220,7 @@ export default function App() {
     // forcing a re-render as a non-notebook path via unopenableNotebooks.
     if (selectedFile?.toLowerCase().endsWith(".ipynb") && !unopenableNotebooks.has(selectedFile)) {
       return (
-        <Suspense fallback={<div style={{ padding: 12 }}>Loading notebook…</div>}>
+        <Suspense fallback={<PanelLoadingSkeleton label="Loading notebook" />}>
           <NotebookTab
             projectHash={project.hash}
             path={selectedFile}
@@ -6357,7 +6395,7 @@ export default function App() {
         );
       case "database":
         return (
-          <Suspense fallback={<div style={{ padding: 12 }}>Loading…</div>}>
+          <Suspense fallback={<PanelLoadingSkeleton label="Loading database" />}>
             <DatabasePanel
               projectHash={project.hash}
               onOpenTable={(connection, schema, table) =>
@@ -6410,7 +6448,7 @@ export default function App() {
                   place busy/idle state and agent attribution per session
                   are inspectable. */}
               <h2 className="ds-section-heading">Sessions</h2>
-              <Suspense fallback={<div style={{ padding: 12 }}>Loading…</div>}>
+              <Suspense fallback={<PanelLoadingSkeleton label="Loading sessions" />}>
                 <SessionsPanel
                   projectHash={project.hash}
                   threads={threads}
@@ -6751,6 +6789,7 @@ export default function App() {
             {!boardPanel && shell.sessionListOpen && (
               <SessionList
                 threads={threads}
+                loading={openingProject === project.hash}
                 activeThread={thread ?? undefined}
                 /* `busyThreads` is already exactly "threads with a live
                    session" — no second derivation of the same state. */
@@ -6923,7 +6962,10 @@ export default function App() {
                       />
                     )}
                   </div>
-                  <ChatSurface {...chatProps} />
+                  <ChatSurface
+                    {...chatProps}
+                    loading={openingProject === project.hash}
+                  />
                 </aside>
               </div>
               )}
