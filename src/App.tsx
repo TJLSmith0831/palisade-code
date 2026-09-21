@@ -1670,6 +1670,7 @@ export const ChatSurface = memo(
             border: "1px solid var(--border)",
             borderRadius: 14,
             background: "var(--surface)",
+            boxShadow: "var(--shadow-float)",
             boxSizing: "border-box",
             position: "relative",
           }}
@@ -2359,7 +2360,7 @@ export const ChatSurface = memo(
                         opacity: 0.9,
                       },
                       "&:active": {
-                        transform: "scale(0.94)",
+                        transform: "scale(0.96)",
                       },
                     },
                   }}
@@ -2401,7 +2402,7 @@ export const ChatSurface = memo(
                         opacity: 0.9,
                       },
                       "&:active": {
-                        transform: "scale(0.94)",
+                        transform: "scale(0.96)",
                       },
                       "&:disabled": {
                         opacity: 0.4,

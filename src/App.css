@@ -1885,34 +1885,106 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
-/* --- agent chat bubble (v2) ---------------------------------------------- */
+/* --- reading-first transcript -------------------------------------------- */
 
-.ds-chat-bubble {
-  display: flex;
-  gap: 10px;
-  max-width: 85%;
-}
-
-.ds-chat-bubble.agent {
-  align-self: flex-start;
-}
-
-.ds-chat-avatar {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  border-radius: 9999px;
-  background: var(--twilight-glow);
+.ds-assistant-response {
+  width: min(100%, 84ch);
+  align-self: center;
   color: var(--fg);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.ds-assistant-response-meta {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.ds-chat-bubble .message {
-  max-width: 100%;
+.ds-assistant-response .content.wmde-markdown {
+  padding: 0;
+  background: transparent;
+}
+
+.ds-assistant-response .content.wmde-markdown > *:first-child {
+  margin-top: 0;
+}
+
+.ds-assistant-response .content.wmde-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.ds-activity-group {
+  align-self: stretch;
+  border-block: 1px solid var(--border);
+}
+
+.ds-activity-summary,
+.ds-event-disclosure-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition-property: background-color, color;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
+}
+
+.ds-activity-summary {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.ds-activity-summary:hover,
+.ds-event-disclosure-header:hover {
+  color: var(--fg);
+  background: color-mix(in oklab, var(--surface), transparent 35%);
+}
+
+.ds-activity-summary:focus-visible,
+.ds-event-disclosure-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ds-activity-body {
+  padding-left: 20px;
+}
+
+.ds-activity-body > .mantine-Paper-root,
+.ds-activity-body > .file-edit {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ds-activity-body > .mantine-Paper-root + .mantine-Paper-root,
+.ds-activity-body > .mantine-Paper-root + .file-edit,
+.ds-activity-body > .file-edit + .mantine-Paper-root,
+.ds-activity-body > .file-edit + .file-edit {
+  border-top: 1px solid var(--border);
+}
+
+.ds-activity-body .ds-event-disclosure-header {
+  padding: 6px 10px;
+}
+
+.ds-activity-body .file-edit-head {
+  padding: 6px 10px;
+  background: transparent;
+  border-bottom: 0;
 }
 
 .message {
@@ -2539,7 +2611,8 @@ input[type="checkbox"] {
   color: var(--accent);
 }
 
-.message .content.wmde-markdown {
+.message .content.wmde-markdown,
+.ds-assistant-response .content.wmde-markdown {
   background: transparent;
   padding: 0;
   white-space: normal;
@@ -2548,17 +2621,22 @@ input[type="checkbox"] {
 /* Compact chat-app vertical rhythm — overrides @uiw/react-markdown-preview's
    GitHub-style defaults (24px heading margins, 10px paragraph gaps, etc.)
    so messages read like a chat bubble, not a README. */
-.message .content.wmde-markdown > *:first-child {
+.message .content.wmde-markdown > *:first-child,
+.ds-assistant-response .content.wmde-markdown > *:first-child {
   margin-top: 0;
 }
 
-.message .content.wmde-markdown > *:last-child {
+.message .content.wmde-markdown > *:last-child,
+.ds-assistant-response .content.wmde-markdown > *:last-child {
   margin-bottom: 0;
 }
 
 .message .content.wmde-markdown p,
 .message .content.wmde-markdown ul,
-.message .content.wmde-markdown ol {
+.message .content.wmde-markdown ol,
+.ds-assistant-response .content.wmde-markdown p,
+.ds-assistant-response .content.wmde-markdown ul,
+.ds-assistant-response .content.wmde-markdown ol {
   margin: 0 0 8px;
 }
 
@@ -2567,23 +2645,33 @@ input[type="checkbox"] {
 .message .content.wmde-markdown h3,
 .message .content.wmde-markdown h4,
 .message .content.wmde-markdown h5,
-.message .content.wmde-markdown h6 {
+.message .content.wmde-markdown h6,
+.ds-assistant-response .content.wmde-markdown h1,
+.ds-assistant-response .content.wmde-markdown h2,
+.ds-assistant-response .content.wmde-markdown h3,
+.ds-assistant-response .content.wmde-markdown h4,
+.ds-assistant-response .content.wmde-markdown h5,
+.ds-assistant-response .content.wmde-markdown h6 {
   margin: 12px 0 6px;
   font-size: 1.05em;
   font-weight: 600;
   border: none;
 }
 
-.message .content.wmde-markdown li {
+.message .content.wmde-markdown li,
+.ds-assistant-response .content.wmde-markdown li {
   margin-bottom: 4px;
 }
 
-.message .content.wmde-markdown li > p {
+.message .content.wmde-markdown li > p,
+.ds-assistant-response .content.wmde-markdown li > p {
   margin: 0;
 }
 
 .message .content.wmde-markdown ul,
-.message .content.wmde-markdown ol {
+.message .content.wmde-markdown ol,
+.ds-assistant-response .content.wmde-markdown ul,
+.ds-assistant-response .content.wmde-markdown ol {
   padding-left: 1.2em;
 }
 
@@ -4979,7 +5067,9 @@ button.ds-onboarding-status {
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: all 120ms ease-out;
+  transition-property: color, border-color, background-color;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
 }
 
 .ds-composer-picker > svg {
