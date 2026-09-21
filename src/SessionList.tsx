@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Badge, Button, TextInput, Tooltip } from "@mantine/core";
+import { Badge, Button, Skeleton, TextInput, Tooltip } from "@mantine/core";
 import {
   IconPencil,
   IconPlus,
@@ -161,8 +161,11 @@ export default function SessionList({
   onRename,
   onArchive,
   userOpened = false,
+  loading = false,
 }: {
   threads: ThreadMeta[];
+  /** Project switch is still fetching these rows; do not impersonate an empty project. */
+  loading?: boolean;
   activeThread: ThreadMeta | undefined;
   /** Threads with a live/busy session — drives the accent dot. */
   liveThreadIds: Set<string>;
@@ -240,6 +243,18 @@ export default function SessionList({
       />
 
       <div className="ds-sessions-list">
+        {loading ? (
+          <div className="ds-sessions-skeleton" data-testid="session-list-skeleton" role="status" aria-label="Loading threads">
+            {[0, 1, 2].map((row) => (
+              <div className="ds-sessions-skeleton-row" key={row}>
+                <Skeleton height={13} width={row === 1 ? "56%" : "72%"} />
+                <Skeleton height={10} width="44%" mt={7} />
+                <Skeleton height={10} width="30%" mt={6} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
         {visible.length === 0 && (
           <div className="empty ds-sessions-empty" data-testid="session-list-empty">
             <p>{query ? "No threads match." : "No threads yet."}</p>
@@ -386,6 +401,8 @@ export default function SessionList({
             })}
           </div>
         ))}
+          </>
+        )}
       </div>
     </aside>
   );

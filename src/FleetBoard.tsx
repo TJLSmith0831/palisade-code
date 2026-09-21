@@ -415,7 +415,8 @@ export default function FleetBoard({
           onChange={(e) => setPrompt(e.currentTarget.value)}
           placeholder="What should the agent do?"
           aria-label="New run prompt"
-          rows={2}
+          rows={3}
+          classNames={{ input: "fleet-prompt-input" }}
           data-testid="fleet-prompt"
         />
         <div className="fleet-composer-row">

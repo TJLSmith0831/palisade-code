@@ -141,6 +141,12 @@ const renderSurface = (overrides: SurfaceOverrides = {}) => {
 };
 
 describe("ChatSurface auto-scroll", () => {
+  it("shows a thread skeleton while a project switch is fetching its list", () => {
+    renderSurface({ loading: true, thread: null, messages: [] });
+    expect(screen.getByTestId("thread-loading")).toBeTruthy();
+    expect(screen.queryByTestId("mode-picker")).toBeNull();
+  });
+
   it("starts with auto-scroll on", () => {
     renderSurface();
     const messages = screen.getByTestId("messages");
