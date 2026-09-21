@@ -128,7 +128,9 @@ import FileEditorPane, {
 } from "./FileEditorPane";
 import TabBar from "./TabBar";
 import PreviewPane from "./PreviewPane";
-import { useDevServerPreview } from "./useDevServerPreview";
+import { useDevServers } from "./useDevServers";
+import DevServerChips from "./DevServerChips";
+import { useLinkRouting } from "./linkRouting";
 import { isMarkdownPath, tabKey, useOpenTabs } from "./openTabs";
 import { loadSession, saveSession, type EditorSession } from "./session";
 import CommandPalette from "./CommandPalette";
@@ -180,7 +182,7 @@ import SettingsPanel, {
   loadGlobalAppearance,
   PROJECT_SETTINGS_FILE,
 } from "./SettingsPanel";
-import TerminalTabs from "./TerminalTabs";
+import TerminalTabs, { firstTerminalId } from "./TerminalTabs";
 import TestExplorer from "./TestExplorer";
 import DebugPanel from "./DebugPanel";
 import { markersForFile, resolveTestPath } from "./testGutter";
@@ -3270,6 +3272,7 @@ export default function App() {
   const runCommand = useCallback(
     (name: string, command: string) => {
       setRunLast(name);
+      openPreviewUntil.current = Date.now() + 60_000;
       // Output belongs in the bottom panel's Terminal tab (Amendment 1), so
       // open it before writing — otherwise the command runs somewhere the
       // user can't see.
@@ -3282,7 +3285,7 @@ export default function App() {
       // `terminal_spawn` is a no-op when one is already running.
       // The focused tab, or — on the very first run, before TerminalTabs has
       // mounted and reported one — the tab it deterministically opens first.
-      const target = activeTerminalId ?? `${project.hash}:1`;
+      const target = activeTerminalId ?? firstTerminalId(project.hash);
       api
         .terminalSpawn(project.hash, target)
         .then(() => api.terminalInput(target, `${command}\n`))
@@ -4012,9 +4015,39 @@ export default function App() {
     });
   }, [project, tabs, invalidateFileTree]);
 
-  // Auto-open Preview when either output stream prints a dev-server URL
-  // (D9/D11) — same helper the "+" menu uses, so both paths behave alike.
-  useDevServerPreview(useCallback((url: string) => tabs.openPreview(url), [tabs]));
+  // Running dev servers — from a terminal or an agent — are offered as chips,
+  // never opened on their own: a URL in output is not evidence anyone wants a
+  // browser. The one exception is a server the Run shortcut just started: the
+  // app launched it, so opening its preview is the expected result.
+  const { servers: devServers } = useDevServers(
+    project?.hash ?? null,
+    useMemo(() => pm.threads.map((t) => t.id), [pm.threads])
+  );
+  const openPreviewUntil = useRef(0);
+  const knownServers = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = devServers.filter((s) => !knownServers.current.has(s.url));
+    knownServers.current = new Set(devServers.map((s) => s.url));
+    const started = fresh.find((s) => s.origin === "terminal");
+    if (started && Date.now() < openPreviewUntil.current) {
+      openPreviewUntil.current = 0;
+      tabs.openPreview(started.url);
+    }
+  }, [devServers, tabs.openPreview]);
+  useLinkRouting(useCallback((url: string) => tabs.openPreview(url), [tabs.openPreview]));
+
+  // A hidden native view is still a running page, so it must not outlive its
+  // tab: close it when the Preview tab goes, and when the project does.
+  const hasPreviewTab = tabs.tabs.some((t) => t.type === "preview");
+  useEffect(() => {
+    if (project && !hasPreviewTab) void api.previewClose(project.hash).catch(() => {});
+  }, [hasPreviewTab, project?.hash]);
+  useEffect(() => {
+    const hash = project?.hash;
+    return () => {
+      if (hash) void api.previewClose(hash).catch(() => {});
+    };
+  }, [project?.hash]);
 
   // Opens project-settings.json (D14/D15) in the editor, creating it with a
   // self-documenting default first if the project doesn't have one yet.
@@ -6123,7 +6156,7 @@ export default function App() {
     }
     if (tab?.type === "preview") {
       return (
-        <PreviewPane url={tab.url} onNavigate={(url) => tabs.openPreview(url)} />
+        <PreviewPane projectHash={project.hash} url={tab.url} onNavigate={(url) => tabs.openPreview(url)} />
       );
     }
     if (tab?.type === "chain") {
@@ -6995,6 +7028,7 @@ export default function App() {
                         <TerminalTabs
                           projectHash={project.hash}
                           onActiveTerminalChange={setActiveTerminalId}
+                          onOpenPreview={(url) => tabs.openPreview(url)}
                         />
                       )}
                     </Tabs.Panel>
@@ -7027,6 +7061,7 @@ export default function App() {
             language={languageLabelFor(selectedFile)}
             lsp={lspStatus}
             cursor={cursorPosition}
+            trailing={<DevServerChips servers={devServers} onOpen={(url) => tabs.openPreview(url)} />}
           />
         )}
 
