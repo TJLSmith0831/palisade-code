@@ -95,6 +95,36 @@ describe("groupFleet", () => {
   it("returns empty bands for no rows", () => {
     expect(groupFleet([])).toEqual({ attention: [], running: [], idle: [] });
   });
+
+  // The row's own status only catches up on the next executor event or the
+  // slow poll (useFleet); a run just started from this board must not sit
+  // under "Idle" until then, so `liveThreadIds` overrides a stale row.
+  it("puts a just-started thread under Running even before its row catches up", () => {
+    const groups = groupFleet(
+      [row({ threadId: "t", status: "idle" })],
+      new Set(["t"]),
+    );
+    expect(groups.running.map((r) => r.threadId)).toEqual(["t"]);
+    expect(groups.idle).toEqual([]);
+  });
+
+  it("never lets a live session mask a row waiting on a permission prompt", () => {
+    const groups = groupFleet(
+      [row({ threadId: "t", status: "attention", attention: "permission" })],
+      new Set(["t"]),
+    );
+    expect(groups.attention.map((r) => r.threadId)).toEqual(["t"]);
+    expect(groups.running).toEqual([]);
+  });
+
+  it("leaves a playbook row alone — liveThreadIds keys by thread, not run", () => {
+    const groups = groupFleet(
+      [playbookRow({ threadId: "run-1", status: "idle" })],
+      new Set(["run-1"]),
+    );
+    expect(groups.idle.map((r) => r.threadId)).toEqual(["run-1"]);
+    expect(groups.running).toEqual([]);
+  });
 });
 
 describe("FleetBoard", () => {
@@ -247,6 +277,22 @@ describe("FleetBoard", () => {
     expect(onCancelRun).toHaveBeenCalledWith("run-1");
     expect(onOpen).not.toHaveBeenCalled();
     expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it("offers Stop on a just-started thread before its row confirms running", async () => {
+    const onStop = vi.fn();
+    render(
+      <FleetBoard
+        {...props({
+          rows: [row({ threadId: "t", status: "idle" })],
+          liveThreadIds: new Set(["t"]),
+          onStop,
+        })}
+      />
+    );
+    fireEvent.click(screen.getByTestId("fleet-actions"));
+    fireEvent.click(await screen.findByText("Stop"));
+    expect(onStop).toHaveBeenCalledWith("t");
   });
 
   it("offers Archive for a finished playbook run", async () => {

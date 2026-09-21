@@ -111,16 +111,29 @@ export const FLEET_BANDS = [
 ] as const;
 
 /** Split threads into those bands, newest-touched first within each.
- *  Empty bands are dropped so the sidebar never heads a group over nothing. */
+ *  Empty bands are dropped so the sidebar never heads a group over nothing.
+ *
+ *  A session goes busy on the backend the instant a prompt is sent, but the
+ *  row's own status only catches up on the next executor event or the ~10s
+ *  poll (see useFleet) — so a just-started run could sit under "Idle" for
+ *  several seconds. `liveThreadIds` is the same optimistic flag the row's
+ *  dot already trusts (`threadState`, above); band placement trusts it too,
+ *  unless the row already says a permission prompt is waiting. */
 export function groupByFleet(
   threads: ThreadMeta[],
-  rows: Map<string, FleetRow>
+  rows: Map<string, FleetRow>,
+  liveThreadIds: Set<string> = new Set()
 ): { key: string; label: string; list: ThreadMeta[] }[] {
+  const bandOf = (t: ThreadMeta) => {
+    const status = rows.get(t.id)?.status ?? "idle";
+    if (status === "attention") return status;
+    return liveThreadIds.has(t.id) ? "running" : status;
+  };
   return FLEET_BANDS.map(({ key, label }) => ({
     key,
     label,
     list: threads
-      .filter((t) => (rows.get(t.id)?.status ?? "idle") === key)
+      .filter((t) => bandOf(t) === key)
       .sort(
         (a, b) =>
           Date.parse(rows.get(b.id)?.updatedAt ?? b.updatedAt) -
@@ -186,8 +199,8 @@ export default function SessionList({
   // Grouped the way the board groups: what wants you, what is moving, the
   // rest. The workspace name is already in the workspace picker.
   const groups = useMemo(
-    () => groupByFleet(visible, rowsByThread),
-    [visible, rowsByThread]
+    () => groupByFleet(visible, rowsByThread, liveThreadIds),
+    [visible, rowsByThread, liveThreadIds]
   );
 
   return (

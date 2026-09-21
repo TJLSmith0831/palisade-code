@@ -42,6 +42,9 @@ export type FleetBoardProps = {
    *  home-directory probe. */
   projectHash?: string | null;
   agents: { id: string; name: string; installed: boolean }[];
+  /** Threads with a live/busy session — the same optimistic set the sidebar's
+   *  dot already trusts. See `groupFleet`. */
+  liveThreadIds?: Set<string>;
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
   onStop(threadId: string): void;
@@ -67,24 +70,39 @@ export function playbookSubtitle(row: FleetRow): string {
 
 /** Split the fleet into the three bands the board renders. Attention rows are
  *  newest-first — the thing that just stopped and wants you is the thing you
- *  most likely came here for. */
-export function groupFleet(rows: FleetRow[]): {
+ *  most likely came here for.
+ *
+ *  A session goes busy on the backend the instant a prompt is sent, but a
+ *  row's own status only catches up on the next executor event or the slow
+ *  poll (see useFleet) — so a run just started from this board's composer
+ *  could sit under "Idle" for several seconds. `liveThreadIds` is the same
+ *  optimistic flag the sidebar's dot already trusts; a thread row trusts it
+ *  too, unless the row already says a permission prompt is waiting. */
+export function groupFleet(
+  rows: FleetRow[],
+  liveThreadIds: Set<string> = new Set()
+): {
   attention: FleetRow[];
   running: FleetRow[];
   idle: FleetRow[];
 } {
+  const status = (r: FleetRow) =>
+    r.kind === "thread" && r.status !== "attention" && liveThreadIds.has(r.threadId)
+      ? "running"
+      : r.status;
   const attention = rows
-    .filter((r) => r.status === "attention")
+    .filter((r) => status(r) === "attention")
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   return {
     attention,
-    running: rows.filter((r) => r.status === "running"),
-    idle: rows.filter((r) => r.status === "idle"),
+    running: rows.filter((r) => status(r) === "running"),
+    idle: rows.filter((r) => status(r) === "idle"),
   };
 }
 
 function Row({
   row,
+  running,
   onOpen,
   onReview,
   onStop,
@@ -94,7 +112,13 @@ function Row({
   onOpenRun,
   onCancelRun,
   onArchiveRun,
-}: { row: FleetRow } & Pick<
+}: {
+  row: FleetRow;
+  /** Whether this row landed in the board's "Running" band — already
+   *  resolved by `groupFleet` (raw + optimistic), so Stop doesn't wait on
+   *  the row's own status to catch up. */
+  running: boolean;
+} & Pick<
   FleetBoardProps,
   | "onOpen"
   | "onReview"
@@ -214,7 +238,7 @@ function Row({
           {!playbook && (
             <Menu.Item onClick={() => onReview(row.threadId)}>Review</Menu.Item>
           )}
-          {row.status === "running" && (
+          {running && (
             <Menu.Item onClick={stop}>Stop</Menu.Item>
           )}
           {/* Merge, PR and Archive are a branch's story. A playbook run has
@@ -287,6 +311,7 @@ export default function FleetBoard({
   projectName,
   projectHash,
   agents,
+  liveThreadIds,
   onOpen,
   onReview,
   onStop,
@@ -339,7 +364,7 @@ export default function FleetBoard({
     };
   }, [projectHash, agentId]);
 
-  const groups = groupFleet(rows);
+  const groups = groupFleet(rows, liveThreadIds);
   const bands: { key: string; label: string; list: FleetRow[] }[] = [
     { key: "attention", label: "Needs attention", list: groups.attention },
     { key: "running", label: "Running", list: groups.running },
@@ -485,6 +510,7 @@ export default function FleetBoard({
                 <Row
                   key={row.threadId}
                   row={row}
+                  running={band.key === "running"}
                   onOpen={onOpen}
                   onReview={onReview}
                   onStop={onStop}

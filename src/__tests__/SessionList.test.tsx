@@ -92,6 +92,23 @@ describe("groupByFleet ordering", () => {
     const rows = new Map([["a", { status: "idle", updatedAt: "2026-08-09T00:00:00Z" } as FleetRow]]);
     expect(groupByFleet([b, a], rows)[0].list.map((t) => t.id)).toEqual(["a", "b"]);
   });
+
+  // The row's own status only catches up on the next executor event or the
+  // ~10s poll (useFleet); a just-sent turn must not sit under "Idle" until
+  // then, so `liveThreadIds` overrides a stale "idle" row to "running".
+  it("puts a just-started thread under Running even before its row catches up", () => {
+    const t = thread({ id: "t", updatedAt: "2026-08-01T00:00:00Z" });
+    const rows = new Map([["t", { status: "idle", updatedAt: "2026-08-01T00:00:00Z" } as FleetRow]]);
+    const bands = groupByFleet([t], rows, new Set(["t"]));
+    expect(bands.map((b) => b.key)).toEqual(["running"]);
+  });
+
+  it("never lets a live session mask a row that is waiting on a permission prompt", () => {
+    const t = thread({ id: "t", updatedAt: "2026-08-01T00:00:00Z" });
+    const rows = new Map([["t", { status: "attention", updatedAt: "2026-08-01T00:00:00Z" } as FleetRow]]);
+    const bands = groupByFleet([t], rows, new Set(["t"]));
+    expect(bands.map((b) => b.key)).toEqual(["attention"]);
+  });
 });
 
 describe("filterThreads", () => {

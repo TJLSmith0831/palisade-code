@@ -6809,6 +6809,7 @@ export default function App() {
                   projectName={project?.displayName}
                   projectHash={project?.hash}
                   agents={fleetAgents}
+                  liveThreadIds={busyThreads}
                   onOpen={onFleetOpen}
                   onReview={onFleetReview}
                   onStop={onFleetStop}
