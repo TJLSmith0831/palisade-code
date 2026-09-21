@@ -2138,7 +2138,7 @@ describe("Resizable layout persistence", () => {
     fireEvent.pointerUp(window);
     expect(
       screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
-    ).toBe("253px");
+    ).toBe("280px");
 
     unmount();
     render(<App />);
@@ -2146,7 +2146,7 @@ describe("Resizable layout persistence", () => {
     openExplorerPanel();
     expect(
       screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")
-    ).toBe("253px");
+    ).toBe("280px");
   });
 
   it("disables text selection on the body while dragging a handle, restores it on release", async () => {

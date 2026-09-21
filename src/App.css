@@ -677,12 +677,13 @@ input[type="checkbox"] {
 }
 
 .ds-rail-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
   gap: 4px;
 }
 
 .ds-rail-actions button {
-  flex: 1;
+  min-width: 0;
 }
 
 .ds-branch-btn svg {
@@ -3885,14 +3886,25 @@ input[type="checkbox"] {
 }
 
 .ds-sc-commit-box {
-  position: relative;
   margin-bottom: 8px;
 }
 
-.ds-sc-generate {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
+.ds-sc-commit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ds-sc-commit-actions > :first-child {
+  min-width: 0;
+}
+
+.ds-sc-commit-actions button {
+  flex-shrink: 0;
+  margin-inline-start: auto;
 }
 
 .ds-sc-count {

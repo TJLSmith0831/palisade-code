@@ -622,7 +622,7 @@ describe("a commit row shows the whole commit", () => {
     expect(subjectLines(EIGHTY) * 25).toBeGreaterThanOrEqual(EIGHTY.length);
     // The row is tall enough to hold those lines plus its metadata and both
     // ref badges — and nothing is asked to share a line with the subject.
-    expect(commitRowHeight(EIGHTY, 2)).toBe(15 * 3 + 14 + 16 * 2);
+    expect(commitRowHeight(EIGHTY, 2)).toBe(15 * 3 + 14 + 16 * 2 + 2 * 3);
   });
 
   it("keeps the half of a branch name that tells two branches apart", () => {

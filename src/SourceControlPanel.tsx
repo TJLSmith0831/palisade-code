@@ -133,6 +133,7 @@ export function layoutGraph(commits: api.GraphCommit[]): GraphRow[] {
 const SUBJECT_LINE_H = 15;
 const META_H = 14;
 const BADGE_H = 16;
+const ROW_GAP = 2;
 /**
  * Characters per line for the subject at the panel's default width. Measured
  * in the running app rather than estimated — the subject column is 164px and
@@ -169,7 +170,8 @@ export const shortRef = (ref: string) =>
   ref.length <= BRANCH_BADGE_CHARS ? ref : `…${ref.slice(-(BRANCH_BADGE_CHARS - 1))}`;
 
 export const commitRowHeight = (subject: string, refCount: number) =>
-  SUBJECT_LINE_H * subjectLines(subject) + META_H + BADGE_H * refCount;
+  SUBJECT_LINE_H * subjectLines(subject) + META_H + BADGE_H * refCount +
+  ROW_GAP * (refCount + 1);
 
 function graphLaneGeometry(laneCount: number) {
   const visibleLanes = Math.min(laneCount, 3);
@@ -760,20 +762,21 @@ export default function SourceControlPanel({
             rows={3}
             data-testid="sc-commit-message"
           />
-          <Text size="xs" c="dimmed">⌘↵ commits staged changes</Text>
-          <Button
-            className="ds-sc-generate"
-            size="compact-xs"
-            variant="light"
-            leftSection={
-              generating ? <Loader size={11} /> : <IconSparkles size={13} />
-            }
-            disabled={generating}
-            onClick={generate}
-            data-testid="sc-generate"
-          >
-            {generating ? "Drafting…" : "Generate"}
-          </Button>
+          <div className="ds-sc-commit-actions">
+            <Text size="xs" c="dimmed">⌘↵ commits staged changes</Text>
+            <Button
+              size="compact-xs"
+              variant="light"
+              leftSection={
+                generating ? <Loader size={11} /> : <IconSparkles size={13} />
+              }
+              disabled={generating}
+              onClick={generate}
+              data-testid="sc-generate"
+            >
+              {generating ? "Drafting…" : "Generate"}
+            </Button>
+          </div>
         </div>
 
         <Button

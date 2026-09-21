@@ -137,8 +137,8 @@ export function useAppShell(projectHash: string | undefined) {
 
   const leftRail = useResizable({
     storageKey: `palisade:layout:${layoutHash}:left`,
-    defaultSize: 193,
-    min: 160,
+    defaultSize: 220,
+    min: 220,
     max: 420,
     axis: "horizontal",
     // The rail and its panel are DOM-first/left-edge, but CSS `order` puts
