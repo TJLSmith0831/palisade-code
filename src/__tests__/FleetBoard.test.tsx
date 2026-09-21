@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
 import type { FleetBoardProps } from "../FleetBoard";
@@ -373,6 +373,51 @@ describe("FleetBoard", () => {
       mode: "spec",
       isolated: true,
     });
+  });
+
+  it("preselects the agent's default option over its settings-resolved current model", async () => {
+    apiMock.listModels.mockResolvedValueOnce({
+      configId: "model",
+      current: "claude-fable-5-1",
+      models: [
+        { id: "default", name: "Default (recommended)" },
+        { id: "claude-fable-5-1", name: "Fable 5.1" },
+      ],
+    });
+    const onNewRun = vi.fn();
+    render(<FleetBoard {...props({ onNewRun })} />);
+    await waitFor(() => expect(screen.getByTestId("fleet-model-select")).toHaveValue("Default (recommended)"));
+  });
+
+  it("shows skeleton rows only after a short delay on the first load, never over real rows", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<FleetBoard {...props({ rows: [], loading: true })} />);
+      expect(screen.queryByTestId("fleet-skeleton")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.getByTestId("fleet-skeleton")).toBeInTheDocument();
+      expect(screen.queryByTestId("fleet-empty")).toBeNull();
+      expect(screen.getByTestId("fleet-board")).toHaveAttribute("aria-busy", "true");
+      rerender(<FleetBoard {...props({ rows: [], loading: false })} />);
+      expect(screen.queryByTestId("fleet-skeleton")).toBeNull();
+      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("toggles isolation with the thread-style badge, and the choice reaches the start-run payload", () => {
+    const onNewRun = vi.fn();
+    render(<FleetBoard {...props({ onNewRun })} />);
+    const badge = screen.getByTestId("fleet-isolated");
+    expect(badge).toHaveTextContent("Isolated");
+    fireEvent.click(badge);
+    expect(badge).toHaveTextContent("Project root");
+    fireEvent.change(screen.getByTestId("fleet-prompt"), { target: { value: "ship it" } });
+    fireEvent.click(screen.getByTestId("fleet-start"));
+    expect(onNewRun).toHaveBeenCalledWith(expect.objectContaining({ isolated: false }));
   });
 
   it("disables the model select with a clear placeholder while loading, and when the agent offers none", async () => {

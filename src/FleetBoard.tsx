@@ -4,12 +4,13 @@ import {
   Menu,
   Select,
   SegmentedControl,
-  Switch,
+  Skeleton,
   Text,
   Textarea,
   Tooltip,
+  VisuallyHidden,
 } from "@mantine/core";
-import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
+import { IconAiAgent, IconDots, IconFolderOpen, IconGitBranch, IconRoute } from "@tabler/icons-react";
 import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { activityLabel, relativeTime } from "./SessionList";
@@ -244,6 +245,33 @@ function Row({
   );
 }
 
+/** Placeholder rows shaped like `Row`, so the board doesn't jump when real
+ *  ones land. Delayed so a fast load never flashes them. */
+function FleetSkeleton() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setVisible(true), 150);
+    return () => clearTimeout(timer);
+  }, []);
+  if (!visible) return null;
+  return (
+    <div data-testid="fleet-skeleton">
+      <VisuallyHidden role="status">Loading runs…</VisuallyHidden>
+      <Skeleton height={12} width={72} mb="xs" />
+      {[0, 1, 2].map((i) => (
+        <div className="fleet-row" key={i} style={{ cursor: "default" }}>
+          <Skeleton circle height={16} />
+          <div className="fleet-row-main" style={{ flex: 1 }}>
+            <Skeleton height={12} width="45%" mb={8} />
+            <Skeleton height={10} width="70%" />
+          </div>
+          <Skeleton height={18} width={64} radius="xl" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function FleetBoard({
   rows,
   loading,
@@ -287,9 +315,11 @@ export default function FleetBoard({
       .then((state) => {
         if (live) {
           setModels(state.models);
-          // `current` is the agent's own default. Showing it prevents the
-          // composer from looking unset while still honoring the agent.
-          setModelId(state.current && state.models.some((model) => model.id === state.current) ? state.current : null);
+          // Prefer the agent's "default" option (Claude: "Default
+          // (recommended)"). `current` is the agent's resolved pick, which for
+          // Claude is whatever model the user's own settings pinned.
+          const pick = state.models.some((model) => model.id === "default") ? "default" : state.current;
+          setModelId(pick && state.models.some((model) => model.id === pick) ? pick : null);
         }
       })
       .catch(() => live && setModels([]))
@@ -309,7 +339,12 @@ export default function FleetBoard({
   const canStart = prompt.trim().length > 0 && installed.length > 0;
 
   return (
-    <section className="fleet-board" aria-label="Fleet" data-testid="fleet-board">
+    <section
+      className="fleet-board"
+      aria-label="Fleet"
+      aria-busy={loading && rows.length === 0}
+      data-testid="fleet-board"
+    >
       <div className="fleet-header">
         <Text className="fleet-header-project">
           {projectName ?? "Fleet"}
@@ -388,12 +423,17 @@ export default function FleetBoard({
               label: "mode-selector-label",
             }}
           />
-          <Switch
-            checked={isolated}
-            onChange={(e) => setIsolated(e.currentTarget.checked)}
-            label="Isolated worktree"
+          <Button
+            size="compact-xs"
+            variant="light"
+            color={isolated ? "success" : "warn"}
+            leftSection={isolated ? <IconGitBranch size={14} /> : <IconFolderOpen size={14} />}
+            onClick={() => setIsolated(!isolated)}
+            aria-label={isolated ? "Isolated worktree" : "Project root"}
             data-testid="fleet-isolated"
-          />
+          >
+            {isolated ? "Isolated" : "Project root"}
+          </Button>
           <Button
             disabled={!canStart}
             data-testid="fleet-start"
@@ -412,6 +452,8 @@ export default function FleetBoard({
           </Button>
         </div>
       </div>
+
+      {loading && rows.length === 0 && !error && <FleetSkeleton />}
 
       {error && (
         <p className="fleet-error" role="alert" data-testid="fleet-error">
