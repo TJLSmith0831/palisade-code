@@ -4,7 +4,7 @@ import * as api from "../api";
 import type { Envelope, FleetRow } from "../api";
 import { CHAINS_CHANGED_EVENT } from "../ChainsPanel";
 
-/** The fleet board's rows, kept fresh three ways: once on mount, on every
+/** The fleet board's rows, kept fresh three ways: once when it goes active, on every
  *  executor envelope (the only event that means a run moved), and on a slow
  *  poll for the things no event announces — a verify finishing elsewhere, a
  *  branch moving under us. */
@@ -35,12 +35,14 @@ export function useFleet({
     }
   }, []);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
+  // Not on mount: `fleet_overview` only reports projects a window is showing,
+  // and the window isn't tracked until the project is open. A mount-time fetch
+  // answers `[]`, ends the loading state, and the board says "No runs yet"
+  // until the poll catches up. `loading` therefore stays true until the first
+  // fetch that has a project behind it.
   useEffect(() => {
     if (!active) return;
+    void refresh();
     const un = listen<Envelope>("executor-event", () => void refresh());
     const chainsChanged = () => void refresh();
     window.addEventListener(CHAINS_CHANGED_EVENT, chainsChanged);

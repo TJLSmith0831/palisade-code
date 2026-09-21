@@ -49,9 +49,20 @@ describe("useFleet", () => {
     await waitFor(() => expect(mocked.fleetOverview).toHaveBeenCalledTimes(2));
   });
 
+  it("stays loading, and does not fetch, until a project is open", async () => {
+    const { result, rerender } = renderHook(({ active }) => useFleet({ active }), {
+      initialProps: { active: false },
+    });
+    expect(result.current.loading).toBe(true);
+    expect(mocked.fleetOverview).not.toHaveBeenCalled();
+    rerender({ active: true });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mocked.fleetOverview).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces a failed load as an error", async () => {
     mocked.fleetOverview.mockRejectedValue(new Error("no backend"));
-    const { result } = renderHook(() => useFleet({ active: false }));
+    const { result } = renderHook(() => useFleet({ active: true }));
     await waitFor(() => expect(result.current.error).toContain("no backend"));
   });
 });
