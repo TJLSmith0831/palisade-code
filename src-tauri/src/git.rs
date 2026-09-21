@@ -401,9 +401,9 @@ fn merge_scratch(root: &Path, branch: &str) -> (std::path::PathBuf, String) {
 /// On success the base branch is advanced to the merge commit — by
 /// fast-forwarding the worktree that has `base` checked out when there is one
 /// (so git's own index and working tree stay in sync), and by moving the ref
-/// directly when `base` is checked out nowhere. A fast-forward into a dirty
-/// root is refused rather than forced; the caller reports it and the user
-/// commits or stashes.
+/// directly when `base` is checked out nowhere. A fast-forward that would
+/// overwrite an uncommitted edit is refused by git rather than forced; the
+/// caller reports git's error and the user commits or stashes those files.
 pub fn merge_into_base(bin: &Path, root: &Path, base: &str, branch: &str) -> Res<MergeOutcome> {
     if ahead_of(bin, root, base, branch)? == 0 {
         return Ok(MergeOutcome {
@@ -413,22 +413,12 @@ pub fn merge_into_base(bin: &Path, root: &Path, base: &str, branch: &str) -> Res
             detail: format!("`{branch}` has no commits that `{base}` does not already have."),
         });
     }
-    // A base checked out in a dirty worktree can't take the fast-forward, and
-    // finding that out *after* the merge means cleaning up a scratch worktree
-    // for nothing. Check first.
+    // No dirty-tree pre-check: git's own `--ff-only` below refuses exactly
+    // when the fast-forward would overwrite an uncommitted edit, and an
+    // unrelated dirty file is fine. The scratch worktree is cleaned up either way.
     // `worktree_holding` only knows about *linked* worktrees; the project
     // root is the common case and it has to be checked separately.
     let host = base_worktree_path(bin, root, base)?;
-    if let Some(path) = &host {
-        let changes = status(bin, path)?;
-        if !changes.is_empty() {
-            return Err(format!(
-                "Cannot merge into `{base}` because it has {} uncommitted {}. Commit or stash them before merging.",
-                changes.len(),
-                if changes.len() == 1 { "change" } else { "changes" },
-            ).into());
-        }
-    }
 
     let (scratch, tmp_branch) = merge_scratch(root, branch);
     // A scratch worktree left behind by an earlier conflict is stale the
@@ -1517,5 +1507,35 @@ world
         let parked = out.conflict_path.expect("conflict leaves a worktree to resolve in");
         assert!(parked.is_dir(), "conflicted merge stays on disk");
         assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "base version\n");
+    }
+
+    /// A dirty base only blocks the merge when git says the fast-forward would
+    /// overwrite one of those edits; an unrelated dirty file merges and stays
+    /// dirty, and a refusal leaves no scratch worktree behind.
+    #[test]
+    fn merge_back_tolerates_unrelated_dirty_files_and_refuses_overlap() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        let base = current_branch_name(git(), root).unwrap();
+
+        // Thread edits `tracked`.
+        let (wt, branch) = add_worktree(git(), root, "01thread-overlap").unwrap();
+        fs::write(wt.join(&tracked), "thread version\n").unwrap();
+        run(git(), &wt, &["commit", "-qam", "thread edit"]).unwrap();
+
+        // Overlap: the root has an uncommitted edit to the same file.
+        fs::write(root.join(&tracked), "uncommitted local edit\n").unwrap();
+        let err = merge_into_base(git(), root, &base, &branch).unwrap_err();
+        assert!(err.contains("overwritten") || err.contains("commit"), "unexpected error: {err}");
+        assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "uncommitted local edit\n");
+        assert!(!merge_scratch(root, &branch).0.exists(), "scratch worktree should be gone");
+
+        // Unrelated: discard the overlap, dirty a different file instead.
+        run(git(), root, &["checkout", "--", &tracked]).unwrap();
+        fs::write(root.join("unrelated.txt"), "local note\n").unwrap();
+        let out = merge_into_base(git(), root, &base, &branch).unwrap();
+        assert!(out.merged, "unrelated dirty file should not block: {}", out.detail);
+        assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "thread version\n");
+        assert_eq!(fs::read_to_string(root.join("unrelated.txt")).unwrap(), "local note\n");
     }
 }

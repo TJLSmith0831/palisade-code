@@ -102,21 +102,22 @@ describe("MergeGate", () => {
     expect(screen.getByTestId("open-thread-pr")).toBeDisabled();
   });
 
-  it("blocks the merge on a conflict, a dirty base, or an empty thread", () => {
+  it("blocks the merge on a conflict or an empty thread", () => {
     mount(worktree({ mergeable: false, state: "conflict" }));
     expand();
     expect(screen.getByTestId("merge-thread")).toBeDisabled();
 
     mount(worktree({ ahead: 0, clean: true }));
     expect(screen.getAllByTestId("merge-thread")[1]).toBeDisabled();
+  });
 
+  it("does not block the merge on a dirty base, only says so", () => {
     mount(worktree({ baseState: "dirty", baseChangeCount: 14 }));
-    fireEvent.click(screen.getAllByTestId("merge-gate-toggle")[2]);
-    expect(screen.getAllByTestId("gate-check-mergeable")[2]).toHaveTextContent(
+    expand();
+    expect(screen.getByTestId("gate-check-mergeable")).toHaveTextContent(
       "main has 14 uncommitted changes"
     );
-    expect(screen.getAllByTestId("merge-thread")[2]).toBeDisabled();
-    expect(screen.getAllByTestId("open-thread-pr")[2]).not.toBeDisabled();
+    expect(screen.getByTestId("merge-thread")).not.toBeDisabled();
   });
 
   it("blocks only the local merge when the target safety check is unavailable", () => {

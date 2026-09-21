@@ -93,7 +93,9 @@ export default function MergeGate({
 
   const workToLand = hasWorkToLand(worktree);
   const baseState = worktree.baseState ?? "unavailable";
-  const baseBlocked = baseState !== "clean";
+  // A dirty base is only informational: git refuses the merge itself if it
+  // would overwrite one of those edits.
+  const baseBlocked = baseState === "unavailable";
   const canMerge =
     workToLand &&
     worktree.clean &&
@@ -254,7 +256,7 @@ export default function MergeGate({
             </ThemeIcon>
             <Text size="xs" style={{ flex: 1 }}>
               {baseState === "dirty"
-                ? `${worktree.baseBranch} has ${worktree.baseChangeCount ?? "uncommitted"} uncommitted ${worktree.baseChangeCount === 1 ? "change" : "changes"}. Commit or stash them before merging locally.`
+                ? `${worktree.baseBranch} has ${worktree.baseChangeCount ?? "uncommitted"} uncommitted ${worktree.baseChangeCount === 1 ? "change" : "changes"}. The merge only stops if it touches the same files.`
                 : baseState === "unavailable"
                   ? `Cannot check whether ${worktree.baseBranch} is safe to update.`
                   : worktree.mergeable
@@ -334,8 +336,6 @@ export default function MergeGate({
                   ? "Nothing to merge yet"
                   : !worktree.clean
                     ? "Commit this thread's changes before merging"
-                  : baseState === "dirty"
-                    ? `${worktree.baseBranch} has uncommitted changes. Commit or stash them before merging locally.`
                   : baseState === "unavailable"
                     ? `Cannot check whether ${worktree.baseBranch} is safe to update`
                   : !worktree.mergeable
