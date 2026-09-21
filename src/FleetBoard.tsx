@@ -10,12 +10,13 @@ import {
   Tooltip,
   VisuallyHidden,
 } from "@mantine/core";
-import { IconAiAgent, IconDots, IconFolderOpen, IconGitBranch, IconRoute } from "@tabler/icons-react";
+import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
 import { listModels, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
+import WorktreeModeBadge from "./WorktreeModeBadge";
 
 export type NewRunInput = {
   prompt: string;
@@ -245,12 +246,19 @@ function Row({
   );
 }
 
+/** Fast loads never flash the skeleton. */
+const SKELETON_DELAY_MS = 150;
+
+/** ACP agents that offer a "default" model option (Claude's "Default
+ *  (recommended)") use this id for it. */
+const AGENT_DEFAULT_MODEL_ID = "default";
+
 /** Placeholder rows shaped like `Row`, so the board doesn't jump when real
  *  ones land. Delayed so a fast load never flashes them. */
 function FleetSkeleton() {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
-    const timer = setTimeout(() => setVisible(true), 150);
+    const timer = setTimeout(() => setVisible(true), SKELETON_DELAY_MS);
     return () => clearTimeout(timer);
   }, []);
   if (!visible) return null;
@@ -259,7 +267,7 @@ function FleetSkeleton() {
       <VisuallyHidden role="status">Loading runs…</VisuallyHidden>
       <Skeleton height={12} width={72} mb="xs" />
       {[0, 1, 2].map((i) => (
-        <div className="fleet-row" key={i} style={{ cursor: "default" }}>
+        <div className="fleet-row" data-skeleton key={i}>
           <Skeleton circle height={16} />
           <div className="fleet-row-main" style={{ flex: 1 }}>
             <Skeleton height={12} width="45%" mb={8} />
@@ -318,7 +326,9 @@ export default function FleetBoard({
           // Prefer the agent's "default" option (Claude: "Default
           // (recommended)"). `current` is the agent's resolved pick, which for
           // Claude is whatever model the user's own settings pinned.
-          const pick = state.models.some((model) => model.id === "default") ? "default" : state.current;
+          const pick = state.models.some((model) => model.id === AGENT_DEFAULT_MODEL_ID)
+            ? AGENT_DEFAULT_MODEL_ID
+            : state.current;
           setModelId(pick && state.models.some((model) => model.id === pick) ? pick : null);
         }
       })
@@ -423,17 +433,16 @@ export default function FleetBoard({
               label: "mode-selector-label",
             }}
           />
-          <Button
-            size="compact-xs"
-            variant="light"
-            color={isolated ? "success" : "warn"}
-            leftSection={isolated ? <IconGitBranch size={14} /> : <IconFolderOpen size={14} />}
+          <WorktreeModeBadge
+            isolated={isolated}
+            tooltip={
+              isolated
+                ? "Runs in its own git worktree — click to edit the project directly"
+                : "Edits the project directory directly, so uncommitted changes there can be overwritten — click to isolate this run"
+            }
             onClick={() => setIsolated(!isolated)}
-            aria-label={isolated ? "Isolated worktree" : "Project root"}
             data-testid="fleet-isolated"
-          >
-            {isolated ? "Isolated" : "Project root"}
-          </Button>
+          />
           <Button
             disabled={!canStart}
             data-testid="fleet-start"

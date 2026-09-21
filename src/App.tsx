@@ -53,7 +53,6 @@ import {
   IconPlayerPlay,
   IconFolder,
   IconFolders,
-  IconFolderOpen,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
@@ -189,6 +188,7 @@ import { languageForPath } from "./lsp";
 import OnboardingScreen from "./OnboardingScreen";
 import NavRail from "./NavRail";
 import FleetBoard, { type NewRunInput } from "./FleetBoard";
+import WorktreeModeBadge from "./WorktreeModeBadge";
 import ReviewPane, { type ReviewFile } from "./ReviewPane";
 import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
@@ -1813,8 +1813,11 @@ export const ChatSurface = memo(
                 style={{ position: "absolute", top: 8, right: 40, zIndex: 1 }}
                 data-tauri-drag-region-exclude
               >
-                <Tooltip
-                  label={
+                <WorktreeModeBadge
+                  isolated={worktreeEnabled}
+                  locked={worktreeLocked}
+                  data-testid="worktree-mode-btn"
+                  tooltip={
                     worktreeLocked
                       ? `Set when this thread started — it runs ${
                           worktreeEnabled ? "in its own worktree" : "in the project directory"
@@ -1823,43 +1826,15 @@ export const ChatSurface = memo(
                         ? "Runs in its own git worktree — click to edit the project directly"
                         : "Edits the project directory directly — click to isolate this thread"
                   }
-                  openDelay={300}
-                  multiline
-                  w={240}
-                >
-                  <Button
-                    size="compact-xs"
-                    variant="light"
-                    color={worktreeEnabled ? "success" : "warn"}
-                    data-testid="worktree-mode-btn"
-                    data-locked={worktreeLocked ? "true" : undefined}
-                    aria-label={
-                      worktreeEnabled ? "Isolated worktree" : "Project root"
-                    }
-                    aria-disabled={worktreeLocked || !onToggleWorktree}
-                    style={worktreeLocked ? { opacity: 0.45, cursor: "default" } : undefined}
-                    onClick={() => {
-                      // Not `disabled`: a disabled control swallows the hover
-                      // too, and the tooltip explaining *why* it is locked is
-                      // the only thing that makes the lock legible.
-                      if (worktreeLocked || !onToggleWorktree) return;
-                      if (!worktreeEnabled) {
-                        onToggleWorktree();
-                      } else {
-                        setWorktreeOffConfirmOpen(true);
-                      }
-                    }}
-                    leftSection={
-                      worktreeEnabled ? (
-                        <IconGitBranch size={14} />
-                      ) : (
-                        <IconFolderOpen size={14} />
-                      )
-                    }
-                  >
-                    {worktreeEnabled ? "Isolated" : "Project root"}
-                  </Button>
-                </Tooltip>
+                  onClick={
+                    onToggleWorktree
+                      ? () => {
+                          if (!worktreeEnabled) onToggleWorktree();
+                          else setWorktreeOffConfirmOpen(true);
+                        }
+                      : undefined
+                  }
+                />
               </span>
             </Popover.Target>
             <Popover.Dropdown data-testid="worktree-mode-confirm">

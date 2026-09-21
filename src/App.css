@@ -6456,6 +6456,10 @@ button.ds-onboarding-status {
 
 /* Archiving: the row stays put but visibly hands off, so the delay reads as
    work in progress rather than a dead click. */
+.fleet-row[data-skeleton] {
+  pointer-events: none;
+}
+
 .fleet-row[data-busy] {
   opacity: 0.6;
   pointer-events: none;

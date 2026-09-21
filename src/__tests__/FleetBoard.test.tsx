@@ -389,6 +389,19 @@ describe("FleetBoard", () => {
     await waitFor(() => expect(screen.getByTestId("fleet-model-select")).toHaveValue("Default (recommended)"));
   });
 
+  it("falls back to the agent's current model when it offers no default option", async () => {
+    apiMock.listModels.mockResolvedValueOnce({
+      configId: "model",
+      current: "m2",
+      models: [
+        { id: "m1", name: "Model One" },
+        { id: "m2", name: "Model Two" },
+      ],
+    });
+    render(<FleetBoard {...props()} />);
+    await waitFor(() => expect(screen.getByTestId("fleet-model-select")).toHaveValue("Model Two"));
+  });
+
   it("shows skeleton rows only after a short delay on the first load, never over real rows", () => {
     vi.useFakeTimers();
     try {
@@ -413,8 +426,10 @@ describe("FleetBoard", () => {
     render(<FleetBoard {...props({ onNewRun })} />);
     const badge = screen.getByTestId("fleet-isolated");
     expect(badge).toHaveTextContent("Isolated");
+    expect(badge).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(badge);
     expect(badge).toHaveTextContent("Project root");
+    expect(badge).toHaveAttribute("aria-pressed", "false");
     fireEvent.change(screen.getByTestId("fleet-prompt"), { target: { value: "ship it" } });
     fireEvent.click(screen.getByTestId("fleet-start"));
     expect(onNewRun).toHaveBeenCalledWith(expect.objectContaining({ isolated: false }));
