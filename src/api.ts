@@ -1157,14 +1157,46 @@ export const setSpecChange = (
   name: string | null
 ) => invoke<ThreadMeta>("set_spec_change", { projectHash, threadId, name });
 
+// ---------------------------------------------------------------- preview
+
+/** Where the Preview pane's native webview sits, in the window's CSS pixels. */
+export type PreviewBounds = { x: number; y: number; width: number; height: number };
+
+/** What the previewed page reports about itself (`preview-state` event). */
+export type PreviewState = { projectHash: string; url: string; loading: boolean; title: string | null };
+
+/** Shows `projectHash`'s preview at `bounds`, navigating only if `url`
+ *  differs from what it already shows. Each project has its own browser, with
+ *  its own cookies and storage. */
+export const previewOpen = (projectHash: string, url: string, bounds: PreviewBounds) =>
+  invoke<void>("preview_open", { projectHash, url, bounds });
+/** Whether anything answers at `url`: `null` if so (any HTTP status counts),
+ *  otherwise why not. Only loopback addresses are checked. */
+export const previewProbe = (url: string) => invoke<string | null>("preview_probe", { url });
+export const previewBounds = (projectHash: string, bounds: PreviewBounds) =>
+  invoke<void>("preview_bounds", { projectHash, bounds });
+/** Hides the view but keeps its page alive. */
+export const previewHide = (projectHash: string) => invoke<void>("preview_hide", { projectHash });
+/** Destroys the view and its page; the next open starts a fresh one. */
+export const previewClose = (projectHash: string) => invoke<void>("preview_close", { projectHash });
+export const previewReload = (projectHash: string) => invoke<void>("preview_reload", { projectHash });
+/** `-1` back, `1` forward. */
+export const previewHistory = (projectHash: string, delta: -1 | 1) =>
+  invoke<void>("preview_history", { projectHash, delta });
+
 // ---------------------------------------------------------------- terminal
 
 /** Resolves to the display name of a project whose shell was killed to make
  * room for this one, or `null` when nothing was replaced. */
-/** Ensures tab `terminalId`'s shell is running. Resolves `true` when one was
- *  spawned, `false` when re-attaching to a shell that was already there. */
+/** What attaching to a tab returns: whether a shell was started, and the
+ *  tab's recent output (base64) so a late view can catch up. Live
+ *  `terminal-output` chunks with `offset < end` are already in `backlog`. */
+export type TerminalAttach = { spawned: boolean; backlog: string; end: number };
+
+/** Ensures tab `terminalId`'s shell is running — starting a new one if the
+ *  previous shell exited — and returns what the view needs to attach. */
 export const terminalSpawn = (projectHash: string, terminalId: string) =>
-  invoke<boolean>("terminal_spawn", { projectHash, terminalId });
+  invoke<TerminalAttach>("terminal_spawn", { projectHash, terminalId });
 export const terminalInput = (terminalId: string, data: string) =>
   invoke<void>("terminal_input", { terminalId, data });
 export const terminalResize = (terminalId: string, cols: number, rows: number) =>

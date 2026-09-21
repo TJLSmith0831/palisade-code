@@ -17,10 +17,51 @@ use crate::executor::child_path_env;
 use crate::store::Res;
 use crate::locks::MutexExt;
 
+/// How much output a tab remembers so a view that attaches late (a second
+/// window, a remounted pane, the first Run of a fresh shell) can catch up.
+const SCROLLBACK_BYTES: usize = 256 * 1024;
+
+/// The tail of a PTY's output plus a running byte count. Every chunk is
+/// stamped with the count before it, so a view that fetched a snapshot can
+/// tell which live chunks the snapshot already contains.
+#[derive(Default)]
+struct Scrollback {
+    tail: Vec<u8>,
+    total: u64,
+}
+
+impl Scrollback {
+    /// Appends `chunk` and returns its start offset.
+    fn push(&mut self, chunk: &[u8]) -> u64 {
+        let offset = self.total;
+        self.total += chunk.len() as u64;
+        self.tail.extend_from_slice(chunk);
+        if self.tail.len() > SCROLLBACK_BYTES {
+            let excess = self.tail.len() - SCROLLBACK_BYTES;
+            self.tail.drain(..excess);
+        }
+        offset
+    }
+}
+
+/// What a view gets when it attaches to a tab.
+#[derive(Debug)]
+pub struct Attach {
+    /// False when the tab was already live and the caller merely re-attached.
+    pub spawned: bool,
+    /// Recent output, oldest first.
+    pub backlog: Vec<u8>,
+    /// Offset just past `backlog`; live chunks starting below it are duplicates.
+    pub end: u64,
+}
+
 pub struct Terminal {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Box<dyn MasterPty + Send>,
     stopping: Arc<AtomicBool>,
+    /// Set by the reader thread when the shell's side of the PTY closes.
+    exited: Arc<AtomicBool>,
+    scrollback: Arc<Mutex<Scrollback>>,
     reader_handle: Option<thread::JoinHandle<()>>,
     child: Box<dyn Child + Send + Sync>,
 }
@@ -28,8 +69,14 @@ pub struct Terminal {
 impl Terminal {
     /// Spawns `$SHELL` (fallback `/bin/zsh`) as a login shell rooted at
     /// `project_root`. `on_output` is called from a background thread with
-    /// each chunk of raw PTY bytes as they arrive.
-    pub fn spawn(project_root: &Path, on_output: impl Fn(Vec<u8>) + Send + 'static) -> Res<Self> {
+    /// each chunk of raw PTY bytes (with its start offset) as they arrive;
+    /// `on_exit` runs once if the shell ends on its own — not when
+    /// `terminate()` ends it.
+    pub fn spawn(
+        project_root: &Path,
+        on_output: impl Fn(u64, Vec<u8>) + Send + 'static,
+        on_exit: impl Fn() + Send + 'static,
+    ) -> Res<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
@@ -59,12 +106,25 @@ impl Terminal {
         let writer = pair.master.take_writer().map_err(|err| crate::PalisadeError::from(format!("take pty writer: {err}")))?;
 
         let stopping = Arc::new(AtomicBool::new(false));
-        let reader_handle = thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => on_output(buf[..n].to_vec()),
+        let exited = Arc::new(AtomicBool::new(false));
+        let scrollback = Arc::new(Mutex::new(Scrollback::default()));
+        let reader_handle = thread::spawn({
+            let (stopping, exited, scrollback) = (stopping.clone(), exited.clone(), scrollback.clone());
+            move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let chunk = buf[..n].to_vec();
+                            let offset = scrollback.lock_or_recover().push(&chunk);
+                            on_output(offset, chunk);
+                        }
+                    }
+                }
+                exited.store(true, Ordering::SeqCst);
+                if !stopping.load(Ordering::SeqCst) {
+                    on_exit();
                 }
             }
         });
@@ -73,9 +133,21 @@ impl Terminal {
             writer: Mutex::new(writer),
             master: pair.master,
             stopping,
+            exited,
+            scrollback,
             reader_handle: Some(reader_handle),
             child,
         })
+    }
+
+    pub fn has_exited(&self) -> bool {
+        self.exited.load(Ordering::SeqCst)
+    }
+
+    /// The remembered output and the offset just past it.
+    fn snapshot(&self) -> (Vec<u8>, u64) {
+        let scrollback = self.scrollback.lock_or_recover();
+        (scrollback.tail.clone(), scrollback.total)
     }
 
     pub fn write(&self, bytes: &[u8]) -> Res<()> {
@@ -138,30 +210,42 @@ pub struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
-    /// Makes sure tab `id` is running against `project_root`. Returns whether
-    /// a shell was actually spawned — `false` means the tab was already live
-    /// and the caller has simply re-attached to it (re-opening the panel).
+    /// Makes sure tab `id` is running against `project_root` and hands back
+    /// what the caller needs to attach. A live tab is re-attached, not
+    /// respawned; a tab whose shell has exited is replaced, which is how a
+    /// view restarts a shell that ended.
     pub fn ensure(
         &self,
         id: &str,
         project_hash: &str,
         project_root: &Path,
-        on_output: impl Fn(Vec<u8>) + Send + 'static,
-    ) -> Res<bool> {
+        on_output: impl Fn(u64, Vec<u8>) + Send + 'static,
+        on_exit: impl Fn() + Send + 'static,
+    ) -> Res<Attach> {
+        // Declared before the guard so the dead shell is dropped after the
+        // lock is released: `Terminal::drop` joins threads.
+        let mut stale: Option<Tab> = None;
         let mut tabs = self.tabs.lock_or_recover();
-        if tabs.contains_key(id) {
-            return Ok(false);
-        }
-        let open_for_project =
-            tabs.values().filter(|tab| tab.project_hash == project_hash).count();
-        if open_for_project >= MAX_TERMINALS_PER_PROJECT {
-            return Err(format!(
-                "at the limit of {MAX_TERMINALS_PER_PROJECT} terminal tabs for this project — close one first"
-            ).into());
-        }
-        let terminal = Terminal::spawn(project_root, on_output)?;
-        tabs.insert(id.to_string(), Tab { project_hash: project_hash.to_string(), terminal });
-        Ok(true)
+        let spawned = match tabs.get(id) {
+            Some(tab) if !tab.terminal.has_exited() => false,
+            _ => {
+                stale = tabs.remove(id);
+                let open_for_project =
+                    tabs.values().filter(|tab| tab.project_hash == project_hash).count();
+                if open_for_project >= MAX_TERMINALS_PER_PROJECT {
+                    return Err(format!(
+                        "at the limit of {MAX_TERMINALS_PER_PROJECT} terminal tabs for this project — close one first"
+                    ).into());
+                }
+                let terminal = Terminal::spawn(project_root, on_output, on_exit)?;
+                tabs.insert(id.to_string(), Tab { project_hash: project_hash.to_string(), terminal });
+                true
+            }
+        };
+        let (backlog, end) = tabs[id].terminal.snapshot();
+        drop(tabs);
+        drop(stale);
+        Ok(Attach { spawned, backlog, end })
     }
 
     pub fn write(&self, id: &str, bytes: &[u8]) -> Res<()> {
@@ -201,14 +285,13 @@ impl TerminalRegistry {
         drop(doomed);
     }
 
-    /// The ids of every live tab for one project, in no particular order —
+    /// The ids of every tab with a running shell for one project, in no particular order —
     /// tab *ordering* is the frontend's business, liveness is this one's.
     pub fn list(&self, project_hash: &str) -> Vec<String> {
         self.tabs
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
-            .filter(|(_, tab)| tab.project_hash == project_hash)
+            .filter(|(_, tab)| tab.project_hash == project_hash && !tab.terminal.has_exited())
             .map(|(id, _)| id.clone())
             .collect()
     }
@@ -239,9 +322,9 @@ mod tests {
     fn spawns_a_shell_and_round_trips_input_and_output() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
-        let mut term = Terminal::spawn(dir.path(), move |bytes| {
+        let mut term = Terminal::spawn(dir.path(), move |_, bytes| {
             let _ = tx.send(bytes);
-        })
+        }, || {})
         .unwrap();
 
         term.write(b"echo hello-from-pty\n").unwrap();
@@ -257,9 +340,9 @@ mod tests {
     fn terminate_kills_background_children_not_just_the_shell() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
-        let mut term = Terminal::spawn(dir.path(), move |bytes| {
+        let mut term = Terminal::spawn(dir.path(), move |_, bytes| {
             let _ = tx.send(bytes);
-        })
+        }, || {})
         .unwrap();
 
         // Split quoting so the PTY's echo of the command line doesn't itself
@@ -288,7 +371,7 @@ mod tests {
     #[test]
     fn resize_does_not_error_and_terminate_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
-        let mut term = Terminal::spawn(dir.path(), |_| {}).unwrap();
+        let mut term = Terminal::spawn(dir.path(), |_, _| {}, || {}).unwrap();
 
         term.resize(100, 30).unwrap();
 
@@ -323,7 +406,7 @@ mod registry_tests {
         let dir = tempfile::tempdir().unwrap();
         let reg = TerminalRegistry::default();
         for id in ["t1", "t2", "t3"] {
-            reg.ensure(id, "proj", dir.path(), |_| {}).unwrap();
+            reg.ensure(id, "proj", dir.path(), |_, _| {}, || {}).unwrap();
         }
         let mut ids = reg.list("proj");
         ids.sort();
@@ -334,8 +417,8 @@ mod registry_tests {
     fn ensure_is_idempotent_for_a_live_tab() {
         let dir = tempfile::tempdir().unwrap();
         let reg = TerminalRegistry::default();
-        assert!(reg.ensure("t1", "proj", dir.path(), |_| {}).unwrap(), "first ensure spawns");
-        assert!(!reg.ensure("t1", "proj", dir.path(), |_| {}).unwrap(), "re-attach must not respawn");
+        assert!(reg.ensure("t1", "proj", dir.path(), |_, _| {}, || {}).unwrap().spawned, "first ensure spawns");
+        assert!(!reg.ensure("t1", "proj", dir.path(), |_, _| {}, || {}).unwrap().spawned, "re-attach must not respawn");
         assert_eq!(reg.list("proj").len(), 1);
     }
 
@@ -345,8 +428,8 @@ mod registry_tests {
         let reg = TerminalRegistry::default();
         let (tx1, rx1) = mpsc::channel::<Vec<u8>>();
         let (tx2, rx2) = mpsc::channel::<Vec<u8>>();
-        reg.ensure("t1", "proj", dir.path(), move |b| { let _ = tx1.send(b); }).unwrap();
-        reg.ensure("t2", "proj", dir.path(), move |b| { let _ = tx2.send(b); }).unwrap();
+        reg.ensure("t1", "proj", dir.path(), move |_, b| { let _ = tx1.send(b); }, || {}).unwrap();
+        reg.ensure("t2", "proj", dir.path(), move |_, b| { let _ = tx2.send(b); }, || {}).unwrap();
 
         reg.write("t1", b"MARK=one''-tab\n").unwrap();
         reg.write("t2", b"MARK=two''-tab\n").unwrap();
@@ -365,8 +448,8 @@ mod registry_tests {
         let dir = tempfile::tempdir().unwrap();
         let reg = TerminalRegistry::default();
         let (tx2, rx2) = mpsc::channel::<Vec<u8>>();
-        reg.ensure("t1", "proj", dir.path(), |_| {}).unwrap();
-        reg.ensure("t2", "proj", dir.path(), move |b| { let _ = tx2.send(b); }).unwrap();
+        reg.ensure("t1", "proj", dir.path(), |_, _| {}, || {}).unwrap();
+        reg.ensure("t2", "proj", dir.path(), move |_, b| { let _ = tx2.send(b); }, || {}).unwrap();
 
         reg.kill("t1");
         assert_eq!(reg.list("proj"), vec!["t2"]);
@@ -382,7 +465,7 @@ mod registry_tests {
         let reg = TerminalRegistry::default();
         for round in 0..12 {
             let id = format!("cycle-{round}");
-            reg.ensure(&id, "proj", dir.path(), |_| {}).unwrap();
+            reg.ensure(&id, "proj", dir.path(), |_, _| {}, || {}).unwrap();
             reg.kill(&id);
         }
         assert!(reg.list("proj").is_empty(), "registry leaked: {:?}", reg.list("proj"));
@@ -395,13 +478,13 @@ mod registry_tests {
         let dir = tempfile::tempdir().unwrap();
         let reg = TerminalRegistry::default();
         for n in 0..MAX_TERMINALS_PER_PROJECT {
-            reg.ensure(&format!("t{n}"), "proj", dir.path(), |_| {}).unwrap();
+            reg.ensure(&format!("t{n}"), "proj", dir.path(), |_, _| {}, || {}).unwrap();
         }
-        let err = reg.ensure("one-too-many", "proj", dir.path(), |_| {}).unwrap_err();
+        let err = reg.ensure("one-too-many", "proj", dir.path(), |_, _| {}, || {}).unwrap_err();
         assert!(err.contains("terminal"), "unhelpful limit error: {err}");
         assert_eq!(reg.list("proj").len(), MAX_TERMINALS_PER_PROJECT);
         // The limit is per project, not global.
-        reg.ensure("other-1", "other-proj", dir.path(), |_| {}).unwrap();
+        reg.ensure("other-1", "other-proj", dir.path(), |_, _| {}, || {}).unwrap();
         assert_eq!(reg.list("other-proj").len(), 1);
     }
 
@@ -409,9 +492,9 @@ mod registry_tests {
     fn closing_a_project_closes_only_its_own_tabs() {
         let dir = tempfile::tempdir().unwrap();
         let reg = TerminalRegistry::default();
-        reg.ensure("a1", "a", dir.path(), |_| {}).unwrap();
-        reg.ensure("a2", "a", dir.path(), |_| {}).unwrap();
-        reg.ensure("b1", "b", dir.path(), |_| {}).unwrap();
+        reg.ensure("a1", "a", dir.path(), |_, _| {}, || {}).unwrap();
+        reg.ensure("a2", "a", dir.path(), |_, _| {}, || {}).unwrap();
+        reg.ensure("b1", "b", dir.path(), |_, _| {}, || {}).unwrap();
 
         reg.kill_project("a");
         assert!(reg.list("a").is_empty());
@@ -424,5 +507,68 @@ mod registry_tests {
         let err = reg.write("ghost", b"x").unwrap_err();
         assert!(err.contains("ghost"), "error should name the tab: {err}");
         assert!(reg.resize("ghost", 80, 24).is_err());
+    }
+
+    #[test]
+    fn a_shell_that_exits_is_reported_and_replaced_on_the_next_ensure() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = TerminalRegistry::default();
+        let (exit_tx, exit_rx) = mpsc::channel::<()>();
+        reg.ensure("t1", "proj", dir.path(), |_, _| {}, move || {
+            let _ = exit_tx.send(());
+        })
+        .unwrap();
+
+        reg.write("t1", b"exit\n").unwrap();
+        exit_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a shell that exits on its own must report it");
+        assert!(reg.list("proj").is_empty(), "a dead shell is not a live tab");
+
+        let again = reg.ensure("t1", "proj", dir.path(), |_, _| {}, || {}).unwrap();
+        assert!(again.spawned, "ensure on a dead tab must start a fresh shell");
+        assert_eq!(reg.list("proj"), vec!["t1"]);
+    }
+
+    #[test]
+    fn closing_a_tab_does_not_report_an_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = TerminalRegistry::default();
+        let (exit_tx, exit_rx) = mpsc::channel::<()>();
+        reg.ensure("t1", "proj", dir.path(), |_, _| {}, move || {
+            let _ = exit_tx.send(());
+        })
+        .unwrap();
+        reg.kill("t1");
+        assert!(
+            exit_rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a deliberate close is not a crash"
+        );
+    }
+
+    #[test]
+    fn attaching_late_replays_earlier_output_without_overlap() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = TerminalRegistry::default();
+        let (tx, rx) = mpsc::channel::<(u64, Vec<u8>)>();
+        reg.ensure("t1", "proj", dir.path(), move |offset, b| { let _ = tx.send((offset, b)); }, || {}).unwrap();
+
+        reg.write("t1", b"echo back''log-marker\n").unwrap();
+        let mut live_end = 0;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen = String::new();
+        while std::time::Instant::now() < deadline && !seen.contains("backlog-marker") {
+            if let Ok((offset, bytes)) = rx.recv_timeout(Duration::from_millis(200)) {
+                assert_eq!(offset, live_end, "chunk offsets must be contiguous");
+                live_end = offset + bytes.len() as u64;
+                seen.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+        assert!(seen.contains("backlog-marker"), "shell never echoed: {seen:?}");
+
+        let late = reg.ensure("t1", "proj", dir.path(), |_, _| {}, || {}).unwrap();
+        assert!(!late.spawned);
+        assert!(String::from_utf8_lossy(&late.backlog).contains("backlog-marker"));
+        assert!(late.end >= live_end, "the snapshot must cover everything already delivered");
     }
 }

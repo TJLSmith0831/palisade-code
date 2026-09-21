@@ -4935,11 +4935,28 @@ button.ds-onboarding-status {
   background: transparent;
   color: var(--muted);
   font-size: 11px;
+  transition-property: background-color, color;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
 }
 
 .ds-status-item:hover {
   background: var(--surface-warm);
   color: var(--fg);
+}
+
+/* A dev server appearing is worth noticing, but not a jump: opacity only, so
+   nothing shifts, and none at all under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .ds-status-item-enter {
+    animation: ds-status-item-in 180ms ease-out;
+  }
+}
+
+@keyframes ds-status-item-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .ds-status-dot {
@@ -6772,4 +6789,23 @@ button.ds-onboarding-status {
    copy button off the card instead of truncating. */
 .connections-skills .mantine-Group-root > * {
   min-width: 0;
+}
+
+/* Preview toolbar. In a squeezed column the address bar takes its own full row
+   under the buttons, and "open in browser" stays up with them — instead of the
+   bar shrinking to nothing or a button spilling out of the pane. */
+.ds-preview-toolbar {
+  container-type: inline-size;
+}
+
+@container (max-width: 300px) {
+  .ds-preview-address {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .ds-preview-external {
+    order: 2;
+    margin-left: auto;
+  }
 }

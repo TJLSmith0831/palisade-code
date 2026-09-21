@@ -8,7 +8,15 @@ import * as api from "./api";
  *  gate; this only stops the "+" from offering a tab that would be refused. */
 export const MAX_TERMINAL_TABS = 8;
 
-type Tab = { id: string; label: string };
+/** The tab every project starts with. `App`'s Run shortcut targets it before
+ *  the strip has reported a focused tab, so both must agree on the id. */
+export const firstTerminalId = (projectHash: string) => `${projectHash}:1`;
+
+// Each tab remembers the project it was opened for: on a project switch the
+// strip still holds the old project's tabs for one render, and a pane that
+// took `projectHash` from the new props would spawn the old tab's id under
+// the new project.
+type Tab = { id: string; label: string; projectHash: string };
 
 /**
  * The terminal tab strip: several shells per project, all live at once.
@@ -20,8 +28,11 @@ type Tab = { id: string; label: string };
 export default function TerminalTabs({
   projectHash,
   onActiveTerminalChange,
+  onOpenPreview,
 }: {
   projectHash: string;
+  /** Opens a local URL in the Preview tab, from a ⌘-clicked link. */
+  onOpenPreview?: (url: string) => void;
   /** Which tab the "Run" shortcut should type into. */
   onActiveTerminalChange?: (terminalId: string) => void;
 }) {
@@ -42,7 +53,7 @@ export default function TerminalTabs({
       api.terminalKillProject(previous).catch(() => {});
     }
     nextIndex.current = 1;
-    const first = { id: `${projectHash}:1`, label: "1" };
+    const first = { id: firstTerminalId(projectHash), label: "1", projectHash };
     nextIndex.current = 2;
     setTabs([first]);
     setActive(first.id);
@@ -56,7 +67,7 @@ export default function TerminalTabs({
     // had no PTY under. State updaters must be pure.
     if (tabs.length >= MAX_TERMINAL_TABS) return;
     const index = nextIndex.current++;
-    const tab = { id: `${projectHash}:${index}`, label: String(index) };
+    const tab = { id: `${projectHash}:${index}`, label: String(index), projectHash };
     setTabs((previous) =>
       previous.length >= MAX_TERMINAL_TABS ? previous : [...previous, tab]
     );
@@ -140,9 +151,10 @@ export default function TerminalTabs({
         {tabs.map((tab) => (
           <TerminalPane
             key={tab.id}
-            projectHash={projectHash}
+            projectHash={tab.projectHash}
             terminalId={tab.id}
             visible={active === tab.id}
+            onOpenUrl={onOpenPreview}
           />
         ))}
       </div>

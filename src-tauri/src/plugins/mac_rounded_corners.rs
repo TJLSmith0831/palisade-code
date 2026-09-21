@@ -3,7 +3,7 @@
 #![allow(unexpected_cfgs)]
 #![allow(deprecated)]
 
-use tauri::{AppHandle, Runtime, WebviewWindow};
+use tauri::{AppHandle, Runtime, Webview};
 
 #[cfg(target_os = "macos")]
 use cocoa::{
@@ -34,7 +34,7 @@ impl Default for TrafficLightsConfig {
 #[tauri::command]
 pub fn enable_rounded_corners<R: Runtime>(
     _app: AppHandle<R>,
-    window: WebviewWindow<R>,
+    window: Webview<R>,
     offset_x: Option<f64>,
     offset_y: Option<f64>,
 ) -> Res<()> {
@@ -76,7 +76,7 @@ pub fn enable_rounded_corners<R: Runtime>(
 #[tauri::command]
 pub fn enable_modern_window_style<R: Runtime>(
     _app: AppHandle<R>,
-    window: WebviewWindow<R>,
+    window: Webview<R>,
     corner_radius: Option<f64>,
     offset_x: Option<f64>,
     offset_y: Option<f64>,
@@ -124,8 +124,9 @@ pub fn enable_modern_window_style<R: Runtime>(
         // the event-loop thread, so the reposition happens before the frame
         // is presented.
         let (dx, dy) = (offset_x.unwrap_or(0.0), offset_y.unwrap_or(0.0));
-        let handle = window.clone();
-        window.on_window_event(move |event| {
+        let native_window = window.window();
+        let handle = native_window.clone();
+        native_window.on_window_event(move |event| {
             if matches!(
                 event,
                 tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
@@ -150,7 +151,7 @@ pub fn enable_modern_window_style<R: Runtime>(
 #[tauri::command]
 pub fn reposition_traffic_lights<R: Runtime>(
     _app: AppHandle<R>,
-    window: WebviewWindow<R>,
+    window: Webview<R>,
     offset_x: Option<f64>,
     offset_y: Option<f64>,
 ) -> Res<()> {

@@ -5,10 +5,10 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 ## Commands (verified 2026-09-11)
 
 - `pnpm install` — frontend deps (standalone repo, not a workspace member)
-- `pnpm test` — all frontend tests (vitest, 67 files / 1,073 tests, ~24s)
+- `pnpm test` — all frontend tests (vitest, 83 files / 1,360 tests, ~31s)
 - `npx vitest run src/__tests__/errors.test.ts` — one frontend test file
 - `npx tsc --noEmit` — typecheck only; `pnpm build` = `tsc && vite build`
-- `cd src-tauri && cargo test` — all Rust tests (757: 756 pass, 1 ignored, ~8s after build)
+- `cd src-tauri && cargo test` — all Rust tests (807: 806 pass, 1 ignored, ~8s after build)
 - `cd src-tauri && cargo test git::` — one Rust module's tests
 - `pnpm start` (= `tauri dev`) — dev window; see run skill below before driving it
 
@@ -37,6 +37,15 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 - **Two modes only** (spec / go). They differ by permission flag (`--permission-mode` / `--sandbox`) and skill focus — not by model. No third mode.
 - **OpenSpec is authoritative for specs.** Palisade shells out to `openspec list/show/validate --json` and never writes a spec file. No Palisade-computed "% complete": task checkboxes are agent self-reports and must be labeled as such.
 - **Verification is the only evidence.** A spec is green because a named `verify` command exited 0 at a named commit — never because a model said so. No UI string may claim complete/satisfied/implemented on any other basis.
+
+- **Preview is a native child webview, not an iframe** (`commands/preview_cmds.rs`, one per window, placed over the placeholder `PreviewPane` measures). Needs tauri's `unstable` feature. Once a window hosts it Tauri stops treating that window as a `WebviewWindow`: use `tauri::Window`/`Webview` args and `app.windows()`/`get_window()` — never `WebviewWindow`, `webview_windows()` or `get_webview_window()` (quit's unsaved-changes prompt and every native-menu shortcut silently broke). A native view draws above all HTML, so `nativeOverlay.ts` hides it under overlays and `hide_preview_on_reload` hides it when a frontend reloads.
+- **No link may navigate Palisade's own window.** `linkRouting.ts` intercepts every `<a>` document-wide: http(s) opens in Preview, ⌘/Ctrl-click opens the default browser, relative links are swallowed. Before it, clicking a URL in an agent's message replaced the whole app with that page.
+- **A native view shows a refused connection as a blank white page.** `PreviewPane` therefore calls `preview_probe` first (loopback hosts only) and shows an error with auto-retry until the server answers.
+- **The Tauri MCP bridge is blind while a preview view exists** (it uses `webview_windows()`): `manage_window list` returns `[]` and JS/screenshot calls fail. Set the app up first, then drive it with OS-level input.
+- **Nothing opens Preview by scraping output.** Terminal output and agent messages/tool results only feed status-bar chips (`useDevServers` → `DevServerTracker`) and ⌘-click terminal links; Preview auto-opens only for a server the Run shortcut just started. A URL becomes a chip only once `preview_probe` (a silent TCP connect, never an HTTP request — it would fill the user's server log) finds something listening, and the chip goes away when it stops answering.
+- **Each project has its own preview browser** (`preview:<window>:<project>` label + `data_store_identifier`, so cookies/storage never cross projects; macOS < 14 silently shares one store). Closing the Preview tab or switching project calls `preview_close` — a merely hidden view is still a running page.
+- **Preview and terminals are per window/project, not per thread.** Open tabs (Preview included) are window state and survive a thread switch; only a project switch closes them. Terminal ids are `${projectHash}:N` and spawn in the project root, not a thread's isolated worktree.
+- **Terminal attach protocol:** `TerminalPane` listens first, then `terminal_spawn` returns a scrollback backlog plus an offset; live chunks below that offset are dropped. A shell that exits emits `terminal-exit` and restarts on the next key.
 
 ## Do not touch
 

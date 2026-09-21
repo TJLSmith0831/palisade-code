@@ -86,15 +86,19 @@ impl QuitRegistry {
     }
 }
 
+// These commands take `Window`, never `WebviewWindow`, and look windows up with
+// `windows()`/`get_window()`. Once a window hosts a second webview (the Preview
+// pane's browser) Tauri stops treating it as a `WebviewWindow`: `webview_windows()`
+// comes back empty, so quit would skip its unsaved-changes prompt.
 #[tauri::command]
-fn sync_window_dirty(window: tauri::WebviewWindow, dirty: bool, registry: tauri::State<'_, QuitRegistry>) {
+fn sync_window_dirty(window: tauri::Window, dirty: bool, registry: tauri::State<'_, QuitRegistry>) {
     registry.dirty_windows.lock().expect("quit registry dirty lock poisoned")
         .insert(window.label().to_string(), dirty);
 }
 
 #[tauri::command]
 fn request_quit(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
-    let live = app.webview_windows().into_keys().collect();
+    let live = app.windows().into_keys().collect();
     let dirty = registry.begin_quit(&live);
     if dirty.is_empty() {
         app.exit(0);
@@ -104,7 +108,7 @@ fn request_quit(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>)
 }
 
 #[tauri::command]
-fn confirm_quit_window(window: tauri::WebviewWindow, app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
+fn confirm_quit_window(window: tauri::Window, app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
     if registry.confirm(window.label()) { app.exit(0); }
 }
 
@@ -221,7 +225,7 @@ async fn add_project(app: tauri::AppHandle, path: String) -> Res<Project> {
 #[tauri::command]
 async fn open_project_window(app: tauri::AppHandle, hash: String) -> Res<String> {
     if let Some(label) = project_windows::window_showing(&app.state::<Harness>(), &hash) {
-        if let Some(existing) = app.get_webview_window(&label) {
+        if let Some(existing) = app.get_window(&label) {
             // Focus can fail on a window mid-teardown; falling through to open
             // a fresh one is better than reporting an error for "show me this".
             if existing.set_focus().is_ok() {
@@ -4100,7 +4104,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_page_load(commands::preview_cmds::hide_preview_on_reload);
     #[cfg(debug_assertions)]
     {
         // Default binds 0.0.0.0, which would expose the bridge to the LAN.
@@ -4256,6 +4261,13 @@ pub fn run() {
             commands::openspec_cmds::validate_spec_changes,
             commands::openspec_cmds::archive_spec_change,
             commands::openspec_cmds::set_spec_change,
+            commands::preview_cmds::preview_open,
+            commands::preview_cmds::preview_probe,
+            commands::preview_cmds::preview_bounds,
+            commands::preview_cmds::preview_hide,
+            commands::preview_cmds::preview_close,
+            commands::preview_cmds::preview_reload,
+            commands::preview_cmds::preview_history,
             commands::terminal_cmds::terminal_spawn,
             commands::terminal_cmds::terminal_input,
             commands::terminal_cmds::terminal_resize,

@@ -4,4 +4,5 @@ pub mod fs_ops;
 pub mod git_cmds;
 pub mod notebook_cmds;
 pub mod openspec_cmds;
+pub mod preview_cmds;
 pub mod terminal_cmds;

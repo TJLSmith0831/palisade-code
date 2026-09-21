@@ -20,8 +20,24 @@ const { listenMock, listeners } = vi.hoisted(() => {
 });
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
+const { lines, linkProviders } = vi.hoisted(() => ({
+  /** Terminal buffer rows by index, for the link provider to read. */
+  lines: [] as string[],
+  linkProviders: [] as {
+    provideLinks: (
+      line: number,
+      done: (links?: { text: string; range: unknown; activate: (e: MouseEvent) => void }[]) => void
+    ) => void;
+  }[],
+}));
+
 const { termInstances } = vi.hoisted(() => ({
-  termInstances: [] as { write: ReturnType<typeof vi.fn>; writeln: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }[],
+  termInstances: [] as {
+    write: ReturnType<typeof vi.fn>;
+    writeln: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+    reset: ReturnType<typeof vi.fn>;
+  }[],
 }));
 
 vi.mock("@xterm/xterm", () => {
@@ -31,6 +47,16 @@ vi.mock("@xterm/xterm", () => {
     write = vi.fn();
     dispose = vi.fn();
     writeln = vi.fn();
+    reset = vi.fn();
+    registerLinkProvider = vi.fn((provider: unknown) => {
+      linkProviders.push(provider as never);
+      return { dispose: vi.fn() };
+    });
+    buffer = {
+      active: { getLine: (y: number) => ({ translateToString: () => lines[y] ?? "" }) },
+    };
+    cols = 100;
+    rows = 30;
     focus = vi.fn();
     options: Record<string, unknown> = {};
     onData = vi.fn(() => ({ dispose: vi.fn() }));
@@ -57,14 +83,23 @@ import TerminalTabs from "../TerminalTabs";
 const emit = (name: string, payload: unknown) =>
   (listeners[name] ?? []).forEach((cb) => cb({ payload }));
 
+/** A pane is attached once its spawn has resolved and it has reset its view. */
+const attached = (index = 0) => waitFor(() => expect(termInstances[index]?.reset).toHaveBeenCalled());
+
+const typedInto = (index: number) =>
+  (termInstances[index] as never as { onData: { mock: { calls: [(d: string) => void][] } } }).onData
+    .mock.calls[0][0];
+
 beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string) => {
-    if (cmd === "terminal_spawn") return Promise.resolve(true);
+    if (cmd === "terminal_spawn") return Promise.resolve({ spawned: true, backlog: "", end: 0 });
     if (cmd === "terminal_list") return Promise.resolve([]);
     return Promise.resolve();
   });
   termInstances.length = 0;
+  linkProviders.length = 0;
+  lines.length = 0;
   for (const key of Object.keys(listeners)) delete listeners[key];
 });
 
@@ -88,23 +123,22 @@ describe("TerminalPane", () => {
     );
     await waitFor(() => expect(termInstances).toHaveLength(2));
     await waitFor(() => expect(listeners["terminal-output"]?.length).toBe(2));
+    await attached(0);
+    await attached(1);
 
-    emit("terminal-output", { terminalId: "tab-a", data: btoa("hello-a") });
+    emit("terminal-output", { terminalId: "tab-a", data: btoa("hello-a"), offset: 0 });
     expect(termInstances[0].write).toHaveBeenCalledTimes(1);
     expect(termInstances[1].write).not.toHaveBeenCalled();
 
-    emit("terminal-output", { terminalId: "tab-b", data: btoa("hello-b") });
+    emit("terminal-output", { terminalId: "tab-b", data: btoa("hello-b"), offset: 0 });
     expect(termInstances[0].write).toHaveBeenCalledTimes(1);
     expect(termInstances[1].write).toHaveBeenCalledTimes(1);
   });
 
   it("sends input tagged with its tab id", async () => {
     render(<TerminalPane projectHash="p" terminalId="tab-x" />);
-    await waitFor(() => expect(termInstances).toHaveLength(1));
-    const onData = (
-      termInstances[0] as never as { onData: { mock: { calls: [(d: string) => void][] } } }
-    ).onData.mock.calls[0][0];
-    onData("ls\n");
+    await attached();
+    typedInto(0)("ls\n");
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("terminal_input", {
         terminalId: "tab-x",
@@ -125,6 +159,83 @@ describe("TerminalPane", () => {
         expect.stringContaining("no pty available"),
       ),
     );
+  });
+
+  it("listens before it spawns, so the shell's first output is not lost", async () => {
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", expect.anything()));
+    expect(listeners["terminal-output"]?.length, "output listener must exist by spawn time").toBe(1);
+  });
+
+  it("replays the backlog and drops live chunks the backlog already holds", async () => {
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "terminal_spawn"
+        ? Promise.resolve({ spawned: false, backlog: btoa("earlier "), end: 8 })
+        : Promise.resolve(),
+    );
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await waitFor(() => expect(listeners["terminal-output"]?.length).toBe(1));
+    // Arrives while the spawn call is still in flight: one chunk the backlog
+    // contains (offset 0..8) and one it does not.
+    emit("terminal-output", { terminalId: "tab-x", data: btoa("earlier "), offset: 0 });
+    emit("terminal-output", { terminalId: "tab-x", data: btoa("later"), offset: 8 });
+    await attached();
+
+    const written = termInstances[0].write.mock.calls.map(
+      ([bytes]) => new TextDecoder().decode(bytes as Uint8Array),
+    );
+    expect(written, "backlog once, then only the chunk past it").toEqual(["earlier ", "later"]);
+  });
+
+  it("tells the shell its real size once attached", async () => {
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await attached();
+    expect(invokeMock).toHaveBeenCalledWith("terminal_resize", { terminalId: "tab-x", cols: 100, rows: 30 });
+  });
+
+  it("says so when the shell exits, and restarts it on the next key", async () => {
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await attached();
+
+    emit("terminal-exit", { terminalId: "tab-x" });
+    expect(termInstances[0].writeln).toHaveBeenCalledWith(expect.stringContaining("process exited"));
+
+    invokeMock.mockClear();
+    typedInto(0)("x");
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("terminal_spawn", { projectHash: "p", terminalId: "tab-x" }));
+    expect(invokeMock).not.toHaveBeenCalledWith("terminal_input", expect.anything());
+  });
+
+  it("ignores another tab's exit", async () => {
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await attached();
+    emit("terminal-exit", { terminalId: "someone-else" });
+    expect(termInstances[0].writeln).not.toHaveBeenCalled();
+  });
+
+  it("makes a local URL in the output a link that opens only on ⌘-click", async () => {
+    const opened: string[] = [];
+    render(<TerminalPane projectHash="p" terminalId="tab-x" onOpenUrl={(url) => opened.push(url)} />);
+    await attached();
+    lines[0] = "  Local:   http://localhost:5173/  (press h to show help)";
+
+    let links: { text: string; range: unknown; activate: (e: MouseEvent) => void }[] | undefined;
+    linkProviders[0].provideLinks(1, (found) => (links = found));
+    expect(links?.map((l) => l.text)).toEqual(["http://localhost:5173/"]);
+
+    links![0].activate({ metaKey: false, ctrlKey: false } as MouseEvent);
+    expect(opened, "a plain click is how you start selecting text").toEqual([]);
+    links![0].activate({ metaKey: true, ctrlKey: false } as MouseEvent);
+    expect(opened).toEqual(["http://localhost:5173/"]);
+  });
+
+  it("offers no link on a line without a local URL", async () => {
+    render(<TerminalPane projectHash="p" terminalId="tab-x" />);
+    await attached();
+    lines[0] = "built in 412ms — see https://example.com";
+    let links: unknown = "unset";
+    linkProviders[0].provideLinks(1, (found) => (links = found));
+    expect(links).toBeUndefined();
   });
 
   it("has no header of its own — the tab strip is the header", () => {
@@ -207,6 +318,13 @@ describe("TerminalTabs", () => {
       expect(invokeMock).toHaveBeenCalledWith("terminal_kill_project", { projectHash: "p" }),
     );
     await waitFor(() => expect(screen.getAllByTestId(/^terminal-tab-\d/)).toHaveLength(1));
+
+    const spawns = invokeMock.mock.calls
+      .filter(([cmd]) => cmd === "terminal_spawn")
+      .map(([, args]) => args as { projectHash: string; terminalId: string });
+    for (const { projectHash, terminalId } of spawns) {
+      expect(terminalId.startsWith(`${projectHash}:`), "a tab id must be spawned under its own project").toBe(true);
+    }
   });
 
   it("reports which tab is focused so Run has somewhere to type", async () => {

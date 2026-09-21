@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Menu, Tooltip } from "@mantine/core";
 import { IconBraces, IconDownload, IconSparkles } from "@tabler/icons-react";
 import * as api from "./api";
@@ -26,12 +26,15 @@ export default function EditorStatusBar({
   language,
   lsp,
   cursor,
+  trailing,
 }: {
   /** Display name for the file's language, e.g. "TypeScript". */
   language: string | null;
   lsp: LspStatus | null;
   /** 1-based, from the open editor. Absent when no file is open. */
   cursor?: { line: number; col: number } | null;
+  /** Items for the right-hand side, ahead of the cursor position. */
+  trailing?: ReactNode;
 }) {
   const tone = stateTone(lsp?.state ?? null);
   const label = stateLabel(lsp);
@@ -208,6 +211,7 @@ export default function EditorStatusBar({
         </span>
       </Tooltip>
       <span className="ds-status-spacer" />
+      {trailing}
       {cursor && (
         <span className="ds-status-note" data-testid="cursor-position">
           Ln {cursor.line}, Col {cursor.col}

@@ -1,17 +1,27 @@
-import { ActionIcon, Group, Text, TextInput, Tooltip } from "@mantine/core";
-import { IconExternalLink, IconRefresh, IconWorld } from "@tabler/icons-react";
+import { ActionIcon, Button, Group, Loader, Stack, Text, TextInput, Tooltip } from "@mantine/core";
+import {
+  IconArrowLeft,
+  IconArrowRight,
+  IconExternalLink,
+  IconPlugConnectedX,
+  IconRefresh,
+  IconWorld,
+} from "@tabler/icons-react";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
+import * as api from "./api";
+import { overlayCovers } from "./nativeOverlay";
 
 type Props = {
+  /** The project this preview belongs to: each has its own browser and its
+   * own cookies and storage. */
+  projectHash: string;
   /** The URL to show, or null before anything has been navigated to. */
   url: string | null;
   /** Called when the user submits a new URL in the address bar. */
   onNavigate: (url: string) => void;
 };
-
-/** ponytail: fixed 4s guess — tune once real dev servers have been watched. */
-const LOAD_TIMEOUT_MS = 4000;
 
 /** `localhost:5173` -> `http://localhost:5173`, so the address bar accepts
  * what people actually type. */
@@ -21,54 +31,200 @@ const normalize = (raw: string): string => {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
 };
 
-/**
- * A local URL, shown inline.
- *
- * No back/forward history (D4) and no programmatic detection of framing
- * failures — WKWebView gives no signal for X-Frame-Options/CSP blocks, so
- * the external-open button is always present and a passive hint appears if
- * the frame hasn't loaded in time (D8).
- */
-export default function PreviewPane({ url, onNavigate }: Props) {
-  const [draft, setDraft] = useState(url ?? "");
-  // Bumped on reload to remount the iframe — the only way to re-fetch a
-  // cross-origin frame without touching its contentWindow.
-  const [reloadKey, setReloadKey] = useState(0);
-  const [slow, setSlow] = useState(false);
-  // Separate from `slow`: the timer fires whether or not the frame already
-  // loaded, so "did it load" has to be its own fact.
-  const [loaded, setLoaded] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+/** Loopback addresses, the ones `preview_probe` will check. */
+const isLocal = (url: string): boolean => {
+  try {
+    const host = new URL(url).hostname;
+    return host === "localhost" || host.endsWith(".localhost") || ["127.0.0.1", "[::1]", "0.0.0.0"].includes(host);
+  } catch {
+    return false;
+  }
+};
 
-  // Auto-detection (D9) navigates the tab from outside, so the address bar
-  // follows the URL rather than owning it.
-  useEffect(() => setDraft(url ?? ""), [url]);
+/** How often to look again while a local server isn't answering — it is
+ * usually just still starting. */
+const RETRY_MS = 2000;
+
+const sameBounds = (a: api.PreviewBounds, b: api.PreviewBounds) =>
+  a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
+/**
+ * A browser, shown inline.
+ *
+ * The page lives in a native webview the backend parks over the placeholder
+ * below (`preview_cmds.rs`) — not an iframe — so sites that forbid framing
+ * load, logins and popups work, and the page keeps its own history. The
+ * webview outlives this component: switching away hides it, coming back shows
+ * the same page. Closing the tab ends it (`App` calls `previewClose`).
+ *
+ * Tooltips open upward: a tooltip below the toolbar would land on the native
+ * view, which draws above all HTML.
+ */
+export default function PreviewPane({ projectHash, url, onNavigate }: Props) {
+  const [draft, setDraft] = useState(url ?? "");
+  const [page, setPage] = useState<api.PreviewState | null>(null);
+  // Why nothing answers at `url`, or null when something does. A native view
+  // shows a refused connection as a blank white page and says nothing, so a
+  // local URL is probed first and an error shown here instead.
+  const [unreachable, setUnreachable] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const blocked = useRef(false);
+  blocked.current = unreachable !== null;
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  const measure = (): api.PreviewBounds | null => {
+    const rect = hostRef.current?.getBoundingClientRect();
+    if (!rect || rect.width < 1 || rect.height < 1) return null;
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  };
+
+  // Show (or navigate) the native view whenever the target URL changes — or,
+  // for a local URL that isn't answering, an error until it does.
+  useEffect(() => {
+    if (!url) {
+      setUnreachable(null);
+      void api.previewHide(projectHash).catch(() => {});
+      return;
+    }
+    let live = true;
+    const show = () => {
+      const bounds = measure();
+      if (bounds) void api.previewOpen(projectHash, url, bounds).catch(() => {});
+    };
+    if (!isLocal(url)) {
+      setUnreachable(null);
+      show();
+      return;
+    }
+    api
+      .previewProbe(url)
+      .then((reason) => {
+        if (!live) return;
+        setUnreachable(reason);
+        if (reason) void api.previewHide(projectHash).catch(() => {});
+        else show();
+      })
+      .catch(() => live && setUnreachable(null));
+    return () => {
+      live = false;
+    };
+  }, [projectHash, url, attempt]);
+
+  // While a local server isn't answering, look again — it is usually still starting.
+  useEffect(() => {
+    if (unreachable === null) return;
+    const timer = setTimeout(() => setAttempt((n) => n + 1), RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [unreachable, attempt]);
+
+  // Follow the placeholder. A layout change elsewhere (a sidebar toggling)
+  // moves it without resizing it, which a ResizeObserver never reports, so
+  // compare its rect once per frame instead. The same loop steps the native
+  // view aside while an overlay (palette, menu, dialog) is over it.
+  // ponytail: per-frame rect check, upgrade if profiling ever shows it.
+  useEffect(() => {
+    let last: api.PreviewBounds | null = null;
+    let covered = false;
+    let frame = requestAnimationFrame(function tick() {
+      const next = measure();
+      if (next && url && !blocked.current) {
+        const nowCovered = overlayCovers(next);
+        if (nowCovered !== covered) {
+          covered = nowCovered;
+          last = covered ? last : next;
+          void (covered ? api.previewHide(projectHash) : api.previewBounds(projectHash, next)).catch(() => {});
+        } else if (!covered && (!last || !sameBounds(last, next))) {
+          last = next;
+          void api.previewBounds(projectHash, next).catch(() => {});
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [projectHash, url]);
+
+  // Leaving the tab hides the view; the page stays alive behind it.
+  useEffect(
+    () => () => {
+      void api.previewHide(projectHash).catch(() => {});
+    },
+    [projectHash]
+  );
 
   useEffect(() => {
-    if (!url) return;
-    setSlow(false);
-    setLoaded(false);
-    const timer = setTimeout(() => setSlow(true), LOAD_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [url, reloadKey]);
+    setPage(null);
+    const off = listen<api.PreviewState>("preview-state", ({ payload }) => {
+      // Another project's browser keeps loading in the background.
+      if (payload.projectHash !== projectHash) return;
+      setPage((prior) => ({ ...payload, title: payload.title ?? prior?.title ?? null }));
+    });
+    return () => void off.then((un) => un());
+  }, [projectHash]);
+
+  // The address bar shows where the page actually is (redirects, links
+  // clicked inside it), falling back to what we asked for.
+  const shown = page?.url || url || "";
+  useEffect(() => setDraft(shown), [shown]);
 
   const submit = () => {
     const next = normalize(draft);
     if (next && next !== url) onNavigate(next);
-    else if (next) setReloadKey((k) => k + 1);
+    else if (next) reload();
+  };
+
+  const reload = () => {
+    if (unreachable !== null) setAttempt((n) => n + 1);
+    else void api.previewReload(projectHash).catch(() => {});
   };
 
   return (
     <div
       className="ds-preview-pane"
       data-testid="preview-pane"
-      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
+      // `overflow: hidden` and `minWidth: 0`: a squeezed column must clip the
+      // toolbar, never let it spill over the panel beside it.
+      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, minWidth: 0, overflow: "hidden" }}
     >
-      <Group gap="xs" p="xs" wrap="nowrap">
+      {/* Wraps: in a narrow column the address bar drops to its own row
+          instead of shrinking to nothing beside three buttons. */}
+      <Group gap={4} p="xs" wrap="wrap" className="ds-preview-toolbar">
+        <Tooltip label="Back" position="top" withinPortal>
+          <ActionIcon
+            variant="subtle"
+            aria-label="Back"
+            data-testid="preview-back"
+            disabled={!url}
+            onClick={() => void api.previewHistory(projectHash, -1).catch(() => {})}
+          >
+            <IconArrowLeft size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Forward" position="top" withinPortal>
+          <ActionIcon
+            variant="subtle"
+            aria-label="Forward"
+            data-testid="preview-forward"
+            disabled={!url}
+            onClick={() => void api.previewHistory(projectHash, 1).catch(() => {})}
+          >
+            <IconArrowRight size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Reload" position="top" withinPortal>
+          <ActionIcon
+            variant="subtle"
+            aria-label="Reload"
+            data-testid="preview-reload"
+            disabled={!url}
+            onClick={reload}
+          >
+            <IconRefresh size={16} />
+          </ActionIcon>
+        </Tooltip>
         <TextInput
-          ref={inputRef}
           size="xs"
-          style={{ flex: 1 }}
+          className="ds-preview-address"
+          style={{ flex: "1 1 160px", minWidth: 0 }}
           placeholder="localhost:5173"
           aria-label="Preview URL"
           data-testid="preview-url"
@@ -77,66 +233,56 @@ export default function PreviewPane({ url, onNavigate }: Props) {
           onKeyDown={(event) => {
             if (event.key === "Enter") submit();
           }}
+          rightSection={page?.loading ? <Loader size={12} data-testid="preview-loading" /> : null}
         />
-        <Tooltip label="Reload" withinPortal>
-          <ActionIcon
-            variant="subtle"
-            aria-label="Reload"
-            data-testid="preview-reload"
-            disabled={!url}
-            onClick={() => setReloadKey((k) => k + 1)}
-          >
-            <IconRefresh size={16} />
-          </ActionIcon>
-        </Tooltip>
-        {/* Always visible, never conditional on detecting a failure (D8). */}
-        <Tooltip label="Open in browser" withinPortal>
+        <Tooltip label="Open in browser" position="top" withinPortal>
           <ActionIcon
             variant="subtle"
             aria-label="Open in browser"
+            className="ds-preview-external"
             data-testid="preview-external"
             disabled={!url}
-            onClick={() => url && void openUrl(url)}
+            onClick={() => void openUrl(shown || (url as string))}
           >
             <IconExternalLink size={16} />
           </ActionIcon>
         </Tooltip>
       </Group>
 
-      {slow && !loaded && url && (
-        <Text size="xs" c="dimmed" px="xs" pb="xs" data-testid="preview-slow-hint">
-          Not loading? Open externally.
-        </Text>
-      )}
-
-      {url ? (
-        <iframe
-          key={`${url}#${reloadKey}`}
-          src={url}
-          title="Preview"
-          data-testid="preview-frame"
-          onLoad={() => {
-            setLoaded(true);
-            setSlow(false);
-          }}
-          // Deliberately outside the app palette: this is the previewed
-          // page's canvas, not app chrome, and a page that paints no
-          // background must not inherit Palisade's dark surface.
-          style={{ flex: 1, border: "none", background: "#fff", minHeight: 0 }}
-        />
-      ) : (
-        <Group
-          justify="center"
-          gap="xs"
-          style={{ flex: 1 }}
-          data-testid="preview-empty"
-        >
-          <IconWorld size={16} opacity={0.5} />
-          <Text size="sm" c="dimmed">
-            Enter a URL, or start a dev server.
-          </Text>
-        </Group>
-      )}
+      {/* The native webview is drawn over this box; when there is no URL the
+          box shows the empty state instead. */}
+      <div
+        ref={hostRef}
+        data-testid={url ? "preview-frame" : "preview-empty"}
+        title={page?.title ?? undefined}
+        style={{ flex: 1, minHeight: 0 }}
+      >
+        {!url && (
+          <Group justify="center" gap="xs" style={{ height: "100%" }}>
+            <IconWorld size={16} stroke={1.5} opacity={0.5} />
+            <Text size="sm" c="dimmed">
+              Enter a URL, or start a dev server.
+            </Text>
+          </Group>
+        )}
+        {url && unreachable !== null && (
+          <Stack align="center" justify="center" gap="xs" p="md" style={{ height: "100%" }} data-testid="preview-unreachable">
+            <IconPlugConnectedX size={22} stroke={1.5} opacity={0.6} />
+            <Text size="sm" fw={600}>
+              Can't reach {new URL(url).host}
+            </Text>
+            <Group gap={6} wrap="nowrap" title={unreachable}>
+              <Loader size={10} />
+              <Text size="xs" c="dimmed">
+                Nothing is listening yet. Retrying…
+              </Text>
+            </Group>
+            <Button size="compact-xs" variant="light" onClick={reload} data-testid="preview-retry">
+              Try again
+            </Button>
+          </Stack>
+        )}
+      </div>
     </div>
   );
 }

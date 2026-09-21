@@ -213,7 +213,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<NativeMenu<R>> {
 pub fn dispatch_to_focused_window<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let Some(command) = id.strip_prefix("cmd.") else { return };
     if command == "window.next" || command == "window.previous" {
-        let mut windows = app.webview_windows().into_values().collect::<Vec<_>>();
+        let mut windows = app.windows().into_values().collect::<Vec<_>>();
         windows.sort_by(|a, b| a.label().cmp(b.label()));
         let labels = windows.iter().map(|window| window.label().to_string()).collect::<Vec<_>>();
         let focused = windows.iter().find(|window| window.is_focused().unwrap_or(false));
@@ -223,7 +223,7 @@ pub fn dispatch_to_focused_window<R: Runtime>(app: &AppHandle<R>, id: &str) {
         }
         return;
     }
-    if let Some(window) = app.webview_windows().into_values().find(|window| window.is_focused().unwrap_or(false)) {
+    if let Some(window) = app.windows().into_values().find(|window| window.is_focused().unwrap_or(false)) {
         // Addressed, never broadcast: `emit` fans out to every webview no
         // matter which one it is called on, which would run the command in
         // every open project window instead of the focused one. Both halves
