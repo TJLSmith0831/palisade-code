@@ -116,6 +116,13 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
+// No notification center in jsdom; the relay must never reach the real plugin.
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: vi.fn().mockResolvedValue(false),
+  requestPermission: vi.fn().mockResolvedValue("denied"),
+  sendNotification: vi.fn(),
+}));
+
 // Mock the markdown editor (heavy dependency)
 const { mdEditorMock, mdMarkdownMock } = vi.hoisted(() => {
   const mdMarkdownMock = ({ source }: { source: string }) => (

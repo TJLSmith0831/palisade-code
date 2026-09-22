@@ -158,6 +158,8 @@ const STARTER_PROMPTS = [
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
+import FirstRunChecklist from "./FirstRunChecklist";
+import { notifyTurnDone } from "./turnNotifications";
 // Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
 // nobody loads until they open the panel.
 const DatabasePanel = lazy(() => import("./DatabasePanel"));
@@ -3052,6 +3054,8 @@ export default function App() {
   const setErrors = ex.setErrors;
   const flight = ex.flight;
   const setFlight = ex.setFlight;
+  // The first-run checklist's "Check again" is in flight.
+  const [rechecking, setRechecking] = useState(false);
   const liveBySession = ex.liveBySession;
   const setLiveBySession = ex.setLiveBySession;
   const busyThreads = ex.busyThreads;
@@ -4438,6 +4442,10 @@ export default function App() {
   // Keeps the event listener (registered once) pointed at the current thread.
   const current = useRef({ project, thread });
   current.current = { project, thread };
+  // ...and at the thread list, so a turn ending on some other thread can be
+  // named in its notification.
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -4888,6 +4896,14 @@ export default function App() {
           });
           // Each thread's own composer unlocks when its own turn ends.
           setBusyFor(threadId, false);
+          // Away from the window, this is the one moment worth a system
+          // notification; with focus, the board and the sidebar already
+          // moved the thread. The helper is silent when the setting is off.
+          void notifyTurnDone({
+            threadTitle: threadsRef.current.find((t) => t.id === threadId)?.title ?? "",
+            kind: event.kind,
+            focused: document.hasFocus(),
+          });
           // But a session finishing on some other thread must not drag the
           // thread on screen back to its own log.
           if (threadId !== current.current.thread?.id) return;
@@ -6904,7 +6920,22 @@ export default function App() {
             </div>
           </div>
         </header>
-        {flight && flight.warnings.length > 0 && (
+        {/* No agent at all is a first-run situation, not a warning line: it
+            gets the checklist. Anything else preflight has to say keeps the
+            plain banner. */}
+        {flight && flight.agents.length === 0 ? (
+          <FirstRunChecklist
+            flight={flight}
+            checking={rechecking}
+            onRecheck={() => {
+              setRechecking(true);
+              api
+                .preflight(true)
+                .then(setFlight, fail)
+                .finally(() => setRechecking(false));
+            }}
+          />
+        ) : flight && flight.warnings.length > 0 ? (
           <Alert
             color="warn"
             variant="light"
@@ -6915,7 +6946,7 @@ export default function App() {
               <div key={warning}>⚠ {warning}</div>
             ))}
           </Alert>
-        )}
+        ) : null}
 
         {specLinkChoice && (
           <Alert
