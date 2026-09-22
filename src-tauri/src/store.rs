@@ -1848,11 +1848,14 @@ mod tests {
     /// each line exactly once, and a new append must not reuse a seq.
     #[test]
     fn mid_flush_readers_and_appenders_see_every_line_exactly_once() {
-        use crate::session_log_writer::{shared_session_log_writer, write_out};
+        use crate::session_log_writer::{shared_session_log_writer, write_out, FLUSH_GATE};
         let home = home();
         let (p, t) = thread_with(home.path());
         let path = log_path(home.path(), &p.hash, &t.id);
         flush_session_log_writer().unwrap();
+        // This test plays the flusher by hand, so it must hold the gate a real
+        // flush holds; otherwise a parallel test's flush claims this log too.
+        let gate = FLUSH_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for i in 0..3 {
             say(home.path(), &p, &t, &format!("m{i}"));
         }
@@ -1877,6 +1880,7 @@ mod tests {
         writer.lock().unwrap().finish_flush(&batch);
         assert_eq!(seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()), vec![0, 1, 2, 3]);
         assert_eq!(say(home.path(), &p, &t, "m4").seq, 4);
+        drop(gate);
         flush_session_log_writer().unwrap();
         assert_eq!(seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()), vec![0, 1, 2, 3, 4]);
     }

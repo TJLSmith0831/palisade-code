@@ -112,7 +112,7 @@ impl SessionLogWriter {
 
 /// One flusher at a time, so a log never has two writes in flight. Only
 /// flushers take this — appends and reads never do, which is the point.
-static FLUSH_GATE: Mutex<()> = Mutex::new(());
+pub(crate) static FLUSH_GATE: Mutex<()> = Mutex::new(());
 
 /// Retires a batch on drop, so a panic mid-write can't leave lines "in flight"
 /// forever (readers would show them twice).
