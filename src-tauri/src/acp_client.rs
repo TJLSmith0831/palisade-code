@@ -44,6 +44,10 @@ const SESSION_NEW_RETRY_DELAYS: [Duration; 3] = [Duration::from_secs(1), Duratio
 
 // ------------------------------------------------------------- models
 
+/// The model id ACP agents use for their own recommended pick (Claude's
+/// "Default (recommended)").
+const AGENT_DEFAULT_MODEL_ID: &str = "default";
+
 /// One selectable model an agent reported via its `model` config option.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1397,8 +1401,13 @@ async fn run_bridge(
             let session_id = new_session.session_id;
             let mut models = extract_models(new_session.config_options.as_deref().unwrap_or(&[]));
 
-            // Apply the thread's model choice when the agent offers it.
-            if let Some(want) = spawn.model.as_deref() {
+            // Apply the thread's model choice when the agent offers it. No
+            // choice means the agent's recommended model, not whatever it
+            // boots on: claude-acp boots on the user's ~/.claude settings
+            // pin, which can be a credits-only model nobody picked for this
+            // thread. A probe only reads the list, so it leaves that alone.
+            let want = spawn.model.as_deref().or((!probe_only).then_some(AGENT_DEFAULT_MODEL_ID));
+            if let Some(want) = want {
                 let offered = models.models.iter().any(|m| m.id == want);
                 if offered && models.current.as_deref() != Some(want) {
                     if let Some(config_id) = models.config_id.clone() {
@@ -1956,6 +1965,7 @@ mod tests {
             "Model",
             "model-a",
             vec![
+                v1::SessionConfigSelectOption::new("default", "Default"),
                 v1::SessionConfigSelectOption::new("model-a", "Model A"),
                 v1::SessionConfigSelectOption::new("model-b", "Model B"),
             ],
@@ -1972,6 +1982,7 @@ mod tests {
         assert_eq!(
             state.models,
             vec![
+                ModelInfo { id: "default".into(), name: "Default".into() },
                 ModelInfo { id: "model-a".into(), name: "Model A".into() },
                 ModelInfo { id: "model-b".into(), name: "Model B".into() },
             ]
@@ -2744,6 +2755,7 @@ mod tests {
                                     "Model",
                                     value,
                                     vec![
+                                        v1::SessionConfigSelectOption::new("default", "Default"),
                                         v1::SessionConfigSelectOption::new("model-a", "Model A"),
                                         v1::SessionConfigSelectOption::new("model-b", "Model B"),
                                     ],
@@ -2957,16 +2969,22 @@ mod tests {
     }
 
     /// RED→GREEN: a session starts against a live ACP connection and reports
-    /// the agent's model selector.
+    /// the agent's model selector. With no thread choice it moves off the
+    /// model the agent booted on (for Claude, the user's settings pin) onto
+    /// the agent's own "default".
     #[tokio::test(flavor = "multi_thread")]
     async fn bridge_session_reports_models() {
-        let (transport, _fake, _agent) = fake_agent_pair();
+        let (transport, fake, _agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
         let session = start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), false, None);
         let (_id, models, _cmds, _busy, acp_id, _pending) = session.expect("session should start");
-        assert_eq!(models.current.as_deref(), Some("model-a"));
-        assert_eq!(models.models.len(), 2);
+        assert_eq!(models.current.as_deref(), Some("default"));
+        assert_eq!(models.models.len(), 3);
         assert_eq!(acp_id, "acp-sess-1");
+        assert_eq!(
+            *fake.set_config_requests.lock_or_recover(),
+            vec![("model".to_string(), "default".to_string())]
+        );
     }
 
     /// A connection advertising several login choices must not be prompted or
@@ -3166,12 +3184,14 @@ mod tests {
     /// RED→GREEN: a probe reports models and then lets the connection die.
     #[tokio::test(flavor = "multi_thread")]
     async fn probe_returns_models_without_a_session() {
-        let (transport, _fake, agent) = fake_agent_pair();
+        let (transport, fake, agent) = fake_agent_pair();
         let (tx, _rx) = std::sync::mpsc::channel();
         let (_id, models, _cmds, _busy, _acp_id, _pending) =
             start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), true, None)
                 .unwrap();
-        assert_eq!(models.models.len(), 2);
+        assert_eq!(models.models.len(), 3);
+        // A probe only reads the list; it never switches the agent's model.
+        assert!(fake.set_config_requests.lock_or_recover().is_empty());
         // The bridge returned, so the agent sees EOF and exits too.
         agent.await.unwrap();
     }
