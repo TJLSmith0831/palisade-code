@@ -172,6 +172,9 @@ export type Preflight = {
   selected: string | null;
   openspec: boolean;
   ready: boolean;
+  /** False when the ACP registry could not be fetched and nothing is cached,
+   *  so an empty `agents` means "unknown", not "none installed". */
+  registryReachable: boolean;
   warnings: string[];
   checkedAt: string;
 };

@@ -9,6 +9,7 @@ const flight = (over: Partial<Preflight> = {}): Preflight => ({
   selected: null,
   openspec: true,
   ready: false,
+  registryReachable: true,
   warnings: ["No ACP agents found on PATH — chat-only mode, /go unavailable."],
   checkedAt: "2026-09-22T00:00:00Z",
   ...over,
@@ -26,15 +27,7 @@ const renderIt = (f: Preflight, onRecheck = vi.fn(), checking = false) => {
 describe("firstRunReason", () => {
   it("tells an unreachable registry apart from an empty PATH", () => {
     expect(firstRunReason(flight())).toBe("none-on-path");
-    expect(
-      firstRunReason(
-        flight({
-          warnings: [
-            "The ACP registry could not be reached and no cached copy exists — chat-only mode, /go unavailable until it is.",
-          ],
-        })
-      )
-    ).toBe("registry-unreachable");
+    expect(firstRunReason(flight({ registryReachable: false }))).toBe("registry-unreachable");
   });
 });
 
@@ -55,6 +48,7 @@ describe("FirstRunChecklist", () => {
   it("says the registry was unreachable when that is the reason", () => {
     renderIt(
       flight({
+        registryReachable: false,
         warnings: [
           "The ACP registry could not be reached and no cached copy exists — chat-only mode, /go unavailable until it is.",
         ],

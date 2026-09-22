@@ -4816,6 +4816,7 @@ mod tests {
             agents,
             openspec: true,
             ready: true,
+            registry_reachable: true,
             warnings: vec![],
             checked_at: "2026-08-07T00:00:00Z".into(),
         }

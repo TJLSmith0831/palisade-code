@@ -9,9 +9,9 @@ import type { Preflight } from "./api";
 
 export type FirstRunReason = "registry-unreachable" | "none-on-path";
 
-/** Preflight says why the agent list is empty in prose; read it back. */
+/** Why the agent list is empty, from preflight's structured flag. */
 export function firstRunReason(flight: Preflight): FirstRunReason {
-  return flight.warnings.some((w) => /registry/i.test(w)) ? "registry-unreachable" : "none-on-path";
+  return flight.registryReachable ? "none-on-path" : "registry-unreachable";
 }
 
 const REGISTRY_URL = "https://agentclientprotocol.com/";

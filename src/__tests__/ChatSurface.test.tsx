@@ -55,6 +55,7 @@ const flight: Preflight = {
   openspec: false,
   ready: true,
   warnings: [],
+  registryReachable: true,
   checkedAt: "2026-08-06T00:00:00Z",
 };
 

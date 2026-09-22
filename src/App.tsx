@@ -4899,11 +4899,17 @@ export default function App() {
           // Away from the window, this is the one moment worth a system
           // notification; with focus, the board and the sidebar already
           // moved the thread. The helper is silent when the setting is off.
-          void notifyTurnDone({
-            threadTitle: threadsRef.current.find((t) => t.id === threadId)?.title ?? "",
-            kind: event.kind,
-            focused: document.hasFocus(),
-          });
+          // Only the window whose project owns the thread speaks up:
+          // envelopes reach every window, and two windows must not post
+          // the same notification twice.
+          const ended = threadsRef.current.find((t) => t.id === threadId);
+          if (ended) {
+            void notifyTurnDone({
+              threadTitle: ended.title,
+              kind: event.kind,
+              focused: document.hasFocus(),
+            });
+          }
           // But a session finishing on some other thread must not drag the
           // thread on screen back to its own log.
           if (threadId !== current.current.thread?.id) return;

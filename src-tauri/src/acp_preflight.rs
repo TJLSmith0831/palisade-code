@@ -37,6 +37,11 @@ pub struct Preflight {
     pub openspec: bool,
     /// True when at least one agent is available.
     pub ready: bool,
+    /// False when the ACP registry could not be fetched and no cached copy
+    /// exists — so an empty `agents` means "unknown", not "none installed".
+    /// A structured flag, because the frontend used to read it back out of
+    /// the warning prose.
+    pub registry_reachable: bool,
     pub warnings: Vec<String>,
     pub checked_at: String,
 }
@@ -97,6 +102,7 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
         agents,
         openspec,
         ready: !is_empty && openspec,
+        registry_reachable: !registry_agents.is_empty(),
         warnings,
         checked_at: chrono::Utc::now().to_rfc3339(),
     }
@@ -177,6 +183,7 @@ mod tests {
             agents,
             openspec: true,
             ready: true,
+            registry_reachable: true,
             warnings: vec![],
             checked_at: "2026-08-10T00:00:00Z".into(),
         }
