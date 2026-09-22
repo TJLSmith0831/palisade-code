@@ -227,6 +227,8 @@ type ChatSurfaceProps = {
   hasEarlier?: boolean;
   /** Fetch and prepend the next page of older messages. */
   onLoadEarlier?: () => Promise<void>;
+  /** Threads whose title is still being written in the background. */
+  titlePendingIds?: Set<string>;
   thread: ThreadMeta | null;
   messages: Message[];
   live: ExecutorEvent[];
@@ -657,6 +659,7 @@ export const ChatSurface = memo(
     historyLoading = false,
     hasEarlier = false,
     onLoadEarlier,
+    titlePendingIds,
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
@@ -1357,7 +1360,13 @@ export const ChatSurface = memo(
                 data-testid="thread-tab"
                 title={t.title}
               >
-                <span className="ds-thread-tab-title">{t.title}</span>
+                <span className="ds-thread-tab-title">
+                  {titlePendingIds?.has(t.id) ? (
+                    <Skeleton height={12} width={96} role="status" aria-label="Naming thread" />
+                  ) : (
+                    t.title
+                  )}
+                </span>
                 <span className="ds-thread-tab-mode">
                   {t.currentMode === "spec" ? "SPEC" : "GO"}
                 </span>
@@ -1395,7 +1404,11 @@ export const ChatSurface = memo(
         )}
         <div className="pane-head">
           <strong data-testid="thread-title">
-            {thread?.title ?? "New thread"}
+            {thread && titlePendingIds?.has(thread.id) ? (
+              <Skeleton height={14} width={180} role="status" aria-label="Naming thread" />
+            ) : (
+              thread?.title ?? "New thread"
+            )}
           </strong>
           {thread && (
             <Tooltip label="Rename thread" openDelay={400}>
@@ -5687,6 +5700,30 @@ export default function App() {
   // often than the board is. One source for "what does the backend actually
   // know about this thread".
   const fleet = useFleet({ active: !!project && openingProject === null });
+  // Threads whose title the backend is still writing (`title_thread`). The
+  // skeleton only clears once the new name has been read back, so no surface
+  // flashes the "New thread" placeholder between the two.
+  const [titlePending, setTitlePending] = useState<Set<string>>(() => new Set());
+  const fleetRefresh = fleet.refresh;
+  useEffect(() => {
+    const un = listen<{ threadId: string; pending: boolean }>(
+      "thread-title-pending",
+      ({ payload: { threadId, pending } }) => {
+        const mark = () =>
+          setTitlePending((prev) => {
+            const next = new Set(prev);
+            if (pending) next.add(threadId);
+            else next.delete(threadId);
+            return next;
+          });
+        if (pending) mark();
+        else void Promise.allSettled([refresh(), fleetRefresh()]).then(mark);
+      }
+    );
+    return () => {
+      void un.then((off) => off());
+    };
+  }, [refresh, fleetRefresh]);
   /** The open thread's own row — what the header's verify badge reports. */
   const threadFleetRow = useMemo(
     () =>
@@ -6155,6 +6192,7 @@ export default function App() {
   const oldestOnScreen = oldestSeq(messages);
   const chatProps = {
     project,
+    titlePendingIds: titlePending,
     thread,
     messages,
     historyLoading,
@@ -6918,6 +6956,7 @@ export default function App() {
                    session" — no second derivation of the same state. */
                 liveThreadIds={busyThreads}
                 attentionThreadIds={attentionThreads}
+                titlePendingIds={titlePending}
                 worktrees={worktrees}
                 /* Same rows the board renders — one source for what the
                    backend knows about a thread, whichever surface asks. */
@@ -6972,6 +7011,7 @@ export default function App() {
                   projectHash={project?.hash}
                   agents={fleetAgents}
                   liveThreadIds={busyThreads}
+                  titlePendingIds={titlePending}
                   onOpen={onFleetOpen}
                   onReview={onFleetReview}
                   onStop={onFleetStop}

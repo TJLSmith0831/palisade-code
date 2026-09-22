@@ -493,6 +493,12 @@ fn palisade_owns_title(m: &ThreadMeta) -> bool {
     m.title_source == "auto"
 }
 
+/// Whether a thread still carries a placeholder name Palisade may replace —
+/// i.e. whether [`set_auto_title`] would change anything.
+pub fn needs_auto_title(m: &ThreadMeta) -> bool {
+    palisade_owns_title(m) && PLACEHOLDER_TITLES.contains(&m.title.as_str())
+}
+
 /// Name a thread after the turn that opened it, so the user never has to.
 ///
 /// Fires once, on the first turn: a thread already named — by an earlier turn
@@ -511,7 +517,7 @@ pub fn set_auto_title(
         return Ok(());
     };
     update_thread(home, hash, id, |m| {
-        if palisade_owns_title(m) && PLACEHOLDER_TITLES.contains(&m.title.as_str()) {
+        if needs_auto_title(m) {
             m.title = title;
         }
     })?;
@@ -2551,6 +2557,25 @@ mod tests {
 
         let named = list_threads(home.path(), &project.hash).unwrap().remove(0);
         assert_eq!(named.title, "Fix Google sign-in redirect");
+    }
+
+    /// Background titling only starts for a thread still on its placeholder:
+    /// once named — by an earlier turn or by the user — later turns skip it.
+    #[test]
+    fn only_a_placeholder_titled_thread_needs_an_auto_title() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let named = create_thread(home.path(), &project.hash, "New thread").unwrap();
+        let renamed = create_thread(home.path(), &project.hash, "New thread").unwrap();
+        assert!(needs_auto_title(&named));
+
+        set_auto_title(home.path(), &project.hash, &named.id, "add order validation", None).unwrap();
+        rename_thread(home.path(), &project.hash, &renamed.id, "My own name").unwrap();
+
+        for thread in list_threads(home.path(), &project.hash).unwrap() {
+            assert!(!needs_auto_title(&thread), "{} should keep its name", thread.title);
+        }
     }
 
     /// A name the user typed is theirs. Auto-titling never overwrites it.
