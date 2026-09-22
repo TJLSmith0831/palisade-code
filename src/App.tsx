@@ -5763,15 +5763,23 @@ export default function App() {
   // board. Re-marked on window focus too: a turn that finishes while the
   // app is in the background and is read the moment you come back would
   // otherwise keep flagging itself.
+  // The board re-reads right after, so the row leaves the band as the thread
+  // opens instead of on the next 10s poll — seen live: ⌘⇧U landed on the
+  // thread while the sidebar still headed it "Unreviewed".
+  const fleetRefreshAfterView = fleet.refresh;
   useEffect(() => {
     const hash = project?.hash;
     const id = thread?.id;
     if (!hash || !id) return;
-    const mark = () => void api.markThreadViewed(hash, id).catch(() => {});
+    const mark = () =>
+      void api
+        .markThreadViewed(hash, id)
+        .then(() => fleetRefreshAfterView())
+        .catch(() => {});
     mark();
     window.addEventListener("focus", mark);
     return () => window.removeEventListener("focus", mark);
-  }, [project?.hash, thread?.id]);
+  }, [project?.hash, thread?.id, fleetRefreshAfterView]);
 
   // ----------------------------------------------------------------- fleet
   // The dock badge counts threads wanting a look: blocked on you (a permission
