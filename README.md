@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/playbooks.png" alt="A thread on the left, a playbook of two agent nodes on the canvas, the Playbooks panel on the right" width="900">
+  <img src="docs/screenshots/fleet.png" alt="The Fleet board: three finished threads waiting under Unreviewed, six idle, each with its branch, diff stat, verify state and overlap with other threads" width="900">
 </p>
 
 ---
@@ -25,15 +25,19 @@ Palisade is in **public beta**. It is the tool we build Palisade with, every day
 
 ## What it does
 
-- **Fleet board is home.** Every thread across your open projects is a row: needs attention, running, unreviewed, or idle. Agent, diff stat, verify evidence, merge readiness, and overlap with other running threads, all on one screen.
-
-  <img src="docs/screenshots/fleet.png" alt="The Fleet board with its four status counts and a thread row" width="720">
+- **Fleet board is home.** Every thread across your open projects is a row: needs attention, running, unreviewed, or idle. Agent, diff stat, verify evidence, merge readiness, and overlap with other running threads, all on one screen. A finished turn you have not opened yet badges the dock, and ⌘⇧U takes you to the next one.
 - **Any ACP agent, none compiled in.** Claude Code, Codex, and whatever else the [ACP registry](https://agentclientprotocol.com/) lists and you have on `PATH`. Palisade discovers agents at runtime and speaks ACP to all of them. Pick a different agent per thread.
 - **One worktree per thread.** Agents never share a working tree, so two threads can run at once on the same project without stepping on each other.
+
+  <img src="docs/screenshots/thread.png" alt="A thread: the sidebar groups threads by status, the conversation runs in the middle, the editor column on the right" width="720">
 - **Spec, then build.** Two modes only: `spec` writes an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change with the agent's permissions locked down; `go` builds it. OpenSpec stays the source of truth; Palisade never writes a spec file.
 - **Verification is the only evidence.** A change is green because a named `verify` command exited 0 at a named commit. Never because a model said so. Merge stays disabled until that happens, or you override it on purpose and it says so.
 - **Review lane.** Read a thread's diff file by file, with per-file viewed state and the verify evidence beside it, before you merge.
+
+  <img src="docs/screenshots/review.png" alt="The Review lane: five changed files on the left, an inline diff of one of them, Run verify above, Merge and Open PR below" width="720">
 - **Playbooks.** Draw a graph of agent nodes with gates between them (a verify command, or your approval), save it, run it as one unit from any thread with `|=`.
+
+  <img src="docs/screenshots/playbooks.png" alt="A two-node playbook on the canvas beside a thread, with the Playbooks panel on the right" width="720">
 - **The rest of an IDE.** Editor with local fill-in-the-middle completion (a bundled model, no upload), terminals, a native Preview browser per project, git, MCP server management, and a command palette.
 - **Local first.** Session logs, completion telemetry and settings live under `~/.palisade-code`. Network traffic is what you would expect: your agents, your git remotes, the ACP and MCP registries, and update checks.
 

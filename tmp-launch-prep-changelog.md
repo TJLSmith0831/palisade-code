@@ -19,7 +19,34 @@ Decisions confirmed with owner up front:
 - [x] 6. Brooks review of changes and whole app, fix bugs
 - [x] 7. PR (opened from branch `worktree-launch-prep`)
 
-Left behind on purpose: a test playbook `draft-then-review` saved in `/private/tmp/palisade-launch-fixture/.palisade/chains/` while screenshotting. Delete it if the fixture should stay pristine.
+Left behind on purpose: a test playbook `draft-then-review` saved in `/private/tmp/palisade-launch-fixture/.palisade/chains/` while screenshotting, and one Sonnet 5 thread ("Reply with exactly one short sentence…") in the same fixture from the dogfooding run below. Delete either if the fixture should stay pristine.
+
+## Round 2 (same day): the three follow-ups
+
+Owner asked for the three recommended follow-ups; Homebrew was skipped by choice (needs a public tap repo). Flow: red tests → code → Brooks pass → fixes → dogfood live.
+
+### 8. Turn-done notification — commit `feat(notifications): system notification when a turn ends in the background`
+- `tauri-plugin-notification` (Rust 2.4 + JS), `notification:default` capability, `.plugin(tauri_plugin_notification::init())`.
+- `src/turnNotifications.ts`: pure copy (`turnNotification`), the setting (`palisade:notifyTurnDone`, on by default), and `notifyTurnDone` — silent when the window has focus or the setting is off, asks permission once, never throws into the relay. 8 tests.
+- Wired in the executor-event `done`/`crashed` branch for every thread of this window's project (not just the one on screen). Settings › Notifications toggle (test added).
+- **Brooks pass finding, fixed:** envelopes reach every window, so two windows would post the same notification twice → only the window whose project owns the thread posts (also gives it the title).
+- Not verified live: a macOS banner cannot be captured through the webview bridge. The path was exercised by the dogfood run (window unfocused; no plugin errors in the dev log).
+
+### 9. First-run checklist — commits `feat(onboarding): a first-run checklist…`, `fix(onboarding): read the registry state from preflight…`
+- `src/FirstRunChecklist.tsx` replaces the one-line warning when preflight finds no agent: reason (registry unreachable vs nothing on PATH), three numbered steps, a link to the ACP registry (no agent named in code), "Check again" that re-runs `preflight(true)`. Other preflight warnings keep the plain banner. 5 tests.
+- **Brooks pass finding (R2 Information Leakage), fixed:** the reason was parsed out of the Rust warning prose by regex. Preflight now carries a structured `registryReachable`; TS reads that. Rust/TS fixtures updated.
+- Not verified live: needs a Mac with no agent installed; covered by component tests and the preflight Rust tests.
+
+### 10. Dogfooding (fixture project, Sonnet 5, per your rule)
+1. Fleet composer → Go → Sonnet 5 → "Start run": the thread opened, sidebar band read **RUNNING** (`docs/screenshots/dogfood-1-running.png`).
+2. Switched to Fleet while the turn ran; on completion the row moved to **UNREVIEWED**, count 1 (`dogfood-2-unreviewed.png`).
+3. ⌘⇧U jumped to that thread (`dogfood-3-next-unreviewed.png`). **Finding, fixed:** the sidebar still headed it "Unreviewed" until the next 10s poll — the mark-viewed effect now refreshes the fleet right after it records the view.
+4. Settings › Notifications toggle renders, on by default (`settings-notifications.png`).
+
+### README coverage (Signalboard, the owner's real project)
+`fleet.png` (hero: 3 unreviewed, overlap badges, diff stats), `thread.png` (sidebar bands + conversation), `review.png` (5-file diff with Run verify / Merge / Open PR), `playbooks.png` (from the fixture). Opening the "Add an Export CSV button…" thread for the review shot marked it viewed, so it left Signalboard's Unreviewed band.
+
+Gates on the final commit: `pnpm test` 85 files / 1396 tests, `cargo test` 817 passed / 1 ignored, `tsc` clean.
 
 ## Pre-flight audit
 
