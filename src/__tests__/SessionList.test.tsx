@@ -182,6 +182,25 @@ describe("SessionList row actions", () => {
 });
 
 describe("SessionList loading", () => {
+  it("shows a skeleton instead of a title that is still being written", () => {
+    render(
+      <SessionList
+        threads={[thread({ title: "New thread", titleSource: "auto" })]}
+        activeThread={undefined}
+        liveThreadIds={new Set()}
+        titlePendingIds={new Set(["t1"])}
+        worktrees={new Map()}
+        onNewThread={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status", { name: "Naming thread" })).toBeInTheDocument();
+    expect(screen.getByTestId("session-item")).not.toHaveTextContent("New thread");
+    expect(screen.queryByLabelText("Auto-named")).toBeNull();
+  });
+
   it("does not present an in-flight thread list as an empty project", () => {
     render(
       <SessionList

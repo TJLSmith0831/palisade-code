@@ -1277,23 +1277,12 @@ async fn send_message(
         let message =
             store::append_message(&palisade_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
         // Name the thread after the turn that opened it, so "New thread" is
-        // never what the user has to live with. Silent on failure: a title is
-        // cosmetic and must not cost the user their message.
-        let local = model_title(&app, &harness, &content);
-        let _ = store::set_auto_title(
-            &palisade_home(),
-            &project_hash,
-            &thread_id,
-            &content,
-            local.as_deref(),
-        );
-        // Local model first (fast, free), the thread's own agent second, and
-        // the truncated first line only as the last resort — which is what a
-        // machine with no local model was getting every time. The agent call
-        // is detached: a title is cosmetic and must never delay the turn.
-        // A title must never cause a throwaway executor process (and therefore
-        // an unexpected auth flow). The local/fallback title above is enough
-        // until an already-ready connection can provide this enhancement.
+        // never what the user has to live with. In the background and silent
+        // on failure: a title is cosmetic and must not delay or cost the
+        // user their message. No agent fallback here: a title must never
+        // cause a throwaway executor process (and therefore an unexpected
+        // auth flow); the truncated first line is enough.
+        title_thread(&app, &project_hash, &thread_id, &content, false);
         let agent = match selected_executor(&app, &harness, &project_hash, Some(&thread_id)) {
             Ok((agent, _)) => agent,
             Err(_) => {
@@ -1376,16 +1365,6 @@ async fn retry_message(
 /// ACP agents use a structured `auth_required` error when they can, but a few
 /// adapters still surface only provider prose. Keep this mirror intentionally
 /// narrow and aligned with the frontend's auth error classification.
-/// A thread title written by the bundled local model, or `None` if it
-/// didn't return anything usable.
-///
-/// Starts the sidecar on demand (same as `complete_code`) rather than
-/// requiring FIM to already be warm: naming a thread must stay local and
-/// free even for someone who turned ghost-text completion off, since the
-/// model ships with every install regardless (AGENTS.md, D59). The one-cold
-/// -start cost lands on a thread's first message, same as this call already
-/// blocks that message on. Never surfaces `ensure_completion_server`'s
-/// missing-install warning — see the guard at the top of the body.
 /// Ask the thread's own agent to name the thread, in the background, and
 /// upgrade the title if it answers.
 ///
@@ -1437,14 +1416,65 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
     });
 }
 
+/// Name a thread after the turn that opened it, without making that turn
+/// wait on it.
+///
+/// The local model can need a cold start (up to 45s) before it answers, so it
+/// runs on its own thread, bracketed by `thread-title-pending` events the UI
+/// shows as a title skeleton. Only a thread still on its placeholder name is
+/// touched, so every later turn costs nothing. With no local model
+/// installed there is nothing to wait for: the truncated first line goes up
+/// at once. `agent_fallback` asks the thread's own agent when the local
+/// model has no answer.
+fn title_thread(app: &tauri::AppHandle, project_hash: &str, thread_id: &str, prompt: &str, agent_fallback: bool) {
+    if !thread_meta(project_hash, thread_id).is_some_and(|m| store::needs_auto_title(&m)) {
+        return;
+    }
+    if !local_title_installed(app) {
+        let _ = store::set_auto_title(&palisade_home(), project_hash, thread_id, prompt, None);
+        if agent_fallback {
+            agent_title_later(app, project_hash, thread_id, prompt);
+        }
+        return;
+    }
+    let pending = |pending: bool| serde_json::json!({ "threadId": thread_id, "pending": pending });
+    let _ = app.emit("thread-title-pending", pending(true));
+    let done = pending(false);
+    let app = app.clone();
+    let project_hash = project_hash.to_string();
+    let thread_id = thread_id.to_string();
+    let prompt = prompt.to_string();
+    std::thread::spawn(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let local = model_title(&app, &harness, &prompt);
+        let _ = store::set_auto_title(&palisade_home(), &project_hash, &thread_id, &prompt, local.as_deref());
+        let _ = app.emit("thread-updated", &thread_id);
+        let _ = app.emit("thread-title-pending", done);
+        if local.is_none() && agent_fallback {
+            agent_title_later(&app, &project_hash, &thread_id, &prompt);
+        }
+    });
+}
+
+/// Whether the bundled sidecar and model are on disk. Checked before titling
+/// rather than left to `ensure_completion_server`: a missing install makes it
+/// emit a `harness-warning` ("AI completion is unavailable...") for FIM's
+/// benefit, and a cosmetic title the user never asked for must not speak up
+/// on their behalf.
+fn local_title_installed(app: &tauri::AppHandle) -> bool {
+    completion::resolve_sidecar_paths(app).is_ok_and(|(binary, model)| binary.exists() && model.exists())
+}
+
+/// A thread title written by the bundled local model, or `None` if it
+/// didn't return anything usable.
+///
+/// Starts the sidecar on demand (same as `complete_code`) rather than
+/// requiring FIM to already be warm: naming a thread must stay local and
+/// free even for someone who turned ghost-text completion off, since the
+/// model ships with every install regardless (AGENTS.md, D59). Blocks for a
+/// cold start, which is why only [`title_thread`]'s background thread calls it.
 fn model_title(app: &tauri::AppHandle, harness: &Harness, prompt: &str) -> Option<String> {
-    // Checked here, not left to `ensure_completion_server`: a missing
-    // binary/model makes it emit a `harness-warning` ("AI completion is
-    // unavailable...") for FIM's benefit. A cosmetic title request the user
-    // never asked for must not speak up on their behalf — silent means
-    // silent, including this failure mode.
-    let (binary, model) = completion::resolve_sidecar_paths(app).ok()?;
-    if !binary.exists() || !model.exists() {
+    if !local_title_installed(app) {
         return None;
     }
     ensure_completion_server(app, harness).ok()?;
@@ -1665,17 +1695,7 @@ async fn spec_mode(
         // request — not after which card the user pressed. "Feature" is the
         // same row for every feature they will ever spec (#30/#35).
         if let Some(request) = request {
-            let local = model_title(&app, &harness, request);
-            let _ = store::set_auto_title(
-                &palisade_home(),
-                &project_hash,
-                &thread_id,
-                request,
-                local.as_deref(),
-            );
-            if local.is_none() {
-                agent_title_later(&app, &project_hash, &thread_id, request);
-            }
+            title_thread(&app, &project_hash, &thread_id, request, true);
         }
         if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, request, start) {
             if preflight_for_harness(&*harness, true).selected.is_some() {

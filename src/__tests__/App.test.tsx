@@ -6342,6 +6342,50 @@ describe("Notebook recovery", () => {
 });
 
 describe("Streamed tool output survives a mid-turn refresh", () => {
+  it("shows a title skeleton while the thread is being named, then the new name", async () => {
+    let title = "New thread";
+    let hold: Promise<void> = Promise.resolve();
+    invokeMock.mockImplementation(async (cmd, args) => {
+      if (cmd === "list_threads") {
+        await hold;
+        return [
+          {
+            id: "t1",
+            projectHash: "proj-1",
+            title,
+            titleSource: "auto",
+            currentMode: "go",
+            createdAt: "",
+            updatedAt: "",
+            openSpecChangeName: null,
+          },
+        ];
+      }
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    const header = await screen.findByTestId("thread-title");
+
+    await act(async () => {
+      emit("thread-title-pending", { threadId: "t1", pending: true });
+    });
+    expect(within(header).getByRole("status", { name: "Naming thread" })).toBeInTheDocument();
+
+    // The name is on disk but not yet read back: the skeleton must hold rather
+    // than drop to the "New thread" placeholder in between.
+    title = "Fix login redirect";
+    let release = () => {};
+    hold = new Promise((resolve) => (release = resolve));
+    await act(async () => {
+      emit("thread-title-pending", { threadId: "t1", pending: false });
+    });
+    expect(within(header).getByRole("status", { name: "Naming thread" })).toBeInTheDocument();
+    await act(async () => release());
+    await waitFor(() => expect(header).toHaveTextContent("Fix login redirect"));
+    expect(within(header).queryByRole("status")).toBeNull();
+  });
+
   it("keeps rendering toolOutputDelta chunks after a thread-updated refresh", async () => {
     // The backend persists the toolCall itself as it happens, but never the
     // toolOutputDelta chunks that stream its output (live-only, same as
