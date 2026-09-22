@@ -32,7 +32,7 @@ It pairs that orchestration with a capable local workbench instead of reducing t
 
 Privacy is legible rather than implied. Fill-in-the-middle completion and small editor-assistance tasks use a bundled local model, so Palisade does not silently send a code index to a cloud service for those features. A developer-selected agent or MCP server may still communicate with its own external service; Palisade must make those choices and boundaries visible rather than claiming the entire workflow is offline.
 
-Cross-machine consistency is useful, but it is not the primary product claim. Competitive rationale and the market survey behind this positioning are recorded in `docs/research/ade-market-survey-2026-09.md`; that survey is not itself a claim this document makes.
+Cross-machine consistency is useful, but it is not the primary product claim. The competitive rationale behind this positioning is summarized in `openspec/changes/ade-pivot/design.md` (D10); it is not itself a claim this document makes.
 
 ## Operating Context
 

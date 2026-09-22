@@ -2,6 +2,12 @@
   "name": "palisade-code",
   "private": true,
   "version": "0.3.0",
+  "description": "An Agentic Development Environment: run ACP coding agents in parallel, review their diffs, gate merge on verification.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TJLSmith0831/palisade-code.git"
+  },
   "type": "module",
   "scripts": {
     "postinstall": "scripts/link-sidecar.sh || true",

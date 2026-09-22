@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in Palisade did the wrong thing.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please leave secrets, tokens and private repository contents out of it.
+  - type: input
+    id: version
+    attributes:
+      label: Palisade version
+      description: Shown in the beta badge (bottom of the sidebar) or Palisade → About.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: "macOS 15.6, Apple M3 / Intel i7"
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version
+      description: Which coding agent the thread was using, and `<agent> --version`.
+      placeholder: "Claude Code 2.1.x"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project
+        2. Start a thread in go mode
+        3. …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Help → Open Logs, or the panel you were looking at. Redact anything private.
+      render: shell
