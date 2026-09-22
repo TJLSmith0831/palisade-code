@@ -63,6 +63,8 @@ export type Message = {
   sessionId?: string | null;
   /** Present only for structured ACP failures; absent records use legacy UI fallback. */
   failureClass?: "authRequired" | "transientProvider" | "other" | null;
+  /** Stored image paths a user turn carried; absent when it had none. */
+  attachments?: string[];
 };
 
 /** Open an independent native window, initialized to this project. */
@@ -343,7 +345,8 @@ export const sendMessage = (
   threadId: string,
   content: string,
   mode: Mode,
-  bypass: boolean
+  bypass: boolean,
+  attachments: string[] = []
 ) =>
   invoke<Message>("send_message", {
     projectHash,
@@ -352,7 +355,25 @@ export const sendMessage = (
     mode,
     model: null,
     bypass,
+    attachments,
   });
+
+/** Copy a dropped image (`path`) or pasted bytes (`dataBase64` + `ext`) into
+ *  the project's attachments dir; resolves to the stored path. */
+export const saveAttachment = (
+  projectHash: string,
+  source: { path: string } | { dataBase64: string; ext: string }
+) =>
+  invoke<string>("save_attachment", {
+    projectHash,
+    path: "path" in source ? source.path : null,
+    dataBase64: "dataBase64" in source ? source.dataBase64 : null,
+    ext: "ext" in source ? source.ext : null,
+  });
+
+/** A stored attachment as a `data:` URL, for thumbnails. */
+export const readAttachment = (projectHash: string, path: string) =>
+  invoke<string>("read_attachment", { projectHash, path });
 /** Retry an already-persisted user turn without adding a duplicate row. */
 export const retryMessage = (projectHash: string, threadId: string, messageSeq: number) =>
   invoke<void>("retry_message", { projectHash, threadId, messageSeq });
@@ -1398,6 +1419,11 @@ export const listDirectory = (
     relativePath,
     includeHidden,
   });
+
+/** One directory anywhere on disk (`~` expanded), absolute paths back —
+ *  for `@~/…` and `@/…` mentions of files outside the project. */
+export const listAnyDirectory = (path: string, includeHidden = false) =>
+  invoke<DirEntry[]>("list_any_directory", { path, includeHidden });
 
 export const listAllFiles = (projectHash: string) =>
   invoke<string[]>("list_all_files", { projectHash });

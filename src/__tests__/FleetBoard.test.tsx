@@ -10,6 +10,7 @@ import { ArchivingContext } from "../archiving";
 const { apiMock } = vi.hoisted(() => ({
   apiMock: {
     listModels: vi.fn().mockResolvedValue({ configId: null, current: null, models: [] }),
+    readAttachment: vi.fn().mockResolvedValue("data:image/png;base64,AA=="),
   },
 }));
 vi.mock("../api", () => apiMock);
@@ -249,6 +250,7 @@ describe("FleetBoard", () => {
       agentId: "a1",
       mode: "spec",
       isolated: true,
+      attachments: [],
     });
   });
 
@@ -440,6 +442,7 @@ describe("FleetBoard", () => {
       model: "m1",
       mode: "spec",
       isolated: true,
+      attachments: [],
     });
   });
 
@@ -582,5 +585,27 @@ describe("FleetBoard — archive in flight", () => {
   it("leaves other rows alone", () => {
     withArchiving(["t1"], [row(), row({ threadId: "t2" })]);
     expect(screen.getAllByLabelText("Archiving")).toHaveLength(1);
+  });
+});
+
+describe("FleetBoard attachments", () => {
+  it("starts a run with dropped images and files, even with no prompt", () => {
+    const onNewRun = vi.fn();
+    render(
+      <FleetBoard
+        {...props({ onNewRun })}
+        attachments={["/home/.palisade-code/projects/p/attachments/a.png"]}
+        files={["/Users/me/notes.pdf", "/Users/me/spec.md"]}
+      />
+    );
+    expect(screen.getAllByTestId("attachment-thumb")).toHaveLength(1);
+    expect(screen.getAllByTestId("file-chip")).toHaveLength(2);
+    fireEvent.click(screen.getByTestId("fleet-start"));
+    expect(onNewRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "@/Users/me/notes.pdf @/Users/me/spec.md",
+        attachments: ["/home/.palisade-code/projects/p/attachments/a.png"],
+      })
+    );
   });
 });

@@ -5282,6 +5282,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         mode: "spec",
         model: null,
         bypass: true,
+        attachments: [],
       })
     );
   });
@@ -6310,9 +6311,11 @@ describe("Beta feedback #32 — @ mentions", () => {
     fireEvent.change(input, { target: { value: "look at @app" } });
     fireEvent.select(input, { target: { selectionStart: 12 } });
 
-    const rows = await screen.findAllByTestId("mention-row");
-    expect(rows[0]).toHaveTextContent("src/App.tsx");
-    fireEvent.click(rows[0]);
+    // The Browse… row is there from the start; files join it once read.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("mention-row")[0]).toHaveTextContent("src/App.tsx")
+    );
+    fireEvent.click(screen.getAllByTestId("mention-row")[0]);
 
     await waitFor(() =>
       expect(screen.getByTestId("composer-input")).toHaveValue(
@@ -7017,5 +7020,114 @@ describe("Native macOS menu", () => {
     // IPCs race, and if the `false` lands last Quit discards the edit without
     // asking. Only the unmount is allowed to report this window clean.
     expect(reportedDirty()).toEqual([false, true]);
+  });
+});
+
+describe("Composer: skills anywhere, @ threads, images", () => {
+  const threads = [
+    { id: "t1", projectHash: "proj-1", title: "Test thread", currentMode: "go", createdAt: "", updatedAt: "", openSpecChangeName: null },
+    { id: "t2", projectHash: "proj-1", title: "Auth token refresh fix", currentMode: "go", createdAt: "", updatedAt: "2026-09-20T00:00:00Z", openSpecChangeName: null },
+  ];
+  const setup = async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads") return Promise.resolve(threads);
+      if (cmd === "list_all_files") return Promise.resolve(["src/App.tsx"]);
+      if (cmd === "save_attachment") return Promise.resolve("/h/.palisade-code/projects/proj-1/attachments/1.png");
+      if (cmd === "read_attachment") return Promise.resolve("data:image/png;base64,AA==");
+      if (cmd === "send_message")
+        return Promise.resolve({ seq: 7, ts: "", role: "user", mode: "go", content: (args as { content: string }).content });
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    emit("agent-commands", {
+      sessionId: "s1",
+      threadId: "t1",
+      commands: [
+        { name: "tdd", description: "Test-driven development loop" },
+        { name: "grill-apply", description: "Implement with the decision log" },
+      ],
+    });
+    return screen.getByTestId("composer-input") as HTMLTextAreaElement;
+  };
+  const type = (input: HTMLTextAreaElement, value: string) => {
+    fireEvent.change(input, { target: { value } });
+    fireEvent.select(input, { target: { selectionStart: value.length } });
+  };
+  const sentContent = () =>
+    invokeMock.mock.calls.find(([cmd]) => cmd === "send_message")?.[1] as
+      | { content: string; attachments: string[] }
+      | undefined;
+
+  it("picks a skill mid-sentence into the tray and sends it leading the prompt", async () => {
+    const input = await setup();
+    type(input, "fix it, /td");
+    await screen.findByTestId("command-menu");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("composer-chip")).toHaveTextContent("/tdd"));
+    expect(screen.getByTestId("composer-input")).toHaveValue("fix it, ");
+
+    type(screen.getByTestId("composer-input") as HTMLTextAreaElement, "fix it, /gr");
+    fireEvent.keyDown(screen.getByTestId("composer-input"), { key: "Enter" });
+    await waitFor(() => expect(screen.getAllByTestId("composer-chip")).toHaveLength(2));
+
+    type(screen.getByTestId("composer-input") as HTMLTextAreaElement, "fix it, test first");
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    await waitFor(() =>
+      expect(sentContent()?.content).toBe(
+        "/tdd fix it, test first\n\nAlso use these skills: grill-apply"
+      )
+    );
+    // The sent turn keeps its chips.
+    expect(await screen.findByTestId("message-skills")).toHaveTextContent("/tdd");
+  });
+
+  it("shows a skill's description on hover, not its body", async () => {
+    const input = await setup();
+    type(input, "/td");
+    await screen.findByTestId("command-menu");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.mouseEnter(await screen.findByTestId("composer-chip"));
+    expect(await screen.findByTestId("skill-hovercard")).toHaveTextContent(
+      "Test-driven development loop"
+    );
+  });
+
+  it("lets a mid-sentence path through: no menu, Enter sends", async () => {
+    const input = await setup();
+    type(input, "check /tmp");
+    expect(screen.queryByTestId("command-menu")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(sentContent()?.content).toBe("check /tmp"));
+  });
+
+  it("offers past threads after files and inserts an @thread mention", async () => {
+    const input = await setup();
+    type(input, "redo @auth");
+    const menu = await screen.findByTestId("mention-menu");
+    const row = await within(menu).findByText("Auth token refresh fix");
+    expect(menu).toHaveTextContent("Threads");
+    fireEvent.click(row.closest("[data-testid='mention-row']")!);
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-input")).toHaveValue("redo @thread:Auth-token-refresh-fix ")
+    );
+  });
+
+  it("attaches pasted images and sends them with the turn", async () => {
+    const input = await setup();
+    const files = [
+      new File(["a"], "a.png", { type: "image/png" }),
+      new File(["b"], "b.png", { type: "image/png" }),
+    ];
+    fireEvent.paste(input, { clipboardData: { files } });
+    await waitFor(() => expect(screen.getAllByTestId("attachment-thumb")).toHaveLength(2));
+    expect(invokeMock).toHaveBeenCalledWith(
+      "save_attachment",
+      expect.objectContaining({ projectHash: "proj-1", ext: "png", path: null })
+    );
+    // An image alone is a sendable turn.
+    fireEvent.keyDown(screen.getByTestId("composer-input"), { key: "Enter" });
+    await waitFor(() => expect(sentContent()?.attachments).toHaveLength(2));
+    expect(screen.queryByTestId("composer-tray")).toBeNull();
   });
 });

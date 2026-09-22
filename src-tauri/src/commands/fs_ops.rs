@@ -64,6 +64,44 @@ pub async fn list_directory(
     .map_err(crate::PalisadeError::from)?
 }
 
+/// `~` or `~/…` against the home directory; anything else as given.
+pub(crate) fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix('~'), dirs::home_dir()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
+            home.join(rest.trim_start_matches('/'))
+        }
+        _ => PathBuf::from(path),
+    }
+}
+
+/// One directory anywhere on disk, for the composer's `@~/…` and `@/…`
+/// mentions (files outside the project). Read-only and one level deep; the
+/// entries carry absolute paths, which is what the agent is sent.
+#[tauri::command]
+pub async fn list_any_directory(path: String, include_hidden: bool) -> Res<Vec<DirEntry>> {
+    tokio::task::spawn_blocking(move || {
+        let target = expand_home(&path);
+        if !target.is_absolute() {
+            return Err("path must start with / or ~".into());
+        }
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(&target).map_err(|e| crate::PalisadeError::from(format!("cannot read directory: {e}")))? {
+            let Ok(entry) = entry else { continue };
+            let name = entry.file_name().to_string_lossy().to_string();
+            if should_skip_entry(&name, include_hidden) {
+                continue;
+            }
+            let is_dir = entry.path().is_dir();
+            let path = entry.path().to_string_lossy().to_string();
+            entries.push(DirEntry { name, is_dir, path });
+        }
+        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        Ok(entries)
+    })
+    .await
+    .map_err(crate::PalisadeError::from)?
+}
+
 /// Recursive file listing for the fuzzy file-open palette (task 5.2). Applies
 /// the same skip rules as `list_directory` (dotfiles, node_modules, target)
 /// rather than a full `.gitignore` parser — matches what the tree already hides.
@@ -510,6 +548,15 @@ pub async fn create_directory(project_hash: String, relative_path: String) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_home_only_touches_a_leading_tilde() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_home("~"), home);
+        assert_eq!(expand_home("~/Documents"), home.join("Documents"));
+        assert_eq!(expand_home("/tmp/~x"), PathBuf::from("/tmp/~x"));
+        assert_eq!(expand_home("~other/x"), PathBuf::from("~other/x"));
+    }
 
     /// A project that is not a git repo has no `.gitignore` to consult, so the
     /// skip list has to hide generated output on its own — otherwise it fills

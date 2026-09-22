@@ -13,6 +13,8 @@ export type QueuedMessage = {
   projectHash: string;
   threadId: string;
   text: string;
+  /** Stored image paths typed-in alongside the text. */
+  attachments?: string[];
   /**
    * Set when the send failed. A failed message stops the queue for its thread
    * and waits for the user rather than retrying on a loop — an agent that
@@ -68,9 +70,9 @@ export function useMessageQueue(
   }, [items, busyThreads]);
 
   const enqueue = useCallback(
-    (projectHash: string, threadId: string, text: string) => {
+    (projectHash: string, threadId: string, text: string, attachments: string[] = []) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed && attachments.length === 0) return;
       setItems((prev) => [
         ...prev,
         {
@@ -78,6 +80,7 @@ export function useMessageQueue(
           projectHash,
           threadId,
           text: trimmed,
+          attachments,
         },
       ]);
     },
