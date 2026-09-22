@@ -1256,8 +1256,7 @@ fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &s
 fn release_idle_sessions_on_exit(harness: &Harness) {
     let idle: Vec<(String, String)> = harness
         .agent.acp_sessions
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .values()
         .filter(|s| !s.is_busy())
         .map(|s| (s.id.clone(), s.thread_id.clone()))

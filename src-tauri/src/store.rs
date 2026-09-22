@@ -113,7 +113,15 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Res<()> {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let tmp = path.with_file_name(name);
-    fs::write(&tmp, body).map_err(|err| e(&format!("write {}", tmp.display()), err))?;
+    // Data to disk before the rename: APFS may otherwise commit the rename
+    // first and a power cut leaves a zero-length meta file, which
+    // `list_threads` skips silently — the thread simply disappears.
+    let written = File::create(&tmp)
+        .and_then(|mut file| file.write_all(body.as_bytes()).and_then(|()| file.sync_all()));
+    written.map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        e(&format!("write {}", tmp.display()), err)
+    })?;
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
         e(&format!("write {}", path.display()), err)
@@ -746,7 +754,9 @@ fn append_session(home: &Path, record: &SessionRecord) -> Res<()> {
     }
     let line = serde_json::to_string(record).map_err(|err| e("serialize session", err))?;
     let writer = crate::session_log_writer::shared_session_log_writer();
-    let mut guard = writer.lock().map_err(|err| e("session log writer", err))?;
+    // Recover a poisoned writer the way `flush_shared` does: one panic in
+    // an earlier append must not stop every later turn from persisting.
+    let mut guard = writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.append(&path, line.as_bytes()).map_err(|err| e("append session", err))
 }
 
@@ -1078,9 +1088,9 @@ pub fn append_message_with_failure_class(
         // Lock the writer first so no other thread can change the buffered byte
         // count while we compute the next seq and append.
         let writer = crate::session_log_writer::shared_session_log_writer();
-        let mut writer = writer.lock().map_err(|err| e("session log writer", err))?;
+        let mut writer = writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let expected_len = writer.disk_len(&path) + writer.buffered_len(&path);
-        let mut cache = SEQ_CACHE.lock().map_err(|err| e("seq cache", err))?;
+        let mut cache = SEQ_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let cache = cache.get_or_insert_with(HashMap::new);
         let NextLine { seq, torn_newline_len } = next_line(&writer, &path, cache, expected_len)?;
         let message = Message {

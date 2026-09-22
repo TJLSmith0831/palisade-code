@@ -188,20 +188,16 @@ const REGISTRY_API: &str = "https://api.github.com/repos/agentclientprotocol/reg
 const REGISTRY_RAW: &str = "https://raw.githubusercontent.com/agentclientprotocol/registry/main";
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Hardcoded fallback list of popular agent IDs for first-run when the
-/// GitHub API is unreachable (D14). Each entry has a PATH-checkable command.
-const FALLBACK_AGENTS: &[(&str, &str)] = &[
-    ("claude-acp", "npx"),
-    ("codex-acp", "npx"),
-    ("opencode", "opencode"),
-    ("gemini", "gemini"),
-    ("devin", "devin"),
-];
-
 /// Fetch all agent manifests from the ACP Registry. Returns cached data if
 /// the cache is fresh; otherwise fetches from GitHub and updates the cache.
-/// On fetch failure, falls back to the cache; on no cache, falls back to the
-/// hardcoded list.
+/// On fetch failure, falls back to the cache, however stale; with no cache
+/// at all the list is empty and the app is honestly chat-only.
+///
+/// There is deliberately no hardcoded fallback list. The one this replaced
+/// (D14) invented agents as bare `npx` with no package and no arguments, so
+/// a first run without network reported them installed and then crashed the
+/// first message on `npx` printing its usage. An agent Palisade cannot
+/// describe correctly is an agent it does not have.
 pub fn discover_agents(palisade_home: &Path) -> Vec<RegistryAgent> {
     let cache_dir = palisade_home.join("acp-registry");
     let cache_file = cache_dir.join("agents.json");
@@ -211,14 +207,9 @@ pub fn discover_agents(palisade_home: &Path) -> Vec<RegistryAgent> {
         return agents;
     }
 
-    // Try fetching from the registry.
-    match fetch_and_cache(&cache_dir, &cache_file) {
-        Ok(agents) => agents,
-        Err(_) => {
-            // Fall back to stale cache or hardcoded list.
-            read_cache(&cache_file).unwrap_or_else(fallback_agents)
-        }
-    }
+    // Try fetching from the registry; otherwise whatever cache exists.
+    fetch_and_cache(&cache_dir, &cache_file)
+        .unwrap_or_else(|_| read_cache(&cache_file).unwrap_or_default())
 }
 
 fn read_fresh_cache(cache_file: &Path) -> Option<Vec<RegistryAgent>> {
@@ -243,34 +234,31 @@ fn write_cache(cache_file: &Path, agents: &[RegistryAgent]) {
     }
 }
 
-fn fallback_agents() -> Vec<RegistryAgent> {
-    FALLBACK_AGENTS
-        .iter()
-        .map(|(id, cmd)| RegistryAgent {
-            id: id.to_string(),
-            name: id.to_string(),
-            version: None,
-            distribution: AgentDistribution::Binary {
-                binary: PlatformMap {
-                    darwin_aarch64: Some(PlatformBinary { cmd: cmd.to_string(), args: vec![] }),
-                    darwin_x86_64: Some(PlatformBinary { cmd: cmd.to_string(), args: vec![] }),
-                    linux_aarch64: Some(PlatformBinary { cmd: cmd.to_string(), args: vec![] }),
-                    linux_x86_64: Some(PlatformBinary { cmd: cmd.to_string(), args: vec![] }),
-                    windows_aarch64: None,
-                    windows_x86_64: None,
-                },
-            },
-        })
-        .collect()
-}
-
 /// Fetch agent directory listing from the GitHub API, then fetch each
 /// agent's manifest. Returns the parsed manifests or an error.
 fn fetch_and_cache(_cache_dir: &Path, cache_file: &Path) -> Res<Vec<RegistryAgent>> {
     let agent_ids = fetch_agent_list()?;
     let agents = fetch_manifests(&agent_ids);
-    write_cache(cache_file, &agents);
+    let (agents, complete) = accept_fetch(agent_ids.len(), agents)?;
+    if complete {
+        write_cache(cache_file, &agents);
+    }
     Ok(agents)
+}
+
+/// Whether a fetch is worth keeping, and worth caching.
+///
+/// A listing that fetched but no manifest that did is a network problem,
+/// not an empty registry: caching `[]` as fresh would report "no agents"
+/// for the next 24h. A partial fetch is served now but not cached, so the
+/// missing agents are retried on the next launch instead of hidden for a
+/// day. Pure, so the policy is testable without the network.
+fn accept_fetch(expected: usize, agents: Vec<RegistryAgent>) -> Res<(Vec<RegistryAgent>, bool)> {
+    if agents.is_empty() {
+        return Err(crate::PalisadeError::from("registry fetch returned no manifests"));
+    }
+    let complete = agents.len() == expected;
+    Ok((agents, complete))
 }
 
 fn fetch_agent_list() -> Res<Vec<String>> {
@@ -480,15 +468,23 @@ mod tests {
         assert_eq!(agents[2].version, None);
     }
 
-    /// RED→GREEN 2.1: The fallback list contains expected popular agent IDs.
+    /// No manifests is a failed fetch, never an empty registry to cache.
     #[test]
-    fn fallback_list_contains_popular_agents() {
-        let agents = fallback_agents();
-        let ids: Vec<&str> = agents.iter().map(|a| a.id.as_str()).collect();
-        assert!(ids.contains(&"claude-acp"));
-        assert!(ids.contains(&"opencode"));
-        assert!(ids.contains(&"devin"));
-        assert_eq!(agents.len(), 5);
+    fn a_fetch_with_no_manifests_is_an_error_not_a_cache_entry() {
+        assert!(accept_fetch(3, vec![]).is_err());
+    }
+
+    /// A partial fetch is used now but not cached, so the agents that did not
+    /// arrive are retried next launch rather than hidden until the TTL ends.
+    #[test]
+    fn a_partial_fetch_is_served_but_not_cached() {
+        let agents = test_agents();
+        let expected = agents.len() + 1;
+        let (kept, complete) = accept_fetch(expected, agents.clone()).unwrap();
+        assert_eq!(kept, agents);
+        assert!(!complete);
+        let (_, complete) = accept_fetch(agents.len(), agents).unwrap();
+        assert!(complete);
     }
 
     // --------------------------------------------------------- 2.2: cache
@@ -594,26 +590,4 @@ mod tests {
         assert_eq!(package_name("plain"), "plain");
     }
 
-    // --------------------------------------------------------- 2.4: fallback
-
-    /// RED→GREEN 2.4: Fallback agents are returned when there's no cache.
-    #[test]
-    fn fallback_returns_popular_agents() {
-        let agents = fallback_agents();
-        assert!(!agents.is_empty());
-        // Each fallback agent's path_cmd should match.
-        for agent in &agents {
-            assert!(agent.distribution.path_cmd().is_some());
-        }
-    }
-
-    /// RED→GREEN 2.4: discover_agents returns fallback when no cache exists.
-    #[test]
-    fn discover_agents_returns_fallback_when_no_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        // No cache file; the network fetch may or may not succeed in test.
-        // The function should return something (either real data or fallback).
-        let agents = discover_agents(dir.path());
-        assert!(!agents.is_empty(), "discover_agents must return agents (real or fallback)");
-    }
 }

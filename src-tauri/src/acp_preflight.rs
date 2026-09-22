@@ -73,7 +73,15 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
     let openspec = find_on_path("openspec").is_some();
 
     let mut warnings = vec![];
-    if is_empty {
+    if registry_agents.is_empty() {
+        // Nothing to check PATH against: the registry never answered and no
+        // cached copy exists. Saying "none on PATH" here would send the user
+        // off to reinstall an agent that is already there.
+        warnings.push(
+            "The ACP registry could not be reached and no cached copy exists — chat-only mode, /go unavailable until it is."
+                .into(),
+        );
+    } else if is_empty {
         warnings.push(
             "No ACP agents found on PATH — chat-only mode, /go unavailable.".into(),
         );
