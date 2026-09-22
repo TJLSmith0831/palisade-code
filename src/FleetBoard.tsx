@@ -24,6 +24,7 @@ import {
   SlashMenu,
   useInstalledSkills,
   useSlashMenu,
+  withInstalled,
   withoutSigil,
 } from "./SkillMenu";
 import { buildPrompt } from "./slashCommands";
@@ -370,15 +371,10 @@ export default function FleetBoard({
   const [skills, setSkills] = useState<string[]>([]);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const installedSkills = useInstalledSkills();
-  const skillPool = useMemo(() => {
-    const advertised = new Set(skillCommands.map((c) => c.name));
-    return [
-      ...skillCommands,
-      ...installedSkills
-        .filter((skill) => !advertised.has(skill.name))
-        .map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
-    ];
-  }, [skillCommands, installedSkills]);
+  const skillPool = useMemo(
+    () => withInstalled(skillCommands, installedSkills),
+    [skillCommands, installedSkills]
+  );
   const menu = useSlashMenu(prompt, caret, skillPool);
   const pickSkill = (command: AgentCommand) => {
     if (!menu.slash) return;
@@ -486,11 +482,7 @@ export default function FleetBoard({
 
       <div className={`fleet-composer${dragActive ? " drag-active" : ""}`}>
         <DropHint active={dragActive} />
-        <SlashMenu
-          menu={menu}
-          onPick={pickSkill}
-          emptySkills="No skills found — install one under ~/.claude/skills or ~/.agents/skills."
-        />
+        <SlashMenu menu={menu} onPick={pickSkill} />
         <ComposerTray
           projectHash={projectHash}
           skills={skills}

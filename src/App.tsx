@@ -119,6 +119,7 @@ import {
   SlashMenu,
   useInstalledSkills,
   useSlashMenu,
+  withInstalled,
   withoutSigil,
 } from "./SkillMenu";
 import {
@@ -828,9 +829,13 @@ export const ChatSurface = memo(
       [commands, draft]
     );
     // The `/` menu, shared with the Fleet composer (SkillMenu.tsx).
-    const menu = useSlashMenu(draft, caret, commands, !!chipCommand);
-    const commandMenuOpen = menu.open;
     const installedSkills = useInstalledSkills();
+    const menuCommands = useMemo(
+      () => withInstalled(commands, installedSkills),
+      [commands, installedSkills]
+    );
+    const menu = useSlashMenu(draft, caret, menuCommands, !!chipCommand);
+    const commandMenuOpen = menu.open;
 
     // A sent turn shows the chips and images it was sent with. Memoized so
     // EventList (itself memoized) doesn't re-render every keystroke.
@@ -838,16 +843,13 @@ export const ChatSurface = memo(
       (item: { text: string; attachments?: string[] }) => {
         // Installed skills count too: after a restart the agent hasn't
         // re-advertised yet, and history should still show its chips.
-        const { skills: sent, text } = parseSentPrompt(item.text, [
-          ...commands,
-          ...installedSkills.map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
-        ]);
+        const { skills: sent, text } = parseSentPrompt(item.text, menuCommands);
         return (
           <>
             {sent.length > 0 && (
               <div className="ds-composer-tray" data-testid="message-skills">
                 {sent.map((name) => (
-                  <SkillChip key={name} name={name} commands={commands} installed={installedSkills} />
+                  <SkillChip key={name} name={name} commands={menuCommands} installed={installedSkills} />
                 ))}
               </div>
             )}
@@ -862,7 +864,7 @@ export const ChatSurface = memo(
           </>
         );
       },
-      [commands, installedSkills, project?.hash]
+      [menuCommands, installedSkills, project?.hash]
     );
 
     // The `@` mention menu (#32). Unlike `/`, a mention is a reference inside
@@ -1857,11 +1859,7 @@ export const ChatSurface = memo(
         >
           {/* The `/` menu, anchored above the composer so the input it is
               completing stays visible and in place while it filters. */}
-          <SlashMenu
-            menu={menu}
-            onPick={pickCommand}
-            emptySkills="No skills advertised for this session yet — send a message to start one."
-          />
+          <SlashMenu menu={menu} onPick={pickCommand} />
 
           {/* The `@` mention menu (#32), sharing the `/` menu's shape so
               the two read as one control with two grammars. Files, then past
@@ -2117,7 +2115,7 @@ export const ChatSurface = memo(
             projectHash={project?.hash}
             skills={skills}
             attachments={attachments}
-            commands={commands}
+            commands={menuCommands}
             installed={installedSkills}
             noImageSupport={!imageSupport}
             onRemoveSkill={(name) => setSkills?.(skills.filter((s) => s !== name))}

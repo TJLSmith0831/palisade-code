@@ -29,6 +29,26 @@ export function useInstalledSkills(): api.Skill[] {
   return installed;
 }
 
+/**
+ * What a composer's `/` menu offers: the agent's advertised commands, then
+ * any installed skill the agent has not advertised. A thread's first turn
+ * and a new Fleet run have no session yet, so without the installed list
+ * their menus would be empty exactly when a skill is most useful.
+ */
+export function withInstalled(commands: MenuCommand[], installed: api.Skill[]): MenuCommand[] {
+  const advertised = new Set(commands.map((c) => c.name));
+  return [
+    ...commands,
+    ...installed
+      .filter((skill) => !advertised.has(skill.name))
+      .map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
+  ];
+}
+
+/** Shown when a composer has no skill to offer at all. */
+export const NO_SKILLS =
+  "No skills advertised or installed yet — add one under ~/.claude/skills or ~/.agents/skills.";
+
 export type SlashMenuState = ReturnType<typeof useSlashMenu>;
 
 /**
@@ -115,12 +135,9 @@ export function withoutSigil(draft: string, token: SlashToken): string {
 export function SlashMenu({
   menu,
   onPick,
-  emptySkills,
 }: {
   menu: SlashMenuState;
   onPick: (command: api.AgentCommand) => void;
-  /** What an empty skills pool means for this composer. */
-  emptySkills: string;
 }) {
   if (!menu.open) return null;
   const chains = menu.kind === "chains";
@@ -142,7 +159,7 @@ export function SlashMenu({
       <div className="ds-command-menu-scroll">
         {menu.pool.length === 0 ? (
           <p className="ds-command-menu-empty">
-            {chains ? "No playbooks saved for this project yet." : emptySkills}
+            {chains ? "No playbooks saved for this project yet." : NO_SKILLS}
           </p>
         ) : menu.matches.length === 0 ? (
           <p className="ds-command-menu-empty">No matches for “{menu.slash?.query}”.</p>

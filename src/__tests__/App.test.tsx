@@ -7131,3 +7131,25 @@ describe("Composer: skills anywhere, @ threads, images", () => {
     expect(screen.queryByTestId("composer-tray")).toBeNull();
   });
 });
+
+describe("Composer: installed skills before any session", () => {
+  it("offers installed skills in a thread's very first message", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          { id: "t1", projectHash: "proj-1", title: "Fresh", currentMode: "go", createdAt: "", updatedAt: "", openSpecChangeName: null },
+        ]);
+      if (cmd === "list_skills")
+        return Promise.resolve([
+          { name: "microcopy-voice", path: "/Users/me/.claude/skills/microcopy-voice", description: "Write UI microcopy", owner: "claude" },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "tighten this copy, /micro" } });
+    fireEvent.select(input, { target: { selectionStart: 25 } });
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/microcopy-voice");
+  });
+});
