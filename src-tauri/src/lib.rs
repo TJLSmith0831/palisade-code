@@ -1279,7 +1279,7 @@ async fn send_message(
         // Name the thread after the turn that opened it, so "New thread" is
         // never what the user has to live with. Silent on failure: a title is
         // cosmetic and must not cost the user their message.
-        let local = model_title(&harness, &content);
+        let local = model_title(&app, &harness, &content);
         let _ = store::set_auto_title(
             &palisade_home(),
             &project_hash,
@@ -1376,13 +1376,16 @@ async fn retry_message(
 /// ACP agents use a structured `auth_required` error when they can, but a few
 /// adapters still surface only provider prose. Keep this mirror intentionally
 /// narrow and aligned with the frontend's auth error classification.
-/// A thread title written by the bundled local model, or `None` if it isn't
-/// up yet or didn't return anything usable.
+/// A thread title written by the bundled local model, or `None` if it
+/// didn't return anything usable.
 ///
-/// Deliberately does *not* start the sidecar: this runs on the user's first
-/// turn, and spawning a model to earn a nicer label would delay the message
-/// they actually sent. If inline completion has the model warm, titles get
-/// the good path; otherwise the caller trims the prompt instead.
+/// Starts the sidecar on demand (same as `complete_code`) rather than
+/// requiring FIM to already be warm: naming a thread must stay local and
+/// free even for someone who turned ghost-text completion off, since the
+/// model ships with every install regardless (AGENTS.md, D59). The one-cold
+/// -start cost lands on a thread's first message, same as this call already
+/// blocks that message on. Never surfaces `ensure_completion_server`'s
+/// missing-install warning — see the guard at the top of the body.
 /// Ask the thread's own agent to name the thread, in the background, and
 /// upgrade the title if it answers.
 ///
@@ -1434,12 +1437,19 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
     });
 }
 
-fn model_title(harness: &Harness, prompt: &str) -> Option<String> {
-    let server = harness.completion.completion_server.lock_or_recover();
-    let server = server.as_ref()?;
-    if !server.is_alive() {
+fn model_title(app: &tauri::AppHandle, harness: &Harness, prompt: &str) -> Option<String> {
+    // Checked here, not left to `ensure_completion_server`: a missing
+    // binary/model makes it emit a `harness-warning` ("AI completion is
+    // unavailable...") for FIM's benefit. A cosmetic title request the user
+    // never asked for must not speak up on their behalf — silent means
+    // silent, including this failure mode.
+    let (binary, model) = completion::resolve_sidecar_paths(app).ok()?;
+    if !binary.exists() || !model.exists() {
         return None;
     }
+    ensure_completion_server(app, harness).ok()?;
+    let server = harness.completion.completion_server.lock_or_recover();
+    let server = server.as_ref()?;
     server.title(prompt).ok()
 }
 
@@ -1655,7 +1665,7 @@ async fn spec_mode(
         // request — not after which card the user pressed. "Feature" is the
         // same row for every feature they will ever spec (#30/#35).
         if let Some(request) = request {
-            let local = model_title(&harness, request);
+            let local = model_title(&app, &harness, request);
             let _ = store::set_auto_title(
                 &palisade_home(),
                 &project_hash,

@@ -48,6 +48,11 @@ const DEFAULT_TEMPERATURE: f64 = 0.0;
 // output (see decisions.md D4/D5).
 const DEFAULT_REPEAT_PENALTY: f64 = 1.1;
 const DEFAULT_TOP_P: f64 = 0.95;
+/// Title-only: stronger than `DEFAULT_REPEAT_PENALTY` to discourage the model
+/// from copying n-grams straight out of the request sitting in its own
+/// context, which reads as "the title is just the first few words" (see
+/// `build_title_prompt`).
+const TITLE_REPEAT_PENALTY: f64 = 1.3;
 
 /// Averaged characters per token for code-like text. Used to approximate the
 /// 256/128 token budget without shipping a tokenizer in v1.
@@ -375,18 +380,40 @@ pub fn build_commit_prompt(diff: &str) -> String {
 /// An instruction-style prompt rather than FIM: this is a summarisation task,
 /// not a code-hole to fill. Few-shot, because a 0.8B model asked bare for "a
 /// title" tends to answer the request instead of naming it.
+///
+/// A base coder model's cheapest way to satisfy "write a title" is to keep
+/// typing the prompt it was just fed — the request's own opening words are
+/// right there in context, and greedy decoding takes the free continuation
+/// over an actual summary. The third example exists specifically to show a
+/// long, rambling request collapsing to a title that shares none of its
+/// first words, since that is the one shape "explain it in the instruction"
+/// alone doesn't teach a model this small.
+///
+/// Its topic is deliberately a backend bug report, not a UI one: an earlier
+/// version used an onboarding-copy cleanup example, and on a live request
+/// about reorganising a *settings panel* the model produced "Reorder tab
+/// order for onboarding" — onboarding never appeared in the request. A
+/// few-shot example this close in topic-space to a real UI request bleeds
+/// into it; picking a domain real UI requests won't resemble removes the
+/// attractor instead of trying to out-word it in the instruction.
 pub fn build_title_prompt(request: &str) -> String {
     // A long paste is a title's worst input and the model's slowest; the
     // first part carries the intent.
     let request: String = request.chars().take(600).collect();
     format!(
-        "Write a short title (3-6 words) naming what the user asked for. \
-         Title only, no quotes, no trailing period.\n\n\
+        "Give the request below a short thread title (3-5 words) naming its \
+         goal or topic. Do not copy the request's own opening words — name \
+         what it's about instead. Title only, no quotes, no trailing period.\n\n\
          Request: the login page redirects to a 404 after signing in with google, \
          can you look into why that happens\n\
          Title: Fix Google sign-in redirect\n\n\
          Request: add a priority field to each todo item\n\
          Title: Add todo priority field\n\n\
+         Request: the export job has been running fine for months but starting \
+         last week it randomly times out on large accounts, I dug through the \
+         logs a bit and it might be the new batching logic but I honestly can't \
+         tell, could you take a look and fix it if that's actually the cause\n\
+         Title: Fix export job timeout on large accounts\n\n\
          Request: {}\n\
          Title:",
         request.trim()
@@ -399,7 +426,12 @@ fn title_request_body(request: &str) -> serde_json::Value {
         // A title is one short line: stop at the newline that ends it.
         "n_predict": 16,
         "temperature": DEFAULT_TEMPERATURE,
-        "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+        // Higher than DEFAULT_REPEAT_PENALTY on purpose: the failure mode
+        // here is the model copying n-grams straight out of the request
+        // that's still sitting in context, which is exactly what
+        // repeat_penalty suppresses (same mechanism as D4, aimed at a
+        // different repetition source).
+        "repeat_penalty": TITLE_REPEAT_PENALTY,
         "top_p": DEFAULT_TOP_P,
         "stop": ["\n", "Request:", "Title:", FIM_END.to_string()],
     })
@@ -1443,6 +1475,17 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
 
         assert!(stop.iter().any(|s| s.as_str() == Some("\n")));
         assert_eq!(body.get("n_predict").and_then(|v| v.as_u64()), Some(16));
+    }
+
+    /// Locks in the stronger anti-copying penalty so a future edit that
+    /// merges this back onto `DEFAULT_REPEAT_PENALTY` fails loudly instead
+    /// of quietly reintroducing "title is just the first few words".
+    #[test]
+    fn title_request_uses_the_title_specific_repeat_penalty() {
+        let body = title_request_body("add a priority field");
+
+        assert_eq!(body.get("repeat_penalty").and_then(|v| v.as_f64()), Some(TITLE_REPEAT_PENALTY));
+        assert_ne!(TITLE_REPEAT_PENALTY, DEFAULT_REPEAT_PENALTY);
     }
 
     #[test]
