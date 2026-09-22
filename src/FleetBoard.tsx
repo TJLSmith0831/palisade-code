@@ -45,6 +45,8 @@ export type FleetBoardProps = {
   /** Threads with a live/busy session — the same optimistic set the sidebar's
    *  dot already trusts. See `groupFleet`. */
   liveThreadIds?: Set<string>;
+  /** Threads whose title is still being written in the background. */
+  titlePendingIds?: Set<string>;
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
   onStop(threadId: string): void;
@@ -103,6 +105,7 @@ export function groupFleet(
 function Row({
   row,
   running,
+  naming = false,
   onOpen,
   onReview,
   onStop,
@@ -118,6 +121,8 @@ function Row({
    *  resolved by `groupFleet` (raw + optimistic), so Stop doesn't wait on
    *  the row's own status to catch up. */
   running: boolean;
+  /** The title is still being written; show a skeleton, not the placeholder. */
+  naming?: boolean;
 } & Pick<
   FleetBoardProps,
   | "onOpen"
@@ -177,7 +182,13 @@ function Row({
       </Tooltip>
 
       <div className="fleet-row-main">
-        <div className="fleet-row-title">{row.title}</div>
+        <div className="fleet-row-title">
+          {naming ? (
+            <Skeleton height={12} width="45%" my={3} role="status" aria-label="Naming thread" />
+          ) : (
+            row.title
+          )}
+        </div>
         <div className="fleet-row-meta">
           <span>
             {playbook
@@ -312,6 +323,7 @@ export default function FleetBoard({
   projectHash,
   agents,
   liveThreadIds,
+  titlePendingIds,
   onOpen,
   onReview,
   onStop,
@@ -512,6 +524,7 @@ export default function FleetBoard({
                   key={row.threadId}
                   row={row}
                   running={band.key === "running"}
+                  naming={titlePendingIds?.has(row.threadId)}
                   onOpen={onOpen}
                   onReview={onReview}
                   onStop={onStop}

@@ -154,6 +154,7 @@ export default function SessionList({
   activeThread,
   liveThreadIds,
   attentionThreadIds = new Set(),
+  titlePendingIds = new Set(),
   worktrees,
   fleetRows,
   onNewThread,
@@ -172,6 +173,8 @@ export default function SessionList({
   /** Threads blocked on a permission prompt (or other blocking question) —
    *  the loudest dot state, and what the aggregate count in the header sums. */
   attentionThreadIds?: Set<string>;
+  /** Threads whose title is still being written in the background. */
+  titlePendingIds?: Set<string>;
   /** Each thread's isolated worktree, keyed by thread id. Threads that have
    *  never run — and every thread in a non-git project — are absent. */
   worktrees: Map<string, WorktreeStatus>;
@@ -302,7 +305,7 @@ export default function SessionList({
                   {/* Marks a name Palisade wrote from the opening turn, so a
                       title the user never chose does not read as one they
                       did. Renaming clears it. */}
-                  {thread.titleSource === "auto" && (
+                  {thread.titleSource === "auto" && !titlePendingIds.has(thread.id) && (
                     <Tooltip label="Named from the first message" openDelay={400}>
                       <IconSparkles
                         size={11}
@@ -311,7 +314,11 @@ export default function SessionList({
                       />
                     </Tooltip>
                   )}
-                  {thread.title}
+                  {titlePendingIds.has(thread.id) ? (
+                    <Skeleton height={13} width="72%" my={2} role="status" aria-label="Naming thread" />
+                  ) : (
+                    thread.title
+                  )}
                 </div>
                 <div className="ds-session-meta" data-testid="session-times">
                   {activityLabel(thread.createdAt, row?.lastActivityAt, Date.now(), true)}

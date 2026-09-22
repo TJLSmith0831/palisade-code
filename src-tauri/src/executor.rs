@@ -540,9 +540,6 @@ pub struct WorkspaceState {
     /// project window shares this watcher (#33), and a single slot meant
     /// opening a second window silently stopped watching the first project.
     pub fswatch: Mutex<HashMap<String, crate::fswatch::FsWatcher>>,
-    /// Buffered JSONL writer for session and thread logs; flushed on turn-done
-    /// and app-quit (D9).
-    pub session_log_writer: crate::session_log_writer::SharedSessionLogWriter,
     /// Mtime-keyed cache over `openspec` CLI output (D10).
     pub openspec_cache: std::sync::Arc<crate::openspec_cache::OpenSpecCache>,
 }
@@ -681,7 +678,7 @@ mod harness_shape_tests {
             .iter()
             .map(|n| counts[*n])
             .sum();
-        assert_eq!(grouped, 20, "a field was dropped or added without a home");
+        assert_eq!(grouped, 19, "a field was dropped or added without a home");
     }
 
     /// The field comments are why this codebase is auditable; a refactor that
@@ -782,7 +779,6 @@ impl Default for WorkspaceState {
         Self {
             window_projects: Default::default(),
             fswatch: Default::default(),
-            session_log_writer: crate::session_log_writer::shared_session_log_writer(),
             openspec_cache: std::sync::Arc::new(
                 crate::openspec_cache::OpenSpecCache::with_real_adapter(),
             ),

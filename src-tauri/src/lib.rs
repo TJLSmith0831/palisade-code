@@ -473,11 +473,30 @@ async fn append_message(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// A thread's history. With no options: all of it. `from_seq` returns every
+/// message from that seq on (an incremental refresh); otherwise `limit`
+/// returns the newest that many, only those before `before_seq` if given (the
+/// "load earlier" page). Windowed reads touch only the tail of the log.
 #[tauri::command]
-async fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
-    tokio::task::spawn_blocking(move || store::read_thread(&palisade_home(), &project_hash, &thread_id))
-        .await
-        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+async fn read_thread(
+    project_hash: String,
+    thread_id: String,
+    before_seq: Option<u64>,
+    from_seq: Option<u64>,
+    limit: Option<usize>,
+) -> Res<Vec<Message>> {
+    tokio::task::spawn_blocking(move || {
+        let home = palisade_home();
+        match (from_seq, limit) {
+            (Some(from), _) => store::read_thread_window(&home, &project_hash, &thread_id, store::Window::From(from)),
+            (None, Some(limit)) => {
+                store::read_thread_window(&home, &project_hash, &thread_id, store::Window::Last { before_seq, limit })
+            }
+            (None, None) => store::read_thread(&home, &project_hash, &thread_id),
+        }
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------- executor handoff
@@ -664,7 +683,7 @@ impl Sink for AppSink {
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
-                let _ = harness.workspace.session_log_writer.lock_or_recover().flush();
+                let _ = store::flush_session_log_writer();
                 // A turn made it to completion, so whatever auth problem
                 // blocked an earlier one no longer applies.
                 if thread_meta(&self.project_hash, &thread_id)
@@ -1277,23 +1296,12 @@ async fn send_message(
         let message =
             store::append_message(&palisade_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
         // Name the thread after the turn that opened it, so "New thread" is
-        // never what the user has to live with. Silent on failure: a title is
-        // cosmetic and must not cost the user their message.
-        let local = model_title(&harness, &content);
-        let _ = store::set_auto_title(
-            &palisade_home(),
-            &project_hash,
-            &thread_id,
-            &content,
-            local.as_deref(),
-        );
-        // Local model first (fast, free), the thread's own agent second, and
-        // the truncated first line only as the last resort — which is what a
-        // machine with no local model was getting every time. The agent call
-        // is detached: a title is cosmetic and must never delay the turn.
-        // A title must never cause a throwaway executor process (and therefore
-        // an unexpected auth flow). The local/fallback title above is enough
-        // until an already-ready connection can provide this enhancement.
+        // never what the user has to live with. In the background and silent
+        // on failure: a title is cosmetic and must not delay or cost the
+        // user their message. No agent fallback here: a title must never
+        // cause a throwaway executor process (and therefore an unexpected
+        // auth flow); the truncated first line is enough.
+        title_thread(&app, &project_hash, &thread_id, &content, false);
         let agent = match selected_executor(&app, &harness, &project_hash, Some(&thread_id)) {
             Ok((agent, _)) => agent,
             Err(_) => {
@@ -1361,7 +1369,7 @@ async fn retry_message(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let home = palisade_home();
-        let message = store::read_thread(&home, &project_hash, &thread_id)?
+        let message = store::read_thread_window(&home, &project_hash, &thread_id, store::Window::From(message_seq))?
             .into_iter()
             .find(|message| message.seq == message_seq && message.role == "user")
             .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
@@ -1376,13 +1384,6 @@ async fn retry_message(
 /// ACP agents use a structured `auth_required` error when they can, but a few
 /// adapters still surface only provider prose. Keep this mirror intentionally
 /// narrow and aligned with the frontend's auth error classification.
-/// A thread title written by the bundled local model, or `None` if it isn't
-/// up yet or didn't return anything usable.
-///
-/// Deliberately does *not* start the sidecar: this runs on the user's first
-/// turn, and spawning a model to earn a nicer label would delay the message
-/// they actually sent. If inline completion has the model warm, titles get
-/// the good path; otherwise the caller trims the prompt instead.
 /// Ask the thread's own agent to name the thread, in the background, and
 /// upgrade the title if it answers.
 ///
@@ -1434,12 +1435,70 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
     });
 }
 
-fn model_title(harness: &Harness, prompt: &str) -> Option<String> {
-    let server = harness.completion.completion_server.lock_or_recover();
-    let server = server.as_ref()?;
-    if !server.is_alive() {
+/// Name a thread after the turn that opened it, without making that turn
+/// wait on it.
+///
+/// The local model can need a cold start (up to 45s) before it answers, so it
+/// runs on its own thread, bracketed by `thread-title-pending` events the UI
+/// shows as a title skeleton. Only a thread still on its placeholder name is
+/// touched, so every later turn costs nothing. With no local model
+/// installed there is nothing to wait for: the truncated first line goes up
+/// at once. `agent_fallback` asks the thread's own agent when the local
+/// model has no answer.
+fn title_thread(app: &tauri::AppHandle, project_hash: &str, thread_id: &str, prompt: &str, agent_fallback: bool) {
+    if !thread_meta(project_hash, thread_id).is_some_and(|m| store::needs_auto_title(&m)) {
+        return;
+    }
+    if !local_title_installed(app) {
+        let _ = store::set_auto_title(&palisade_home(), project_hash, thread_id, prompt, None);
+        if agent_fallback {
+            agent_title_later(app, project_hash, thread_id, prompt);
+        }
+        return;
+    }
+    let pending = |pending: bool| serde_json::json!({ "threadId": thread_id, "pending": pending });
+    let _ = app.emit("thread-title-pending", pending(true));
+    let done = pending(false);
+    let app = app.clone();
+    let project_hash = project_hash.to_string();
+    let thread_id = thread_id.to_string();
+    let prompt = prompt.to_string();
+    std::thread::spawn(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let local = model_title(&app, &harness, &prompt);
+        let _ = store::set_auto_title(&palisade_home(), &project_hash, &thread_id, &prompt, local.as_deref());
+        let _ = app.emit("thread-updated", &thread_id);
+        let _ = app.emit("thread-title-pending", done);
+        if local.is_none() && agent_fallback {
+            agent_title_later(&app, &project_hash, &thread_id, &prompt);
+        }
+    });
+}
+
+/// Whether the bundled sidecar and model are on disk. Checked before titling
+/// rather than left to `ensure_completion_server`: a missing install makes it
+/// emit a `harness-warning` ("AI completion is unavailable...") for FIM's
+/// benefit, and a cosmetic title the user never asked for must not speak up
+/// on their behalf.
+fn local_title_installed(app: &tauri::AppHandle) -> bool {
+    completion::resolve_sidecar_paths(app).is_ok_and(|(binary, model)| binary.exists() && model.exists())
+}
+
+/// A thread title written by the bundled local model, or `None` if it
+/// didn't return anything usable.
+///
+/// Starts the sidecar on demand (same as `complete_code`) rather than
+/// requiring FIM to already be warm: naming a thread must stay local and
+/// free even for someone who turned ghost-text completion off, since the
+/// model ships with every install regardless (AGENTS.md, D59). Blocks for a
+/// cold start, which is why only [`title_thread`]'s background thread calls it.
+fn model_title(app: &tauri::AppHandle, harness: &Harness, prompt: &str) -> Option<String> {
+    if !local_title_installed(app) {
         return None;
     }
+    ensure_completion_server(app, harness).ok()?;
+    let server = harness.completion.completion_server.lock_or_recover();
+    let server = server.as_ref()?;
     server.title(prompt).ok()
 }
 
@@ -1655,17 +1714,7 @@ async fn spec_mode(
         // request — not after which card the user pressed. "Feature" is the
         // same row for every feature they will ever spec (#30/#35).
         if let Some(request) = request {
-            let local = model_title(&harness, request);
-            let _ = store::set_auto_title(
-                &palisade_home(),
-                &project_hash,
-                &thread_id,
-                request,
-                local.as_deref(),
-            );
-            if local.is_none() {
-                agent_title_later(&app, &project_hash, &thread_id, request);
-            }
+            title_thread(&app, &project_hash, &thread_id, request, true);
         }
         if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, request, start) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
@@ -2703,7 +2752,7 @@ async fn set_thread_worktree_enabled(
         // started one but never spoken has nothing invested in it, and the
         // empty worktree is removed rather than left orphaned. Once an agent
         // has written a turn, its working directory cannot move underneath it.
-        if !store::read_thread(&home, &project_hash, &thread_id)?.is_empty() {
+        if !store::thread_is_empty(&home, &project_hash, &thread_id)? {
             return Err(
                 "This thread has already run — its worktree setting is fixed for the life of the thread."
                     .into(),
@@ -4356,7 +4405,7 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit) {
                 release_idle_sessions_on_exit(&app.state::<Harness>());
-                let _ = app.state::<Harness>().workspace.session_log_writer.lock_or_recover().flush();
+                let _ = store::flush_session_log_writer();
                 stop_completion_server(&app.state::<Harness>());
                 for (_, kernel) in app.state::<Harness>().tooling.notebook_kernels.lock_or_recover().drain() {
                     kernel.terminate();

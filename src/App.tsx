@@ -4,6 +4,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -220,6 +221,14 @@ type ChatSurfaceProps = {
   project: Project | null;
   /** Project switch is still fetching threads; keep the old empty state hidden. */
   loading?: boolean;
+  /** This thread's history is still being read; show a skeleton, not "What are we building?". */
+  historyLoading?: boolean;
+  /** Older messages exist beyond what is on screen. */
+  hasEarlier?: boolean;
+  /** Fetch and prepend the next page of older messages. */
+  onLoadEarlier?: () => Promise<void>;
+  /** Threads whose title is still being written in the background. */
+  titlePendingIds?: Set<string>;
   thread: ThreadMeta | null;
   messages: Message[];
   live: ExecutorEvent[];
@@ -647,6 +656,10 @@ export const ChatSurface = memo(
     onChainGateResolved,
     onChainOpenRun,
     loading = false,
+    historyLoading = false,
+    hasEarlier = false,
+    onLoadEarlier,
+    titlePendingIds,
   }: ChatSurfaceProps) {
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
@@ -899,6 +912,32 @@ export const ChatSurface = memo(
       if (!el) return;
       el.scrollTop = el.scrollHeight;
     }, [items, busy, autoScroll]);
+    // Older messages land above what the reader is looking at. WKWebView has no
+    // scroll anchoring, so hold the same distance from the bottom by hand.
+    const earlierAnchor = useRef<{ oldest: number; fromBottom: number } | null>(null);
+    const [loadingEarlier, setLoadingEarlier] = useState(false);
+    const handleLoadEarlier = async () => {
+      const el = messagesRef.current;
+      const oldest = oldestSeq(messages);
+      if (!onLoadEarlier || !el || oldest === undefined) return;
+      earlierAnchor.current = { oldest, fromBottom: el.scrollHeight - el.scrollTop };
+      setLoadingEarlier(true);
+      try {
+        await onLoadEarlier();
+      } catch (err) {
+        onError?.(describeError(err));
+      } finally {
+        setLoadingEarlier(false);
+      }
+    };
+    useLayoutEffect(() => {
+      const anchor = earlierAnchor.current;
+      const el = messagesRef.current;
+      const oldest = oldestSeq(messages);
+      if (!anchor || !el || oldest === undefined || oldest >= anchor.oldest) return;
+      el.scrollTop = el.scrollHeight - anchor.fromBottom;
+      earlierAnchor.current = null;
+    }, [messages]);
     useEffect(() => {
       if (!modelMenuOpen) setModelQuery("");
     }, [modelMenuOpen]);
@@ -1321,7 +1360,13 @@ export const ChatSurface = memo(
                 data-testid="thread-tab"
                 title={t.title}
               >
-                <span className="ds-thread-tab-title">{t.title}</span>
+                <span className="ds-thread-tab-title">
+                  {titlePendingIds?.has(t.id) ? (
+                    <Skeleton height={12} width={96} role="status" aria-label="Naming thread" />
+                  ) : (
+                    t.title
+                  )}
+                </span>
                 <span className="ds-thread-tab-mode">
                   {t.currentMode === "spec" ? "SPEC" : "GO"}
                 </span>
@@ -1359,7 +1404,11 @@ export const ChatSurface = memo(
         )}
         <div className="pane-head">
           <strong data-testid="thread-title">
-            {thread?.title ?? "New thread"}
+            {thread && titlePendingIds?.has(thread.id) ? (
+              <Skeleton height={14} width={180} role="status" aria-label="Naming thread" />
+            ) : (
+              thread?.title ?? "New thread"
+            )}
           </strong>
           {thread && (
             <Tooltip label="Rename thread" openDelay={400}>
@@ -1449,7 +1498,21 @@ export const ChatSurface = memo(
           data-autoscroll={autoScroll}
         >
           <>
-            {items.length === 0 && (
+            {hasEarlier && (
+              <Button
+                variant="subtle"
+                size="compact-sm"
+                loading={loadingEarlier}
+                onClick={() => void handleLoadEarlier()}
+                data-testid="load-earlier"
+              >
+                Load earlier messages
+              </Button>
+            )}
+            {items.length === 0 && historyLoading && (
+              <ThreadLoadingSkeleton label="Loading messages" />
+            )}
+            {items.length === 0 && !historyLoading && (
               <div className="ds-thread-empty" data-testid="thread-empty">
                 <strong>What are we building?</strong>
                 <p>
@@ -2443,9 +2506,9 @@ export const ChatSurface = memo(
   }
 );
 
-function ThreadLoadingSkeleton() {
+function ThreadLoadingSkeleton({ label = "Loading threads" }: { label?: string }) {
   return (
-    <div className="ds-thread-loading" data-testid="thread-loading" role="status" aria-label="Loading threads">
+    <div className="ds-thread-loading" data-testid="thread-loading" role="status" aria-label={label}>
       <div className="ds-thread-loading-message">
         <Skeleton height={12} width="28%" />
         <Skeleton height={14} width="82%" />
@@ -2538,6 +2601,13 @@ const LIVE_ONLY_KINDS = new Set<ExecutorEvent["kind"]>([
  *  assigned it a real one — real seqs are positive, persisted integers, so
  *  this can never collide with one. */
 const OPTIMISTIC_SEQ = -1;
+/** How much of a thread opens at once. Older messages come on demand ("Load
+ *  earlier"), so opening — and every refresh — costs the same at any length. */
+const THREAD_PAGE = 200;
+/** Streamed executor events are applied to state at most this often. */
+const LIVE_BATCH_MS = 50;
+/** The seq of the oldest persisted message on screen; `undefined` when none. */
+const oldestSeq = (messages: Message[]) => messages.find((m) => m.seq !== OPTIMISTIC_SEQ)?.seq;
 type ThreadRowProps = {
   thread: ThreadMeta;
   active: boolean;
@@ -2952,6 +3022,8 @@ export default function App() {
   const ex = useExecutor();
   const messages = ex.messages;
   const setMessages = ex.setMessages;
+  const historyLoading = ex.historyLoading;
+  const setHistoryLoading = ex.setHistoryLoading;
   const draft = ex.draft;
   const setDraft = ex.setDraft;
   const errors = ex.errors;
@@ -3499,21 +3571,36 @@ export default function App() {
   const dismissError = (id: string) =>
     setErrors((prev) => prev.filter((e) => e.id !== id));
 
+  /** Bumped by every thread selection; a read that finds it moved on discards itself. */
+  const selectionRef = useRef(0);
   const selectThread = useCallback(
     async (projectHash: string, next: ThreadMeta | null) => {
       // Leaving a thread releases its idle sessions (closed `done`, D20);
       // anything mid-turn keeps running and keeps streaming into its own key.
       const leaving = current.current.thread?.id;
       if (leaving && leaving !== next?.id) api.leaveThread(leaving).catch(fail);
+      // Each selection owns the screen until a newer one replaces it: a slow
+      // read for an earlier click must not land its history under this thread.
+      const mine = ++selectionRef.current;
       setThread(next);
       setNewThreadPicker(false);
+      // The previous thread's history must not sit under the new title while
+      // this one loads.
+      setMessages([]);
       if (!next) {
-        setMessages([]);
+        setHistoryLoading(false);
         return;
       }
+      setHistoryLoading(true);
       localStorage.setItem(lastThreadKey(projectHash), next.id);
       clearLiveFor(next.id);
-      setMessages(await api.readThread(projectHash, next.id));
+      try {
+        const history = await api.readThread(projectHash, next.id, { limit: THREAD_PAGE });
+        if (mine !== selectionRef.current) return;
+        setMessages(history);
+      } finally {
+        if (mine === selectionRef.current) setHistoryLoading(false);
+      }
       // Load this thread's model/bypass preferences (per-thread override or
       // global default) so the composer control shows the right values.
       loadThreadPrefs(projectHash, next.id);
@@ -4326,6 +4413,20 @@ export default function App() {
   // Keeps the event listener (registered once) pointed at the current thread.
   const current = useRef({ project, thread });
   current.current = { project, thread };
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  const loadEarlier = useCallback(async () => {
+    const { project, thread } = current.current;
+    const before = oldestSeq(messagesRef.current);
+    if (!project || !thread || before === undefined) return;
+    const older = await api.readThread(project.hash, thread.id, { beforeSeq: before, limit: THREAD_PAGE });
+    if (current.current.thread?.id !== thread.id) return;
+    setMessages((prev) => {
+      const have = new Set(prev.map((m) => m.seq));
+      return [...older.filter((m) => !have.has(m.seq)), ...prev];
+    });
+  }, [setMessages]);
 
   const busy = thread ? busyThreads.has(thread.id) : false;
   /** Busy for whichever thread is on screen — what the composer's callers mean. */
@@ -4475,14 +4576,25 @@ export default function App() {
   const refresh = useCallback(async () => {
     const { project, thread } = current.current;
     if (!project || !thread) return;
+    // Re-read only from the oldest message already on screen, so a refresh
+    // keeps whatever "Load earlier" has paged in and costs what changed, not
+    // the whole thread. A thread not yet loaded (or empty) starts at the newest page.
+    const from = oldestSeq(messagesRef.current);
     const [found, history] = await Promise.all([
       api.listThreads(project.hash),
-      api.readThread(project.hash, thread.id),
+      from === undefined
+        ? api.readThread(project.hash, thread.id, { limit: THREAD_PAGE })
+        : api.readThread(project.hash, thread.id, { fromSeq: from }),
     ]);
+    // The user may have moved on while this read was out.
+    if (current.current.thread?.id !== thread.id) return;
     const updated = found.find((t) => t.id === thread.id) ?? thread;
     setThreads(found);
     setThread(updated);
-    setMessages(history);
+    // Everything from `history` on is fresh; keep any older page that landed
+    // while this read was out (an optimistic bubble is superseded by its real row).
+    const newest = history[0]?.seq ?? Number.POSITIVE_INFINITY;
+    setMessages((prev) => [...prev.filter((m) => m.seq !== OPTIMISTIC_SEQ && m.seq < newest), ...history]);
     clearLiveFor(thread.id);
     // Fetch change status when the thread has an open spec change.
     if (updated.openSpecChangeName) {
@@ -4717,10 +4829,34 @@ export default function App() {
   // Executor output streams in live; once the turn ends, the persisted log
   // becomes the source of truth again so both paths can't drift.
   useEffect(() => {
+    // Streamed events pile up here and reach state every LIVE_BATCH_MS. Copying
+    // the whole live array (and the Map around it) on every event made a long
+    // turn quadratic; an event now costs a push. A timer, not an animation
+    // frame: a hidden window pauses frames, and a permission prompt arriving
+    // there must still raise the "waiting on you" badge.
+    let pending = new Map<string, { threadId: string; events: ExecutorEvent[] }>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushLive = () => {
+      flushTimer = undefined;
+      const batch = pending;
+      if (batch.size === 0) return;
+      pending = new Map();
+      setLiveBySession((previous) => {
+        const next = new Map(previous);
+        for (const [id, { threadId, events }] of batch) {
+          const entry = next.get(id);
+          next.set(id, { threadId, events: entry ? entry.events.concat(events) : events });
+        }
+        return next;
+      });
+    };
     const streaming = listen<Envelope>(
       "executor-event",
       async ({ payload: { sessionId, threadId, event } }) => {
         if (event.kind === "done" || event.kind === "crashed") {
+          // The session's live entry is dropped below, so anything still
+          // waiting for the next frame would only resurrect it.
+          pending.delete(sessionId);
           setLiveBySession((previous) => {
             const next = new Map(previous);
             next.delete(sessionId);
@@ -4735,15 +4871,10 @@ export default function App() {
           await refresh().catch(fail);
           return;
         }
-        setLiveBySession((previous) => {
-          const next = new Map(previous);
-          const entry = next.get(sessionId);
-          next.set(sessionId, {
-            threadId,
-            events: [...(entry?.events ?? []), event],
-          });
-          return next;
-        });
+        const queued = pending.get(sessionId);
+        if (queued) queued.events.push(event);
+        else pending.set(sessionId, { threadId, events: [event] });
+        flushTimer ??= setTimeout(flushLive, LIVE_BATCH_MS);
       }
     );
     const updated = listen<string>("thread-updated", () => {
@@ -4772,6 +4903,7 @@ export default function App() {
         )
     );
     return () => {
+      clearTimeout(flushTimer);
       streaming.then((un) => un());
       updated.then((un) => un());
       ambiguous.then((un) => un());
@@ -5568,6 +5700,30 @@ export default function App() {
   // often than the board is. One source for "what does the backend actually
   // know about this thread".
   const fleet = useFleet({ active: !!project && openingProject === null });
+  // Threads whose title the backend is still writing (`title_thread`). The
+  // skeleton only clears once the new name has been read back, so no surface
+  // flashes the "New thread" placeholder between the two.
+  const [titlePending, setTitlePending] = useState<Set<string>>(() => new Set());
+  const fleetRefresh = fleet.refresh;
+  useEffect(() => {
+    const un = listen<{ threadId: string; pending: boolean }>(
+      "thread-title-pending",
+      ({ payload: { threadId, pending } }) => {
+        const mark = () =>
+          setTitlePending((prev) => {
+            const next = new Set(prev);
+            if (pending) next.add(threadId);
+            else next.delete(threadId);
+            return next;
+          });
+        if (pending) mark();
+        else void Promise.allSettled([refresh(), fleetRefresh()]).then(mark);
+      }
+    );
+    return () => {
+      void un.then((off) => off());
+    };
+  }, [refresh, fleetRefresh]);
   /** The open thread's own row — what the header's verify badge reports. */
   const threadFleetRow = useMemo(
     () =>
@@ -6033,10 +6189,15 @@ export default function App() {
     if (!project || !thread || !activeExecutor) return;
     probeAgentModels(activeExecutor);
   }, [project, thread?.id, activeExecutor, probeAgentModels]);
+  const oldestOnScreen = oldestSeq(messages);
   const chatProps = {
     project,
+    titlePendingIds: titlePending,
     thread,
     messages,
+    historyLoading,
+    hasEarlier: oldestOnScreen !== undefined && oldestOnScreen > 0,
+    onLoadEarlier: loadEarlier,
     live,
     sessionId: liveSessionId,
     onPermissionAnswered: (requestId: string) => {
@@ -6795,6 +6956,7 @@ export default function App() {
                    session" — no second derivation of the same state. */
                 liveThreadIds={busyThreads}
                 attentionThreadIds={attentionThreads}
+                titlePendingIds={titlePending}
                 worktrees={worktrees}
                 /* Same rows the board renders — one source for what the
                    backend knows about a thread, whichever surface asks. */
@@ -6849,6 +7011,7 @@ export default function App() {
                   projectHash={project?.hash}
                   agents={fleetAgents}
                   liveThreadIds={busyThreads}
+                  titlePendingIds={titlePending}
                   onOpen={onFleetOpen}
                   onReview={onFleetReview}
                   onStop={onFleetStop}
