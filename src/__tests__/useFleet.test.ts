@@ -41,12 +41,42 @@ describe("useFleet", () => {
   });
 
   it("reloads when an executor envelope arrives", async () => {
-    renderHook(() => useFleet({ active: true }));
+    renderHook(() => useFleet({ active: true, minGapMs: 0 }));
     await waitFor(() => expect(handlers.has("executor-event")).toBe(true));
     await act(async () => {
       handlers.get("executor-event")?.({ payload: {} });
     });
     await waitFor(() => expect(mocked.fleetOverview).toHaveBeenCalledTimes(2));
+  });
+
+  it("coalesces a burst of envelopes into one trailing fetch", async () => {
+    const { result } = renderHook(() => useFleet({ active: true, minGapMs: 150 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(handlers.has("executor-event")).toBe(true));
+    await act(async () => {
+      for (let i = 0; i < 30; i++) handlers.get("executor-event")?.({ payload: {} });
+    });
+    await waitFor(() => expect(mocked.fleetOverview).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(mocked.fleetOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it("never runs two fetches at once, and re-fetches once after a mid-fetch trigger", async () => {
+    let release: () => void = () => {};
+    mocked.fleetOverview.mockReset().mockImplementation(
+      () => new Promise((resolve) => { release = () => resolve([]); })
+    );
+    renderHook(() => useFleet({ active: true, minGapMs: 0 }));
+    await waitFor(() => expect(handlers.has("executor-event")).toBe(true));
+    await act(async () => {
+      for (let i = 0; i < 5; i++) handlers.get("executor-event")?.({ payload: {} });
+    });
+    expect(mocked.fleetOverview).toHaveBeenCalledTimes(1);
+    await act(async () => release());
+    await waitFor(() => expect(mocked.fleetOverview).toHaveBeenCalledTimes(2));
+    await act(async () => release());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mocked.fleetOverview).toHaveBeenCalledTimes(2);
   });
 
   it("stays loading, and does not fetch, until a project is open", async () => {

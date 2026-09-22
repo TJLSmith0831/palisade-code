@@ -140,8 +140,15 @@ export const appendMessage = (
     mode,
     content,
   });
-export const readThread = (projectHash: string, threadId: string) =>
-  invoke<Message[]>("read_thread", { projectHash, threadId });
+/** A thread's history. No options: all of it. `limit` is the newest that many
+ *  (only those before `beforeSeq`, for a "load earlier" page); `fromSeq` is
+ *  everything from that seq on, for a refresh that keeps what is on screen.
+ *  The windowed forms read only the tail of the log. */
+export const readThread = (
+  projectHash: string,
+  threadId: string,
+  opts: { beforeSeq?: number; fromSeq?: number; limit?: number } = {},
+) => invoke<Message[]>("read_thread", { projectHash, threadId, ...opts });
 
 // ------------------------------------------------------- executor handoff
 
