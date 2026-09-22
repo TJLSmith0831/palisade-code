@@ -126,6 +126,10 @@ export const deleteThread = (projectHash: string, threadId: string) =>
 export const markThreadViewed = (projectHash: string, threadId: string) =>
   invoke<void>("mark_thread_viewed", { projectHash, threadId });
 
+/** The macOS dock badge: threads wanting a look (blocked on you, or finished
+ *  and unread). App-wide; 0 clears it. */
+export const setDockBadge = (count: number) => invoke<void>("set_dock_badge", { count });
+
 export const appendMessage = (
   projectHash: string,
   threadId: string,

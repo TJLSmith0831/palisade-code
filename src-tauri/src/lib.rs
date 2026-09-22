@@ -417,6 +417,17 @@ async fn mark_thread_viewed(project_hash: String, thread_id: String) -> Res<()> 
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// The dock badge: how many threads want a look — blocked on you, or finished
+/// and unread. Tauri applies it app-wide, so whichever window called last
+/// wins; every window derives the same count from the same fleet. Zero clears
+/// it, because a "0" badge is noise.
+#[tauri::command]
+fn set_dock_badge(window: tauri::Window, count: u32) -> Res<()> {
+    window
+        .set_badge_count(if count == 0 { None } else { Some(i64::from(count)) })
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))
+}
+
 #[tauri::command]
 async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
@@ -4300,6 +4311,7 @@ pub fn run() {
             delete_thread,
             set_thread_archived,
             mark_thread_viewed,
+            set_dock_badge,
             append_message,
             read_thread,
             preflight,

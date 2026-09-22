@@ -5584,6 +5584,30 @@ export default function App() {
   // Every action, declared once. The palette lists these and the keyboard
   // handler below dispatches them, so a shortcut can't be bound in one
   // place and described differently in another.
+  // Polled whenever a project is open: the board, Review and the sidebar's
+  // thread rows all read these rows, and the sidebar is on screen far more
+  // often than the board is. One source for "what does the backend actually
+  // know about this thread".
+  const fleet = useFleet({ active: !!project && openingProject === null });
+  // What "Next unreviewed thread" walks: finished, unopened, newest first.
+  const unreviewedThreadIds = useMemo(
+    () =>
+      fleet.rows
+        .filter((r) => r.kind === "thread" && r.status === "unreviewed")
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+        .map((r) => r.threadId),
+    [fleet.rows]
+  );
+  // `onFleetOpen` is defined further down, after the handlers it composes;
+  // the command list is built here, so it reaches it through a ref.
+  const onFleetOpenRef = useRef<(threadId: string) => void>(() => {});
+  const onNextUnreviewed = useCallback(() => {
+    const next =
+      unreviewedThreadIds.find((id) => id !== current.current.thread?.id) ??
+      unreviewedThreadIds[0];
+    if (next) onFleetOpenRef.current(next);
+  }, [unreviewedThreadIds]);
+
   const commands = useAppCommands({
     project,
     projects,
@@ -5612,6 +5636,8 @@ export default function App() {
     selectedFile,
     setCommandPaletteOpen,
     setSettingsOpen,
+    unreviewedCount: unreviewedThreadIds.length,
+    onNextUnreviewed,
     activePathRef,
     closeTabRef,
     tabsRef,
@@ -5725,11 +5751,15 @@ export default function App() {
   }, [project?.hash, thread?.id]);
 
   // ----------------------------------------------------------------- fleet
-  // Polled whenever a project is open: the board, Review and the sidebar's
-  // thread rows all read these rows, and the sidebar is on screen far more
-  // often than the board is. One source for "what does the backend actually
-  // know about this thread".
-  const fleet = useFleet({ active: !!project && openingProject === null });
+  // The dock badge counts threads wanting a look: blocked on you (a permission
+  // prompt, a gate, a crash) or finished and unread. App-wide, cleared at zero.
+  // Rides useFleet's own coalescing, so a streaming agent does not hammer it.
+  useEffect(() => {
+    const count = fleet.rows.filter(
+      (r) => r.status === "attention" || r.status === "unreviewed"
+    ).length;
+    void api.setDockBadge(count).catch(() => {});
+  }, [fleet.rows]);
   // Threads whose title the backend is still writing (`title_thread`). The
   // skeleton only clears once the new name has been read back, so no surface
   // flashes the "New thread" placeholder between the two.
@@ -5794,6 +5824,7 @@ export default function App() {
     },
     [selectFleetThread, shell.openPanel]
   );
+  onFleetOpenRef.current = onFleetOpen;
   const onFleetReview = useCallback(
     (threadId: string) => {
       void selectFleetThread(threadId).then((ok) => {

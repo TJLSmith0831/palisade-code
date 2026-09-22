@@ -50,6 +50,8 @@ const deps = (over: Partial<AppCommandDeps> = {}): AppCommandDeps =>
     selectedFile: null,
     setCommandPaletteOpen: noop,
     setSettingsOpen: noop,
+    unreviewedCount: 0,
+    onNextUnreviewed: noop,
     activePathRef: ref<string | null>(null),
     closeTabRef: ref((_: string) => {}),
     tabsRef: ref({ tabs: [] }),
@@ -73,6 +75,21 @@ describe("useAppCommands", () => {
       expect(command.group, command.id).toBeTruthy();
       expect(typeof command.run, command.id).toBe("function");
     }
+  });
+
+  it("offers Next unreviewed thread only while the Unreviewed band has rows", () => {
+    const off = list().find((c) => c.id === "fleet.nextUnreviewed")!;
+    expect(off.enabled).toBe(false);
+    expect(off.label).toBe("Next unreviewed thread");
+
+    const onNextUnreviewed = vi.fn();
+    const on = list({ unreviewedCount: 3, onNextUnreviewed }).find(
+      (c) => c.id === "fleet.nextUnreviewed"
+    )!;
+    expect(on.enabled).toBe(true);
+    expect(on.label).toBe("Next unreviewed thread (3)");
+    on.run();
+    expect(onNextUnreviewed).toHaveBeenCalledTimes(1);
   });
 
   it("declares no chord twice, since one keystroke cannot mean two things", () => {
