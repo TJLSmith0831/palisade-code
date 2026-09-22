@@ -421,10 +421,10 @@ describe("FleetBoard", () => {
     });
   });
 
-  it("preselects the agent's default option over its settings-resolved current model", async () => {
+  it("preselects the model the probe says a session would run — the agent's default", async () => {
     apiMock.listModels.mockResolvedValueOnce({
       configId: "model",
-      current: "claude-fable-5-1",
+      current: "default",
       models: [
         { id: "default", name: "Default (recommended)" },
         { id: "claude-fable-5-1", name: "Fable 5.1" },

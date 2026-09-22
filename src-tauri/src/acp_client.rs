@@ -63,7 +63,8 @@ pub struct ModelInfo {
 pub struct ModelState {
     /// The config option id used to change the model, if the agent has one.
     pub config_id: Option<String>,
-    /// The currently selected model value id.
+    /// The model value id a session runs on: the live selection, or — from a
+    /// probe, which never switches — the one a new session would select.
     pub current: Option<String>,
     pub models: Vec<ModelInfo>,
 }
@@ -1405,24 +1406,25 @@ async fn run_bridge(
             // choice means the agent's recommended model, not whatever it
             // boots on: claude-acp boots on the user's ~/.claude settings
             // pin, which can be a credits-only model nobody picked for this
-            // thread. A probe only reads the list, so it leaves that alone.
-            let want = spawn.model.as_deref().or((!probe_only).then_some(AGENT_DEFAULT_MODEL_ID));
-            if let Some(want) = want {
-                let offered = models.models.iter().any(|m| m.id == want);
-                if offered && models.current.as_deref() != Some(want) {
-                    if let Some(config_id) = models.config_id.clone() {
-                        if let Ok(response) = cx
-                            .send_request(v1::SetSessionConfigOptionRequest::new(
-                                session_id.clone(),
-                                config_id,
-                                want,
-                            ))
-                            .block_task()
-                            .await
-                        {
-                            models =
-                                extract_models(&response.config_options);
-                        }
+            // thread. A probe never switches, but it reports what a session
+            // would run, so a picker defaults to the same model.
+            let want = spawn.model.as_deref().unwrap_or(AGENT_DEFAULT_MODEL_ID);
+            let offered = models.models.iter().any(|m| m.id == want);
+            if offered && probe_only {
+                models.current = Some(want.to_string());
+            } else if offered && models.current.as_deref() != Some(want) {
+                if let Some(config_id) = models.config_id.clone() {
+                    if let Ok(response) = cx
+                        .send_request(v1::SetSessionConfigOptionRequest::new(
+                            session_id.clone(),
+                            config_id,
+                            want,
+                        ))
+                        .block_task()
+                        .await
+                    {
+                        models =
+                            extract_models(&response.config_options);
                     }
                 }
             }
@@ -3190,8 +3192,10 @@ mod tests {
             start_with_transport(transport, test_spawn(None), Arc::new(ChannelSink(tx)), true, None)
                 .unwrap();
         assert_eq!(models.models.len(), 3);
-        // A probe only reads the list; it never switches the agent's model.
+        // A probe never switches the agent's model, but reports the one a
+        // session would run, so pickers default to what actually runs.
         assert!(fake.set_config_requests.lock_or_recover().is_empty());
+        assert_eq!(models.current.as_deref(), Some("default"));
         // The bridge returned, so the agent sees EOF and exits too.
         agent.await.unwrap();
     }

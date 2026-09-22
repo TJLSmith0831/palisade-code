@@ -1301,7 +1301,7 @@ async fn send_message(
         // user their message. No agent fallback here: a title must never
         // cause a throwaway executor process (and therefore an unexpected
         // auth flow); the truncated first line is enough.
-        title_thread(&app, &project_hash, &thread_id, &content, false);
+        title_thread(&app, TitleRequest::new(&project_hash, &thread_id, &content), false);
         let agent = match selected_executor(&app, &harness, &project_hash, Some(&thread_id)) {
             Ok((agent, _)) => agent,
             Err(_) => {
@@ -1435,6 +1435,51 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
     });
 }
 
+/// Which thread to name, and from what. Owned, because the naming finishes on
+/// a background thread after the command that asked for it has returned.
+struct TitleRequest {
+    project_hash: String,
+    thread_id: String,
+    prompt: String,
+}
+
+impl TitleRequest {
+    fn new(project_hash: &str, thread_id: &str, prompt: &str) -> Self {
+        Self { project_hash: project_hash.into(), thread_id: thread_id.into(), prompt: prompt.into() }
+    }
+}
+
+/// Payload of `thread-title-pending`: a thread's title is being written
+/// (`pending`), or has landed.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TitlePending<'a> {
+    thread_id: &'a str,
+    pending: bool,
+}
+
+/// Threads whose local-model title is being written right now. A second turn
+/// sent while the first is still being named must not start a second run —
+/// that would call the model twice and clear the UI's skeleton early.
+static TITLING: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// A thread's place in [`TITLING`]; dropping it frees the thread for naming
+/// again, even if the naming thread panics.
+struct TitlingClaim(String);
+
+impl TitlingClaim {
+    /// `None` when the thread is already being named.
+    fn take(thread_id: &str) -> Option<Self> {
+        TITLING.lock_or_recover().insert(thread_id.to_string()).then(|| Self(thread_id.to_string()))
+    }
+}
+
+impl Drop for TitlingClaim {
+    fn drop(&mut self) {
+        TITLING.lock_or_recover().remove(&self.0);
+    }
+}
+
 /// Name a thread after the turn that opened it, without making that turn
 /// wait on it.
 ///
@@ -1445,30 +1490,30 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
 /// installed there is nothing to wait for: the truncated first line goes up
 /// at once. `agent_fallback` asks the thread's own agent when the local
 /// model has no answer.
-fn title_thread(app: &tauri::AppHandle, project_hash: &str, thread_id: &str, prompt: &str, agent_fallback: bool) {
-    if !thread_meta(project_hash, thread_id).is_some_and(|m| store::needs_auto_title(&m)) {
+fn title_thread(app: &tauri::AppHandle, request: TitleRequest, agent_fallback: bool) {
+    let TitleRequest { project_hash, thread_id, prompt } = request;
+    if !thread_meta(&project_hash, &thread_id).is_some_and(|m| store::needs_auto_title(&m)) {
         return;
     }
     if !local_title_installed(app) {
-        let _ = store::set_auto_title(&palisade_home(), project_hash, thread_id, prompt, None);
+        let _ = store::set_auto_title(&palisade_home(), &project_hash, &thread_id, &prompt, None);
         if agent_fallback {
-            agent_title_later(app, project_hash, thread_id, prompt);
+            agent_title_later(app, &project_hash, &thread_id, &prompt);
         }
         return;
     }
-    let pending = |pending: bool| serde_json::json!({ "threadId": thread_id, "pending": pending });
-    let _ = app.emit("thread-title-pending", pending(true));
-    let done = pending(false);
+    let Some(claim) = TitlingClaim::take(&thread_id) else {
+        return;
+    };
+    let _ = app.emit("thread-title-pending", TitlePending { thread_id: &thread_id, pending: true });
     let app = app.clone();
-    let project_hash = project_hash.to_string();
-    let thread_id = thread_id.to_string();
-    let prompt = prompt.to_string();
     std::thread::spawn(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let local = model_title(&app, &harness, &prompt);
         let _ = store::set_auto_title(&palisade_home(), &project_hash, &thread_id, &prompt, local.as_deref());
+        drop(claim);
         let _ = app.emit("thread-updated", &thread_id);
-        let _ = app.emit("thread-title-pending", done);
+        let _ = app.emit("thread-title-pending", TitlePending { thread_id: &thread_id, pending: false });
         if local.is_none() && agent_fallback {
             agent_title_later(&app, &project_hash, &thread_id, &prompt);
         }
@@ -1484,6 +1529,13 @@ fn local_title_installed(app: &tauri::AppHandle) -> bool {
     completion::resolve_sidecar_paths(app).is_ok_and(|(binary, model)| binary.exists() && model.exists())
 }
 
+/// The crash counter is FIM's (D33): its second strike warns and turns
+/// ghost-text off. A sidecar that has already crashed once is left for FIM to
+/// retry, so a title the user never asked for can never be that strike.
+fn titling_may_start_sidecar(harness: &Harness) -> bool {
+    *harness.completion.completion_crashes.lock_or_recover() == 0
+}
+
 /// A thread title written by the bundled local model, or `None` if it
 /// didn't return anything usable.
 ///
@@ -1493,7 +1545,7 @@ fn local_title_installed(app: &tauri::AppHandle) -> bool {
 /// model ships with every install regardless (AGENTS.md, D59). Blocks for a
 /// cold start, which is why only [`title_thread`]'s background thread calls it.
 fn model_title(app: &tauri::AppHandle, harness: &Harness, prompt: &str) -> Option<String> {
-    if !local_title_installed(app) {
+    if !local_title_installed(app) || !titling_may_start_sidecar(harness) {
         return None;
     }
     ensure_completion_server(app, harness).ok()?;
@@ -1714,7 +1766,7 @@ async fn spec_mode(
         // request — not after which card the user pressed. "Feature" is the
         // same row for every feature they will ever spec (#30/#35).
         if let Some(request) = request {
-            title_thread(&app, &project_hash, &thread_id, request, true);
+            title_thread(&app, TitleRequest::new(&project_hash, &thread_id, request), true);
         }
         if let Some(prompt) = spec_mode_initial_prompt(&meta, &spec_type, request, start) {
             if preflight_for_harness(&*harness, true).selected.is_some() {
@@ -4443,6 +4495,26 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A thread already being named can't be claimed again until the first
+    /// claim is dropped — the guard against a second turn double-titling.
+    #[test]
+    fn a_thread_being_named_cannot_be_claimed_twice() {
+        let first = super::TitlingClaim::take("titling-test-thread").expect("first claim");
+        assert!(super::TitlingClaim::take("titling-test-thread").is_none(), "claimed twice");
+        drop(first);
+        assert!(super::TitlingClaim::take("titling-test-thread").is_some(), "not released on drop");
+    }
+
+    /// Titling may start the sidecar only while FIM has no strike against it,
+    /// so a title can never be the second crash that turns ghost-text off.
+    #[test]
+    fn titling_never_restarts_a_sidecar_that_has_crashed() {
+        let harness = super::Harness::default();
+        assert!(super::titling_may_start_sidecar(&harness));
+        *harness.completion.completion_crashes.lock_or_recover() = 1;
+        assert!(!super::titling_may_start_sidecar(&harness), "a crashed sidecar was restarted for a title");
+    }
+
     use crate::locks::MutexExt;
 
     mod chain_startup_reconciliation {

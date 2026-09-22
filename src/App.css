@@ -5218,7 +5218,7 @@ button.ds-onboarding-status {
   flex-shrink: 0;
   padding: 0;
   background: transparent;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -6590,7 +6590,7 @@ button.ds-onboarding-status {
   padding: 12px 14px;
   border-radius: 8px;
   background: var(--editor-bg);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
   resize: vertical;
   transition-property: border-color, box-shadow;
