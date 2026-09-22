@@ -2310,6 +2310,179 @@ describe("Keyboard navigation (accessibility)", () => {
     );
   });
 
+  describe("opening a thread's history", () => {
+    const twoThreads = [
+      { id: "t1", title: "Thread A", createdAt: "2026-08-06T00:00:00Z", currentMode: "go" },
+      { id: "t2", title: "Thread B", createdAt: "2026-08-06T00:00:00Z", currentMode: "go" },
+    ];
+    const said = (seq: number, content: string) => ({
+      seq,
+      ts: "2026-08-06T00:00:00Z",
+      role: "user",
+      mode: "go",
+      content,
+    });
+    const serve = (readThread: (args: Record<string, unknown>) => Promise<unknown>) =>
+      invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve(twoThreads);
+        if (cmd === "read_thread") return readThread(args ?? {});
+        return defaultInvoke(cmd, args);
+      });
+
+    const titleOf = (id: string) => (id === "t1" ? "Thread A" : "Thread B");
+    const clickThread = async (id: string) => {
+      const row = within(await screen.findByTestId("thread-list")).getByText(titleOf(id)).closest("li")!;
+      fireEvent.keyDown(row, { key: "Enter" });
+    };
+    const openedThread = () =>
+      invokeMock.mock.calls.find(([c]) => c === "read_thread")![1].threadId as string;
+
+    it("shows a skeleton while a thread's history loads, never the empty-thread prompt", async () => {
+      // Opening the project answers at once; the *switch* is the slow read.
+      let release: (messages: unknown[]) => void = () => {};
+      let calls = 0;
+      serve(() => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve([said(1, "opening history")]);
+        return new Promise((resolve) => (release = resolve));
+      });
+      render(<App />);
+      await openProject();
+      expect(await screen.findByText("opening history")).toBeDefined();
+      const opened = openedThread();
+
+      fireEvent.click(screen.getByTestId("rail-history"));
+      await clickThread(opened === "t1" ? "t2" : "t1");
+
+      expect(await screen.findByRole("status", { name: "Loading messages" })).toBeDefined();
+      expect(screen.queryByTestId("thread-empty")).toBeNull();
+      // The thread you left is not shown under the new title while this loads.
+      expect(screen.queryByText("opening history")).toBeNull();
+
+      await act(async () => release([said(1, "the new history")]));
+      expect(await screen.findByText("the new history")).toBeDefined();
+      expect(screen.queryByRole("status", { name: "Loading messages" })).toBeNull();
+    });
+
+    it("a slow read for an earlier click never lands under a later thread", async () => {
+      // Click Y (slow read), then click back to X (fast read). When Y's read
+      // finally resolves it must be dropped, not painted under X.
+      let releaseSlow: () => void = () => {};
+      let calls = 0;
+      serve(() => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve([said(1, "opening history")]);
+        if (calls === 2) return new Promise((resolve) => (releaseSlow = () => resolve([said(1, "late history")])));
+        return Promise.resolve([said(1, "history on return")]);
+      });
+      render(<App />);
+      await openProject();
+      expect(await screen.findByText("opening history")).toBeDefined();
+      const x = openedThread();
+      const y = x === "t1" ? "t2" : "t1";
+
+      fireEvent.click(screen.getByTestId("rail-history"));
+      await clickThread(y);
+      await waitFor(() => expect(calls).toBe(2));
+      await clickThread(x);
+      expect(await screen.findByText("history on return")).toBeDefined();
+
+      await act(async () => releaseSlow());
+      expect(screen.queryByText("late history")).toBeNull();
+      expect(screen.getByText("history on return")).toBeDefined();
+    });
+
+    it("opens the newest page and pages older messages in on demand", async () => {
+      serve((args) => {
+        if (args.beforeSeq === 5) return Promise.resolve([said(3, "old three"), said(4, "old four")]);
+        return Promise.resolve([said(5, "newest five"), said(6, "newest six")]);
+      });
+      render(<App />);
+      await openProject();
+
+      expect(await screen.findByText("newest six")).toBeDefined();
+      expect(invokeMock).toHaveBeenCalledWith("read_thread", expect.objectContaining({ limit: 200 }));
+      expect(screen.queryByText("old four")).toBeNull();
+
+      fireEvent.click(await screen.findByTestId("load-earlier"));
+      expect(await screen.findByText("old four")).toBeDefined();
+      expect(screen.getByText("newest five")).toBeDefined();
+      expect(invokeMock).toHaveBeenCalledWith(
+        "read_thread",
+        expect.objectContaining({ beforeSeq: 5, limit: 200 })
+      );
+    });
+
+    it("a burst of streamed events all land, and none outlive their turn's done", async () => {
+      serve(() => Promise.resolve([said(1, "opening history")]));
+      render(<App />);
+      await openProject();
+      expect(await screen.findByText("opening history")).toBeDefined();
+      const threadId = openedThread();
+      const event = (kind: string, extra: object = {}) =>
+        emit("executor-event", { sessionId: "s1", threadId, event: { kind, ...extra } });
+
+      // Deltas concatenate, so the merged line proves nothing was dropped or reordered.
+      await act(async () => {
+        event("textDelta", { text: "alpha " });
+        event("textDelta", { text: "beta " });
+        event("textDelta", { text: "gamma" });
+      });
+      expect(await screen.findByText("alpha beta gamma")).toBeDefined();
+
+      // Queued for the next frame, then the turn ends: the entry must not be
+      // resurrected by the frame that was already scheduled.
+      await act(async () => {
+        event("textDelta", { text: "ghost of a finished turn" });
+        event("done");
+      });
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(screen.queryByText("ghost of a finished turn")).toBeNull();
+    });
+
+    it("a refresh that finishes after an earlier page landed does not throw that page away", async () => {
+      let releaseRefresh: () => void = () => {};
+      serve((args) => {
+        if (args.beforeSeq === 5) return Promise.resolve([said(3, "old three"), said(4, "old four")]);
+        if (args.fromSeq === 5)
+          return new Promise((resolve) => (releaseRefresh = () => resolve([said(5, "newest five"), said(6, "newest six")])));
+        return Promise.resolve([said(5, "newest five"), said(6, "newest six")]);
+      });
+      render(<App />);
+      await openProject();
+      expect(await screen.findByText("newest six")).toBeDefined();
+
+      await act(async () => emit("thread-updated", "t1")); // refresh starts, its read is held
+      fireEvent.click(await screen.findByTestId("load-earlier"));
+      expect(await screen.findByText("old four")).toBeDefined();
+
+      await act(async () => releaseRefresh());
+      expect(screen.getByText("old four")).toBeDefined();
+      expect(screen.getByText("newest six")).toBeDefined();
+    });
+
+    it("says so when an earlier page cannot be loaded", async () => {
+      serve((args) =>
+        args.beforeSeq === 5
+          ? Promise.reject(new Error("disk on fire"))
+          : Promise.resolve([said(5, "newest five")])
+      );
+      render(<App />);
+      await openProject();
+      fireEvent.click(await screen.findByTestId("load-earlier"));
+      expect(await screen.findByText(/disk on fire/)).toBeDefined();
+      expect(screen.getByTestId("load-earlier")).toBeDefined();
+    });
+
+    it("offers no earlier page once the oldest message is on screen", async () => {
+      serve(() => Promise.resolve([said(0, "the very first"), said(1, "second")]));
+      render(<App />);
+      await openProject();
+      expect(await screen.findByText("second")).toBeDefined();
+      expect(screen.queryByTestId("load-earlier")).toBeNull();
+    });
+  });
+
   it("switches branches via Enter on a keyboard-focused branch row", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "list_projects") {

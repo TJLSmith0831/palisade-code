@@ -1031,6 +1031,11 @@ pub struct Message {
 /// the seq is recomputed from disk.
 static SEQ_CACHE: Mutex<Option<HashMap<PathBuf, (u64, u64)>>> = Mutex::new(None);
 
+/// A log's in-memory buffer is flushed once it passes this, not only at turn
+/// end (D9): a turn that streams for hours would otherwise hold — and lose to a
+/// crash — everything it emitted. 1 MiB is a few hundred messages.
+const BUFFER_FLUSH_BYTES: u64 = 1024 * 1024;
+
 pub(crate) fn file_len(path: &Path) -> u64 {
     fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
@@ -1063,41 +1068,56 @@ pub fn append_message_with_failure_class(
 ) -> Res<Message> {
     let path = log_path(home, hash, id);
 
-    // Lock the writer first so no other thread can change the buffered byte
-    // count while we compute the next seq and append.
-    let writer = crate::session_log_writer::shared_session_log_writer();
-    let mut writer = writer.lock().map_err(|err| e("session log writer", err))?;
-    let expected_len = file_len(&path) + writer.buffered_len(&path);
+    let (message, over_threshold) = {
+        // Lock the writer first so no other thread can change the buffered byte
+        // count while we compute the next seq and append.
+        let writer = crate::session_log_writer::shared_session_log_writer();
+        let mut writer = writer.lock().map_err(|err| e("session log writer", err))?;
+        let disk_len = writer.disk_len(&path);
+        let expected_len = disk_len + writer.buffered_len(&path);
 
-    let mut cache = SEQ_CACHE.lock().map_err(|err| e("seq cache", err))?;
-    let cache = cache.get_or_insert_with(HashMap::new);
-    let seq = match cache.get(&path) {
-        Some((len, seq)) if *len == expected_len => *seq,
-        _ => read_thread_impl(home, hash, id, writer.buffer_for(&path).unwrap_or(&[]))?
-            .last()
-            .map_or(0, |m| m.seq + 1),
-    };
-    let message = Message {
-        seq,
-        ts: now(),
-        role: role.to_string(),
-        mode: mode.to_string(),
-        content: content.to_string(),
-        session_id: session_id.map(str::to_string),
-        failure_class,
-    };
-    let line = serde_json::to_string(&message).map_err(|err| e("serialize message", err))?;
+        let mut cache = SEQ_CACHE.lock().map_err(|err| e("seq cache", err))?;
+        let cache = cache.get_or_insert_with(HashMap::new);
+        let cached_seq = cache.get(&path).filter(|(len, _)| *len == expected_len).map(|(_, seq)| *seq);
+        let seq = match cached_seq {
+            Some(seq) => seq,
+            // Only the newest line is needed, not the whole history.
+            None => {
+                let (disk_len, tail) = writer.view(&path);
+                newest_tip(&path, disk_len, &tail).map_or(0, |tip| tip.seq + 1)
+            }
+        };
+        let message = Message {
+            seq,
+            ts: now(),
+            role: role.to_string(),
+            mode: mode.to_string(),
+            content: content.to_string(),
+            session_id: session_id.map(str::to_string),
+            failure_class,
+        };
+        let line = serde_json::to_string(&message).map_err(|err| e("serialize message", err))?;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| e("create thread dir", err))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|err| e("create thread dir", err))?;
+        }
+
+        // A cache hit means the file is exactly what our own appends left, which is
+        // never torn — so the open+seek+read behind `ends_with_newline_upto` is only
+        // needed when the cache could not vouch for the file.
+        let torn_newline_len: u64 =
+            if cached_seq.is_some() || ends_with_newline_upto(&path, disk_len)? { 0 } else { 1 };
+        writer
+            .append(&path, line.as_bytes())
+            .map_err(|err| e("append message", err))?;
+        // Update the seq cache with the expected on-disk length after the next flush.
+        cache.insert(path.clone(), (expected_len + torn_newline_len + line.len() as u64 + 1, seq + 1));
+        (message, writer.buffered_len(&path) >= BUFFER_FLUSH_BYTES)
+    };
+    // With the locks released: the fsync must never stall another session's append.
+    if over_threshold {
+        crate::session_log_writer::flush_shared(Some(&path), false)?;
     }
-
-    let torn_newline_len: u64 = if ends_with_newline(&path)? { 0 } else { 1 };
-    writer
-        .append(&path, line.as_bytes())
-        .map_err(|err| e("append message", err))?;
-    // Update the seq cache with the expected on-disk length after the next flush.
-    cache.insert(path.clone(), (expected_len + torn_newline_len + line.len() as u64 + 1, seq + 1));
     Ok(message)
 }
 
@@ -1105,26 +1125,48 @@ pub fn append_message_with_failure_class(
 /// reading back recently appended rows; production flushes on turn-done and
 /// app-quit.
 pub fn flush_session_log_writer() -> Res<()> {
-    let writer = crate::session_log_writer::shared_session_log_writer();
-    let mut guard = writer.lock().map_err(|err| e("session log writer", err))?;
-    guard.flush()
+    crate::session_log_writer::flush_shared(None, true)
 }
 
 pub(crate) fn ends_with_newline(path: &Path) -> Res<bool> {
+    ends_with_newline_upto(path, u64::MAX)
+}
+
+/// Whether the first `len` bytes of the file (or all of it, if shorter) end in
+/// a newline. Bytes past `len` may be a flush still being written.
+fn ends_with_newline_upto(path: &Path, len: u64) -> Res<bool> {
     use std::io::{Seek, SeekFrom};
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(true),
         Err(err) => return Err(e("open session log", err)),
     };
-    let len = file.seek(SeekFrom::End(0)).map_err(|err| e("seek session log", err))?;
+    let len = file.seek(SeekFrom::End(0)).map_err(|err| e("seek session log", err))?.min(len);
     if len == 0 {
         return Ok(true);
     }
-    file.seek(SeekFrom::End(-1)).map_err(|err| e("seek session log", err))?;
+    file.seek(SeekFrom::Start(len - 1)).map_err(|err| e("seek session log", err))?;
     let mut last = [0u8; 1];
     file.read_exact(&mut last).map_err(|err| e("read session log", err))?;
     Ok(last[0] == b'\n')
+}
+
+/// One consistent view of a thread's log that a reader can use *without*
+/// holding the writer lock. The log is append-only and only `flush` writes it
+/// (under that lock), so once `file_len` and the buffered tail are captured
+/// together, the first `file_len` bytes of the file never change — the reader
+/// can take as long as it likes on file I/O without stalling any session's
+/// append, and cannot see the same line both on disk and in `buffered`.
+struct LogSnapshot {
+    file_len: u64,
+    buffered: Vec<u8>,
+}
+
+fn snapshot(path: &Path) -> Res<LogSnapshot> {
+    let writer = crate::session_log_writer::shared_session_log_writer();
+    let writer = writer.lock().map_err(|err| e("session log writer", err))?;
+    let (file_len, buffered) = writer.view(path);
+    Ok(LogSnapshot { file_len, buffered })
 }
 
 /// Read a thread's history in `seq` order. A line that fails to parse — a torn
@@ -1134,11 +1176,89 @@ pub(crate) fn ends_with_newline(path: &Path) -> Res<bool> {
 /// mid-turn (before `Done` flushes) sees the same view `append_message` just
 /// wrote — the user's turn and any buffered assistant events.
 pub fn read_thread(home: &Path, hash: &str, id: &str) -> Res<Vec<Message>> {
+    let snap = snapshot(&log_path(home, hash, id))?;
+    read_thread_impl(home, hash, id, Some(snap.file_len), &snap.buffered)
+}
+
+/// True until the thread's first message. Does not parse the log.
+pub fn thread_is_empty(home: &Path, hash: &str, id: &str) -> Res<bool> {
+    let snap = snapshot(&log_path(home, hash, id))?;
+    Ok(snap.file_len == 0 && snap.buffered.is_empty())
+}
+
+/// Which slice of a thread `read_thread_window` returns.
+#[derive(Clone, Copy, Debug)]
+pub enum Window {
+    /// The newest `limit` messages, optionally only those older than `before_seq`
+    /// (the "load earlier" page).
+    Last { before_seq: Option<u64>, limit: usize },
+    /// Every message with `seq >= from_seq` (an incremental refresh).
+    From(u64),
+}
+
+/// First bytes read from the end of a log; a window grows 4x until it holds
+/// what was asked for, so cost tracks the slice, not the thread's length.
+const WINDOW_START_BYTES: u64 = 256 * 1024;
+
+/// First bytes `last_activity` reads: a few messages, so almost always one read.
+const TAIL_START_BYTES: u64 = 16 * 1024;
+
+/// Read part of a thread by reading only the tail of its log. Same view and
+/// same lock-free guarantee as `read_thread`, but a 50 MB thread opens as fast
+/// as a 50 KB one.
+pub fn read_thread_window(home: &Path, hash: &str, id: &str, window: Window) -> Res<Vec<Message>> {
     let path = log_path(home, hash, id);
-    let writer = crate::session_log_writer::shared_session_log_writer();
-    let writer = writer.lock().map_err(|err| e("session log writer", err))?;
-    let buffered = writer.buffer_for(&path).unwrap_or(&[]);
-    read_thread_impl(home, hash, id, buffered)
+    let snap = snapshot(&path)?;
+    let mut span = WINDOW_START_BYTES;
+    loop {
+        let start = snap.file_len.saturating_sub(span);
+        let mut messages = parse_log(home, id, tail_text(&path, start, snap.file_len)?, &snap.buffered);
+        // The window is a suffix of the log, so anything outside it is older
+        // than everything inside: these tests are exact, not heuristic.
+        let done = match window {
+            Window::From(from) => messages.first().is_some_and(|m| m.seq <= from),
+            Window::Last { before_seq, limit } => {
+                messages.iter().filter(|m| before_seq.is_none_or(|b| m.seq < b)).count() >= limit
+            }
+        };
+        if !done && start > 0 {
+            span = span.saturating_mul(4);
+            continue;
+        }
+        match window {
+            Window::From(from) => messages.retain(|m| m.seq >= from),
+            Window::Last { before_seq, limit } => {
+                messages.retain(|m| before_seq.is_none_or(|b| m.seq < b));
+                let excess = messages.len().saturating_sub(limit);
+                messages.drain(..excess);
+            }
+        }
+        return Ok(messages);
+    }
+}
+
+/// `[start, end)` of a log as text, dropping the partial line a mid-file
+/// `start` lands in. A missing file is an empty log.
+fn tail_text(path: &Path, start: u64, end: u64) -> Res<String> {
+    let mut bytes = read_log_bytes(path, start, end)?;
+    if start > 0 {
+        let cut = bytes.iter().position(|b| *b == b'\n').map_or(bytes.len(), |i| i + 1);
+        bytes.drain(..cut);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn read_log_bytes(path: &Path, start: u64, end: u64) -> Res<Vec<u8>> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(err) => return Err(e("open session log", err)),
+    };
+    file.seek(SeekFrom::Start(start)).map_err(|err| e("seek session log", err))?;
+    let mut bytes = vec![];
+    file.take(end.saturating_sub(start)).read_to_end(&mut bytes).map_err(|err| e("read session log", err))?;
+    Ok(bytes)
 }
 
 /// When the thread last did something: the time of its newest message.
@@ -1146,34 +1266,65 @@ pub fn read_thread(home: &Path, hash: &str, id: &str) -> Res<Vec<Message>> {
 /// merely opening a thread moves it to "just now". `None` for a thread that
 /// has never spoken.
 ///
-/// ponytail: parses the whole log. Read only the tail if a thread's log ever
-/// gets big enough to slow the fleet refresh.
+/// Reads the log's tail, not the whole log: the fleet board asks this for
+/// every thread on every refresh. The newest line is the newest message
+/// because `seq` only ever grows by appending.
 pub fn last_activity(home: &Path, hash: &str, id: &str) -> Option<String> {
-    read_thread(home, hash, id).ok()?.last().map(|m| m.ts.clone())
+    let path = log_path(home, hash, id);
+    let snap = snapshot(&path).ok()?;
+    newest_tip(&path, snap.file_len, &snap.buffered).map(|tip| tip.ts)
+}
+
+/// The fields of a message that say where a log has got to.
+#[derive(Deserialize)]
+struct Tip {
+    seq: u64,
+    ts: String,
+}
+
+/// The newest whole message line of a log, without parsing the rest of it: the
+/// unwritten `tail` first, then the file's last `disk_len` bytes, reading
+/// further back only when the last line is longer than what has been read. A
+/// torn final line is skipped for the newest whole one.
+fn newest_tip(path: &Path, disk_len: u64, tail: &[u8]) -> Option<Tip> {
+    let newest = |text: &str| text.lines().rev().find_map(|line| serde_json::from_str::<Tip>(line).ok());
+    if let Some(tip) = newest(&String::from_utf8_lossy(tail)) {
+        return Some(tip);
+    }
+    let mut span = TAIL_START_BYTES;
+    loop {
+        let start = disk_len.saturating_sub(span);
+        if let Some(tip) = newest(&tail_text(path, start, disk_len).ok()?) {
+            return Some(tip);
+        }
+        if start == 0 {
+            return None;
+        }
+        span = span.saturating_mul(4);
+    }
 }
 
 /// Inner reader that takes the buffered bytes directly, so callers already
 /// holding the writer lock (e.g. `append_message`'s seq-cache fallback) can
-/// read without re-locking and deadlocking.
-fn read_thread_impl(home: &Path, hash: &str, id: &str, buffered: &[u8]) -> Res<Vec<Message>> {
-    let path = log_path(home, hash, id);
-    let mut body = String::new();
-    match File::open(&path) {
-        Ok(mut file) => {
-            file.read_to_string(&mut body).map_err(|err| e("read session log", err))?;
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(e("open session log", err)),
-    }
+/// read without re-locking and deadlocking. `limit` caps how much of the file
+/// is read: lock-free callers pass their snapshot's length, lock-holding
+/// callers pass `None` (nothing can flush while they hold the lock).
+fn read_thread_impl(home: &Path, hash: &str, id: &str, limit: Option<u64>, buffered: &[u8]) -> Res<Vec<Message>> {
+    let bytes = read_log_bytes(&log_path(home, hash, id), 0, limit.unwrap_or(u64::MAX))?;
+    let body = String::from_utf8(bytes).map_err(|err| e("read session log", err))?;
+    Ok(parse_log(home, id, body, buffered))
+}
 
-    // Merge unflushed buffered writes. If the on-disk content doesn't end with
-    // a newline, insert one so the first buffered line isn't glued to a torn
-    // tail — the same separator `flush` inserts when it writes.
+/// Merge unflushed buffered writes into `body`, parse every line, order by seq.
+/// If the on-disk content doesn't end with a newline, insert one so the first
+/// buffered line isn't glued to a torn tail — the same separator `flush`
+/// inserts when it writes.
+fn parse_log(home: &Path, id: &str, mut body: String, buffered: &[u8]) -> Vec<Message> {
     if !buffered.is_empty() {
         if !body.is_empty() && !body.ends_with('\n') {
             body.push('\n');
         }
-        body.push_str(std::str::from_utf8(buffered).map_err(|err| e("buffer utf8", err))?);
+        body.push_str(&String::from_utf8_lossy(buffered));
     }
 
     let mut messages = vec![];
@@ -1189,7 +1340,7 @@ fn read_thread_impl(home: &Path, hash: &str, id: &str, buffered: &[u8]) -> Res<V
         offset += line.len();
     }
     messages.sort_by_key(|m| m.seq);
-    Ok(messages)
+    messages
 }
 
 fn log_corrupt_line(home: &Path, thread_id: &str, offset: usize) {
@@ -1660,6 +1811,222 @@ mod tests {
         mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
 
         assert_eq!(last_activity(home.path(), &project.hash, &thread.id), Some(sent.ts));
+    }
+
+    fn thread_with(home: &Path) -> (Project, ThreadMeta) {
+        let project = add_project(home, tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home, &project.hash, "t").unwrap();
+        (project, thread)
+    }
+
+    fn say(home: &Path, p: &Project, t: &ThreadMeta, text: &str) -> Message {
+        append_message(home, &p.hash, &t.id, "assistant", "go", text, None).unwrap()
+    }
+
+    fn seqs(messages: &[Message]) -> Vec<u64> {
+        messages.iter().map(|m| m.seq).collect()
+    }
+
+    /// The reader used to hold the writer lock for its whole file read; now it
+    /// snapshots length + buffer and reads outside the lock. A flush landing
+    /// between the two must not show the same lines from disk *and* buffer.
+    #[test]
+    fn a_flush_between_snapshot_and_read_does_not_duplicate_messages() {
+        let home = home();
+        let (p, t) = thread_with(home.path());
+        for i in 0..3 {
+            say(home.path(), &p, &t, &format!("m{i}"));
+        }
+        let snap = snapshot(&log_path(home.path(), &p.hash, &t.id)).unwrap();
+        flush_session_log_writer().unwrap();
+        let seen = read_thread_impl(home.path(), &p.hash, &t.id, Some(snap.file_len), &snap.buffered).unwrap();
+        assert_eq!(seqs(&seen), vec![0, 1, 2]);
+    }
+
+    /// A flush writes with the writer lock released. Mid-write, the file may hold
+    /// some, all or none of the in-flight lines; readers and appenders must see
+    /// each line exactly once, and a new append must not reuse a seq.
+    #[test]
+    fn mid_flush_readers_and_appenders_see_every_line_exactly_once() {
+        use crate::session_log_writer::{shared_session_log_writer, write_out, FLUSH_GATE};
+        let home = home();
+        let (p, t) = thread_with(home.path());
+        let path = log_path(home.path(), &p.hash, &t.id);
+        flush_session_log_writer().unwrap();
+        // This test plays the flusher by hand, so it must hold the gate a real
+        // flush holds; otherwise a parallel test's flush claims this log too.
+        let gate = FLUSH_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for i in 0..3 {
+            say(home.path(), &p, &t, &format!("m{i}"));
+        }
+        let writer = shared_session_log_writer();
+        let batch = writer.lock().unwrap().begin_flush(Some(&path));
+
+        // Nothing written yet: the lines are "in flight" and still all visible.
+        assert_eq!(seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()), vec![0, 1, 2]);
+        // An append now must continue the numbering, not restart it.
+        assert_eq!(say(home.path(), &p, &t, "m3").seq, 3);
+
+        // Half the in-flight bytes reach the file (a write caught mid-way).
+        assert!(std::fs::read(&path).unwrap().is_empty());
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"seq\":0,\"ts\":\"half").unwrap();
+        assert_eq!(seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()), vec![0, 1, 2, 3]);
+        std::fs::write(&path, b"").unwrap();
+
+        // The write completes, then the flush retires.
+        let in_flight_bytes: Vec<u8> = batch_bytes(&home, &p, &t);
+        write_out(&path, &in_flight_bytes).unwrap();
+        writer.lock().unwrap().finish_flush(&batch);
+        assert_eq!(seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()), vec![0, 1, 2, 3]);
+        assert_eq!(say(home.path(), &p, &t, "m4").seq, 4);
+        drop(gate);
+        flush_session_log_writer().unwrap();
+        assert_eq!(seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()), vec![0, 1, 2, 3, 4]);
+    }
+
+    /// The in-flight lines exactly as the flusher holds them: what `view` reports
+    /// beyond `disk_len`, minus whatever was appended after the flush began.
+    fn batch_bytes(home: &tempfile::TempDir, p: &Project, t: &ThreadMeta) -> Vec<u8> {
+        let path = log_path(home.path(), &p.hash, &t.id);
+        let (_, tail) = crate::session_log_writer::shared_session_log_writer().lock().unwrap().view(&path);
+        let text = String::from_utf8(tail).unwrap();
+        // The first three lines were in flight; the fourth is the later append.
+        text.split_inclusive('\n').take(3).collect::<String>().into_bytes()
+    }
+
+    /// Sessions appending, a flusher fsyncing and a reader reading, all at once:
+    /// no lost, duplicated or reordered messages.
+    #[test]
+    fn concurrent_appends_flushes_and_reads_stay_consistent() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let threads: Vec<ThreadMeta> =
+            (0..4).map(|_| create_thread(home.path(), &project.hash, "t").unwrap()).collect();
+        let done = Arc::new(AtomicBool::new(false));
+
+        let flusher = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    flush_session_log_writer().unwrap();
+                }
+            })
+        };
+        let reader = {
+            let (done, h, hash, ids) =
+                (done.clone(), home.path().to_path_buf(), project.hash.clone(), threads.clone());
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    for t in &ids {
+                        let got = seqs(&read_thread(&h, &hash, &t.id).unwrap());
+                        let expected: Vec<u64> = (0..got.len() as u64).collect();
+                        assert_eq!(got, expected, "a reader saw a gap, repeat or reorder");
+                    }
+                }
+            })
+        };
+        let writers: Vec<_> = threads
+            .iter()
+            .map(|t| {
+                let (h, hash, id) = (home.path().to_path_buf(), project.hash.clone(), t.id.clone());
+                std::thread::spawn(move || {
+                    for i in 0..300 {
+                        append_message(&h, &hash, &id, "assistant", "go", &format!("m{i}-{}", "p".repeat(200)), None)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+        flusher.join().unwrap();
+        reader.join().unwrap();
+
+        flush_session_log_writer().unwrap();
+        for t in &threads {
+            let got = seqs(&read_thread(home.path(), &project.hash, &t.id).unwrap());
+            assert_eq!(got, (0..300).collect::<Vec<u64>>());
+        }
+    }
+
+    #[test]
+    fn windows_return_the_tail_and_grow_past_their_first_read() {
+        let home = home();
+        let (p, t) = thread_with(home.path());
+        // ~20 KB each, so 40 of them overrun the 256 KB first window.
+        let big = "x".repeat(20_000);
+        for _ in 0..40 {
+            say(home.path(), &p, &t, &big);
+        }
+        flush_session_log_writer().unwrap();
+        say(home.path(), &p, &t, "still buffered");
+
+        let win = |w| seqs(&read_thread_window(home.path(), &p.hash, &t.id, w).unwrap());
+        assert_eq!(win(Window::Last { before_seq: None, limit: 3 }), vec![38, 39, 40]);
+        assert_eq!(win(Window::Last { before_seq: Some(38), limit: 3 }), vec![35, 36, 37]);
+        assert_eq!(win(Window::Last { before_seq: Some(2), limit: 10 }), vec![0, 1]);
+        assert_eq!(win(Window::Last { before_seq: None, limit: 500 }).len(), 41);
+        assert_eq!(win(Window::From(39)), vec![39, 40]);
+        assert_eq!(win(Window::From(0)).len(), 41);
+        assert_eq!(win(Window::From(99)), Vec::<u64>::new());
+        assert_eq!(win(Window::Last { before_seq: None, limit: 0 }), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn last_activity_reads_the_tail_even_when_the_last_line_is_huge_or_torn() {
+        let home = home();
+        let (p, t) = thread_with(home.path());
+        say(home.path(), &p, &t, "small");
+        let last = say(home.path(), &p, &t, &"y".repeat(300_000));
+        flush_session_log_writer().unwrap();
+        assert_eq!(last_activity(home.path(), &p.hash, &t.id), Some(last.ts.clone()));
+
+        // A torn final line (crash mid-write) is skipped for the newest whole one.
+        let path = log_path(home.path(), &p.hash, &t.id);
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"seq\":9,\"ts\":\"broke").unwrap();
+        assert_eq!(last_activity(home.path(), &p.hash, &t.id), Some(last.ts));
+
+        // A buffered message is newer than anything on disk.
+        let fresh = say(home.path(), &p, &t, "buffered");
+        assert_eq!(last_activity(home.path(), &p.hash, &t.id), Some(fresh.ts));
+    }
+
+    #[test]
+    fn thread_is_empty_until_the_first_message_without_parsing() {
+        let home = home();
+        let (p, t) = thread_with(home.path());
+        assert!(thread_is_empty(home.path(), &p.hash, &t.id).unwrap());
+        say(home.path(), &p, &t, "hi");
+        assert!(!thread_is_empty(home.path(), &p.hash, &t.id).unwrap());
+    }
+
+    #[test]
+    fn a_log_that_outgrows_its_buffer_is_flushed_without_waiting_for_done() {
+        let home = home();
+        let (p, t) = thread_with(home.path());
+        let path = log_path(home.path(), &p.hash, &t.id);
+        say(home.path(), &p, &t, &"z".repeat(BUFFER_FLUSH_BYTES as usize + 1));
+        // The size trigger never waits: if another flush is running it skips, and
+        // the next append tries again. Tests share the flusher, so allow for that.
+        let mut appended = 1;
+        while file_len(&path) <= BUFFER_FLUSH_BYTES && appended < 200 {
+            say(home.path(), &p, &t, "tick");
+            appended += 1;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(file_len(&path) > BUFFER_FLUSH_BYTES, "over-threshold buffer should have hit disk");
+        // Seq numbering carries on correctly across the automatic flush.
+        assert_eq!(say(home.path(), &p, &t, "next").seq, appended);
+        assert_eq!(
+            seqs(&read_thread(home.path(), &p.hash, &t.id).unwrap()),
+            (0..=appended).collect::<Vec<_>>()
+        );
     }
 
     #[test]
