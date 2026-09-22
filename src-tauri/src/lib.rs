@@ -2598,7 +2598,6 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     awaiting_permission: live.awaiting_permission,
                     busy: live.busy,
                     turn_ended: last.is_some() && !live.busy,
-                    has_diff: changes.added + changes.removed > 0 || !files_touched.is_empty(),
                     viewed_since_turn: fleet::viewed_since_turn(
                         thread.last_viewed_at.as_deref(),
                         last.and_then(|s| s.ended_at.as_deref()),

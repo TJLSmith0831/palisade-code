@@ -9,7 +9,6 @@ import type { FleetAttention, FleetRow, FleetVerify } from "./api";
 export const ATTENTION_LABEL: Record<FleetAttention, string> = {
   permission: "Needs permission",
   gate: "Needs approval",
-  turn_done: "Turn finished",
   verify_failed: "Verify failed",
   merge_conflict: "Merge conflict",
   crashed: "Crashed",

@@ -4890,6 +4890,13 @@ export default function App() {
           // But a session finishing on some other thread must not drag the
           // thread on screen back to its own log.
           if (threadId !== current.current.thread?.id) return;
+          // A turn that ends while its thread is on screen in a focused
+          // window has been seen: record the view now, or the thread would
+          // list itself as "Unreviewed" under the user's nose.
+          const hash = current.current.project?.hash;
+          if (hash && document.hasFocus()) {
+            void api.markThreadViewed(hash, threadId).catch(() => {});
+          }
           setDiffRefreshToken((t) => t + 1);
           await refresh().catch(fail);
           return;
@@ -5703,7 +5710,7 @@ export default function App() {
   const boardPanel =
     shell.activePanel === "fleet" || shell.activePanel === "review";
 
-  // Looking at a thread is what clears its "Turn finished" flag on the
+  // Looking at a thread is what moves it out of "Unreviewed" on the
   // board. Re-marked on window focus too: a turn that finishes while the
   // app is in the background and is read the moment you come back would
   // otherwise keep flagging itself.

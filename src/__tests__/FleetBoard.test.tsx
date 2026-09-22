@@ -73,15 +73,33 @@ const playbookRow = (over: Partial<FleetRow> = {}): FleetRow =>
   });
 
 describe("groupFleet", () => {
-  it("splits rows into the three bands", () => {
+  it("splits rows into the four bands", () => {
     const groups = groupFleet([
       row({ threadId: "a", status: "attention", attention: "permission" }),
       row({ threadId: "b", status: "running" }),
       row({ threadId: "c", status: "idle" }),
+      row({ threadId: "d", status: "unreviewed" }),
     ]);
     expect(groups.attention.map((r) => r.threadId)).toEqual(["a"]);
     expect(groups.running.map((r) => r.threadId)).toEqual(["b"]);
+    expect(groups.unreviewed.map((r) => r.threadId)).toEqual(["d"]);
     expect(groups.idle.map((r) => r.threadId)).toEqual(["c"]);
+  });
+
+  it("sorts the unreviewed band newest first", () => {
+    const groups = groupFleet([
+      row({ threadId: "old", status: "unreviewed", updatedAt: "2026-01-01T00:00:00Z" }),
+      row({ threadId: "new", status: "unreviewed", updatedAt: "2026-02-01T00:00:00Z" }),
+    ]);
+    expect(groups.unreviewed.map((r) => r.threadId)).toEqual(["new", "old"]);
+  });
+
+  // A new prompt on an unreviewed thread makes it running again; the stale
+  // row must not pin it under "Unreviewed" until the poll catches up.
+  it("lets a live session move an unreviewed thread back to Running", () => {
+    const groups = groupFleet([row({ threadId: "t", status: "unreviewed" })], new Set(["t"]));
+    expect(groups.running.map((r) => r.threadId)).toEqual(["t"]);
+    expect(groups.unreviewed).toEqual([]);
   });
 
   it("sorts the attention band newest first", () => {
@@ -93,7 +111,7 @@ describe("groupFleet", () => {
   });
 
   it("returns empty bands for no rows", () => {
-    expect(groupFleet([])).toEqual({ attention: [], running: [], idle: [] });
+    expect(groupFleet([])).toEqual({ attention: [], running: [], unreviewed: [], idle: [] });
   });
 
   // The row's own status only catches up on the next executor event or the
@@ -133,16 +151,18 @@ describe("FleetBoard", () => {
       <FleetBoard
         {...props({
           rows: [
-            row({ threadId: "a", status: "attention", attention: "turn_done" }),
+            row({ threadId: "a", status: "attention", attention: "verify_failed" }),
             row({ threadId: "b", status: "running" }),
+            row({ threadId: "c", status: "unreviewed" }),
           ],
         })}
       />
     );
     expect(screen.getByTestId("fleet-group-attention")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-group-running")).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-group-unreviewed")).toBeInTheDocument();
     expect(screen.queryByTestId("fleet-group-idle")).toBeNull();
-    expect(screen.getByTestId("fleet-attention")).toHaveTextContent("Turn finished");
+    expect(screen.getByTestId("fleet-attention")).toHaveTextContent("Verify failed");
   });
 
   it("shows the empty state with no rows", () => {
@@ -308,16 +328,17 @@ describe("FleetBoard", () => {
     expect(onArchiveRun).toHaveBeenCalledWith("p1", "run-1");
   });
 
-  it("heads the board with the project and its three status counts", () => {
+  it("heads the board with the project and its four status counts", () => {
     render(
       <FleetBoard
         {...props({
           projectName: "palisade",
           rows: [
-            row({ threadId: "t1", status: "attention", attention: "turn_done" }),
+            row({ threadId: "t1", status: "attention", attention: "crashed" }),
             row({ threadId: "t2", status: "running" }),
             row({ threadId: "t3", status: "idle" }),
             row({ threadId: "t4", status: "idle" }),
+            row({ threadId: "t5", status: "unreviewed" }),
           ],
         })}
       />
@@ -325,6 +346,7 @@ describe("FleetBoard", () => {
     expect(screen.getByText("palisade")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-count-attention")).toHaveTextContent("1Needs attention");
     expect(screen.getByTestId("fleet-count-running")).toHaveTextContent("1Running");
+    expect(screen.getByTestId("fleet-count-unreviewed")).toHaveTextContent("1Unreviewed");
     expect(screen.getByTestId("fleet-count-idle")).toHaveTextContent("2Idle");
   });
 

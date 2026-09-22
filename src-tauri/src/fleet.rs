@@ -11,11 +11,14 @@ use std::path::Path;
 
 /// The dot the board shows for a thread. `Attention` always carries a
 /// reason — a board that says "look at this" without saying why is noise.
+/// `Unreviewed` is the quiet fourth band: a turn ended and nobody has opened
+/// the thread since. Nothing is blocked; something is waiting to be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FleetStatus {
     Attention,
     Running,
+    Unreviewed,
     Idle,
 }
 
@@ -30,15 +33,15 @@ pub enum FleetKind {
 }
 
 /// Why a thread wants the user. Ordered by how blocked the work is: a
-/// permission prompt has an agent literally stopped mid-turn, a finished turn
-/// is only waiting to be read.
+/// permission prompt has an agent literally stopped mid-turn, a crash only
+/// shows once nothing more actionable is true. A finished-but-unread turn is
+/// not attention at all — it is `FleetStatus::Unreviewed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FleetAttention {
     Permission,
     /// A playbook run is suspended at a human approval gate.
     Gate,
-    TurnDone,
     VerifyFailed,
     MergeConflict,
     Crashed,
@@ -204,9 +207,8 @@ pub struct StatusInput {
     pub busy: bool,
     /// At least one turn has run and ended.
     pub turn_ended: bool,
-    pub has_diff: bool,
-    /// The user has looked at the thread since that turn ended. Always false
-    /// today — Palisade records no per-thread view time (see `fleet_overview`).
+    /// The user has looked at the thread since that turn ended
+    /// (`ThreadMeta::last_viewed_at` against the last session's `ended_at`).
     pub viewed_since_turn: bool,
     /// The thread's most recent verification run failed.
     pub verify_failed: bool,
@@ -218,8 +220,8 @@ pub struct StatusInput {
 /// Has the user looked at this thread since its last turn ended?
 ///
 /// A thread that predates view tracking has no `last_viewed_at` at all.
-/// Reading that absence as "never viewed" made every legacy thread shout
-/// "Turn finished" forever, which is the opposite of a signal — so missing
+/// Reading that absence as "never viewed" made every legacy thread sit under
+/// "Unreviewed" forever, which is the opposite of a signal — so missing
 /// tracking counts as viewed. Only a recorded view older than a recorded turn
 /// end is evidence of something unread.
 pub fn viewed_since_turn(last_viewed_at: Option<&str>, turn_ended_at: Option<&str>) -> bool {
@@ -233,8 +235,9 @@ pub fn viewed_since_turn(last_viewed_at: Option<&str>, turn_ended_at: Option<&st
 /// Map observed session/worktree state onto the dot and its reason.
 ///
 /// The order is the precedence: a paused agent outranks a running one, a
-/// running one outranks anything waiting to be read, and a crash only shows
-/// when nothing more actionable is true.
+/// running one outranks any problem, a problem (failed verify, conflict,
+/// crash) outranks a turn merely waiting to be read, and only a thread with
+/// none of those is idle.
 pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention>) {
     if input.awaiting_permission {
         return (FleetStatus::Attention, Some(FleetAttention::Permission));
@@ -242,9 +245,7 @@ pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention
     if input.busy {
         return (FleetStatus::Running, None);
     }
-    let attention = if input.turn_ended && input.has_diff && !input.viewed_since_turn {
-        Some(FleetAttention::TurnDone)
-    } else if input.verify_failed {
+    let attention = if input.verify_failed {
         Some(FleetAttention::VerifyFailed)
     } else if input.merge_conflict {
         Some(FleetAttention::MergeConflict)
@@ -253,10 +254,13 @@ pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention
     } else {
         None
     };
-    match attention {
-        Some(reason) => (FleetStatus::Attention, Some(reason)),
-        None => (FleetStatus::Idle, None),
+    if let Some(reason) = attention {
+        return (FleetStatus::Attention, Some(reason));
     }
+    if input.turn_ended && !input.viewed_since_turn {
+        return (FleetStatus::Unreviewed, None);
+    }
+    (FleetStatus::Idle, None)
 }
 
 /// What one playbook run's record says it is doing. Gathered by the caller
@@ -659,30 +663,25 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_turn_with_unreviewed_changes_asks_to_be_read() {
+    fn a_finished_turn_nobody_has_opened_is_unreviewed() {
+        let input = StatusInput { turn_ended: true, ..StatusInput::default() };
+        assert_eq!(derive_status(&input), (FleetStatus::Unreviewed, None));
+    }
+
+    #[test]
+    fn an_already_viewed_turn_is_idle() {
         let input =
-            StatusInput { turn_ended: true, has_diff: true, ..StatusInput::default() };
+            StatusInput { turn_ended: true, viewed_since_turn: true, ..StatusInput::default() };
+        assert_eq!(derive_status(&input), (FleetStatus::Idle, None));
+    }
+
+    #[test]
+    fn a_problem_outranks_an_unread_turn() {
+        let input = StatusInput { turn_ended: true, crashed: true, ..StatusInput::default() };
         assert_eq!(
             derive_status(&input),
-            (FleetStatus::Attention, Some(FleetAttention::TurnDone))
+            (FleetStatus::Attention, Some(FleetAttention::Crashed))
         );
-    }
-
-    #[test]
-    fn a_finished_turn_that_changed_nothing_is_idle() {
-        let input = StatusInput { turn_ended: true, ..StatusInput::default() };
-        assert_eq!(derive_status(&input), (FleetStatus::Idle, None));
-    }
-
-    #[test]
-    fn an_already_viewed_turn_stops_asking() {
-        let input = StatusInput {
-            turn_ended: true,
-            has_diff: true,
-            viewed_since_turn: true,
-            ..StatusInput::default()
-        };
-        assert_eq!(derive_status(&input), (FleetStatus::Idle, None));
     }
 
     #[test]
@@ -800,8 +799,8 @@ mod tests {
     #[test]
     fn rows_serialize_as_camel_case() {
         let mut row = row("a", "p1", &["src/lib.rs"]);
-        row.status = FleetStatus::Attention;
-        row.attention = Some(FleetAttention::TurnDone);
+        row.status = FleetStatus::Unreviewed;
+        row.attention = Some(FleetAttention::VerifyFailed);
         row.merge = FleetMerge::NoWorktree;
         let json = serde_json::to_value(&row).unwrap();
         assert_eq!(json["kind"], "thread");
@@ -810,7 +809,8 @@ mod tests {
         assert_eq!(json["projectName"], "p1");
         assert_eq!(json["filesTouched"][0], "src/lib.rs");
         assert_eq!(json["updatedAt"], "2026-01-01T00:00:00Z");
-        assert_eq!(json["attention"], "turn_done");
+        assert_eq!(json["status"], "unreviewed");
+        assert_eq!(json["attention"], "verify_failed");
         assert_eq!(json["merge"], "no_worktree");
         assert_eq!(json["verify"]["state"], "not_run");
         assert!(json["verify"].get("command").is_none(), "an absent field stays absent");
@@ -977,14 +977,13 @@ mod tests {
     }
 
     /// Threads created before view tracking existed have no `last_viewed_at`.
-    /// Reading that absence as "never viewed" made every legacy thread shout
-    /// "Turn finished" forever.
+    /// Reading that absence as "never viewed" made every legacy thread sit
+    /// under "Unreviewed" forever.
     #[test]
     fn a_thread_that_predates_view_tracking_counts_as_viewed() {
         assert!(viewed_since_turn(None, Some("2026-01-01T00:00:00Z")));
         let input = StatusInput {
             turn_ended: true,
-            has_diff: true,
             viewed_since_turn: viewed_since_turn(None, Some("2026-01-01T00:00:00Z")),
             ..StatusInput::default()
         };

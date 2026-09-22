@@ -3715,6 +3715,12 @@ input[type="checkbox"] {
   height: 8px;
 }
 
+/* A turn ended and nobody has opened the thread since: a solid, still,
+   warning-toned dot — louder than idle, quieter than a real problem. */
+.ds-session-dot[data-state="unreviewed"] {
+  background: var(--warn);
+}
+
 /* Only rendered once the fleet has a verdict for this thread: a quiet dot
    saying "the backend looked, and there is nothing pending". */
 .ds-session-dot[data-state="idle"] {
@@ -6555,6 +6561,11 @@ button.ds-onboarding-status {
 
 .fleet-status-dot[data-status="running"] {
   background: var(--success);
+  opacity: 1;
+}
+
+.fleet-status-dot[data-status="unreviewed"] {
+  background: var(--warn);
   opacity: 1;
 }
 
