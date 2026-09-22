@@ -1334,7 +1334,7 @@ async fn send_message(
         // user their message. No agent fallback here: a title must never
         // cause a throwaway executor process (and therefore an unexpected
         // auth flow); the truncated first line is enough.
-        title_thread(&app, TitleRequest::new(&project_hash, &thread_id, &content), false);
+        title_thread(&app, TitleRequest::new(&project_hash, &thread_id, title_source(&content)), false);
         let agent = match selected_executor(&app, &harness, &project_hash, Some(&thread_id)) {
             Ok((agent, _)) => agent,
             Err(_) => {
@@ -1480,6 +1480,21 @@ struct TitleRequest {
 impl TitleRequest {
     fn new(project_hash: &str, thread_id: &str, prompt: &str) -> Self {
         Self { project_hash: project_hash.into(), thread_id: thread_id.into(), prompt: prompt.into() }
+    }
+}
+
+/// What a turn is *about*, for naming its thread: the composer puts a picked
+/// skill at the head (`/tdd …`) and any others in an "Also use these skills"
+/// line, and neither says what the user asked for. Mirrors the grammar of
+/// `buildPrompt` in `src/slashCommands.ts`.
+fn title_source(content: &str) -> &str {
+    let body = content.split("\n\nAlso use these skills: ").next().unwrap_or(content);
+    match body.strip_prefix('/').or_else(|| body.strip_prefix('$')) {
+        Some(rest) => match rest.split_once(char::is_whitespace) {
+            Some((_, text)) if !text.trim().is_empty() => text.trim_start(),
+            _ => body,
+        },
+        None => body,
     }
 }
 
@@ -5167,6 +5182,15 @@ mod tests {
         end_session(&harness, &thread, &id, "cancelled");
         assert!(thread_commands(&harness, &thread).is_empty());
         assert!(!harness.agent.session_commands.lock_or_recover().contains_key(&id));
+    }
+
+    #[test]
+    fn a_thread_is_named_for_the_request_not_the_skill_that_leads_it() {
+        assert_eq!(title_source("/tdd fix the login form"), "fix the login form");
+        assert_eq!(title_source("$tdd fix it\n\nAlso use these skills: grill-apply"), "fix it");
+        // A bare command has nothing else to name the thread for.
+        assert_eq!(title_source("/review"), "/review");
+        assert_eq!(title_source("plain request"), "plain request");
     }
 
     /// The bytes the agent actually receives. `/go` performs the handoff but
