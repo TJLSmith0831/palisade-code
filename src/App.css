@@ -6215,8 +6215,10 @@ button.ds-onboarding-status {
   align-items: center;
   gap: 10px;
   margin: auto;
-  width: max-content;
-  max-width: 400px;
+  width: fit-content;
+  /* Never wider than the pane it floats in: a narrow side-by-side layout
+     used to clip the card's right edge. */
+  max-width: min(400px, 100% - 32px);
   height: fit-content;
   padding: 20px 24px;
   text-align: center;

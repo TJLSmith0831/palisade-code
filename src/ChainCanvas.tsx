@@ -948,7 +948,9 @@ export default function ChainCanvas({
         {/* Overlaid, not stacked in flow: this used to sit between the
             toolbar and the surface, so every toggle resized the surface
             underneath it and shifted what was visible. */}
-        {(error || problem) && (!watching || !!error) && (
+        {/* A validation problem only matters once there is something to
+            save; a blank canvas already explains itself. Errors always show. */}
+        {(error || (problem && dirty)) && (!watching || !!error) && (
           <Alert
             variant="light"
             color={error ? "danger" : "warn"}
@@ -1227,6 +1229,9 @@ export default function ChainCanvas({
         title={`Node: ${editing ?? ""}`}
         position="right"
         size="sm"
+        // The inspector sits beside the graph, not over it: the selected
+        // node keeps its ring in view while its fields are edited.
+        overlayProps={{ backgroundOpacity: 0.25, blur: 0 }}
       >
         {node && editing && (
           <Stack gap="sm">
@@ -1317,6 +1322,7 @@ export default function ChainCanvas({
         title={edge ? `${edge.from} → ${edge.to}` : ""}
         position="right"
         size="sm"
+        overlayProps={{ backgroundOpacity: 0.25, blur: 0 }}
       >
         {edge && editingEdge !== null && (
           <Stack gap="sm">
