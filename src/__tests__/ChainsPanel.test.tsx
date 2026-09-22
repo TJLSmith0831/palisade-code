@@ -91,6 +91,43 @@ describe("ChainsPanel", () => {
     expect(typeof onRun.mock.calls[0][1]).toBe("string");
   });
 
+  it("duplicates a playbook under a free name and opens the copy", async () => {
+    apiMock.listChains.mockResolvedValue([chain, { ...chain, name: "review copy" }]);
+    const onOpen = vi.fn();
+
+    render(
+      <MantineProvider>
+        <ChainsPanel projectHash="proj-1" onOpen={onOpen} />
+      </MantineProvider>
+    );
+
+    fireEvent.click(await screen.findByLabelText("Actions for review"));
+    fireEvent.click(await screen.findByText("Duplicate"));
+
+    await waitFor(() => expect(apiMock.saveChain).toHaveBeenCalledTimes(1));
+    const [, saved] = apiMock.saveChain.mock.calls[0];
+    expect(saved).toEqual({ ...chain, name: "review copy 2" });
+    expect(onOpen).toHaveBeenCalledWith("review copy 2");
+  });
+
+  // Deleting is the one action in this panel with no undo.
+  it("asks before deleting, and only deletes on the second click", async () => {
+    apiMock.listChains.mockResolvedValue([chain]);
+
+    render(
+      <MantineProvider>
+        <ChainsPanel projectHash="proj-1" onOpen={vi.fn()} />
+      </MantineProvider>
+    );
+
+    fireEvent.click(await screen.findByLabelText("Actions for review"));
+    fireEvent.click(await screen.findByText("Delete…"));
+    expect(apiMock.deleteChain).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByTestId("chains-panel-confirm-delete"));
+    await waitFor(() => expect(apiMock.deleteChain).toHaveBeenCalledWith("proj-1", "review"));
+  });
+
   it("toggles run history for a chain and forwards projectHash/chainName", async () => {
     apiMock.listChains.mockResolvedValue([chain]);
 

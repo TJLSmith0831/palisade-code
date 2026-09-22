@@ -29,6 +29,7 @@ import {
   IconMinus,
   IconPlayerStop,
   IconPencil,
+  IconRobot,
   IconSettings,
 } from "@tabler/icons-react";
 import * as api from "./api";
@@ -45,8 +46,14 @@ import { describeError } from "./errors";
 // primitive, and Tabler has no node/edge component. Everything inside a node
 // (inputs, selects, buttons) is still Mantine.
 
-const NODE_W = 190;
-const NODE_H = 78;
+/** A node card is a fixed box so edges have somewhere to anchor: the port
+ *  sits on its right edge at half NODE_H. The height is the card's resting
+ *  size — head, agent line, two guideline lines — so a card that grows with
+ *  run state simply hangs below its anchor. */
+const NODE_W = 220;
+const NODE_H = 84;
+/** Drag snap and the dot grid drawn on the surface share one pitch, so a
+ *  dropped node always lands on a visible dot. */
 const GRID = 20;
 
 /** Zoom stays readable at both ends — a node is never a dot or a wall. */
@@ -535,6 +542,17 @@ export default function ChainCanvas({
     }
   };
 
+  /** Back to what is on disk (or to an empty canvas for a playbook that
+   *  never was). Goes through the undo stack, so a discard is itself one
+   *  Mod+Z away from being undone. */
+  const discard = () => {
+    setDraft(JSON.parse(savedSnapshot.current) as Draft);
+    setEditing(null);
+    setEditingEdge(null);
+    setConnectFrom(null);
+    setError(null);
+  };
+
   // ------------------------------------------------------------ pan and zoom
 
   const panning = useRef<{ x: number; y: number } | null>(null);
@@ -766,16 +784,6 @@ export default function ChainCanvas({
           >
             Node
           </Button>
-          <Button
-            size="xs"
-            variant="default"
-            leftSection={<IconDeviceFloppy size={14} />}
-            onClick={() => void save()}
-            disabled={watching}
-            data-testid="chain-save"
-          >
-            {saved ? "Saved" : "Save"}
-          </Button>
           {!watching && (
             <Button
               size="xs"
@@ -860,21 +868,15 @@ export default function ChainCanvas({
         </Group>
       </div>
 
-      {/* State, not actions. "Unsaved changes" in particular used to be the
-          quietest type treatment in the system, sitting on the one thing a
-          user can actually lose. */}
-      {(dirty || nodeCount > 0 || connectFrom || watching) && (
+      {/* State, not actions. Unsaved changes are not here: they dock at the
+          bottom of the canvas with their own Save and Discard, so the one
+          thing a user can lose is never a quiet line of text. */}
+      {(nodeCount > 0 || connectFrom || watching) && (
         <div className="ds-chain-statusbar" data-testid="chain-statusbar">
           {watching && (
             <Badge size="sm" variant="light">
               Running · {elapsed}s · turn up to {ceiling}
             </Badge>
-          )}
-          {dirty && !watching && (
-            <Text size="xs" c="warn" fw={500} data-testid="chain-dirty">
-              <IconPencil size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
-              Unsaved changes
-            </Text>
           )}
           {/* D13: states how wide the chain actually runs, so a user can tell
               sequential from parallel without running it. Scoped to this one
@@ -935,6 +937,13 @@ export default function ChainCanvas({
         tabIndex={0}
         role="application"
         aria-label="Playbook graph"
+        // The dot grid is painted on the surface, not the plane, so it never
+        // scales its dots into blobs — it just follows the pan and re-pitches
+        // with the zoom, the way a real drafting grid would.
+        style={{
+          backgroundPosition: `${view.x}px ${view.y}px`,
+          backgroundSize: `${GRID * view.zoom}px ${GRID * view.zoom}px`,
+        }}
       >
         {/* Overlaid, not stacked in flow: this used to sit between the
             toolbar and the surface, so every toggle resized the surface
@@ -976,12 +985,17 @@ export default function ChainCanvas({
               const from = positions[e.from];
               const to = positions[e.to];
               if (!from || !to) return null;
+              // Output flows down an edge while its source node is running,
+              // so that edge — and only that edge — moves.
+              const live =
+                stateName(run?.nodes?.[e.from]?.state ?? run?.states[e.from]) === "executing";
               return (
                 <path
                   key={`${e.from}->${e.to}`}
                   d={edgePath(from, to, loops.has(index))}
                   className="ds-chain-edge"
                   data-loop={loops.has(index) || undefined}
+                  data-live={live || undefined}
                   markerEnd="url(#chain-arrow)"
                 />
               );
@@ -1037,6 +1051,7 @@ export default function ChainCanvas({
                 data-state={stateName(state)}
                 data-entry={draft.entry === role || undefined}
                 data-connecting={connectFrom === role || undefined}
+                data-selected={editing === role || undefined}
                 style={{ left: p.x, top: p.y, width: NODE_W }}
                 onPointerDown={(e) => onNodePointerDown(e, role)}
                 onClick={() => {
@@ -1067,6 +1082,9 @@ export default function ChainCanvas({
                 data-testid={`chain-node-${role}`}
               >
                 <div className="ds-chain-node-head">
+                  <span className="ds-chain-node-glyph" aria-hidden="true">
+                    <IconRobot size={13} />
+                  </span>
                   <span className="ds-chain-node-role">{role}</span>
                   {draft.entry === role && (
                     <span className="ds-chain-node-entry">start</span>
@@ -1085,7 +1103,12 @@ export default function ChainCanvas({
                 <div className="ds-chain-node-guideline">
                   {draft.nodes[role].guideline || "No guideline yet"}
                 </div>
-                {state && <span className="ds-chain-node-state">{stateLabel(state)}</span>}
+                {state && (
+                  <span className="ds-chain-node-state">
+                    <span className="ds-chain-node-dot" aria-hidden="true" />
+                    {stateLabel(state)}
+                  </span>
+                )}
                 {nodeRun?.iterations && <span className="ds-chain-node-meta">turn {nodeRun.iterations}</span>}
                 {nodeRun?.cost && <span className="ds-chain-node-meta">{nodeRun.cost.amount.toFixed(2)} {nodeRun.cost.currency}</span>}
                 {nodeRun?.taskCalls?.map((task, index) => <TaskCall key={`${task.title}-${index}`} task={task} />)}
@@ -1110,28 +1133,76 @@ export default function ChainCanvas({
         {roles.length === 0 && (
           <div className="ds-chain-empty" data-testid="chain-canvas-empty">
             <Text size="sm" fw={600}>
-              Nothing here yet
+              Start a playbook
             </Text>
             <Text size="xs" c="dimmed">
-              A <b>node</b> is one role bound to an installed agent (or, for a
-              human-in-the-loop step, to a person — you). Click{" "}
-              <b>+ Node</b> to add one.
+              Agents hand work to each other along edges; gates decide when
+              a run may continue.
             </Text>
-            <Text size="xs" c="dimmed">
-              An <b>edge</b> connects two nodes: click a node, then the one
-              it should hand its output to. A forward edge just pipes output
-              downstream.
-            </Text>
-            <Text size="xs" c="dimmed">
-              A <b>gate</b> on an edge makes the run pause there — either a
-              named <code>verify</code> command, or a human's approval —
-              before continuing.
-            </Text>
-            <Text size="xs" c="dimmed">
-              A <b>loop</b> is an edge that points back to an earlier node.
-              It needs a gate and a maximum iteration count, so it always
-              has a way to stop.
-            </Text>
+            {!watching && (
+              <Button
+                size="xs"
+                variant="filled"
+                leftSection={<IconPlus size={14} />}
+                onClick={addNode}
+                data-testid="chain-empty-add-node"
+              >
+                Add your first node
+              </Button>
+            )}
+            <dl className="ds-chain-empty-terms">
+              <dt>Node</dt>
+              <dd>One role, bound to an installed agent and a model.</dd>
+              <dt>Edge</dt>
+              <dd>Click a node, then the node it hands its output to.</dd>
+              <dt>Gate</dt>
+              <dd>
+                Pauses a run at an edge for a <code>verify</code> command or
+                your approval.
+              </dd>
+              <dt>Loop</dt>
+              <dd>An edge pointing back needs a gate and a maximum iteration count.</dd>
+            </dl>
+          </div>
+        )}
+
+        {/* Railway's "apply changes" bar: edits stage on the canvas and are
+            written by one action, docked where the eye lands last. Save and
+            Discard live here and nowhere else, so an unsaved canvas is never
+            a quiet warning next to a row of unrelated buttons. */}
+        {(dirty || saved) && !watching && (
+          <div className="ds-chain-changes" data-testid="chain-changes-bar" role="status">
+            {saved && !dirty ? (
+              <Text size="xs" c="success" fw={500}>
+                <IconCheck size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                Saved
+              </Text>
+            ) : (
+              <>
+                <Text size="xs" c="warn" fw={500} data-testid="chain-dirty">
+                  <IconPencil size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                  Unsaved changes
+                </Text>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="neutral"
+                  onClick={discard}
+                  data-testid="chain-discard"
+                >
+                  Discard
+                </Button>
+                <Button
+                  size="compact-xs"
+                  variant="filled"
+                  leftSection={<IconDeviceFloppy size={12} />}
+                  onClick={() => void save()}
+                  data-testid="chain-save"
+                >
+                  Save
+                </Button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1475,13 +1546,19 @@ function stateLabel(state: api.ChainNodeState): string {
   return state;
 }
 
-/** A forward edge is a straight line; a loop bows above so it can be read. */
+/** A forward edge leaves and arrives horizontally — an S-curve between the
+ *  two ports, with control points pulled far enough out that even a steep
+ *  hop still reads as "output goes that way". A loop bows above so it can be
+ *  read. Both curves are symmetric, so `edgeMidpoint` stays a plain average. */
 function edgePath(from: Point, to: Point, loop: boolean): string {
   const x1 = from.x + NODE_W;
   const y1 = from.y + NODE_H / 2;
   const x2 = to.x;
   const y2 = to.y + NODE_H / 2;
-  if (!loop) return `M ${x1} ${y1} L ${x2} ${y2}`;
+  if (!loop) {
+    const pull = Math.max(40, Math.abs(x2 - x1) / 2);
+    return `M ${x1} ${y1} C ${x1 + pull} ${y1}, ${x2 - pull} ${y2}, ${x2} ${y2}`;
+  }
   const lift = Math.max(70, Math.abs(from.x - to.x) / 3);
   return `M ${from.x} ${y1} C ${from.x - lift} ${y1 - lift}, ${x2 + NODE_W + lift} ${y2 - lift}, ${x2 + NODE_W} ${y2}`;
 }

@@ -898,7 +898,36 @@ describe("ChainCanvas — toolbar hierarchy", () => {
     expect(toolbar.contains(width)).toBe(false);
     expect(toolbar.contains(dirty)).toBe(false);
     expect(screen.getByTestId("chain-statusbar").contains(width)).toBe(true);
-    expect(screen.getByTestId("chain-statusbar").contains(dirty)).toBe(true);
+    // Unsaved changes dock at the foot of the canvas with their own Save and
+    // Discard, the way a staged deploy does — not as a line in the status bar.
+    const bar = screen.getByTestId("chain-changes-bar");
+    expect(bar.contains(dirty)).toBe(true);
+    expect(bar.contains(screen.getByRole("button", { name: "Save" }))).toBe(true);
+    expect(bar.contains(screen.getByRole("button", { name: "Discard" }))).toBe(true);
+    expect(toolbar.contains(screen.getByRole("button", { name: "Save" }))).toBe(false);
+  });
+
+  it("offers no Save until there is something to save", () => {
+    renderCanvas();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByTestId("chain-changes-bar")).toBeNull();
+  });
+
+  it("discards staged edits back to the saved playbook", async () => {
+    apiMock.saveChain.mockClear();
+    apiMock.listChains.mockResolvedValueOnce([chain]);
+    render(
+      <MantineProvider>
+        <ChainCanvas projectHash="proj-1" chainName="review" agents={[{ id: "codex", name: "Codex" }]} verifyCommands={[]} />
+      </MantineProvider>
+    );
+    await screen.findByTestId("chain-node-scout");
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(Object.keys(chain.nodes).length + 1);
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(Object.keys(chain.nodes).length);
+    expect(screen.queryByTestId("chain-dirty")).toBeNull();
+    expect(apiMock.saveChain).not.toHaveBeenCalled();
   });
 
   it("says unsaved changes in something louder than the quietest voice available", () => {

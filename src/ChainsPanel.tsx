@@ -4,6 +4,8 @@ import {
   Button,
   Group,
   Menu,
+  Modal,
+  Stack,
   Text,
   Tooltip,
   UnstyledButton,
@@ -15,6 +17,7 @@ import {
   IconTrash,
   IconPlayerPlay,
   IconHistory,
+  IconCopy,
 } from "@tabler/icons-react";
 import * as api from "./api";
 import ChainRunHistory from "./ChainRunHistory";
@@ -88,6 +91,9 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
   const [error, setError] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [exampleBusy, setExampleBusy] = useState(false);
+  /** The playbook whose Delete is waiting on a second click. Deleting is the
+   *  one action here with no undo, so it is the one that asks. */
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectHash) {
@@ -110,11 +116,30 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
 
   const remove = async (name: string) => {
     if (!projectHash) return;
+    setConfirmDelete(null);
     try {
       await api.deleteChain(projectHash, name);
       announceChainsChanged();
     } catch (err) {
       setError(describeError(err));
+    }
+  };
+
+  /** Saves a copy under the first free "<name> copy", "<name> copy 2", …
+   *  and opens it — the way to fork a working playbook without editing
+   *  the original in place. The definition is plain JSON, so a copy is the
+   *  same record with a new name and nothing else. */
+  const duplicate = async (chain: api.Chain) => {
+    if (!projectHash) return;
+    const taken = new Set(chains.map((c) => c.name));
+    let name = `${chain.name} copy`;
+    for (let n = 2; taken.has(name); n += 1) name = `${chain.name} copy ${n}`;
+    try {
+      await api.saveChain(projectHash, { ...chain, name });
+      announceChainsChanged();
+      onOpen(name);
+    } catch (err) {
+      setError(describeError(err, { action: "duplicate this playbook" }));
     }
   };
 
@@ -243,11 +268,17 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
                       </Menu.Item>
                     )}
                     <Menu.Item
+                      leftSection={<IconCopy size={14} />}
+                      onClick={() => void duplicate(chain)}
+                    >
+                      Duplicate
+                    </Menu.Item>
+                    <Menu.Item
                       color="danger"
                       leftSection={<IconTrash size={14} />}
-                      onClick={() => void remove(chain.name)}
+                      onClick={() => setConfirmDelete(chain.name)}
                     >
-                      Delete
+                      Delete…
                     </Menu.Item>
                   </Menu.Dropdown>
                 </Menu>
@@ -264,6 +295,33 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
           </div>
         ))}
       </div>
+
+      <Modal
+        opened={confirmDelete !== null}
+        onClose={() => setConfirmDelete(null)}
+        title={`Delete ${confirmDelete ?? ""}?`}
+        size="sm"
+      >
+        <Stack gap="sm">
+          <Text size="xs" c="dimmed">
+            The playbook definition is removed from this project. Its past
+            runs stay in the run history.
+          </Text>
+          <Group justify="flex-end" gap="xs">
+            <Button size="xs" variant="default" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              color="danger"
+              onClick={() => confirmDelete && void remove(confirmDelete)}
+              data-testid="chains-panel-confirm-delete"
+            >
+              Delete
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </>
   );
 }

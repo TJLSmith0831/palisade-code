@@ -5830,6 +5830,10 @@ button.ds-onboarding-status {
   font-size: 11px;
 }
 
+.ds-chains-empty {
+  padding: 4px 0;
+}
+
 /* Icons beside 11-12px regular text carry regular weight: 1.5, not Tabler's
    default 2. Scoped to the setup panels so the file tree and the rail (1.6)
    keep their own. */
@@ -5875,12 +5879,22 @@ button.ds-onboarding-status {
   flex: none;
 }
 
+/* A dot grid at the drag-snap pitch, so a dropped node lands on a dot and a
+   pan has something to move against. Position and pitch come from the
+   canvas's inline style (they follow the viewport); the dot itself is the
+   border token, mostly transparent, so it never competes with an edge. */
 .ds-chain-surface {
   position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
   cursor: grab;
+  background-color: var(--surface);
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--border), transparent 15%) 1px,
+    transparent 1.5px
+  );
 }
 
 .ds-chain-surface:active {
@@ -5931,6 +5945,28 @@ button.ds-onboarding-status {
   stroke-dasharray: 5 4;
 }
 
+/* Output is flowing down this edge right now: the source node is executing.
+   The dashes travel toward the arrowhead. One accent, moving, on the one
+   live path — the same rule the executing node follows. */
+.ds-chain-edge[data-live] {
+  stroke: var(--accent);
+  stroke-dasharray: 6 6;
+  animation: ds-chain-flow 900ms linear infinite;
+}
+
+@keyframes ds-chain-flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-chain-edge[data-live] {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}
+
 .ds-chain-gate {
   position: absolute;
   width: 20px;
@@ -5955,18 +5991,48 @@ button.ds-onboarding-status {
   color: var(--warn);
 }
 
+/* A service card: glyph tile + name up top, what runs it beneath, what it is
+   told to do in two lines, and — while a run is on — a status dot and label
+   at the foot. Flat, bordered, no shadow (Resting-Plane Rule); state is
+   carried by the border and the dot, never by a fill. */
 .ds-chain-node {
   position: absolute;
   box-sizing: border-box;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface-warm);
   cursor: pointer;
   user-select: none;
   transition:
     border-color 180ms cubic-bezier(0.2, 0, 0, 1),
-    background 180ms cubic-bezier(0.2, 0, 0, 1);
+    background 180ms cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The node whose editor is open. Selection is one of the three things the
+   accent is for (One Accent Rule), and it is a ring rather than a fill so a
+   selected node and an executing node still read as two different things. */
+.ds-chain-node[data-selected] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.ds-chain-node-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.ds-chain-node[data-state="executing"] .ds-chain-node-glyph {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent), transparent 55%);
 }
 
 /* A plain div with role="button" — same reasoning as the surface above. */
@@ -5993,28 +6059,37 @@ button.ds-onboarding-status {
 
 .ds-chain-node-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
 .ds-chain-node-role {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: var(--fg);
 }
 
 .ds-chain-node-entry {
+  flex: none;
   font-size: 10px;
+  font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 .ds-chain-node-agent {
   font-size: 11px;
   color: var(--muted);
-  margin-top: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-chain-node-model::before {
@@ -6032,12 +6107,42 @@ button.ds-onboarding-status {
 }
 
 .ds-chain-node-state {
-  display: inline-block;
-  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--muted);
+}
+
+/* The dot takes the state's colour so the label never carries it alone. */
+.ds-chain-node-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ds-chain-node[data-state="executing"] .ds-chain-node-dot {
+  animation: ds-session-pulse 1.6s ease-in-out infinite;
+}
+
+.ds-chain-node[data-state="done"] .ds-chain-node-state {
+  color: var(--success);
+}
+
+.ds-chain-node[data-state="blocked"] .ds-chain-node-state {
+  color: var(--warn);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-chain-node[data-state="executing"] .ds-chain-node-dot {
+    animation: none;
+  }
 }
 
 /* The One Accent Rule's payoff: at rest the canvas is entirely neutral, and
@@ -6097,6 +6202,123 @@ button.ds-onboarding-status {
 .ds-chain-node:hover .ds-chain-node-port,
 .ds-chain-node-port:focus-visible {
   opacity: 1;
+}
+
+/* A card in the middle of the empty grid, not a caption floating over it:
+   one primary action, then the four words the builder is made of. Sized to
+   its content so the grid around it still pans. */
+.ds-chain-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: auto;
+  width: max-content;
+  max-width: 400px;
+  height: fit-content;
+  padding: 20px 24px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-warm);
+}
+
+.ds-chain-empty-terms {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 8px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ds-chain-empty-terms dt {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-chain-empty-terms dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Staged changes, docked at the foot of the canvas with the one action that
+   writes them and the one that throws them away. */
+.ds-chain-changes {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-warm);
+  box-shadow: var(--shadow-float);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+/* Docked, never a modal takeover — the graph stays visible while deciding. */
+.ds-chain-approval {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--warn), transparent 92%);
+}
+
+.ds-chain-settings {
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-chain-settings .mantine-InputWrapper-root {
+  width: 150px;
+}
+
+.ds-chain-node-meta,
+.ds-chain-cost {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-chain-cost {
+  margin: 6px 8px;
+}
+
+.ds-chain-task {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.ds-chain-approval-evidence {
+  flex-basis: 100%;
+  max-height: 9em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ds-chain-node[data-state="blocked"] {
+  border-color: var(--warn);
+}
+
+.ds-chain-node[data-state="cancelled"] {
+  border-color: var(--muted);
 }
 
 /* The chat is the surface users open most, and it used to greet a new
@@ -6404,80 +6626,6 @@ button.ds-onboarding-status {
 .ds-spec-back {
   margin-top: 8px;
   font-size: 12px;
-}
-
-.ds-chain-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: auto;
-  max-width: 420px;
-  padding: 16px;
-  text-align: center;
-  pointer-events: none;
-}
-
-.ds-chain-empty > :first-child {
-  margin-bottom: 4px;
-}
-
-/* Docked, never a modal takeover — the graph stays visible while deciding. */
-.ds-chain-approval {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--warn);
-  border-radius: 6px;
-  background: color-mix(in oklab, var(--warn), transparent 92%);
-}
-
-.ds-chain-settings {
-  border-bottom: 1px solid var(--border);
-}
-
-.ds-chain-settings .mantine-InputWrapper-root {
-  width: 150px;
-}
-
-.ds-chain-node-meta,
-.ds-chain-cost {
-  display: block;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.ds-chain-cost {
-  margin: 6px 8px;
-}
-
-.ds-chain-task {
-  margin-top: 4px;
-  overflow-wrap: anywhere;
-}
-
-.ds-chain-approval-evidence {
-  flex-basis: 100%;
-  max-height: 9em;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.ds-chain-node[data-state="blocked"] {
-  border-color: var(--warn);
-}
-
-.ds-chain-node[data-state="cancelled"] {
-  border-color: var(--muted);
 }
 
 /* ---------------------------------------------------------------- fleet
