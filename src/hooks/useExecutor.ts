@@ -4,6 +4,8 @@ import type { AgentCommand, ExecutorEvent, Message, Preflight } from "../api";
 
 export function useExecutor() {
   const [messages, setMessages] = useState<Message[]>([]);
+  // The on-screen thread's history is being read (see `selectThread`).
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [liveBySession, setLiveBySession] = useState<
     Map<string, { threadId: string; events: ExecutorEvent[] }>
   >(new Map());
@@ -63,6 +65,8 @@ export function useExecutor() {
     () => ({
       messages,
       setMessages,
+      historyLoading,
+      setHistoryLoading,
       liveBySession,
       setLiveBySession,
       busyThreads,
@@ -85,6 +89,7 @@ export function useExecutor() {
     }),
     [
       messages,
+      historyLoading,
       liveBySession,
       busyThreads,
       commandsByThread,

@@ -473,11 +473,30 @@ async fn append_message(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// A thread's history. With no options: all of it. `from_seq` returns every
+/// message from that seq on (an incremental refresh); otherwise `limit`
+/// returns the newest that many, only those before `before_seq` if given (the
+/// "load earlier" page). Windowed reads touch only the tail of the log.
 #[tauri::command]
-async fn read_thread(project_hash: String, thread_id: String) -> Res<Vec<Message>> {
-    tokio::task::spawn_blocking(move || store::read_thread(&palisade_home(), &project_hash, &thread_id))
-        .await
-        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+async fn read_thread(
+    project_hash: String,
+    thread_id: String,
+    before_seq: Option<u64>,
+    from_seq: Option<u64>,
+    limit: Option<usize>,
+) -> Res<Vec<Message>> {
+    tokio::task::spawn_blocking(move || {
+        let home = palisade_home();
+        match (from_seq, limit) {
+            (Some(from), _) => store::read_thread_window(&home, &project_hash, &thread_id, store::Window::From(from)),
+            (None, Some(limit)) => {
+                store::read_thread_window(&home, &project_hash, &thread_id, store::Window::Last { before_seq, limit })
+            }
+            (None, None) => store::read_thread(&home, &project_hash, &thread_id),
+        }
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 // ------------------------------------------------------- executor handoff
@@ -664,7 +683,7 @@ impl Sink for AppSink {
             }
             ExecutorEvent::Done => {
                 let harness = self.app.state::<Harness>();
-                let _ = harness.workspace.session_log_writer.lock_or_recover().flush();
+                let _ = store::flush_session_log_writer();
                 // A turn made it to completion, so whatever auth problem
                 // blocked an earlier one no longer applies.
                 if thread_meta(&self.project_hash, &thread_id)
@@ -1361,7 +1380,7 @@ async fn retry_message(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let home = palisade_home();
-        let message = store::read_thread(&home, &project_hash, &thread_id)?
+        let message = store::read_thread_window(&home, &project_hash, &thread_id, store::Window::From(message_seq))?
             .into_iter()
             .find(|message| message.seq == message_seq && message.role == "user")
             .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
@@ -2703,7 +2722,7 @@ async fn set_thread_worktree_enabled(
         // started one but never spoken has nothing invested in it, and the
         // empty worktree is removed rather than left orphaned. Once an agent
         // has written a turn, its working directory cannot move underneath it.
-        if !store::read_thread(&home, &project_hash, &thread_id)?.is_empty() {
+        if !store::thread_is_empty(&home, &project_hash, &thread_id)? {
             return Err(
                 "This thread has already run — its worktree setting is fixed for the life of the thread."
                     .into(),
@@ -4356,7 +4375,7 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit) {
                 release_idle_sessions_on_exit(&app.state::<Harness>());
-                let _ = app.state::<Harness>().workspace.session_log_writer.lock_or_recover().flush();
+                let _ = store::flush_session_log_writer();
                 stop_completion_server(&app.state::<Harness>());
                 for (_, kernel) in app.state::<Harness>().tooling.notebook_kernels.lock_or_recover().drain() {
                     kernel.terminate();
