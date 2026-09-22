@@ -3597,7 +3597,8 @@ export default function App() {
   const selectionRef = useRef(0);
   const selectThread = useCallback(
     async (projectHash: string, next: ThreadMeta | null) => {
-      // Leaving a thread releases its idle sessions (closed `done`, D20);
+      // Leaving a thread lets the backend do its idle housekeeping (worktree
+      // sweeps). Sessions stay alive — idle ones keep their auth state — and
       // anything mid-turn keeps running and keeps streaming into its own key.
       const leaving = current.current.thread?.id;
       if (leaving && leaving !== next?.id) api.leaveThread(leaving).catch(fail);
