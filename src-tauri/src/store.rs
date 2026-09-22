@@ -1133,7 +1133,7 @@ fn next_line(
     }
     // Only the newest line is needed, not the whole history.
     let (disk_len, tail) = writer.view(path);
-    let seq = newest_tip(path, disk_len, &tail).map_or(0, |tip| tip.seq + 1);
+    let seq = newest_tip(path, disk_len, &tail, |_| true).map_or(0, |tip| tip.seq + 1);
     let torn_newline_len = u64::from(!ends_with_newline_upto(path, disk_len)?);
     Ok(NextLine { seq, torn_newline_len })
 }
@@ -1289,7 +1289,19 @@ fn read_log_bytes(path: &Path, start: u64, end: u64) -> Res<Vec<u8>> {
 pub fn last_activity(home: &Path, hash: &str, id: &str) -> Option<String> {
     let path = log_path(home, hash, id);
     let snap = snapshot(&path).ok()?;
-    newest_tip(&path, snap.file_len, &snap.buffered).map(|tip| tip.ts)
+    newest_tip(&path, snap.file_len, &snap.buffered, |_| true).map(|tip| tip.ts)
+}
+
+/// When the agent last said something in this thread: the newest message
+/// that is not the user's own. This is the moment a turn "finished" for the
+/// Fleet board's Unreviewed band. A session record's `ended_at` is not: an
+/// idle session stays open until the app quits, so it would read as "never
+/// finished" all day and then as "finished after you last looked" for every
+/// thread on the next launch.
+pub fn last_agent_activity(home: &Path, hash: &str, id: &str) -> Option<String> {
+    let path = log_path(home, hash, id);
+    let snap = snapshot(&path).ok()?;
+    newest_tip(&path, snap.file_len, &snap.buffered, |tip| tip.role != "user").map(|tip| tip.ts)
 }
 
 /// The fields of a message that say where a log has got to.
@@ -1297,14 +1309,20 @@ pub fn last_activity(home: &Path, hash: &str, id: &str) -> Option<String> {
 struct Tip {
     seq: u64,
     ts: String,
+    #[serde(default)]
+    role: String,
 }
 
 /// The newest whole message line of a log, without parsing the rest of it: the
 /// unwritten `tail` first, then the file's last `disk_len` bytes, reading
 /// further back only when the last line is longer than what has been read. A
 /// torn final line is skipped for the newest whole one.
-fn newest_tip(path: &Path, disk_len: u64, tail: &[u8]) -> Option<Tip> {
-    let newest = |text: &str| text.lines().rev().find_map(|line| serde_json::from_str::<Tip>(line).ok());
+fn newest_tip(path: &Path, disk_len: u64, tail: &[u8], want: impl Fn(&Tip) -> bool) -> Option<Tip> {
+    let newest = |text: &str| {
+        text.lines()
+            .rev()
+            .find_map(|line| serde_json::from_str::<Tip>(line).ok().filter(&want))
+    };
     if let Some(tip) = newest(&String::from_utf8_lossy(tail)) {
         return Some(tip);
     }
@@ -1828,6 +1846,24 @@ mod tests {
         mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
 
         assert_eq!(last_activity(home.path(), &project.hash, &thread.id), Some(sent.ts));
+    }
+
+    /// The Unreviewed band asks "did the agent say something after you last
+    /// looked?", so the user's own newest message must not count as agent
+    /// activity — a prompt that never got a reply is not an unread reply.
+    #[test]
+    fn last_agent_activity_skips_the_users_own_messages() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        assert_eq!(last_agent_activity(home.path(), &project.hash, &thread.id), None);
+
+        append_message(home.path(), &project.hash, &thread.id, "user", "go", "hi", None).unwrap();
+        assert_eq!(last_agent_activity(home.path(), &project.hash, &thread.id), None);
+
+        let reply = append_message(home.path(), &project.hash, &thread.id, "assistant", "go", "hello", None).unwrap();
+        append_message(home.path(), &project.hash, &thread.id, "user", "go", "and?", None).unwrap();
+        assert_eq!(last_agent_activity(home.path(), &project.hash, &thread.id), Some(reply.ts));
     }
 
     fn thread_with(home: &Path) -> (Project, ThreadMeta) {

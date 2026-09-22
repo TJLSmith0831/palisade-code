@@ -207,8 +207,8 @@ pub struct StatusInput {
     pub busy: bool,
     /// At least one turn has run and ended.
     pub turn_ended: bool,
-    /// The user has looked at the thread since that turn ended
-    /// (`ThreadMeta::last_viewed_at` against the last session's `ended_at`).
+    /// The user has looked at the thread since the agent last spoke
+    /// (`ThreadMeta::last_viewed_at` against `store::last_agent_activity`).
     pub viewed_since_turn: bool,
     /// The thread's most recent verification run failed.
     pub verify_failed: bool,
@@ -217,7 +217,8 @@ pub struct StatusInput {
     pub crashed: bool,
 }
 
-/// Has the user looked at this thread since its last turn ended?
+/// Has the user looked at this thread since the agent last spoke?
+/// `turn_ended_at` is the newest agent message's timestamp.
 ///
 /// A thread that predates view tracking has no `last_viewed_at` at all.
 /// Reading that absence as "never viewed" made every legacy thread sit under

@@ -42,8 +42,9 @@ test("a release without an app archive fails loudly", () => {
   assert.throws(() => buildUpdateManifest(dmgOnly, TARGETS, "https://w.dev", "SIG"), /no \.app\.tar\.gz/);
 });
 
-test("an empty target list fails loudly rather than publishing no platforms", () => {
+test("an empty or missing target list fails loudly rather than publishing no platforms", () => {
   assert.throws(() => buildUpdateManifest(release, "", "https://w.dev", "SIG"), /no update targets/);
+  assert.throws(() => buildUpdateManifest(release, undefined, "https://w.dev", "SIG"), /no update targets/);
 });
 
 import { parseModels } from "./src/index.js";

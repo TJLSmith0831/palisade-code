@@ -80,8 +80,10 @@ export function buildUpdateManifest(release, targets, origin, signature) {
   if (!archive) throw new Error("release has no .app.tar.gz asset");
 
   const entry = { signature, url: `${origin}/download/${archive.id}` };
-  const keys = String(targets).split(/[\s,]+/).filter(Boolean);
-  if (keys.length === 0) throw new Error("no update targets configured");
+  // A missing var must fail here, not publish a manifest keyed "undefined"
+  // that every installed app would silently fail to match.
+  const keys = typeof targets === "string" ? targets.split(/[\s,]+/).filter(Boolean) : [];
+  if (keys.length === 0) throw new Error("no update targets configured (UPDATE_TARGETS)");
 
   return {
     version: String(release.tag_name || "").replace(/^v/, ""),

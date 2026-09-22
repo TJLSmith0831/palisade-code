@@ -150,8 +150,9 @@ jobs:
 
           # The host can only run its own slice; prove the fat file with lipo.
           src-tauri/llama-server-aarch64-apple-darwin --version
-          lipo -info src-tauri/llama-server-universal-apple-darwin | tee /dev/stderr \
-            | grep -q 'x86_64 arm64\|arm64 x86_64'
+          info="$(lipo -info src-tauri/llama-server-universal-apple-darwin)"
+          echo "$info"
+          grep -q 'x86_64 arm64\|arm64 x86_64' <<<"$info"
 
       # The model repo is private. Its read token is release-only, just like
       # signing credentials; neither is available to normal CI or local builds.

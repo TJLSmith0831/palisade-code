@@ -5754,12 +5754,15 @@ export default function App() {
   // The dock badge counts threads wanting a look: blocked on you (a permission
   // prompt, a gate, a crash) or finished and unread. App-wide, cleared at zero.
   // Rides useFleet's own coalescing, so a streaming agent does not hammer it.
+  // A window with no project (welcome screen, or one mid-switch) has empty
+  // rows and must not clear a badge another window is keeping up to date.
   useEffect(() => {
+    if (!project || openingProject !== null) return;
     const count = fleet.rows.filter(
       (r) => r.status === "attention" || r.status === "unreviewed"
     ).length;
     void api.setDockBadge(count).catch(() => {});
-  }, [fleet.rows]);
+  }, [fleet.rows, project, openingProject]);
   // Threads whose title the backend is still writing (`title_thread`). The
   // skeleton only clears once the new name has been read back, so no surface
   // flashes the "New thread" placeholder between the two.

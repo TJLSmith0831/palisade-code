@@ -2609,9 +2609,13 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     awaiting_permission: live.awaiting_permission,
                     busy: live.busy,
                     turn_ended: last.is_some() && !live.busy,
+                    // Against the agent's newest message, not the session's
+                    // `ended_at`: an idle session stays open until quit, so
+                    // that field is None all day and then newer than every
+                    // view on the next launch (see `store::last_agent_activity`).
                     viewed_since_turn: fleet::viewed_since_turn(
                         thread.last_viewed_at.as_deref(),
-                        last.and_then(|s| s.ended_at.as_deref()),
+                        store::last_agent_activity(&home, &project.hash, &thread.id).as_deref(),
                     ),
                     verify_failed: verify.state == fleet::VerifyState::Fail,
                     merge_conflict: merge == fleet::FleetMerge::Conflicts,
