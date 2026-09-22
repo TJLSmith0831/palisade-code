@@ -20,6 +20,7 @@
     "dialog:allow-open",
     "mcp-bridge:default",
     "updater:default",
+    "notification:default",
     "process:allow-restart"
   ]
 }

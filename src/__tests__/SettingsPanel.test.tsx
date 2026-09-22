@@ -545,6 +545,19 @@ it("names its close button and paints it from the theme", async () => {
   expect(close.style.color).toBe("var(--muted)");
 });
 
+// The one notification the app sends is opt-out, and the toggle is the only
+// place that writes the setting the event relay reads.
+it("offers the turn-finished notification toggle, on by default, and persists it", async () => {
+  invokeMock.mockReset().mockResolvedValue(undefined);
+  render(<SettingsPanel projectHash="proj1" onClose={vi.fn()} onOpenProjectSettings={vi.fn()} />);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+  const toggle = screen.getByTestId("notify-turn-done-toggle") as HTMLInputElement;
+  expect(toggle.checked).toBe(true);
+  fireEvent.click(toggle);
+  expect(localStorage.getItem("palisade:notifyTurnDone")).toBe("0");
+  expect(toggle.checked).toBe(false);
+});
+
 // The swatches painted oklch(65% 0.18 hue) — a colour the app never ships.
 // The real accent is 88%/0.21 dark and 46%/0.16 light, so every preview was
 // wrong in both themes. They now read the same two tokens --accent derives
