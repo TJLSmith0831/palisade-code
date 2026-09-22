@@ -1540,7 +1540,9 @@ function stateName(state: api.ChainNodeState | undefined): string | undefined {
   return "blocked" in state ? "blocked" : "retrying";
 }
 
-function stateLabel(state: api.ChainNodeState): string {
+/** One wording for a node's state on every surface (canvas card, chat run
+ *  card): "waiting on 2 of 3", "retry 2", or the plain state name. */
+export function stateLabel(state: api.ChainNodeState): string {
   if (typeof state !== "string") {
     const blocked = "kind" in state
       ? state.kind === "blocked" ? { met: state.met, required: state.required } : undefined

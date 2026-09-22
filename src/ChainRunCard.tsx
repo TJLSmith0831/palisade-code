@@ -3,7 +3,7 @@ import { Alert, Badge, Button, Group, Paper, Stack, Text, TextInput } from "@man
 import { IconAlertTriangle, IconChevronDown, IconChevronRight, IconPlayerStop } from "@tabler/icons-react";
 import * as api from "./api";
 import { useElapsed } from "./useElapsed";
-import { outcomeText, type RunView } from "./ChainCanvas";
+import { outcomeText, stateLabel, type RunView } from "./ChainCanvas";
 import ChainRunHistory from "./ChainRunHistory";
 import { describeError } from "./errors";
 
@@ -34,27 +34,6 @@ type Props = {
    * without leaving the thread, same as it already is from the chains panel. */
   onOpenRun?: (runId: string) => void;
 };
-
-// Duplicated (in miniature) from ChainCanvas.tsx's own stateName/stateLabel:
-// that file is owned by a different wave in this worktree, and neither
-// helper is exported, so re-deriving a label from the wire shape here is
-// less risk than reaching into a sibling's file.
-function stateLabel(state: api.ChainNodeState): string {
-  if (typeof state === "string") return state;
-  const blocked =
-    "kind" in state
-      ? state.kind === "blocked"
-        ? { met: state.met, required: state.required }
-        : undefined
-      : "blocked" in state
-        ? state.blocked
-        : undefined;
-  if (blocked?.met !== undefined && blocked.required !== undefined) {
-    return `waiting on ${blocked.met} of ${blocked.required}`;
-  }
-  const attempt = "kind" in state ? state.attempt : state.retrying;
-  return `retry ${attempt ?? 1}`;
-}
 
 function resolvedLabel(decision: string): string {
   return decision === "approve" ? "Approved" : decision === "sendBack" ? "Sent back" : "Rejected";
