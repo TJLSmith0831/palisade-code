@@ -4965,6 +4965,27 @@ export default function App() {
     };
   }, [refresh, setBusyFor]);
 
+  // The agent advertises its `/` menu only when a session starts, so after a
+  // webview reload the listener above has nothing until the next session.
+  // Re-seed from the backend's cache; a live event that landed first wins.
+  const threadId = thread?.id;
+  useEffect(() => {
+    if (!threadId) return;
+    let cancelled = false;
+    api
+      .agentCommands(threadId)
+      .then((commands) => {
+        if (cancelled || !commands?.length) return;
+        setCommandsByThread((prev) =>
+          prev.has(threadId) ? prev : new Map(prev).set(threadId, commands)
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, setCommandsByThread]);
+
   // Files changing for a reason that wasn't us — an agent turn writing
   // directly to disk, a branch switch, another editor. Kept as its own
   // effect (rather than folded into the executor stream above) because the

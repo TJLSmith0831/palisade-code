@@ -249,6 +249,11 @@ export type AgentCommands = {
   commands: AgentCommand[];
 };
 
+/** The commands a thread's live sessions last advertised. `agent-commands`
+ *  fires only at session start, so a reloaded webview re-seeds from this. */
+export const agentCommands = (threadId: string) =>
+  invoke<AgentCommand[]>("agent_commands", { threadId });
+
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
 

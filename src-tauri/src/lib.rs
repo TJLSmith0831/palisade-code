@@ -549,6 +549,12 @@ impl Sink for AppSink {
         thread_id: &str,
         commands: &[crate::acp_events::AgentCommand],
     ) {
+        self.app
+            .state::<Harness>()
+            .agent
+            .session_commands
+            .lock_or_recover()
+            .insert(session_id.to_string(), commands.to_vec());
         let _ = self.app.emit(
             "agent-commands",
             AgentCommands {
@@ -1230,6 +1236,7 @@ fn park_prefix(harness: &Harness, session_id: &str, prefix: Option<String>) {
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
     harness.agent.pending_prefix.lock_or_recover().remove(session_id);
+    harness.agent.session_commands.lock_or_recover().remove(session_id);
     if let Some(mut session) = harness.agent.acp_sessions.lock_or_recover().remove(session_id) {
         session.terminate();
         let head_after = git_bin()
@@ -2361,6 +2368,32 @@ struct SessionStatus {
     /// The model the agent actually settled on for this session — what a
     /// chain node's model pick has to survive into to have meant anything.
     model: Option<String>,
+}
+
+/// The `/` menu for a thread, from the commands its live sessions last
+/// advertised. A webview reload loses every `agent-commands` event, and the
+/// agent never re-sends them while its session lives, so this is how the
+/// frontend re-seeds. Empty when no live session has advertised any.
+fn thread_commands(harness: &Harness, thread_id: &str) -> Vec<crate::acp_events::AgentCommand> {
+    let mut ids: Vec<String> = harness
+        .agent.acp_sessions
+        .lock_or_recover()
+        .values()
+        .filter(|s| s.thread_id == thread_id)
+        .map(|s| s.id.clone())
+        .collect();
+    ids.sort();
+    let cache = harness.agent.session_commands.lock_or_recover();
+    ids.iter().find_map(|id| cache.get(id).cloned()).unwrap_or_default()
+}
+
+#[tauri::command]
+async fn agent_commands(
+    app: tauri::AppHandle,
+    thread_id: String,
+) -> Res<Vec<crate::acp_events::AgentCommand>> {
+    let harness: tauri::State<'_, Harness> = app.state();
+    Ok(thread_commands(&harness, &thread_id))
 }
 
 #[tauri::command]
@@ -4279,6 +4312,7 @@ pub fn run() {
         .manage(Harness::default())
         .manage(lsp::SharedLsp::new(lsp::LspServers::new()))
         .invoke_handler(tauri::generate_handler![
+            agent_commands,
             complete_code,
             agent_usage,
             list_skills,
@@ -5028,6 +5062,32 @@ mod tests {
         assert_eq!(harness.with_pending_prefix("s1", "next"), "next");
         // A session with nothing parked is untouched.
         assert_eq!(harness.with_pending_prefix("s2", "plain"), "plain");
+    }
+
+    /// A reloaded webview re-seeds its `/` menu from here: a live session's
+    /// last advertised commands come back for its thread, and a session that
+    /// ended takes its commands with it.
+    #[test]
+    fn a_live_sessions_commands_survive_for_its_thread_until_it_ends() {
+        let (session, _rx) = acp_client::stub_session(false);
+        let harness = Harness::default();
+        let id = session.id.clone();
+        let thread = session.thread_id.clone();
+        harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
+        let commands = vec![crate::acp_events::AgentCommand {
+            name: "review".into(),
+            description: "Review code changes".into(),
+        }];
+        harness.agent.session_commands.lock_or_recover().insert(id.clone(), commands.clone());
+        // A stale entry for a session that is no longer live is ignored.
+        harness.agent.session_commands.lock_or_recover().insert("gone".into(), vec![]);
+
+        assert_eq!(thread_commands(&harness, &thread), commands);
+        assert!(thread_commands(&harness, "other-thread").is_empty());
+
+        end_session(&harness, &thread, &id, "cancelled");
+        assert!(thread_commands(&harness, &thread).is_empty());
+        assert!(!harness.agent.session_commands.lock_or_recover().contains_key(&id));
     }
 
     /// The bytes the agent actually receives. `/go` performs the handoff but

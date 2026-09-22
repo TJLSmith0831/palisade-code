@@ -525,6 +525,10 @@ pub struct AgentState {
     /// automatically" message a blocked turn is given.
     pub pending_auth_turns: Mutex<HashMap<String, Vec<PendingAuthTurn>>>,
     pub pending_propose: Mutex<Option<ProposeWatch>>,
+    /// The last slash commands each session's agent advertised, keyed by
+    /// session id. Agents send the list only at session start, so a reloaded
+    /// webview reads it back from here instead of waiting for a new session.
+    pub session_commands: Mutex<HashMap<String, Vec<crate::acp_events::AgentCommand>>>,
 }
 
 /// Everything scoped to an open project or window.
@@ -678,7 +682,7 @@ mod harness_shape_tests {
             .iter()
             .map(|n| counts[*n])
             .sum();
-        assert_eq!(grouped, 19, "a field was dropped or added without a home");
+        assert_eq!(grouped, 20, "a field was dropped or added without a home");
     }
 
     /// The field comments are why this codebase is auditable; a refactor that

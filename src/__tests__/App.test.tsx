@@ -5730,8 +5730,11 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
 // a project's own .claude/skills/*/SKILL.md arrives through this channel, so
 // Palisade never scans a skill directory or hardcodes an agent's layout.
 describe("Agent command menu", () => {
-  const openThread = async () => {
+  const openThread = async (
+    cached: { name: string; description: string }[] = []
+  ) => {
     invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "agent_commands") return Promise.resolve(cached);
       if (cmd === "list_projects") {
         return Promise.resolve([
           {
@@ -5815,6 +5818,18 @@ describe("Agent command menu", () => {
     });
     const menu = await screen.findByTestId("command-menu");
     expect(menu).toHaveTextContent(/no skills advertised/i);
+  });
+
+  it("re-seeds a selected thread's menu from the backend without an event", async () => {
+    // A webview reload drops every `agent-commands` event while the ACP
+    // session lives on; the backend's cache is the only source left.
+    await openThread([{ name: "review", description: "Review code changes" }]);
+    expect(invokeMock).toHaveBeenCalledWith("agent_commands", { threadId: "t1" });
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "/" },
+    });
+    const menu = await screen.findByTestId("command-menu");
+    await waitFor(() => expect(menu).toHaveTextContent("/review"));
   });
 
   it("distinguishes a query with no matches from an empty pool", async () => {
