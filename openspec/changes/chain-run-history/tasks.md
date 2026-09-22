@@ -23,16 +23,16 @@
 
 ## 2. Wiring (owned by other, already-scoped tasks — not this change's work)
 
-- [ ] 2.1 `mod chain_history;` in `src-tauri/src/lib.rs`
-- [ ] 2.2 `list_chain_runs(project_hash, chain_name?)` and
+- [x] 2.1 `mod chain_history;` in `src-tauri/src/lib.rs`
+- [x] 2.2 `list_chain_runs(project_hash, chain_name?)` and
   `get_chain_run(run_id)` `#[tauri::command]`s, registered in
   `generate_handler!`
-- [ ] 2.3 `src/api.ts` wrappers for the above (CLAUDE.md: a new IPC
+- [x] 2.3 `src/api.ts` wrappers for the above (CLAUDE.md: a new IPC
   command is three edits — this is the one silently forgotten)
-- [ ] 2.4 Call `chain_history::start_run`/`record_transition`/
+- [x] 2.4 Call `chain_history::start_run`/`record_transition`/
   `record_cost`/`end_run` from `chain_exec.rs`'s `AcpNodeRunner` as a run
   progresses
-- [ ] 2.5 `ChainsPanel.tsx` run-history UI and re-run-from-node, consuming
+- [x] 2.5 `ChainsPanel.tsx` run-history UI and re-run-from-node, consuming
   the persisted `chain_snapshot` rather than the live chain definition
 
 ## 3. Gate
@@ -41,5 +41,5 @@
   copies of `chain_runner.rs`/`chains.rs` in an isolated crate (this
   module cannot itself be registered in `lib.rs` by this task; see the
   task report)
-- [ ] 3.2 `cd src-tauri && cargo test` green once `mod chain_history;`
+- [x] 3.2 `cd src-tauri && cargo test` green once `mod chain_history;`
   is registered (task 2.1)
