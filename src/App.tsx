@@ -2615,6 +2615,17 @@ async function readPage(projectHash: string, threadId: string, beforeSeq?: numbe
   const hasEarlier = got.length > THREAD_PAGE;
   return { messages: hasEarlier ? got.slice(1) : got, hasEarlier };
 }
+/** What a refresh re-reads: everything from `fromSeq` on (keeping any earlier
+ *  pages on screen), or the newest page when nothing is loaded yet. Only the
+ *  newest page can say whether older messages exist. */
+async function readFresh(
+  projectHash: string,
+  threadId: string,
+  fromSeq: number | undefined
+): Promise<{ messages: Message[]; hasEarlier?: boolean }> {
+  if (fromSeq === undefined) return readPage(projectHash, threadId);
+  return { messages: await api.readThread(projectHash, threadId, { fromSeq }) };
+}
 /** The seq of the oldest persisted message on screen; `undefined` when none. */
 const oldestSeq = (messages: Message[]) => messages.find((m) => m.seq !== OPTIMISTIC_SEQ)?.seq;
 type ThreadRowProps = {
@@ -4593,20 +4604,12 @@ export default function App() {
     // Re-read only from the oldest message already on screen, so a refresh
     // keeps whatever "Load earlier" has paged in and costs what changed, not
     // the whole thread. A thread not yet loaded (or empty) starts at the newest page.
-    const from = oldestSeq(messagesRef.current);
     const [found, { messages: history, hasEarlier: moreBefore }] = await Promise.all([
       api.listThreads(project.hash),
-      from === undefined
-        ? readPage(project.hash, thread.id)
-        : api.readThread(project.hash, thread.id, { fromSeq: from }).then((messages) => ({
-            messages,
-            hasEarlier: undefined,
-          })),
+      readFresh(project.hash, thread.id, oldestSeq(messagesRef.current)),
     ]);
     // The user may have moved on while this read was out.
     if (current.current.thread?.id !== thread.id) return;
-    // A refresh from the oldest message on screen can't tell whether older
-    // ones exist; only a fresh newest page can.
     if (moreBefore !== undefined) setHasEarlier(moreBefore);
     const updated = found.find((t) => t.id === thread.id) ?? thread;
     setThreads(found);
