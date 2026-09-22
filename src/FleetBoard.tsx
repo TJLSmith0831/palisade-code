@@ -370,10 +370,11 @@ export default function FleetBoard({
   const [caret, setCaret] = useState(0);
   const [skills, setSkills] = useState<string[]>([]);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
-  const installedSkills = useInstalledSkills();
+  const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
+  const installedSkills = useInstalledSkills(agentId);
   const skillPool = useMemo(
-    () => withInstalled(skillCommands, installedSkills),
-    [skillCommands, installedSkills]
+    () => withInstalled(skillCommands, installedSkills, agentId),
+    [skillCommands, installedSkills, agentId]
   );
   const menu = useSlashMenu(prompt, caret, skillPool);
   const pickSkill = (command: AgentCommand) => {
@@ -389,7 +390,6 @@ export default function FleetBoard({
   };
   const trackCaret = (event: React.SyntheticEvent<HTMLTextAreaElement>) =>
     setCaret(event.currentTarget.selectionStart ?? 0);
-  const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
   const [modelId, setModelId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -522,6 +522,11 @@ export default function FleetBoard({
           onPaste={imagePasteHandler(onPasteImages)}
           placeholder="What should the agent do?"
           aria-label="New run prompt"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={menu.open}
+          aria-controls={menu.open ? menu.id : undefined}
+          aria-activedescendant={menu.open ? menu.activeId : undefined}
           rows={3}
           classNames={{ input: "fleet-prompt-input" }}
           data-testid="fleet-prompt"

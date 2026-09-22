@@ -61,8 +61,8 @@ export function rankMentions(files: string[], query: string): string[] {
     .map((row) => row.path);
 }
 
-/** The `@thread:` form of a thread title — one token, whitespace as `-`.
- *  Mirrors `store::thread_slug`, which resolves it to a transcript on send. */
+/** A readable suffix for a thread mention, whitespace as `-`.
+ *  Mirrors `store::thread_slug`. The ID before it keeps duplicate titles distinct. */
 export const THREAD_PREFIX = "thread:";
 export const threadSlug = (title: string) => title.trim().split(/\s+/).join("-");
 
@@ -96,10 +96,12 @@ export type MentionOption<T> =
   | { kind: "path"; entry: { name: string; is_dir: boolean; path: string } }
   | { kind: "browse" };
 
+export type MentionScope = "all" | "threads" | "files";
+
 /**
  * Every row the `@` menu offers for `query`, in order. A path query lists
- * that folder's entries by name prefix; anything else offers project files,
- * then past threads. Browse… is always last.
+ * that folder's entries by name prefix; anything else offers recent threads
+ * first, then project files. Browse… is always last.
  */
 export function mentionOptions<T extends { title: string }>(
   query: string,
@@ -108,7 +110,8 @@ export function mentionOptions<T extends { title: string }>(
     threads: T[];
     /** The listed folder, for a path query; `null` while it loads. */
     entries: { name: string; is_dir: boolean; path: string }[] | null;
-  }
+  },
+  scope: MentionScope = "all"
 ): MentionOption<T>[] {
   const browse: MentionOption<T> = { kind: "browse" };
   if (isPathQuery(query)) {
@@ -122,18 +125,20 @@ export function mentionOptions<T extends { title: string }>(
     ];
   }
   return [
-    ...rankMentions(sources.files, query).map((path): MentionOption<T> => ({ kind: "file", path })),
-    ...rankThreads(sources.threads, query).map((thread): MentionOption<T> => ({ kind: "thread", thread })),
-    browse,
+    ...(scope === "files" ? [] : rankThreads(sources.threads, query, scope === "threads" ? MENTION_LIMIT : query ? 8 : 4)
+      .map((thread): MentionOption<T> => ({ kind: "thread", thread }))),
+    ...(scope === "threads" ? [] : rankMentions(sources.files, query)
+      .map((path): MentionOption<T> => ({ kind: "file", path }))),
+    ...(scope === "threads" ? [] : [browse]),
   ];
 }
 
 /** What a picked row puts after the `@` (Browse… is resolved by the caller). */
-export function mentionTarget<T extends { title: string }>(
+export function mentionTarget<T extends { title: string; id: string }>(
   option: Exclude<MentionOption<T>, { kind: "browse" }>
 ): string {
   if (option.kind === "file") return option.path;
-  if (option.kind === "thread") return THREAD_PREFIX + threadSlug(option.thread.title);
+  if (option.kind === "thread") return `${THREAD_PREFIX}${option.thread.id}::${threadSlug(option.thread.title)}`;
   return option.entry.is_dir ? `${option.entry.path}/` : option.entry.path;
 }
 
@@ -159,7 +164,7 @@ export function shortPath(path: string, max = 40): string {
 export function displayMentions(markdown: string): string {
   return markdown.replace(/(^|\s)@(\S+)/g, (_, lead: string, target: string) => {
     const shown = target.startsWith(THREAD_PREFIX)
-      ? target.slice(THREAD_PREFIX.length).replace(/-/g, " ")
+      ? (target.slice(THREAD_PREFIX.length).split("::")[1] ?? target.slice(THREAD_PREFIX.length)).replace(/-/g, " ")
       : isPathQuery(target)
         ? shortPath(target)
         : target;

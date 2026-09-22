@@ -99,14 +99,25 @@ describe("@ threads and outside paths", () => {
 import { mentionOptions, mentionTarget } from "../mentions";
 
 describe("mentionOptions", () => {
-  const threads = [{ title: "Auth token refresh fix" }];
+  const threads = [{ id: "t2", title: "Auth token refresh fix" }];
 
-  it("offers files, then threads, then Browse… for a project query", () => {
+  it("offers threads, then files, then Browse… for a project query", () => {
     const rows = mentionOptions("auth", { files: ["src/auth.ts"], threads, entries: null });
-    expect(rows.map((r) => r.kind)).toEqual(["file", "thread", "browse"]);
-    expect(mentionTarget(rows[1] as Exclude<(typeof rows)[number], { kind: "browse" }>)).toBe(
-      "thread:Auth-token-refresh-fix"
+    expect(rows.map((r) => r.kind)).toEqual(["thread", "file", "browse"]);
+    expect(mentionTarget(rows[0] as Exclude<(typeof rows)[number], { kind: "browse" }>)).toBe(
+      "thread:t2::Auth-token-refresh-fix"
     );
+  });
+
+  it("keeps recent threads visible ahead of a large file list", () => {
+    const manyThreads = Array.from({ length: 10 }, (_, n) => ({ id: `t${n}`, title: `Thread ${n}` }));
+    const manyFiles = Array.from({ length: 100 }, (_, n) => `src/file-${n}.ts`);
+    const rows = mentionOptions("", { files: manyFiles, threads: manyThreads, entries: null });
+    expect(rows.slice(0, 4).map((r) => r.kind)).toEqual(["thread", "thread", "thread", "thread"]);
+    expect(rows[4]?.kind).toBe("file");
+    expect(rows.filter((r) => r.kind === "file")).toHaveLength(50);
+    expect(mentionOptions("", { files: manyFiles, threads: manyThreads, entries: null }, "threads")).toHaveLength(10);
+    expect(mentionOptions("", { files: manyFiles, threads: manyThreads, entries: null }, "files").map((r) => r.kind).slice(0, 2)).toEqual(["file", "file"]);
   });
 
   it("lists a folder by name prefix for a path query, folders keeping the menu open", () => {
@@ -141,6 +152,7 @@ import { displayMentions } from "../mentions";
 describe("displayMentions", () => {
   it("shows threads by title and outside paths short, leaving emails alone", () => {
     expect(displayMentions("redo @thread:Auth-token-fix now")).toBe("redo `@Auth token fix` now");
+    expect(displayMentions("redo @thread:t2::Auth-token-fix now")).toBe("redo `@Auth token fix` now");
     expect(displayMentions("read @/Users/me/a/b/spec.md")).toBe("read `@~/a/b/spec.md`");
     expect(displayMentions("read @/private/tmp/some-long-session-folder/scratchpad/fixtures/spec.md")).toBe("read `@…/fixtures/spec.md`");
     expect(displayMentions("@src/App.tsx and me@example.com")).toBe("`@src/App.tsx` and me@example.com");

@@ -32,6 +32,7 @@
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
   --border: oklch(30% 0.01 250);
+  --image-outline: oklch(1 0 0 / 0.1);
   /* The accent's lightness and chroma, named so the settings swatches can
      paint the colour the theme will actually ship instead of guessing at it.
      --accent is derived from them, so the preview cannot drift again. */
@@ -97,6 +98,7 @@
     --fg: oklch(20% 0.006 250);
     --muted: oklch(46% 0.012 250);
     --border: oklch(85% 0.01 250);
+    --image-outline: oklch(0 0 0 / 0.1);
     --accent-l: 46%;
     --accent-c: 0.16;
     --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
@@ -143,6 +145,7 @@
   --fg: oklch(20% 0.006 250);
   --muted: oklch(46% 0.012 250);
   --border: oklch(85% 0.01 250);
+  --image-outline: oklch(0 0 0 / 0.1);
   --accent-l: 46%;
   --accent-c: 0.16;
   --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
@@ -5379,6 +5382,36 @@ button.ds-onboarding-status {
   overflow-y: auto;
 }
 
+.ds-mention-scopes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-mention-scopes button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ds-mention-scopes button:hover { background: var(--surface-warm); color: var(--fg); }
+.ds-mention-scopes button[aria-pressed="true"] { background: var(--active-row); color: var(--fg); }
+.ds-mention-scopes button:focus-visible { outline: 2px solid var(--accent); }
+
+.ds-mention-scopes-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* Names the menu before the list scrolls into it, so "Skills" and "Chains"
    read as two distinct places rather than one list that happens to change
    contents depending on which sigil was typed. */
@@ -5387,7 +5420,7 @@ button.ds-onboarding-status {
   align-items: center;
   gap: 5px;
   padding: 6px 12px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -5413,6 +5446,15 @@ button.ds-onboarding-status {
   background: var(--active-row);
 }
 
+.ds-command-menu-row:hover:not([data-active]) {
+  background: var(--surface-warm);
+}
+
+.ds-command-menu-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .ds-command-menu-name {
   display: block;
   font-size: 12px;
@@ -5426,7 +5468,7 @@ button.ds-onboarding-status {
    you are picking by — the description only has to disambiguate. */
 .ds-command-menu-desc {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--muted);
   overflow: hidden;
@@ -5507,25 +5549,6 @@ button.ds-onboarding-status {
   margin-top: 0;
 }
 
-/* A new item settles in rather than popping: one short authored moment. */
-.ds-composer-tray .ds-tray-item {
-  animation: ds-tray-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes ds-tray-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px) scale(0.96);
-    filter: blur(2px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ds-composer-tray .ds-tray-item {
-    animation: none;
-  }
-}
-
 .ds-composer-chip[data-kind="file"] {
   color: var(--fg);
   background: var(--surface-warm);
@@ -5540,21 +5563,20 @@ button.ds-onboarding-status {
 
 .ds-composer-chip:focus-visible,
 .ds-attachment:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-/* The × inside a pill or on a thumbnail: a real 16px target, quiet until
-   the pointer or keyboard reaches its item. */
+/* The × stays reachable on touch and keyboard as well as pointer hover. */
 .ds-tray-remove {
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  margin: -2px -4px -2px 1px;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px -4px 0;
   border-radius: 9999px;
   color: currentColor;
-  opacity: 0.6;
+  opacity: 0.8;
   transition: opacity 120ms ease-out, background-color 120ms ease-out;
 }
 
@@ -5564,18 +5586,21 @@ button.ds-onboarding-status {
   background: color-mix(in oklab, currentColor, transparent 84%);
 }
 
+.ds-tray-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .ds-attachment {
   position: relative;
   display: inline-flex;
   flex-shrink: 0;
   border-radius: 6px;
-  outline: 1px solid var(--border);
-  outline-offset: -1px;
-  transition: outline-color 120ms ease-out, transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: box-shadow 120ms ease-out, transform 120ms ease-out;
 }
 
 .ds-attachment:hover {
-  outline-color: color-mix(in oklab, var(--accent), var(--border) 55%);
+  box-shadow: 0 0 0 2px var(--accent);
   transform: translateY(-1px);
 }
 
@@ -5584,6 +5609,8 @@ button.ds-onboarding-status {
   height: 100%;
   object-fit: cover;
   border-radius: 6px;
+  outline: 1px solid var(--image-outline);
+  outline-offset: -1px;
 }
 
 /* On a thumbnail the × floats on its corner, over a surface disc so it
@@ -5593,17 +5620,12 @@ button.ds-onboarding-status {
   top: -6px;
   right: -6px;
   margin: 0;
-  width: 18px;
-  height: 18px;
-  opacity: 0;
+  width: 24px;
+  height: 24px;
+  opacity: 1;
   color: var(--fg);
   background: var(--surface-warm);
   box-shadow: 0 0 0 1px var(--border);
-}
-
-.ds-attachment:hover .ds-tray-remove,
-.ds-attachment:focus-within .ds-tray-remove {
-  opacity: 1;
 }
 
 .ds-attachment .ds-tray-remove:hover {
@@ -5672,7 +5694,7 @@ button.ds-onboarding-status {
 
 .ds-skill-card-source {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -5724,6 +5746,8 @@ button.ds-onboarding-status {
   border-radius: 6px;
   object-fit: contain;
   background: var(--editor-bg);
+  outline: 1px solid var(--image-outline);
+  outline-offset: -1px;
 }
 
 .ds-image-card-meta {
@@ -5759,7 +5783,11 @@ button.ds-onboarding-status {
   background: color-mix(in oklab, var(--surface), var(--accent) 7%);
   color: var(--accent);
   pointer-events: none;
-  animation: ds-status-item-in 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-attachment { transition: none; }
+  .ds-attachment:hover { transform: none; }
 }
 
 .ds-drop-hint-title {

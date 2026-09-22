@@ -7101,15 +7101,21 @@ describe("Composer: skills anywhere, @ threads, images", () => {
     await waitFor(() => expect(sentContent()?.content).toBe("check /tmp"));
   });
 
-  it("offers past threads after files and inserts an @thread mention", async () => {
+  it("searches threads and files in separate @ scopes", async () => {
     const input = await setup();
     type(input, "redo @auth");
     const menu = await screen.findByTestId("mention-menu");
-    const row = await within(menu).findByText("Auth token refresh fix");
+    await within(menu).findByText("Auth token refresh fix");
     expect(menu).toHaveTextContent("Threads");
-    fireEvent.click(row.closest("[data-testid='mention-row']")!);
+    fireEvent.keyDown(input, { key: "Tab", ctrlKey: true });
+    expect(screen.getByTestId("mention-scope-threads")).toHaveAttribute("aria-pressed", "true");
+    expect(within(menu).queryByText("Browse…")).toBeNull();
+    fireEvent.click(screen.getByTestId("mention-scope-files"));
+    expect(within(menu).queryByText("Auth token refresh fix")).toBeNull();
+    fireEvent.click(screen.getByTestId("mention-scope-all"));
+    fireEvent.click(within(menu).getByText("Auth token refresh fix").closest("[data-testid='mention-row']")!);
     await waitFor(() =>
-      expect(screen.getByTestId("composer-input")).toHaveValue("redo @thread:Auth-token-refresh-fix ")
+      expect(screen.getByTestId("composer-input")).toHaveValue("redo @thread:t2::Auth-token-refresh-fix ")
     );
   });
 

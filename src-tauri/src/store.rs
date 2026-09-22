@@ -390,9 +390,8 @@ fn log_path(home: &Path, hash: &str, id: &str) -> PathBuf {
     threads_dir(home, hash).join(format!("{id}.jsonl"))
 }
 
-/// How a thread is named in an `@thread:` mention: its title with runs of
-/// whitespace turned into `-`, so the mention is one token. Mirrors
-/// `threadSlug` in `src/mentions.ts` — the two must agree.
+/// Readable suffix of an `@thread:<id>::<slug>` mention. Mirrors `threadSlug`
+/// in `src/mentions.ts`; the ID is what selects the transcript.
 pub fn thread_slug(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join("-")
 }
@@ -416,9 +415,10 @@ pub fn expand_thread_mentions(home: &Path, hash: &str, content: &str) -> String 
         // Exact first: an auto-title can itself end in "..." — then without
         // the sentence punctuation typed after the mention ("@thread:x,").
         let bare = slug.trim_end_matches(|c: char| ".,;:!?)".contains(c));
-        let found = threads
-            .iter()
-            .find(|t| thread_slug(&t.title) == slug)
+        let found = slug.split_once("::")
+            .and_then(|(id, _)| threads.iter().find(|t| t.id == id))
+            // Older mentions only carried a title; keep those readable.
+            .or_else(|| threads.iter().find(|t| thread_slug(&t.title) == slug))
             .or_else(|| threads.iter().find(|t| thread_slug(&t.title) == bare));
         if let Some(thread) = found {
             let line = format!("- {} → {}", thread.title, log_path(home, hash, &thread.id).display());
@@ -2489,6 +2489,10 @@ mod tests {
         let out = expand_thread_mentions(home.path(), &project.hash, "redo @thread:Auth-token-fix, but faster");
         assert!(out.starts_with("redo @thread:Auth-token-fix, but faster\n\nReferenced chats"));
         assert!(out.contains(&format!("{}.jsonl", thread.id)));
+        let duplicate = create_thread(home.path(), &project.hash, "Auth  token fix").unwrap();
+        let out = expand_thread_mentions(home.path(), &project.hash, &format!("redo @thread:{}::Auth-token-fix", duplicate.id));
+        assert!(out.contains(&format!("{}.jsonl", duplicate.id)));
+        assert!(!out.contains(&format!("{}.jsonl", thread.id)));
         // A title that ends in punctuation (auto-titles end in "...") still resolves.
         let dotted = create_thread(home.path(), &project.hash, "Reply with exactly...").unwrap();
         let out = expand_thread_mentions(home.path(), &project.hash, "what did @thread:Reply-with-exactly... ask?");

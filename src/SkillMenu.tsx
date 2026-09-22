@@ -1,12 +1,13 @@
 // The `/` menu, shared by every composer that takes skills: a thread's chat
 // and the Fleet board's new-run box. The grammar lives in slashCommands.ts;
 // this is the state and the rendering, so the two composers cannot drift.
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useState, type KeyboardEvent } from "react";
 import { Paper, UnstyledButton } from "@mantine/core";
 import { IconRoute, IconWand } from "@tabler/icons-react";
 import * as api from "./api";
 import {
   CHAIN_SIGIL,
+  bareName,
   commandTrigger,
   isChainCommand,
   matchToken,
@@ -18,7 +19,7 @@ import {
 
 /** User-level skills on disk, for hover cards and for composers that have
  *  no live session to advertise any (Fleet). Read once per mount. */
-export function useInstalledSkills(): api.Skill[] {
+export function useInstalledSkills(agentId?: string | null): api.Skill[] {
   const [installed, setInstalled] = useState<api.Skill[]>([]);
   useEffect(() => {
     api.listSkills().then(
@@ -26,7 +27,7 @@ export function useInstalledSkills(): api.Skill[] {
       () => {}
     );
   }, []);
-  return installed;
+  return installed.filter((skill) => skill.owner !== "claude" || !agentId || agentId === "claude");
 }
 
 /**
@@ -35,13 +36,17 @@ export function useInstalledSkills(): api.Skill[] {
  * and a new Fleet run have no session yet, so without the installed list
  * their menus would be empty exactly when a skill is most useful.
  */
-export function withInstalled(commands: MenuCommand[], installed: api.Skill[]): MenuCommand[] {
-  const advertised = new Set(commands.map((c) => c.name));
+export function withInstalled(commands: MenuCommand[], installed: api.Skill[], agentId?: string | null): MenuCommand[] {
+  const seen = new Set(commands.map((c) => bareName(c.name)));
   return [
     ...commands,
     ...installed
-      .filter((skill) => !advertised.has(skill.name))
-      .map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
+      .filter((skill) => {
+        if (seen.has(skill.name)) return false;
+        seen.add(skill.name);
+        return true;
+      })
+      .map((skill) => ({ name: agentId === "codex" ? `$${skill.name}` : skill.name, description: skill.description ?? "" })),
   ];
 }
 
@@ -57,6 +62,7 @@ export type SlashMenuState = ReturnType<typeof useSlashMenu>;
  * to complete.
  */
 export function useSlashMenu(draft: string, caret: number, commands: MenuCommand[], suppressed = false) {
+  const id = useId();
   // Any sigil at the head of the draft, or a word-start `/` anywhere after it.
   const slash = useMemo(() => (suppressed ? null : slashAt(draft, caret)), [suppressed, draft, caret]);
   // Skills (`/`, `$`) or chains (`|=`): the sigils never overlap in one
@@ -80,7 +86,8 @@ export function useSlashMenu(draft: string, caret: number, commands: MenuCommand
   useEffect(() => {
     setIndex(0);
   }, [slash?.query]);
-  return { slash, kind, pool, matches, open, active, setIndex };
+  const activeId = active ? `${id}-option-${matches.indexOf(active)}` : undefined;
+  return { id, activeId, slash, kind, pool, matches, open, active, setIndex };
 }
 
 /**
@@ -102,9 +109,9 @@ export function handleSlashMenuKey(
     menu.setIndex((i) => (i + step + count) % count);
     return true;
   }
-  if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+  if (menu.active && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
     event.preventDefault();
-    if (menu.active) onPick(menu.active);
+    onPick(menu.active);
     return true;
   }
   if (event.key === "Escape" && menu.slash) {
@@ -147,6 +154,7 @@ export function SlashMenu({
       shadow="md"
       radius="md"
       className="ds-command-menu"
+      id={menu.id}
       data-testid="command-menu"
       data-kind={menu.kind ?? undefined}
       role="listbox"
@@ -167,6 +175,7 @@ export function SlashMenu({
           menu.matches.map((command, index) => (
             <UnstyledButton
               key={command.name}
+              id={`${menu.id}-option-${index}`}
               role="option"
               aria-selected={command === menu.active}
               data-active={command === menu.active || undefined}
@@ -175,6 +184,7 @@ export function SlashMenu({
               // never leaves two rows looking selected at once.
               onMouseEnter={() => menu.setIndex(index)}
               onClick={() => onPick(command)}
+              title={command.description}
             >
               <span className="ds-command-menu-name">
                 {isChainCommand(command) && (

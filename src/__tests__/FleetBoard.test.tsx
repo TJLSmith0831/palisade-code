@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
+import { withInstalled } from "../SkillMenu";
 import type { FleetBoardProps } from "../FleetBoard";
 import type { FleetRow } from "../api";
 import { ArchivingContext } from "../archiving";
@@ -20,6 +21,15 @@ vi.mock("../api", () => apiMock);
 
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
+
+it("does not offer the same installed skill twice when Codex advertises its dollar sigil", () => {
+  expect(withInstalled(
+    [{ name: "$grill-apply", description: "Agent version" }],
+    [{ name: "grill-apply", path: "/skills/grill-apply", owner: "agents" }]
+  )).toEqual([{ name: "$grill-apply", description: "Agent version" }]);
+  expect(withInstalled([], [{ name: "grill-apply", path: "/skills/grill-apply", owner: "agents" }], "codex"))
+    .toEqual([{ name: "$grill-apply", description: "" }]);
+});
 
 const row = (over: Partial<FleetRow> = {}): FleetRow => ({
   kind: "thread",
@@ -641,7 +651,7 @@ describe("FleetBoard skills", () => {
   });
 
   it("offers installed skills even before any session has advertised one", async () => {
-    render(<FleetBoard {...props()} />);
+    render(<FleetBoard {...props({ agents: [{ id: "claude", name: "Claude Agent", installed: true }] })} />);
     typeAt("/gri");
     expect(await screen.findByTestId("command-menu")).toHaveTextContent("/grill-apply");
   });

@@ -293,16 +293,23 @@ impl CompletionServer {
     /// the editor's inline completion runs on — no extra agent turn, no
     /// network, no cost.
     ///
-    /// Short deadline and no retry, unlike `complete`: a title is cosmetic,
-    /// and the caller falls back to trimming the prompt. Making the user's
-    /// first turn wait on a cold sidecar to earn a nicer label is a bad
-    /// trade, so a slow model simply loses the race.
+    /// Runs in a background thread. The health endpoint can be ready while
+    /// the model is still loading, so a 503 needs the same retry as `complete`.
     pub fn title(&self, prompt: &str) -> Res<String> {
         let url = format!("http://127.0.0.1:{}/completion", self.port());
-        let resp = ureq::post(&url)
-            .timeout(Duration::from_secs(4))
-            .send_json(&title_request_body(prompt))
-            .map_err(|err| crate::PalisadeError::from(format!("title request failed: {err}")))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let resp = loop {
+            match ureq::post(&url)
+                .timeout(Duration::from_secs(8))
+                .send_json(&title_request_body(prompt))
+            {
+                Ok(resp) => break resp,
+                Err(ureq::Error::Status(503, _)) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(200));
+                }
+                Err(err) => return Err(format!("title request failed: {err}").into()),
+            }
+        };
         let text = resp
             .into_string()
             .map_err(|err| crate::PalisadeError::from(format!("failed to read title response: {err}")))?;
@@ -312,7 +319,7 @@ impl CompletionServer {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        clean_title(&raw).ok_or_else(|| crate::PalisadeError::from("model returned no usable title"))
+        clean_thread_title(&raw).ok_or_else(|| crate::PalisadeError::from("model returned no usable title"))
     }
 
     /// A one-line commit subject for a diff, from the local model.
@@ -377,45 +384,15 @@ pub fn build_commit_prompt(diff: &str) -> String {
     )
 }
 
-/// An instruction-style prompt rather than FIM: this is a summarisation task,
-/// not a code-hole to fill. Few-shot, because a 0.8B model asked bare for "a
-/// title" tends to answer the request instead of naming it.
-///
-/// A base coder model's cheapest way to satisfy "write a title" is to keep
-/// typing the prompt it was just fed — the request's own opening words are
-/// right there in context, and greedy decoding takes the free continuation
-/// over an actual summary. The third example exists specifically to show a
-/// long, rambling request collapsing to a title that shares none of its
-/// first words, since that is the one shape "explain it in the instruction"
-/// alone doesn't teach a model this small.
-///
-/// Its topic is deliberately a backend bug report, not a UI one: an earlier
-/// version used an onboarding-copy cleanup example, and on a live request
-/// about reorganising a *settings panel* the model produced "Reorder tab
-/// order for onboarding" — onboarding never appeared in the request. A
-/// few-shot example this close in topic-space to a real UI request bleeds
-/// into it; picking a domain real UI requests won't resemble removes the
-/// attractor instead of trying to out-word it in the instruction.
+/// Ask the bundled model for the task's topic rather than continuing the
+/// opening words. A short instruction avoids examples bleeding into titles.
 pub fn build_title_prompt(request: &str) -> String {
     // A long paste is a title's worst input and the model's slowest; the
     // first part carries the intent.
     let request: String = request.chars().take(600).collect();
     format!(
-        "Give the request below a short thread title (3-5 words) naming its \
-         goal or topic. Do not copy the request's own opening words — name \
-         what it's about instead. Title only, no quotes, no trailing period.\n\n\
-         Request: the login page redirects to a 404 after signing in with google, \
-         can you look into why that happens\n\
-         Title: Fix Google sign-in redirect\n\n\
-         Request: add a priority field to each todo item\n\
-         Title: Add todo priority field\n\n\
-         Request: the export job has been running fine for months but starting \
-         last week it randomly times out on large accounts, I dug through the \
-         logs a bit and it might be the new batching logic but I honestly can't \
-         tell, could you take a look and fix it if that's actually the cause\n\
-         Title: Fix export job timeout on large accounts\n\n\
-         Request: {}\n\
-         Title:",
+        "Condense the user request into a meaningful title of 3-4 words. \
+         Never copy the opening phrase. No punctuation.\nRequest: {}\nTitle:",
         request.trim()
     )
 }
@@ -458,6 +435,21 @@ pub fn clean_title(raw: &str) -> Option<String> {
     let mut chars = cleaned.chars();
     let first = chars.next()?;
     Some(first.to_uppercase().collect::<String>() + chars.as_str())
+}
+
+fn clean_thread_title(raw: &str) -> Option<String> {
+    let title = clean_title(raw)?;
+    // The small model often adds articles even when asked for four words.
+    // Keep its chosen topic words; never cut the user's request to make a title.
+    let words: Vec<&str> = title
+        .split_whitespace()
+        .filter(|word| {
+            !matches!(word.to_ascii_lowercase().as_str(),
+                "a" | "an" | "the" | "to" | "for" | "of" | "in" | "on" | "with" | "and" | "or" | "&" | "-")
+        })
+        .take(4)
+        .collect();
+    (words.len() >= 3).then(|| words.join(" "))
 }
 
 impl Default for CompletionServer {
@@ -1456,6 +1448,48 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
     #[test]
     fn clean_title_takes_only_the_first_line() {
         assert_eq!(clean_title("Fix login redirect\nRequest: something else"), Some("Fix login redirect".into()));
+    }
+
+    #[test]
+    fn thread_titles_have_three_or_four_words() {
+        assert_eq!(clean_thread_title("Git Push Error Message"), Some("Git Push Error Message".into()));
+        assert_eq!(clean_thread_title("Fix login redirect"), Some("Fix login redirect".into()));
+        assert_eq!(clean_thread_title("Clarify Git Push Error Message"), Some("Clarify Git Push Error".into()));
+        assert_eq!(clean_thread_title("Google Login Redirects To A 404 Error"), Some("Google Login Redirects 404".into()));
+        assert_eq!(clean_thread_title("Git push"), None);
+        assert!(build_title_prompt("fix git push").contains("3-4 words"));
+    }
+
+    #[test]
+    fn title_waits_for_a_model_that_is_still_loading() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = CompletionServer::new();
+        *server.port.lock_or_recover() = listener.local_addr().unwrap().port();
+        let replies = thread::spawn(move || {
+            for (index, stream) in listener.incoming().take(2).enumerate() {
+                let mut stream = stream.unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" { break; }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length: ") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body_bytes = vec![0; length];
+                reader.read_exact(&mut body_bytes).unwrap();
+                let (status, body) = if index == 0 {
+                    ("503 Service Unavailable", "loading")
+                } else {
+                    ("200 OK", r#"{"content":"Git Push Error Message"}"#)
+                };
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        assert_eq!(server.title("clarify the failed git push error").unwrap(), "Git Push Error Message");
+        replies.join().unwrap();
     }
 
     /// A pasted stack trace must not become the prompt: it is slow to

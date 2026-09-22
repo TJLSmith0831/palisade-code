@@ -1617,8 +1617,6 @@ fn send_to(
 }
 
 /// [`send_to`] for a user turn that may carry attached images (stored paths).
-/// An attachment that has since gone missing is dropped rather than failing
-/// the whole turn — the words still matter more than one picture.
 fn send_turn(
     harness: &Harness,
     project_hash: &str,
@@ -1628,8 +1626,8 @@ fn send_turn(
 ) -> Res<()> {
     let images = attachments
         .iter()
-        .filter_map(|path| attachments::load(&palisade_home(), project_hash, path).ok())
-        .collect();
+        .map(|path| attachments::load(&palisade_home(), project_hash, path))
+        .collect::<Res<Vec<_>>>()?;
     let content = store::expand_thread_mentions(&palisade_home(), project_hash, content);
     let prefix = harness.pending_prefix(session_id);
     {
@@ -5226,6 +5224,16 @@ mod tests {
             harness.agent.pending_prefix.lock_or_recover().is_empty(),
             "a delivered transcript must not be re-sent on the next turn"
         );
+    }
+
+    #[test]
+    fn a_missing_attachment_never_sends_an_incomplete_turn() {
+        let (session, mut rx) = acp_client::stub_session(false);
+        let harness = Harness::default();
+        let id = session.id.clone();
+        harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
+        assert!(send_turn(&harness, "p1", &id, "look at this", &["/missing/image.png".into()]).is_err());
+        assert!(rx.try_recv().is_err());
     }
 
     /// A go-mode handoff must not re-inject the grill-explore framing: the

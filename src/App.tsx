@@ -5,6 +5,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -112,6 +113,7 @@ import {
   shortPath,
   splitPathQuery,
   type MentionOption as MentionRow,
+  type MentionScope,
 } from "./mentions";
 import {
   handleSlashMenuKey,
@@ -829,10 +831,10 @@ export const ChatSurface = memo(
       [commands, draft]
     );
     // The `/` menu, shared with the Fleet composer (SkillMenu.tsx).
-    const installedSkills = useInstalledSkills();
+    const installedSkills = useInstalledSkills(executor);
     const menuCommands = useMemo(
-      () => withInstalled(commands, installedSkills),
-      [commands, installedSkills]
+      () => withInstalled(commands, installedSkills, executor),
+      [commands, installedSkills, executor]
     );
     const menu = useSlashMenu(draft, caret, menuCommands, !!chipCommand);
     const commandMenuOpen = menu.open;
@@ -872,12 +874,13 @@ export const ChatSurface = memo(
     // wherever the caret is rather than only at the start of the draft, and
     // the caret position is what decides which mention is being typed.
     const [mentionIndex, setMentionIndex] = useState(0);
+    const [mentionScope, setMentionScope] = useState<MentionScope>("all");
+    const mentionMenuId = useId();
     const mention = useMemo(
       () => (commandMenuOpen ? null : mentionAt(draft, caret)),
       [draft, caret, commandMenuOpen]
     );
-    // `@/…` and `@~/…` browse the disk outside the project, one folder at a
-    // time; anything else offers project files, then past threads.
+    // `@/…` and `@~/…` browse the disk outside the project, one folder at a time.
     const pathQuery = mention && isPathQuery(mention.query) ? splitPathQuery(mention.query) : null;
     const [pathEntries, setPathEntries] = useState<api.DirEntry[] | "error" | null>(null);
     useEffect(() => {
@@ -900,15 +903,23 @@ export const ChatSurface = memo(
               files: mentionFiles,
               threads: mentionThreads.filter((t) => t.id !== thread?.id),
               entries: Array.isArray(pathEntries) ? pathEntries : null,
-            })
+            }, mentionScope)
           : [],
-      [mention?.query, mentionFiles, mentionThreads, thread?.id, pathEntries]
+      [mention?.query, mentionFiles, mentionThreads, thread?.id, pathEntries, mentionScope]
     );
     const mentionMenuOpen = mention !== null;
     const activeMention = mentionOptions[mentionIndex] ?? mentionOptions[0];
     useEffect(() => {
+      if (mentionMenuOpen && activeMention) {
+        document.getElementById(`${mentionMenuId}-option-${mentionOptions.indexOf(activeMention)}`)?.scrollIntoView?.({ block: "nearest" });
+      }
+    }, [mentionMenuOpen, activeMention, mentionMenuId, mentionOptions]);
+    useEffect(() => {
       setMentionIndex(0);
-    }, [mention?.query]);
+    }, [mention?.query, mentionScope]);
+    useEffect(() => {
+      if (!mentionMenuOpen) setMentionScope("all");
+    }, [mentionMenuOpen]);
     // Walking the project tree costs a round trip, so it happens when the
     // menu first opens rather than on every keystroke or on mount.
     useEffect(() => {
@@ -1861,9 +1872,8 @@ export const ChatSurface = memo(
               completing stays visible and in place while it filters. */}
           <SlashMenu menu={menu} onPick={pickCommand} />
 
-          {/* The `@` mention menu (#32), sharing the `/` menu's shape so
-              the two read as one control with two grammars. Files, then past
-              threads; `@/` or `@~/` switches it to browsing the disk. */}
+          {/* Scopes let large projects keep every matching thread reachable.
+              `@/` or `@~/` browses the disk directly. */}
           {mentionMenuOpen && (
             <Paper
               withBorder
@@ -1871,29 +1881,40 @@ export const ChatSurface = memo(
               radius="md"
               className="ds-command-menu"
               data-testid="mention-menu"
-              role="listbox"
-              aria-label={pathQuery ? "Files on disk" : "Files and threads"}
             >
-              <div className="ds-command-menu-scroll">
+              {!pathQuery && (
+                <div className="ds-mention-scopes" role="group" aria-label="Mention search scope">
+                  {(["all", "threads", "files"] as const).map((scope) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      aria-pressed={mentionScope === scope}
+                      data-testid={`mention-scope-${scope}`}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => setMentionScope(scope)}
+                    >
+                      {scope === "all" ? "All" : scope === "threads" ? "Threads" : "Files"}
+                    </button>
+                  ))}
+                  <span className="ds-mention-scopes-hint">⌃Tab to switch</span>
+                </div>
+              )}
+              <div className="ds-command-menu-scroll" id={mentionMenuId} role="listbox" aria-label={pathQuery ? "Files on disk" : `${mentionScope} mentions`}>
                 {pathQuery ? (
                   <div className="ds-command-menu-header" data-path title={pathQuery.dir}>
                     <IconFolder size={12} />
                     {shortPath(pathQuery.dir)}
                   </div>
-                ) : (
-                  mentionOptions.some((o) => o.kind === "file") && (
-                    <div className="ds-command-menu-header">
-                      <IconFile size={12} />
-                      Files
-                    </div>
-                  )
-                )}
+                ) : null}
                 {!pathQuery && mentionOptions.every((o) => o.kind === "browse") && (
                   <p className="ds-command-menu-empty">
                     {mentionFiles.length === 0
                       ? "Reading the project's files…"
-                      : `No files or threads match “${mention.query}”.`}
+                      : `No ${mentionScope === "all" ? "files or threads" : mentionScope} match “${mention.query}”.`}
                   </p>
+                )}
+                {!pathQuery && mentionOptions.length === 0 && (
+                  <p className="ds-command-menu-empty">{mention.query ? `No threads match “${mention.query}”.` : "No other threads yet."}</p>
                 )}
                 {pathQuery && pathEntries === null && (
                   <p className="ds-command-menu-empty">Reading {pathQuery.dir}…</p>
@@ -1905,6 +1926,9 @@ export const ChatSurface = memo(
                   const firstThread =
                     option.kind === "thread" &&
                     mentionOptions.findIndex((o) => o.kind === "thread") === index;
+                  const firstFile =
+                    option.kind === "file" &&
+                    mentionOptions.findIndex((o) => o.kind === "file") === index;
                   const key =
                     option.kind === "file"
                       ? `f:${option.path}`
@@ -1918,10 +1942,17 @@ export const ChatSurface = memo(
                       {firstThread && (
                         <div className="ds-command-menu-header">
                           <IconMessageCircle size={12} />
-                          Threads
+                          {mentionScope === "all" && !mention.query ? "Recent threads" : "Threads"}
+                        </div>
+                      )}
+                      {firstFile && (
+                        <div className="ds-command-menu-header">
+                          <IconFile size={12} />
+                          Files
                         </div>
                       )}
                       <UnstyledButton
+                        id={`${mentionMenuId}-option-${index}`}
                         role="option"
                         aria-selected={option === activeMention}
                         data-active={option === activeMention || undefined}
@@ -2221,6 +2252,12 @@ export const ChatSurface = memo(
                 // The mention menu owns the same keys the `/` menu does, and
                 // the two are never open at once.
                 if (mentionMenuOpen) {
+                  if (!pathQuery && event.key === "Tab" && event.ctrlKey) {
+                    event.preventDefault();
+                    const scopes: MentionScope[] = ["all", "threads", "files"];
+                    setMentionScope((scope) => scopes[(scopes.indexOf(scope) + (event.shiftKey ? scopes.length - 1 : 1)) % scopes.length]);
+                    return;
+                  }
                   if (
                     (event.key === "ArrowDown" || event.key === "ArrowUp") &&
                     mentionOptions.length > 0
@@ -2235,7 +2272,7 @@ export const ChatSurface = memo(
                     return;
                   }
                   if (
-                    (event.key === "Tab" ||
+                    ((event.key === "Tab" && !event.ctrlKey) ||
                       (event.key === "Enter" && !event.shiftKey)) &&
                     activeMention
                   ) {
@@ -2280,6 +2317,11 @@ export const ChatSurface = memo(
                     : "Message, or / for commands"
               }
               aria-label="Message"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={commandMenuOpen || mentionMenuOpen}
+              aria-controls={commandMenuOpen ? menu.id : mentionMenuOpen ? mentionMenuId : undefined}
+              aria-activedescendant={commandMenuOpen ? menu.activeId : mentionMenuOpen && activeMention ? `${mentionMenuId}-option-${mentionOptions.indexOf(activeMention)}` : undefined}
               data-testid="composer-input"
               minRows={1}
               maxRows={6}
