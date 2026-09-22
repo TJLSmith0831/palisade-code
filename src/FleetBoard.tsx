@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Menu,
@@ -11,13 +11,22 @@ import {
   VisuallyHidden,
 } from "@mantine/core";
 import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
-import { listModels, type FleetRow, type ModelInfo } from "./api";
+import { listModels, type AgentCommand, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 import WorktreeModeBadge from "./WorktreeModeBadge";
 import { ComposerTray, DropHint, imagePasteHandler } from "./ComposerTray";
+import {
+  handleSlashMenuKey,
+  pickSkillIntoTray,
+  SlashMenu,
+  useInstalledSkills,
+  useSlashMenu,
+  withoutSigil,
+} from "./SkillMenu";
+import { buildPrompt } from "./slashCommands";
 
 export type NewRunInput = {
   prompt: string;
@@ -71,6 +80,9 @@ export type FleetBoardProps = {
   onRemoveFile?: (path: string) => void;
   /** A file is being dragged over the window. */
   dragActive?: boolean;
+  /** Skills live sessions have advertised. A new run has no session yet, so
+   *  these plus the user's installed skills are what its `/` menu offers. */
+  skillCommands?: AgentCommand[];
 };
 
 /** A playbook row's subtitle. The saved playbook's name says which script ran;
@@ -349,9 +361,38 @@ export default function FleetBoard({
   files = [],
   onRemoveFile,
   dragActive = false,
+  skillCommands = [],
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
   const [prompt, setPrompt] = useState("");
+  // The same `/` menu and tray the thread composer has (SkillMenu.tsx).
+  const [caret, setCaret] = useState(0);
+  const [skills, setSkills] = useState<string[]>([]);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  const installedSkills = useInstalledSkills();
+  const skillPool = useMemo(() => {
+    const advertised = new Set(skillCommands.map((c) => c.name));
+    return [
+      ...skillCommands,
+      ...installedSkills
+        .filter((skill) => !advertised.has(skill.name))
+        .map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
+    ];
+  }, [skillCommands, installedSkills]);
+  const menu = useSlashMenu(prompt, caret, skillPool);
+  const pickSkill = (command: AgentCommand) => {
+    if (!menu.slash) return;
+    const next = pickSkillIntoTray(prompt, menu.slash, skills, command.name);
+    setPrompt(next.text);
+    setSkills(next.skills);
+    setCaret(next.caret);
+    requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+  const trackCaret = (event: React.SyntheticEvent<HTMLTextAreaElement>) =>
+    setCaret(event.currentTarget.selectionStart ?? 0);
   const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
   const [modelId, setModelId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -397,7 +438,7 @@ export default function FleetBoard({
   ];
 
   const canStart =
-    (prompt.trim().length > 0 || attachments.length > 0 || files.length > 0) &&
+    (prompt.trim().length > 0 || skills.length > 0 || attachments.length > 0 || files.length > 0) &&
     installed.length > 0;
 
   return (
@@ -445,16 +486,47 @@ export default function FleetBoard({
 
       <div className={`fleet-composer${dragActive ? " drag-active" : ""}`}>
         <DropHint active={dragActive} />
+        <SlashMenu
+          menu={menu}
+          onPick={pickSkill}
+          emptySkills="No skills found — install one under ~/.claude/skills or ~/.agents/skills."
+        />
         <ComposerTray
           projectHash={projectHash}
+          skills={skills}
           attachments={attachments}
           files={files}
+          commands={skillPool}
+          installed={installedSkills}
+          onRemoveSkill={(name) => setSkills(skills.filter((s) => s !== name))}
           onRemoveAttachment={(path) => onRemoveAttachment?.(path)}
           onRemoveFile={onRemoveFile}
         />
         <Textarea
+          ref={promptRef}
           value={prompt}
-          onChange={(e) => setPrompt(e.currentTarget.value)}
+          onChange={(e) => {
+            setPrompt(e.currentTarget.value);
+            setCaret(e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+          }}
+          onSelect={trackCaret}
+          onClick={trackCaret}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Backspace" &&
+              skills.length > 0 &&
+              event.currentTarget.selectionStart === 0 &&
+              event.currentTarget.selectionEnd === 0
+            ) {
+              event.preventDefault();
+              setSkills(skills.slice(0, -1));
+              return;
+            }
+            handleSlashMenuKey(event, menu, pickSkill, (token) => {
+              setPrompt(withoutSigil(prompt, token));
+              setCaret(Math.max(0, caret - token.sigil.length));
+            });
+          }}
           onPaste={imagePasteHandler(onPasteImages)}
           placeholder="What should the agent do?"
           aria-label="New run prompt"
@@ -517,7 +589,11 @@ export default function FleetBoard({
             data-testid="fleet-start"
             onClick={() => {
               onNewRun({
-                prompt: [prompt.trim(), ...files.map((f) => `@${f}`)].filter(Boolean).join(" "),
+                // Skills lead the prompt, the same as a thread's first turn.
+                prompt: buildPrompt(
+                  [prompt.trim(), ...files.map((f) => `@${f}`)].filter(Boolean).join(" "),
+                  skills
+                ),
                 attachments,
                 agentId: agentId ?? undefined,
                 model: modelId ?? undefined,
@@ -525,6 +601,7 @@ export default function FleetBoard({
                 isolated,
               });
               setPrompt("");
+              setSkills([]);
             }}
           >
             Start run

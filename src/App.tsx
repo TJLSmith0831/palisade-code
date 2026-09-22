@@ -114,6 +114,14 @@ import {
   type MentionOption as MentionRow,
 } from "./mentions";
 import {
+  handleSlashMenuKey,
+  pickSkillIntoTray,
+  SlashMenu,
+  useInstalledSkills,
+  useSlashMenu,
+  withoutSigil,
+} from "./SkillMenu";
+import {
   ComposerTray,
   DropHint,
   SkillChip,
@@ -123,12 +131,8 @@ import {
 } from "./ComposerTray";
 import {
   commandTrigger,
-  matchToken,
-  slashAt,
-  removeToken,
   buildPrompt,
   parseSentPrompt,
-  CHAIN_SIGIL,
   leadingCommand,
   chainCommands,
   isChainCommand,
@@ -823,62 +827,10 @@ export const ChatSurface = memo(
       () => leadingCommand(commands.filter(isChainCommand), draft),
       [commands, draft]
     );
-    // The `/` token under the caret: any sigil at the head of the draft, or
-    // a word-start `/` anywhere after it (skills anywhere).
-    const slash = useMemo(
-      () => (chipCommand ? null : slashAt(draft, caret)),
-      [chipCommand, draft, caret]
-    );
-    const commandQuery = slash?.query ?? null;
-    // Which of the two menus is open — skills (`/`, `$`) or chains (`|=`).
-    // The sigils never overlap in one token, so this is never ambiguous, and
-    // the header can name the list instead of the generic "commands".
-    const openMenuKind: "skills" | "chains" | null = slash
-      ? slash.sigil === CHAIN_SIGIL
-        ? "chains"
-        : "skills"
-      : null;
-    // Every command of the typed sigil's kind, before the query narrows it —
-    // an empty pool means the agent hasn't advertised anything yet (skills)
-    // or the project has no saved chains, which reads differently from a
-    // query that just has no matches, so the menu tells them apart.
-    const commandPool = useMemo(
-      () =>
-        openMenuKind === null
-          ? []
-          : commands.filter(
-              (command) => isChainCommand(command) === (openMenuKind === "chains")
-            ),
-      [commands, openMenuKind]
-    );
-    // Mid-sentence, names only: a description hit would open the menu on
-    // almost any word ("check /tmp" fuzzy-matches plenty of descriptions).
-    const commandMatches = useMemo(
-      () => (slash ? matchToken(commandPool, slash) : []),
-      [commandPool, slash]
-    );
-    // At the head the menu stays open even with nothing to show — a
-    // silently-closed menu looked identical to a stray `/` that did nothing.
-    // Mid-sentence it only opens on a match: "check /tmp" then Enter must
-    // send, not get swallowed by an empty skills menu.
-    const commandMenuOpen =
-      slash !== null && (slash.leading || commandMatches.length > 0);
-    const [commandIndex, setCommandIndex] = useState(0);
-    // A new query can be shorter than the old list; clamping here rather than
-    // in the key handler keeps the highlight on a row that actually exists.
-    const activeCommand = commandMatches[commandIndex] ?? commandMatches[0];
-    useEffect(() => {
-      setCommandIndex(0);
-    }, [commandQuery]);
-
-    // User-level skills on disk, for the chips' hover cards (path, owner).
-    const [installedSkills, setInstalledSkills] = useState<api.Skill[]>([]);
-    useEffect(() => {
-      api.listSkills().then(
-        (list) => setInstalledSkills(Array.isArray(list) ? list : []),
-        () => {}
-      );
-    }, []);
+    // The `/` menu, shared with the Fleet composer (SkillMenu.tsx).
+    const menu = useSlashMenu(draft, caret, commands, !!chipCommand);
+    const commandMenuOpen = menu.open;
+    const installedSkills = useInstalledSkills();
 
     // A sent turn shows the chips and images it was sent with. Memoized so
     // EventList (itself memoized) doesn't re-render every keystroke.
@@ -1002,9 +954,9 @@ export const ChatSurface = memo(
         setDraft(commandTrigger(command));
         return;
       }
-      if (!slash) return;
-      const next = removeToken(draft, slash);
-      if (!skills.includes(command.name)) setSkills?.([...skills, command.name]);
+      if (!menu.slash) return;
+      const next = pickSkillIntoTray(draft, menu.slash, skills, command.name);
+      setSkills?.(next.skills);
       placeCaret(next.text, next.caret);
     };
     /** Paste of a screenshot: store it and add it to the tray. */
@@ -1905,75 +1857,11 @@ export const ChatSurface = memo(
         >
           {/* The `/` menu, anchored above the composer so the input it is
               completing stays visible and in place while it filters. */}
-          {commandMenuOpen && (
-            <Paper
-              withBorder
-              shadow="md"
-              radius="md"
-              className="ds-command-menu"
-              data-testid="command-menu"
-              data-kind={openMenuKind ?? undefined}
-              role="listbox"
-              aria-label={openMenuKind === "chains" ? "Playbooks" : "Skills"}
-            >
-              <div className="ds-command-menu-header">
-                {openMenuKind === "chains" ? (
-                  <>
-                    <IconRoute size={12} />
-                    Playbooks
-                  </>
-                ) : (
-                  <>
-                    <IconWand size={12} />
-                    Skills
-                  </>
-                )}
-              </div>
-              <div className="ds-command-menu-scroll">
-                {commandPool.length === 0 ? (
-                  <p className="ds-command-menu-empty">
-                    {openMenuKind === "chains"
-                      ? "No playbooks saved for this project yet."
-                      : "No skills advertised for this session yet — send a message to start one."}
-                  </p>
-                ) : commandMatches.length === 0 ? (
-                  <p className="ds-command-menu-empty">
-                    No matches for “{commandQuery}”.
-                  </p>
-                ) : (
-                  commandMatches.map((command, index) => (
-                  <UnstyledButton
-                    key={command.name}
-                    role="option"
-                    aria-selected={command === activeCommand}
-                    data-active={command === activeCommand || undefined}
-                    className="ds-command-menu-row"
-                    // Mouse and keyboard drive the same highlight, so hovering
-                    // never leaves two rows looking selected at once.
-                    onMouseEnter={() => setCommandIndex(index)}
-                    onClick={() => pickCommand(command)}
-                  >
-                    <span className="ds-command-menu-name">
-                      {isChainCommand(command) && (
-                        <IconRoute
-                          size={12}
-                          // A chain runs several agents against each other —
-                          // a different kind of thing than a skill, and the
-                          // row says so before it is picked (D14).
-                          style={{ marginRight: 4, verticalAlign: "-1px" }}
-                        />
-                      )}
-                      {commandTrigger(command).trimEnd()}
-                    </span>
-                    <span className="ds-command-menu-desc">
-                      {command.description}
-                    </span>
-                  </UnstyledButton>
-                  ))
-                )}
-              </div>
-            </Paper>
-          )}
+          <SlashMenu
+            menu={menu}
+            onPick={pickCommand}
+            emptySkills="No skills advertised for this session yet — send a message to start one."
+          />
 
           {/* The `@` mention menu (#32), sharing the `/` menu's shape so
               the two read as one control with two grammars. Files, then past
@@ -2371,36 +2259,13 @@ export const ChatSurface = memo(
                 }
                 // The menu owns the arrows, Tab, Enter and Escape while it is
                 // open — otherwise Enter would send a half-typed command name.
-                if (commandMenuOpen) {
-                  if (
-                    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                    commandMatches.length > 0
-                  ) {
-                    event.preventDefault();
-                    const step = event.key === "ArrowDown" ? 1 : -1;
-                    setCommandIndex(
-                      (i) =>
-                        (i + step + commandMatches.length) % commandMatches.length
-                    );
-                    return;
-                  }
-                  if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
-                    event.preventDefault();
-                    if (activeCommand) pickCommand(activeCommand);
-                    return;
-                  }
-                  if (event.key === "Escape" && slash) {
-                    event.preventDefault();
-                    // Closing without choosing: keep what was typed, drop the
-                    // sigil, so Escape never destroys the user's text.
-                    setDraft(
-                      draft.slice(0, slash.start) +
-                        draft.slice(slash.start + slash.sigil.length)
-                    );
-                    setCaret(Math.max(0, caret - slash.sigil.length));
-                    return;
-                  }
-                }
+                if (
+                  handleSlashMenuKey(event, menu, pickCommand, (token) => {
+                    setDraft(withoutSigil(draft, token));
+                    setCaret(Math.max(0, caret - token.sigil.length));
+                  })
+                )
+                  return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   // Mid-turn Enter queues rather than doing nothing (#26).
@@ -4790,6 +4655,14 @@ export default function App() {
   const [composerAttachments, setComposerAttachments] = useState<string[]>([]);
   const [fleetAttachments, setFleetAttachments] = useState<string[]>([]);
   const [fleetFiles, setFleetFiles] = useState<string[]>([]);
+  // What Fleet's `/` menu offers: every skill any live session advertised,
+  // once each. A new run has no session of its own to ask yet.
+  const fleetSkills = useMemo(() => {
+    const byName = new Map<string, api.AgentCommand>();
+    for (const list of commandsByThread.values())
+      for (const command of list) if (!byName.has(command.name)) byName.set(command.name, command);
+    return [...byName.values()];
+  }, [commandsByThread]);
   // Skills picked into the thread composer's tray (see `buildPrompt`).
   const [composerSkills, setComposerSkills] = useState<string[]>([]);
   // Per thread: whether its live agent takes image blocks. Unknown (no
@@ -7473,6 +7346,7 @@ export default function App() {
                   onCancelRun={onFleetCancelRun}
                   onArchiveRun={onFleetArchiveRun}
                   onNewRun={onNewRun}
+                  skillCommands={fleetSkills}
                   attachments={fleetAttachments}
                   onRemoveAttachment={(path) =>
                     setFleetAttachments((prev) => prev.filter((p) => p !== path))

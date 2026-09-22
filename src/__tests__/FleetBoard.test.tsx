@@ -11,6 +11,9 @@ const { apiMock } = vi.hoisted(() => ({
   apiMock: {
     listModels: vi.fn().mockResolvedValue({ configId: null, current: null, models: [] }),
     readAttachment: vi.fn().mockResolvedValue("data:image/png;base64,AA=="),
+    listSkills: vi.fn().mockResolvedValue([
+      { name: "grill-apply", path: "/Users/me/.claude/skills/grill-apply", description: "Implement with the decision log", owner: "claude" },
+    ]),
   },
 }));
 vi.mock("../api", () => apiMock);
@@ -607,5 +610,39 @@ describe("FleetBoard attachments", () => {
         attachments: ["/home/.palisade-code/projects/p/attachments/a.png"],
       })
     );
+  });
+});
+
+describe("FleetBoard skills", () => {
+  const typeAt = (value: string) => {
+    const input = screen.getByTestId("fleet-prompt");
+    fireEvent.change(input, { target: { value } });
+    fireEvent.select(input, { target: { selectionStart: value.length } });
+    return input;
+  };
+
+  it("picks an advertised skill mid-sentence and leads the run's prompt with it", async () => {
+    const onNewRun = vi.fn();
+    render(
+      <FleetBoard
+        {...props({ onNewRun })}
+        skillCommands={[{ name: "tdd", description: "Test-driven development loop" }]}
+      />
+    );
+    const input = typeAt("ship the login fix, /td");
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/tdd");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("composer-chip")).toHaveTextContent("/tdd"));
+    expect(screen.getByTestId("fleet-prompt")).toHaveValue("ship the login fix, ");
+    fireEvent.click(screen.getByTestId("fleet-start"));
+    expect(onNewRun).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "/tdd ship the login fix," })
+    );
+  });
+
+  it("offers installed skills even before any session has advertised one", async () => {
+    render(<FleetBoard {...props()} />);
+    typeAt("/gri");
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/grill-apply");
   });
 });

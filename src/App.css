@@ -7052,6 +7052,13 @@ button.ds-onboarding-status {
   background: var(--surface);
 }
 
+/* The Fleet composer sits at the top of the board, so its `/` menu opens
+   downward over the run list instead of up into the header. */
+.fleet-composer .ds-command-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
 /* Same drop affordance as the thread composer's `.composer.drag-active`. */
 .fleet-composer.drag-active {
   border-color: var(--accent);
