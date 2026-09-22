@@ -29,6 +29,11 @@ First signing on a machine raises a keychain dialog even with
 list as documented in the script.
 
 ## Releasing (signed, notarized .dmg)
+DMG notarization is a release-time step only — it is not needed for local dev
+or testing. The inner loop (`pnpm start`, or the self-signed `CODESIGN_ID`
+`package.sh` path above) never contacts Apple; only building a distributable
+installer for other people to download requires it.
+
 Distribution is a different path from the self-signed one above: it needs a
 paid Apple Developer Program membership, a *Developer ID Application*
 certificate (Xcode > Settings > Accounts > Manage Certificates, requires
