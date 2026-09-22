@@ -34,8 +34,9 @@ graphify-out/
 .mcp.json
 .palisade/
 
-# Bundled sidecar and model (build inputs, not source; distribution needs an installer/fetcher in future).
-src-tauri/llama-server-aarch64-apple-darwin
+# Bundled sidecar (build input, not source). One file per target triple plus
+# the lipo'd universal one; CI builds all three, a dev machine has its own.
+src-tauri/llama-server-*-apple-darwin
 
 # Local-only, and a symlink to the main checkout in every worktree — so it
 # holds build inputs only, never source. A tracked file here cannot be checked

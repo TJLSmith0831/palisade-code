@@ -10,26 +10,40 @@ const release = {
   assets: [
     { id: 111, name: "Palisade.app.tar.gz" },
     { id: 112, name: "Palisade.app.tar.gz.sig" },
-    { id: 113, name: "Palisade_0.2.1_aarch64.dmg" },
+    { id: 113, name: "Palisade_0.2.1_universal.dmg" },
   ],
 };
 
+const TARGETS = "darwin-universal darwin-aarch64";
+
 test("manifest matches the shape Tauri validates", () => {
-  const m = buildUpdateManifest(release, "darwin-aarch64", "https://w.dev", "SIG");
+  const m = buildUpdateManifest(release, TARGETS, "https://w.dev", "SIG");
 
   assert.equal(m.version, "0.2.1", "the leading v must be stripped");
-  assert.equal(m.platforms["darwin-aarch64"].signature, "SIG");
-  assert.equal(m.platforms["darwin-aarch64"].url, "https://w.dev/download/111");
+  assert.equal(m.platforms["darwin-universal"].signature, "SIG");
+  assert.equal(m.platforms["darwin-universal"].url, "https://w.dev/download/111");
+});
+
+// Installs from the aarch64-only era still ask for darwin-aarch64; the
+// universal archive runs there, so it is offered under that key too.
+test("the one archive is offered under every configured platform key", () => {
+  const m = buildUpdateManifest(release, TARGETS, "https://w.dev", "SIG");
+  assert.deepEqual(Object.keys(m.platforms).sort(), ["darwin-aarch64", "darwin-universal"]);
+  assert.deepEqual(m.platforms["darwin-aarch64"], m.platforms["darwin-universal"]);
 });
 
 test("the dmg is never offered as the update payload", () => {
-  const m = buildUpdateManifest(release, "darwin-aarch64", "https://w.dev", "SIG");
-  assert.ok(!m.platforms["darwin-aarch64"].url.endsWith("/113"));
+  const m = buildUpdateManifest(release, TARGETS, "https://w.dev", "SIG");
+  assert.ok(!m.platforms["darwin-universal"].url.endsWith("/113"));
 });
 
 test("a release without an app archive fails loudly", () => {
   const dmgOnly = { ...release, assets: [{ id: 113, name: "Palisade.dmg" }] };
-  assert.throws(() => buildUpdateManifest(dmgOnly, "darwin-aarch64", "https://w.dev", "SIG"), /no \.app\.tar\.gz/);
+  assert.throws(() => buildUpdateManifest(dmgOnly, TARGETS, "https://w.dev", "SIG"), /no \.app\.tar\.gz/);
+});
+
+test("an empty target list fails loudly rather than publishing no platforms", () => {
+  assert.throws(() => buildUpdateManifest(release, "", "https://w.dev", "SIG"), /no update targets/);
 });
 
 import { parseModels } from "./src/index.js";

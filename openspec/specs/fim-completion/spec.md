@@ -198,7 +198,8 @@ The system SHALL disable completion silently and log an error if the bundled mod
 - **D17** — Tauri `bundle.resources` used to bundle the model; runtime path via `app.path().resolve(..., BaseDirectory::Resource)`. (2026-08-12, socrata-fim-completion)
 - **D18** — llama-server bundled as Tauri sidecar via `externalBin`, not embedded in Rust binary; ~10MB per architecture. (2026-08-12, socrata-fim-completion)
 - **D19** — Rust backend spawns bundled sidecar at startup, manages lifecycle via spawn/kill, HTTP IPC for completions. (2026-08-12, socrata-fim-completion)
-- **D20** — Primary target is aarch64-apple-darwin (Apple Silicon). Cross-platform is future work. (2026-08-12, socrata-fim-completion)
+- **D20** — Primary target is aarch64-apple-darwin (Apple Silicon). Cross-platform is future work. (2026-08-12, socrata-fim-completion) — *Superseded for macOS by D20a.*
+- **D20a** — Released macOS builds are universal (aarch64 + x86_64). The Intel sidecar slice is CPU-only with a fixed AVX2 feature set; Metal stays Apple Silicon only. Other operating systems remain future work. (2026-09-22, launch-prep)
 - **D21** — Bundle structure: `src-tauri/resources/models/` for model, sidecar binary with target-triple suffix. (2026-08-12, socrata-fim-completion)
 - **D22** — Settings UI has enable/disable toggle only; no model path configuration (bundled, not user-configurable). (2026-08-12, socrata-fim-completion)
 - **D23** — Missing bundled resources → disable completion silently, log error, one-time toast per session. (2026-08-12, socrata-fim-completion)

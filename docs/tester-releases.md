@@ -27,10 +27,12 @@ Create an environment named `testers`, restrict deployments to tags matching
 | `APPLE_API_ISSUER`                   | App Store Connect API issuer UUID.                                                                         |
 | `HF_TOKEN`                           | Read-only Hugging Face token for `TJLSmith0831/palisade-models`.                                           |
 
-The workflow builds the pinned `llama.cpp` sidecar from source and verifies the
-model checksum before packaging. It then publishes three assets: the signed
-updater archive and signature for existing testers, plus a notarized,
-model-included DMG for a tester's first install.
+The workflow builds the pinned `llama.cpp` sidecar from source for both Apple
+Silicon (Metal) and Intel (CPU-only), lipo's it, and verifies the model
+checksum before packaging a universal app. It then publishes three assets:
+the signed updater archive and signature for existing testers, plus a
+notarized, model-included universal DMG for a tester's first install. One
+download runs on every Mac from macOS 11 up.
 
 After publication, the existing update Worker reads that prerelease and serves
 it to installed tester apps. A failed or unapproved workflow cannot change what

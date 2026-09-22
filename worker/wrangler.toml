@@ -12,7 +12,9 @@ preview_urls = false
 #   npx wrangler secret put HF_TOKEN
 [vars]
 GITHUB_REPO = "TJLSmith0831/palisade-code"
-UPDATE_TARGET = "darwin-aarch64"
+# Every key the one universal archive is offered under. darwin-aarch64 stays
+# for installs from before the universal build; drop it once none remain.
+UPDATE_TARGETS = "darwin-universal darwin-aarch64 darwin-x86_64"
 
 HF_REPO = "TJLSmith0831/palisade-models"
 

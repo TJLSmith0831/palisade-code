@@ -68,7 +68,11 @@ must report `accepted` / `source=Notarized Developer ID`.
 - **The entitlements exist for the sidecar.** `allow-jit` (llama.cpp compiles
   Metal shaders at runtime) and `disable-library-validation` (it loads its own
   dylibs). Without them the hardened runtime kills `llama-server` at launch.
-- **Builds are `aarch64` only.** Intel Macs cannot run the current dmg.
+- **Released builds are universal (Apple Silicon + Intel).** The tag-driven
+  workflow passes `--target universal-apple-darwin` and builds the sidecar
+  twice (Metal on arm64, CPU-only AVX2 on x86_64) before lipo'ing it. Local
+  `package.sh` builds stay host-arch only: they use whatever
+  `llama-server-<triple>` sits in `src-tauri/`, and a dev machine has one.
 
 ## Verifying UI flows
 Playwright cannot drive this app: it targets Chromium/Firefox/WebKit browsers,
