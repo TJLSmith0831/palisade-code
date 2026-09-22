@@ -301,6 +301,11 @@ pub trait Sink: Send + Sync + 'static {
     ) {
     }
 
+    /// Whether the session's agent accepts image blocks (ACP
+    /// `promptCapabilities.image`), sent once the session is live so the
+    /// composer can say when an attached image will go as a path instead.
+    fn emit_image_support(&self, _session_id: &str, _thread_id: &str, _images: bool) {}
+
     /// ACP usage is transport metadata rather than a transcript event. The
     /// app sink forwards billed cost to a chain turn watcher when one exists;
     /// ordinary sessions intentionally ignore it for now (D-d scope).
@@ -502,6 +507,8 @@ pub struct PendingAuthTurn {
     pub content: String,
     pub mode: String,
     pub bypass: bool,
+    /// Stored image paths the blocked turn carried.
+    pub attachments: Vec<String>,
 }
 
 /// Everything belonging to a live ACP agent conversation.
@@ -802,11 +809,10 @@ impl Harness {
     /// for it rides along with this turn. Peeks rather than drains — a send
     /// that fails (session gone, agent mid-turn) must leave the transcript
     /// parked for the next attempt instead of eating it.
-    pub fn with_pending_prefix(&self, session_id: &str, content: &str) -> String {
-        match self.agent.pending_prefix.lock_or_recover().get(session_id) {
-            Some(prefix) => format!("{prefix}\n\n{content}"),
-            None => content.to_string(),
-        }
+    /// The handoff transcript parked on a session, if any — sent as context
+    /// ahead of the user's own words, never glued into them.
+    pub fn pending_prefix(&self, session_id: &str) -> Option<String> {
+        self.agent.pending_prefix.lock_or_recover().get(session_id).cloned()
     }
 
     /// Drop a session's parked transcript, once it has actually been sent.
@@ -885,6 +891,7 @@ mod tests {
             content: content.into(),
             mode: "go".into(),
             bypass: false,
+            attachments: Vec::new(),
         };
         harness.queue_pending_auth_turn("codex", turn("first message"));
         harness.queue_pending_auth_turn("codex", turn("second message"));
@@ -908,6 +915,7 @@ mod tests {
             content: content.into(),
             mode: "go".into(),
             bypass: false,
+            attachments: Vec::new(),
         };
         let mut queued = harness.take_pending_auth_turns("codex");
         queued.push(turn("still-blocked"));

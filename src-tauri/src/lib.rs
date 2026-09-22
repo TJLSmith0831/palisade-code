@@ -1,4 +1,5 @@
 mod acp_client;
+mod attachments;
 mod acp_events;
 mod acp_preflight;
 mod acp_registry;
@@ -556,6 +557,13 @@ impl Sink for AppSink {
                 thread_id: thread_id.to_string(),
                 commands: commands.to_vec(),
             },
+        );
+    }
+
+    fn emit_image_support(&self, session_id: &str, thread_id: &str, images: bool) {
+        let _ = self.app.emit(
+            "agent-image-support",
+            serde_json::json!({ "sessionId": session_id, "threadId": thread_id, "images": images }),
         );
     }
 
@@ -1298,13 +1306,21 @@ async fn send_message(
     mode: String,
     model: Option<String>,
     bypass: bool,
+    attachments: Option<Vec<String>>,
 ) -> Res<Message> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
+        let attachments = attachments.unwrap_or_default();
         // Recorded before the executor is resolved, deliberately: a chat-only
         // project still keeps the user's turn. There is no session to name yet.
-        let message =
-            store::append_message(&palisade_home(), &project_hash, &thread_id, "user", &mode, &content, None)?;
+        let message = store::append_user_message(
+            &palisade_home(),
+            &project_hash,
+            &thread_id,
+            &mode,
+            &content,
+            attachments.clone(),
+        )?;
         // Name the thread after the turn that opened it, so "New thread" is
         // never what the user has to live with. In the background and silent
         // on failure: a title is cosmetic and must not delay or cost the
@@ -1338,6 +1354,7 @@ async fn send_message(
                         content: content.clone(),
                         mode: mode.clone(),
                         bypass,
+                        attachments: attachments.clone(),
                     },
                 );
                 // A system row keeps the recovery action durable and gives
@@ -1360,7 +1377,7 @@ async fn send_message(
             }
             Err(error) => return Err(error),
         };
-        send_to(&harness, &project_hash, &id, &content)?;
+        send_turn(&harness, &project_hash, &id, &content, &attachments)?;
         Ok(message)
     })
     .await
@@ -1385,7 +1402,7 @@ async fn retry_message(
             .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
         let harness: tauri::State<'_, Harness> = app.state();
         let id = ensure_session(&app, &harness, &project_hash, &thread_id, &message.mode, None, false)?;
-        send_to(&harness, &project_hash, &id, &message.content)
+        send_turn(&harness, &project_hash, &id, &message.content, &message.attachments)
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -1570,18 +1587,76 @@ fn model_title(app: &tauri::AppHandle, harness: &Harness, prompt: &str) -> Optio
 /// (`/go`) from silently discarding the conversation so far.
 fn send_to(
     harness: &Harness,
-    _project_hash: &str,
+    project_hash: &str,
     session_id: &str,
     content: &str,
 ) -> Res<()> {
-    let prefixed = harness.with_pending_prefix(session_id, content);
+    send_turn(harness, project_hash, session_id, content, &[])
+}
+
+/// [`send_to`] for a user turn that may carry attached images (stored paths).
+/// An attachment that has since gone missing is dropped rather than failing
+/// the whole turn — the words still matter more than one picture.
+fn send_turn(
+    harness: &Harness,
+    project_hash: &str,
+    session_id: &str,
+    content: &str,
+    attachments: &[String],
+) -> Res<()> {
+    let images = attachments
+        .iter()
+        .filter_map(|path| attachments::load(&palisade_home(), project_hash, path).ok())
+        .collect();
+    let content = store::expand_thread_mentions(&palisade_home(), project_hash, content);
+    let prefix = harness.pending_prefix(session_id);
     {
         let sessions = harness.agent.acp_sessions.lock_or_recover();
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
-        acp_client::send_acp_prompt(session, &prefixed)?;
+        acp_client::send_acp_prompt(session, prefix.as_deref(), &content, images)?;
     }
     harness.clear_pending_prefix(session_id);
     Ok(())
+}
+
+/// Copy a dropped (`path`) or pasted (`data_base64` + `ext`) image into the
+/// project's attachments dir. Returns the stored path the turn will carry.
+#[tauri::command]
+async fn save_attachment(
+    project_hash: String,
+    path: Option<String>,
+    data_base64: Option<String>,
+    ext: Option<String>,
+) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        use base64::prelude::*;
+        let home = palisade_home();
+        let stored = match (path, data_base64) {
+            (Some(path), _) => attachments::save_from(&home, &project_hash, std::path::Path::new(&path))?,
+            (None, Some(data)) => {
+                // Refuse an oversized paste before decoding it into memory.
+                if data.len() / 4 * 3 > attachments::MAX_BYTES as usize {
+                    return Err("image is larger than 20 MB".into());
+                }
+                let bytes = BASE64_STANDARD
+                    .decode(data)
+                    .map_err(|e| crate::PalisadeError::from(format!("bad image data: {e}")))?;
+                attachments::save(&home, &project_hash, &bytes, ext.as_deref().unwrap_or("png"))?
+            }
+            (None, None) => return Err("nothing to attach".into()),
+        };
+        Ok(stored.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
+/// A stored attachment as a `data:` URL, for thumbnails.
+#[tauri::command]
+async fn read_attachment(project_hash: String, path: String) -> Res<String> {
+    tokio::task::spawn_blocking(move || attachments::data_url(&palisade_home(), &project_hash, &path))
+        .await
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
 /// `/go`: bring up a write-enabled session on this thread.
@@ -1969,11 +2044,12 @@ async fn agent_authenticate(
                 None,
                 pending.bypass,
             ) {
-                Ok(session_id) => send_to(
+                Ok(session_id) => send_turn(
                     &harness,
                     &pending.project_hash,
                     &session_id,
                     &pending.content,
+                    &pending.attachments,
                 )?,
                 Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
                     let mut remaining = vec![pending];
@@ -4320,6 +4396,8 @@ pub fn run() {
             read_thread,
             preflight,
             send_message,
+            save_attachment,
+            read_attachment,
             retry_message,
             go_mode,
             spec_mode,
@@ -4431,6 +4509,7 @@ pub fn run() {
             commands::git_cmds::git_is_repo,
             commands::git_cmds::git_init,
             commands::fs_ops::list_directory,
+            commands::fs_ops::list_any_directory,
             commands::fs_ops::list_all_files,
             commands::fs_ops::search_text,
             commands::fs_ops::read_file_content,
@@ -5020,14 +5099,14 @@ mod tests {
             .insert("s1".into(), "TRANSCRIPT".into());
 
         // What `send_to` hands the agent.
-        assert_eq!(harness.with_pending_prefix("s1", "hello"), "TRANSCRIPT\n\nhello");
+        assert_eq!(harness.pending_prefix("s1").as_deref(), Some("TRANSCRIPT"));
         // Still parked until the send succeeds — a failed send must not eat it.
-        assert_eq!(harness.with_pending_prefix("s1", "retry"), "TRANSCRIPT\n\nretry");
+        assert_eq!(harness.pending_prefix("s1").as_deref(), Some("TRANSCRIPT"));
         harness.clear_pending_prefix("s1");
         // Sent once, not re-sent on every later turn.
-        assert_eq!(harness.with_pending_prefix("s1", "next"), "next");
+        assert_eq!(harness.pending_prefix("s1"), None);
         // A session with nothing parked is untouched.
-        assert_eq!(harness.with_pending_prefix("s2", "plain"), "plain");
+        assert_eq!(harness.pending_prefix("s2"), None);
     }
 
     /// The bytes the agent actually receives. `/go` performs the handoff but
@@ -5050,7 +5129,7 @@ mod tests {
         send_to(&harness, "p1", &id, "carry on").unwrap();
 
         let sent = match rx.try_recv().expect("a prompt reached the transport") {
-            acp_client::BridgeCommand::Prompt(text) => text,
+            acp_client::BridgeCommand::Prompt(prompt) => prompt.joined(),
             _ => panic!("expected a prompt"),
         };
         assert!(sent.contains("notes_index.py"), "the transcript must ride along: {sent}");

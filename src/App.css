@@ -5484,6 +5484,312 @@ button.ds-onboarding-status {
   background: color-mix(in oklch, var(--code-keyword) 16%, var(--active-row));
 }
 
+/* --- Composer tray -------------------------------------------------------
+   Skills picked from the `/` menu, attached images and dropped files, above
+   the text box. Wraps rather than scrolls: a tray is a handful of items. */
+.ds-composer-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 0;
+}
+
+/* In the thread composer (an `align-items: flex-end` column) the tray spans
+   the full width, and its first row stays clear of the Isolated badge and
+   permission shield pinned absolutely in the top-right corner (~117px). */
+.composer > .ds-composer-tray {
+  align-self: stretch;
+  padding-right: 124px;
+}
+
+.ds-composer-tray .ds-composer-chip {
+  margin-top: 0;
+}
+
+/* A new item settles in rather than popping: one short authored moment. */
+.ds-composer-tray .ds-tray-item {
+  animation: ds-tray-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes ds-tray-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.96);
+    filter: blur(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-composer-tray .ds-tray-item {
+    animation: none;
+  }
+}
+
+.ds-composer-chip[data-kind="file"] {
+  color: var(--fg);
+  background: var(--surface-warm);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.ds-composer-chip[data-missing] {
+  color: var(--muted);
+  background: var(--surface-warm);
+}
+
+.ds-composer-chip:focus-visible,
+.ds-attachment:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 55%);
+}
+
+/* The × inside a pill or on a thumbnail: a real 16px target, quiet until
+   the pointer or keyboard reaches its item. */
+.ds-tray-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: -2px -4px -2px 1px;
+  border-radius: 9999px;
+  color: currentColor;
+  opacity: 0.6;
+  transition: opacity 120ms ease-out, background-color 120ms ease-out;
+}
+
+.ds-tray-remove:hover,
+.ds-tray-remove:focus-visible {
+  opacity: 1;
+  background: color-mix(in oklab, currentColor, transparent 84%);
+}
+
+.ds-attachment {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  border-radius: 6px;
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
+  transition: outline-color 120ms ease-out, transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ds-attachment:hover {
+  outline-color: color-mix(in oklab, var(--accent), var(--border) 55%);
+  transform: translateY(-1px);
+}
+
+.ds-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+/* On a thumbnail the × floats on its corner, over a surface disc so it
+   reads on any image, and only shows once the thumbnail is reached. */
+.ds-attachment .ds-tray-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  margin: 0;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+  color: var(--fg);
+  background: var(--surface-warm);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.ds-attachment:hover .ds-tray-remove,
+.ds-attachment:focus-within .ds-tray-remove {
+  opacity: 1;
+}
+
+.ds-attachment .ds-tray-remove:hover {
+  background: var(--danger);
+  color: var(--danger-on);
+}
+
+.ds-attachment-warn {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  color: var(--warn);
+  background: color-mix(in oklab, var(--bg), transparent 20%);
+}
+
+/* A sent turn's images, under its text. */
+.ds-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* --- Skill hover card: what a skill is, never its body ------------------ */
+.ds-skill-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ds-skill-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ds-skill-card-glyph {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--accent);
+  background: var(--active-row);
+}
+
+.ds-skill-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-skill-card-source {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ds-skill-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in oklab, var(--fg), var(--muted) 30%);
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ds-skill-card-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.ds-skill-card-path {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* --- Image hover card: the picture, then what it is ---------------------- */
+.ds-image-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.ds-image-card img {
+  display: block;
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: var(--editor-bg);
+}
+
+.ds-image-card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ds-image-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+/* --- Drop hint: says what a drop will do before the user lets go -------- */
+.ds-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: inherit;
+  border: 1.5px dashed color-mix(in oklab, var(--accent), transparent 30%);
+  background: color-mix(in oklab, var(--surface), var(--accent) 7%);
+  color: var(--accent);
+  pointer-events: none;
+  animation: ds-status-item-in 140ms ease-out;
+}
+
+.ds-drop-hint-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-drop-hint-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* A path in the `@` menu's header reads as a path: mono, as typed, and
+   ellipsized from the middle by `shortPath` rather than shouted. */
+.ds-command-menu-header[data-path] {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg);
+}
+
+.ds-command-menu-header[data-path] .ds-command-menu-header-note {
+  margin-left: auto;
+  font-family: inherit;
+  color: var(--muted);
+}
+
 /* --- MCP servers panel ----------------------------------------------------
    The panel is ~290px wide, so every row is two lines: identity on top with
    its controls, the command or URL beneath. Cramming name, command, switch
@@ -6744,6 +7050,15 @@ button.ds-onboarding-status {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
+}
+
+/* Same drop affordance as the thread composer's `.composer.drag-active`. */
+.fleet-composer.drag-active {
+  border-color: var(--accent);
+}
+
+.fleet-composer {
+  position: relative;
 }
 
 .fleet-prompt-input {

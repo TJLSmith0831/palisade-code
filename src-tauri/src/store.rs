@@ -390,6 +390,49 @@ fn log_path(home: &Path, hash: &str, id: &str) -> PathBuf {
     threads_dir(home, hash).join(format!("{id}.jsonl"))
 }
 
+/// How a thread is named in an `@thread:` mention: its title with runs of
+/// whitespace turned into `-`, so the mention is one token. Mirrors
+/// `threadSlug` in `src/mentions.ts` — the two must agree.
+pub fn thread_slug(title: &str) -> String {
+    title.split_whitespace().collect::<Vec<_>>().join("-")
+}
+
+/// `content` with a "Referenced chats" list appended for every
+/// `@thread:<slug>` it mentions, pointing the agent at that thread's
+/// transcript so it can read the whole conversation with its own tools.
+/// Unknown slugs are left as typed. Nothing is copied into the prompt.
+pub fn expand_thread_mentions(home: &Path, hash: &str, content: &str) -> String {
+    let slugs: Vec<&str> = content
+        .split_whitespace()
+        .filter_map(|word| word.strip_prefix("@thread:"))
+        .filter(|slug| !slug.is_empty())
+        .collect();
+    if slugs.is_empty() {
+        return content.to_string();
+    }
+    let threads = list_threads(home, hash).unwrap_or_default();
+    let mut lines = Vec::new();
+    for slug in slugs {
+        // Exact first: an auto-title can itself end in "..." — then without
+        // the sentence punctuation typed after the mention ("@thread:x,").
+        let bare = slug.trim_end_matches(|c: char| ".,;:!?)".contains(c));
+        let found = threads
+            .iter()
+            .find(|t| thread_slug(&t.title) == slug)
+            .or_else(|| threads.iter().find(|t| thread_slug(&t.title) == bare));
+        if let Some(thread) = found {
+            let line = format!("- {} → {}", thread.title, log_path(home, hash, &thread.id).display());
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    if lines.is_empty() {
+        return content.to_string();
+    }
+    format!("{content}\n\nReferenced chats (JSONL transcripts, one message per line):\n{}", lines.join("\n"))
+}
+
 pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
     let id = ulid::Ulid::new().to_string();
     let stamp = now();
@@ -1038,6 +1081,11 @@ pub struct Message {
     /// ACP failure classification, if the producing build had structured data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<crate::acp_client::FailureClass>,
+    /// Images attached to a user turn: stored copies under the project's
+    /// `attachments/` dir, so the history keeps showing them. Defaulted so
+    /// every row written before attachments existed still parses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 /// Next `seq` per log path, alongside the file length it was computed at.
@@ -1082,6 +1130,33 @@ pub fn append_message_with_failure_class(
     session_id: Option<&str>,
     failure_class: Option<crate::acp_client::FailureClass>,
 ) -> Res<Message> {
+    append_row(home, hash, id, role, mode, content, session_id, failure_class, Vec::new())
+}
+
+/// A user turn that carries attached images.
+pub fn append_user_message(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    mode: &str,
+    content: &str,
+    attachments: Vec<String>,
+) -> Res<Message> {
+    append_row(home, hash, id, "user", mode, content, None, None, attachments)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_row(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    role: &str,
+    mode: &str,
+    content: &str,
+    session_id: Option<&str>,
+    failure_class: Option<crate::acp_client::FailureClass>,
+    attachments: Vec<String>,
+) -> Res<Message> {
     let path = log_path(home, hash, id);
 
     let (message, over_threshold) = {
@@ -1101,6 +1176,7 @@ pub fn append_message_with_failure_class(
             content: content.to_string(),
             session_id: session_id.map(str::to_string),
             failure_class,
+            attachments,
         };
         let line = serde_json::to_string(&message).map_err(|err| e("serialize message", err))?;
 
@@ -2377,6 +2453,7 @@ mod tests {
             content: "smuggled".into(),
             session_id: None,
             failure_class: None,
+            attachments: Vec::new(),
         };
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{}", serde_json::to_string(&smuggled).unwrap()).unwrap();
@@ -2399,6 +2476,26 @@ mod tests {
         // The field is omitted rather than written as null, so old builds and
         // legacy rows stay byte-identical in shape.
         assert!(!serde_json::to_string(&message).unwrap().contains("sessionId"));
+    }
+
+    #[test]
+    fn thread_mentions_expand_to_transcript_paths() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "Auth  token fix").unwrap();
+        assert_eq!(thread_slug(&thread.title), "Auth-token-fix");
+
+        let out = expand_thread_mentions(home.path(), &project.hash, "redo @thread:Auth-token-fix, but faster");
+        assert!(out.starts_with("redo @thread:Auth-token-fix, but faster\n\nReferenced chats"));
+        assert!(out.contains(&format!("{}.jsonl", thread.id)));
+        // A title that ends in punctuation (auto-titles end in "...") still resolves.
+        let dotted = create_thread(home.path(), &project.hash, "Reply with exactly...").unwrap();
+        let out = expand_thread_mentions(home.path(), &project.hash, "what did @thread:Reply-with-exactly... ask?");
+        assert!(out.contains(&format!("{}.jsonl", dotted.id)), "{out}");
+        // An unknown slug is left alone and adds nothing.
+        let plain = "see @thread:Nope";
+        assert_eq!(expand_thread_mentions(home.path(), &project.hash, plain), plain);
     }
 
     fn append_message_fixture(session: &str) -> Message {

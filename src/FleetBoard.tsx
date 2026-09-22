@@ -17,6 +17,7 @@ import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 import WorktreeModeBadge from "./WorktreeModeBadge";
+import { ComposerTray, DropHint, imagePasteHandler } from "./ComposerTray";
 
 export type NewRunInput = {
   prompt: string;
@@ -27,6 +28,8 @@ export type NewRunInput = {
   model?: string;
   mode: "spec" | "go";
   isolated: boolean;
+  /** Stored image paths from the tray. */
+  attachments?: string[];
 };
 
 export type FleetBoardProps = {
@@ -59,6 +62,15 @@ export type FleetBoardProps = {
   onOpenPr(projectId: string, threadId: string): void;
   onArchive(projectId: string, threadId: string): void;
   onNewRun(input: NewRunInput): void;
+  /** Images dropped or pasted onto the board's composer (stored paths). */
+  attachments?: string[];
+  onRemoveAttachment?: (path: string) => void;
+  onPasteImages?: (images: { dataBase64: string; ext: string }[]) => void;
+  /** Other dropped files, sent as `@path` mentions. */
+  files?: string[];
+  onRemoveFile?: (path: string) => void;
+  /** A file is being dragged over the window. */
+  dragActive?: boolean;
 };
 
 /** A playbook row's subtitle. The saved playbook's name says which script ran;
@@ -331,6 +343,12 @@ export default function FleetBoard({
   onCancelRun,
   onArchiveRun,
   onNewRun,
+  attachments = [],
+  onRemoveAttachment,
+  onPasteImages,
+  files = [],
+  onRemoveFile,
+  dragActive = false,
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
   const [prompt, setPrompt] = useState("");
@@ -378,7 +396,9 @@ export default function FleetBoard({
     { key: "idle", label: "Idle", list: groups.idle },
   ];
 
-  const canStart = prompt.trim().length > 0 && installed.length > 0;
+  const canStart =
+    (prompt.trim().length > 0 || attachments.length > 0 || files.length > 0) &&
+    installed.length > 0;
 
   return (
     <section
@@ -423,10 +443,19 @@ export default function FleetBoard({
         </div>
       </div>
 
-      <div className="fleet-composer">
+      <div className={`fleet-composer${dragActive ? " drag-active" : ""}`}>
+        <DropHint active={dragActive} />
+        <ComposerTray
+          projectHash={projectHash}
+          attachments={attachments}
+          files={files}
+          onRemoveAttachment={(path) => onRemoveAttachment?.(path)}
+          onRemoveFile={onRemoveFile}
+        />
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.currentTarget.value)}
+          onPaste={imagePasteHandler(onPasteImages)}
           placeholder="What should the agent do?"
           aria-label="New run prompt"
           rows={3}
@@ -488,7 +517,8 @@ export default function FleetBoard({
             data-testid="fleet-start"
             onClick={() => {
               onNewRun({
-                prompt: prompt.trim(),
+                prompt: [prompt.trim(), ...files.map((f) => `@${f}`)].filter(Boolean).join(" "),
+                attachments,
                 agentId: agentId ?? undefined,
                 model: modelId ?? undefined,
                 mode,

@@ -566,8 +566,72 @@ pub struct AcpSpawn {
 
 /// Commands the sync side sends to the bridge thread.
 pub(crate) enum BridgeCommand {
-    Prompt(String),
+    Prompt(Prompt),
     Shutdown,
+}
+
+/// One turn as the agent receives it. The user's own words go out as the
+/// *last* text block, after Palisade's context and any images: Claude Code
+/// only expands a `/skill` natively when it leads the final text block
+/// (probed on claude-agent-acp 0.79 — with the context prepended into the
+/// same block, the model had to decide to load the skill itself).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Prompt {
+    /// Palisade-authored instructions and handoff transcripts, in order.
+    pub context: Vec<String>,
+    pub images: Vec<PromptImage>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PromptImage {
+    /// The stored copy under the attachments dir — also the text fallback.
+    pub path: String,
+    pub mime_type: String,
+    /// Base64.
+    pub data: String,
+}
+
+impl Prompt {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self { text: text.into(), ..Self::default() }
+    }
+
+    /// Everything joined as one string — what a text-only reader (tests,
+    /// logs) sees. Not what goes on the wire; see [`Prompt::blocks`].
+    #[cfg(test)]
+    pub fn joined(&self) -> String {
+        let mut parts = self.context.clone();
+        parts.push(self.text.clone());
+        parts.join("\n\n")
+    }
+
+    /// The wire form. An agent that never said it takes images gets their
+    /// paths appended to the user's text instead, so the turn still carries
+    /// them and the agent can open the files with its own tools.
+    pub fn blocks(&self, images_supported: bool) -> Vec<v1::ContentBlock> {
+        let mut blocks: Vec<v1::ContentBlock> = self
+            .context
+            .iter()
+            .map(|c| v1::ContentBlock::Text(v1::TextContent::new(c.clone())))
+            .collect();
+        let mut text = self.text.clone();
+        if images_supported {
+            blocks.extend(self.images.iter().map(|image| {
+                v1::ContentBlock::Image(v1::ImageContent::new(
+                    image.data.clone(),
+                    image.mime_type.clone(),
+                ))
+            }));
+        } else if !self.images.is_empty() {
+            text.push_str("\n\nAttached images:");
+            for image in &self.images {
+                text.push_str(&format!("\n- {}", image.path));
+            }
+        }
+        blocks.push(v1::ContentBlock::Text(v1::TextContent::new(text)));
+        blocks
+    }
 }
 
 /// What the bridge reports once the session is live (or why it failed).
@@ -1361,6 +1425,7 @@ async fn run_bridge(
             // Codex and every other agent without Palisade learning a second
             // config format per agent. Remote transports are filtered by what
             // this agent actually said it supports.
+            let images_supported = init_response.agent_capabilities.prompt_capabilities.image;
             let mcp = &init_response.agent_capabilities.mcp_capabilities;
             let mcp_servers =
                 crate::mcp::for_session(&spawn.project_root, mcp.http, mcp.sse);
@@ -1433,6 +1498,9 @@ async fn run_bridge(
                 acp_session_id: session_id.to_string(),
                 models,
             }));
+            if !probe_only {
+                sink.emit_image_support(&palisade_session_id, &spawn.thread_id, images_supported);
+            }
             if ready.is_err() || probe_only {
                 // Caller gave up waiting, or this was just a model probe.
                 return Ok(());
@@ -1442,7 +1510,7 @@ async fn run_bridge(
                 tokio::select! {
                     cmd = cmd_rx.recv() => {
                         match cmd {
-                            Some(BridgeCommand::Prompt(text)) => {
+                            Some(BridgeCommand::Prompt(prompt)) => {
                                 let done_sink = sink.clone();
                                 let done_session = palisade_session_id.clone();
                                 let done_thread = spawn.thread_id.clone();
@@ -1457,7 +1525,7 @@ async fn run_bridge(
                                 cancelled.store(false, Ordering::SeqCst);
                                 let send = cx.send_request(v1::PromptRequest::new(
                                     session_id.clone(),
-                                    vec![v1::ContentBlock::Text(v1::TextContent::new(text))],
+                                    prompt.blocks(images_supported),
                                 ));
                                 if let Err(e) = send.on_receiving_result(async move |result| {
                                     done_busy.store(false, Ordering::SeqCst);
@@ -1768,7 +1836,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<St
 
     busy.store(true, Ordering::SeqCst);
     cmd_tx
-        .send(BridgeCommand::Prompt(prompt.to_string()))
+        .send(BridgeCommand::Prompt(Prompt::text(prompt)))
         .map_err(|_| crate::PalisadeError::from("agent connection is closed"))?;
 
     let deadline = std::time::Instant::now() + timeout;
@@ -1854,7 +1922,12 @@ impl SessionIdentity {
 
 /// Send a user message to a live ACP session. The prompt response arrives
 /// on the bridge thread, which emits `Done` (or `Crashed`) and clears busy.
-pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Res<()> {
+pub fn send_acp_prompt(
+    session: &AcpSession,
+    prefix: Option<&str>,
+    message: &str,
+    images: Vec<PromptImage>,
+) -> Res<()> {
     if session.is_busy() {
         return Err("executor is mid-turn".into());
     }
@@ -1864,7 +1937,9 @@ pub fn send_acp_prompt(session: &AcpSession, message: &str) -> Res<()> {
     // Bundled prompt instructions need no agent-specific installation or writes
     // into the user's project. One-shot metadata requests bypass this path.
     let preview = include_str!("../skills/palisade-preview.md");
-    tx.send(BridgeCommand::Prompt(format!("{preview}\n\n{message}")))
+    let mut context = vec![preview.to_string()];
+    context.extend(prefix.map(str::to_string));
+    tx.send(BridgeCommand::Prompt(Prompt { context, images, text: message.to_string() }))
         .map_err(|_| crate::PalisadeError::from("agent connection is closed"))
 }
 
@@ -2623,7 +2698,7 @@ mod tests {
     #[test]
     fn send_rejects_when_busy() {
         let (session, mut cmd_rx) = stub_session(true);
-        let result = send_acp_prompt(&session, "hello");
+        let result = send_acp_prompt(&session, None, "hello", vec![]);
         assert!(result.unwrap_err().contains("mid-turn"));
         assert!(cmd_rx.try_recv().is_err());
     }
@@ -2632,12 +2707,52 @@ mod tests {
     #[test]
     fn send_queues_prompt_when_idle() {
         let (session, mut cmd_rx) = stub_session(false);
-        send_acp_prompt(&session, "hello").unwrap();
+        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
         assert!(session.is_busy());
         match cmd_rx.try_recv() {
-            Ok(BridgeCommand::Prompt(text)) => assert!(text.ends_with("\n\nhello")),
+            Ok(BridgeCommand::Prompt(prompt)) => assert!(prompt.joined().ends_with("\n\nhello")),
             _ => panic!("expected a Prompt command"),
         }
+    }
+
+    fn block_kinds(blocks: &[v1::ContentBlock]) -> Vec<&'static str> {
+        blocks
+            .iter()
+            .map(|b| match b {
+                v1::ContentBlock::Text(_) => "text",
+                v1::ContentBlock::Image(_) => "image",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    /// The user's text must be the final block — that is where Claude Code
+    /// looks for a leading `/skill` — with images just before it.
+    #[test]
+    fn prompt_puts_context_then_images_then_user_text_last() {
+        let prompt = Prompt {
+            context: vec!["preview".into(), "handoff".into()],
+            images: vec![PromptImage { path: "/a.png".into(), mime_type: "image/png".into(), data: "AAA".into() }],
+            text: "/tdd fix it".into(),
+        };
+        let blocks = prompt.blocks(true);
+        assert_eq!(block_kinds(&blocks), ["text", "text", "image", "text"]);
+        let v1::ContentBlock::Text(last) = blocks.last().unwrap() else { panic!() };
+        assert_eq!(last.text, "/tdd fix it");
+    }
+
+    /// An agent without image support still gets the images — as paths.
+    #[test]
+    fn prompt_without_image_support_sends_paths_in_the_text() {
+        let prompt = Prompt {
+            context: vec![],
+            images: vec![PromptImage { path: "/a.png".into(), mime_type: "image/png".into(), data: "AAA".into() }],
+            text: "look".into(),
+        };
+        let blocks = prompt.blocks(false);
+        assert_eq!(block_kinds(&blocks), ["text"]);
+        let v1::ContentBlock::Text(only) = &blocks[0] else { panic!() };
+        assert!(only.text.starts_with("look") && only.text.contains("- /a.png"));
     }
 
     #[test]
@@ -2646,10 +2761,11 @@ mod tests {
             let (mut session, mut cmd_rx) = stub_session(false);
             session.mode = mode.into();
             session.agent_id = "any-registry-agent".into();
-            send_acp_prompt(&session, "Show my app").unwrap();
-            let BridgeCommand::Prompt(text) = cmd_rx.try_recv().unwrap() else {
+            send_acp_prompt(&session, None, "Show my app", vec![]).unwrap();
+            let BridgeCommand::Prompt(prompt) = cmd_rx.try_recv().unwrap() else {
                 panic!("expected a prompt");
             };
+            let text = prompt.joined();
             assert!(text.contains("palisade-preview"));
             assert!(text.contains("http://localhost:"));
             assert!(text.contains("tool output"));
@@ -3019,7 +3135,7 @@ mod tests {
 
         let session = SessionIdentity::from(&test_spawn(None))
             .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, "hello").unwrap();
+        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
 
         // Live deltas stream first…
         let first = recv_event(&rx);
@@ -3050,7 +3166,7 @@ mod tests {
                 .unwrap();
         let session = SessionIdentity::from(&test_spawn(None))
             .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, "hello").unwrap();
+        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
 
         // Reasoning deltas stream before the text ones (FakeAgent's order).
         let first = recv_event(&rx);
@@ -3106,7 +3222,7 @@ mod tests {
         .unwrap();
         let session = SessionIdentity::from(&spawn_for_identity)
             .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, "hello").unwrap();
+        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
 
         // Both the permission prompt and the turn's own text chunk must
         // reach the sink before either is answered — the dispatch loop must
