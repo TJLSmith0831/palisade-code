@@ -2606,6 +2606,15 @@ const OPTIMISTIC_SEQ = -1;
 const THREAD_PAGE = 200;
 /** Streamed executor events are applied to state at most this often. */
 const LIVE_BATCH_MS = 50;
+/** One page of a thread's newest messages (older than `beforeSeq`, if given),
+ *  and whether any older ones exist. Asks for one message more than a page:
+ *  its presence is the exact "there is more" signal, whatever seq a thread's
+ *  log starts at. */
+async function readPage(projectHash: string, threadId: string, beforeSeq?: number) {
+  const got = await api.readThread(projectHash, threadId, { beforeSeq, limit: THREAD_PAGE + 1 });
+  const hasEarlier = got.length > THREAD_PAGE;
+  return { messages: hasEarlier ? got.slice(1) : got, hasEarlier };
+}
 /** The seq of the oldest persisted message on screen; `undefined` when none. */
 const oldestSeq = (messages: Message[]) => messages.find((m) => m.seq !== OPTIMISTIC_SEQ)?.seq;
 type ThreadRowProps = {
@@ -3024,6 +3033,8 @@ export default function App() {
   const setMessages = ex.setMessages;
   const historyLoading = ex.historyLoading;
   const setHistoryLoading = ex.setHistoryLoading;
+  /** Older messages exist beyond the page(s) on screen. */
+  const [hasEarlier, setHasEarlier] = useState(false);
   const draft = ex.draft;
   const setDraft = ex.setDraft;
   const errors = ex.errors;
@@ -3587,6 +3598,7 @@ export default function App() {
       // The previous thread's history must not sit under the new title while
       // this one loads.
       setMessages([]);
+      setHasEarlier(false);
       if (!next) {
         setHistoryLoading(false);
         return;
@@ -3595,9 +3607,10 @@ export default function App() {
       localStorage.setItem(lastThreadKey(projectHash), next.id);
       clearLiveFor(next.id);
       try {
-        const history = await api.readThread(projectHash, next.id, { limit: THREAD_PAGE });
+        const page = await readPage(projectHash, next.id);
         if (mine !== selectionRef.current) return;
-        setMessages(history);
+        setMessages(page.messages);
+        setHasEarlier(page.hasEarlier);
       } finally {
         if (mine === selectionRef.current) setHistoryLoading(false);
       }
@@ -4420,12 +4433,13 @@ export default function App() {
     const { project, thread } = current.current;
     const before = oldestSeq(messagesRef.current);
     if (!project || !thread || before === undefined) return;
-    const older = await api.readThread(project.hash, thread.id, { beforeSeq: before, limit: THREAD_PAGE });
+    const older = await readPage(project.hash, thread.id, before);
     if (current.current.thread?.id !== thread.id) return;
     setMessages((prev) => {
       const have = new Set(prev.map((m) => m.seq));
-      return [...older.filter((m) => !have.has(m.seq)), ...prev];
+      return [...older.messages.filter((m) => !have.has(m.seq)), ...prev];
     });
+    setHasEarlier(older.hasEarlier);
   }, [setMessages]);
 
   const busy = thread ? busyThreads.has(thread.id) : false;
@@ -4580,14 +4594,20 @@ export default function App() {
     // keeps whatever "Load earlier" has paged in and costs what changed, not
     // the whole thread. A thread not yet loaded (or empty) starts at the newest page.
     const from = oldestSeq(messagesRef.current);
-    const [found, history] = await Promise.all([
+    const [found, { messages: history, hasEarlier: moreBefore }] = await Promise.all([
       api.listThreads(project.hash),
       from === undefined
-        ? api.readThread(project.hash, thread.id, { limit: THREAD_PAGE })
-        : api.readThread(project.hash, thread.id, { fromSeq: from }),
+        ? readPage(project.hash, thread.id)
+        : api.readThread(project.hash, thread.id, { fromSeq: from }).then((messages) => ({
+            messages,
+            hasEarlier: undefined,
+          })),
     ]);
     // The user may have moved on while this read was out.
     if (current.current.thread?.id !== thread.id) return;
+    // A refresh from the oldest message on screen can't tell whether older
+    // ones exist; only a fresh newest page can.
+    if (moreBefore !== undefined) setHasEarlier(moreBefore);
     const updated = found.find((t) => t.id === thread.id) ?? thread;
     setThreads(found);
     setThread(updated);
@@ -5706,7 +5726,7 @@ export default function App() {
   const [titlePending, setTitlePending] = useState<Set<string>>(() => new Set());
   const fleetRefresh = fleet.refresh;
   useEffect(() => {
-    const un = listen<{ threadId: string; pending: boolean }>(
+    const un = listen<api.TitlePending>(
       "thread-title-pending",
       ({ payload: { threadId, pending } }) => {
         const mark = () =>
@@ -6189,14 +6209,13 @@ export default function App() {
     if (!project || !thread || !activeExecutor) return;
     probeAgentModels(activeExecutor);
   }, [project, thread?.id, activeExecutor, probeAgentModels]);
-  const oldestOnScreen = oldestSeq(messages);
   const chatProps = {
     project,
     titlePendingIds: titlePending,
     thread,
     messages,
     historyLoading,
-    hasEarlier: oldestOnScreen !== undefined && oldestOnScreen > 0,
+    hasEarlier,
     onLoadEarlier: loadEarlier,
     live,
     sessionId: liveSessionId,

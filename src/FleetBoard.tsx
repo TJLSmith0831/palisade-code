@@ -284,10 +284,6 @@ function Row({
 /** Fast loads never flash the skeleton. */
 const SKELETON_DELAY_MS = 150;
 
-/** ACP agents that offer a "default" model option (Claude's "Default
- *  (recommended)") use this id for it. */
-const AGENT_DEFAULT_MODEL_ID = "default";
-
 /** Placeholder rows shaped like `Row`, so the board doesn't jump when real
  *  ones land. Delayed so a fast load never flashes them. */
 function FleetSkeleton() {
@@ -360,12 +356,9 @@ export default function FleetBoard({
       .then((state) => {
         if (live) {
           setModels(state.models);
-          // Prefer the agent's "default" option (Claude: "Default
-          // (recommended)"). `current` is the agent's resolved pick, which for
-          // Claude is whatever model the user's own settings pinned.
-          const pick = state.models.some((model) => model.id === AGENT_DEFAULT_MODEL_ID)
-            ? AGENT_DEFAULT_MODEL_ID
-            : state.current;
+          // `current` is the model a new session would run — the agent's own
+          // "default" option (Claude: "Default (recommended)") when it has one.
+          const pick = state.current;
           setModelId(pick && state.models.some((model) => model.id === pick) ? pick : null);
         }
       })

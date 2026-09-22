@@ -1079,20 +1079,10 @@ pub fn append_message_with_failure_class(
         // count while we compute the next seq and append.
         let writer = crate::session_log_writer::shared_session_log_writer();
         let mut writer = writer.lock().map_err(|err| e("session log writer", err))?;
-        let disk_len = writer.disk_len(&path);
-        let expected_len = disk_len + writer.buffered_len(&path);
-
+        let expected_len = writer.disk_len(&path) + writer.buffered_len(&path);
         let mut cache = SEQ_CACHE.lock().map_err(|err| e("seq cache", err))?;
         let cache = cache.get_or_insert_with(HashMap::new);
-        let cached_seq = cache.get(&path).filter(|(len, _)| *len == expected_len).map(|(_, seq)| *seq);
-        let seq = match cached_seq {
-            Some(seq) => seq,
-            // Only the newest line is needed, not the whole history.
-            None => {
-                let (disk_len, tail) = writer.view(&path);
-                newest_tip(&path, disk_len, &tail).map_or(0, |tip| tip.seq + 1)
-            }
-        };
+        let NextLine { seq, torn_newline_len } = next_line(&writer, &path, cache, expected_len)?;
         let message = Message {
             seq,
             ts: now(),
@@ -1107,12 +1097,6 @@ pub fn append_message_with_failure_class(
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|err| e("create thread dir", err))?;
         }
-
-        // A cache hit means the file is exactly what our own appends left, which is
-        // never torn — so the open+seek+read behind `ends_with_newline_upto` is only
-        // needed when the cache could not vouch for the file.
-        let torn_newline_len: u64 =
-            if cached_seq.is_some() || ends_with_newline_upto(&path, disk_len)? { 0 } else { 1 };
         writer
             .append(&path, line.as_bytes())
             .map_err(|err| e("append message", err))?;
@@ -1125,6 +1109,33 @@ pub fn append_message_with_failure_class(
         crate::session_log_writer::flush_shared(Some(&path), false)?;
     }
     Ok(message)
+}
+
+/// Where an appended line lands: its seq, and the byte a flush adds first to
+/// close a torn tail (0 or 1).
+struct NextLine {
+    seq: u64,
+    torn_newline_len: u64,
+}
+
+/// Resolve [`NextLine`] for `path` while `append_message` holds the writer
+/// lock. A seq-cache hit (`expected_len` matches what our own appends left) is
+/// pure arithmetic and never torn. Only a miss reads the file — the one disk
+/// read an append makes under the lock, so it must stay the cold path.
+fn next_line(
+    writer: &crate::session_log_writer::SessionLogWriter,
+    path: &Path,
+    cache: &HashMap<PathBuf, (u64, u64)>,
+    expected_len: u64,
+) -> Res<NextLine> {
+    if let Some(&(_, seq)) = cache.get(path).filter(|(len, _)| *len == expected_len) {
+        return Ok(NextLine { seq, torn_newline_len: 0 });
+    }
+    // Only the newest line is needed, not the whole history.
+    let (disk_len, tail) = writer.view(path);
+    let seq = newest_tip(path, disk_len, &tail).map_or(0, |tip| tip.seq + 1);
+    let torn_newline_len = u64::from(!ends_with_newline_upto(path, disk_len)?);
+    Ok(NextLine { seq, torn_newline_len })
 }
 
 /// Flush the process-global session log writer. Tests should call this before

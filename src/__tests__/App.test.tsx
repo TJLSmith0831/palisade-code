@@ -2322,6 +2322,9 @@ describe("Keyboard navigation (accessibility)", () => {
       mode: "go",
       content,
     });
+    /** Messages `from..=to`, each reading `m<seq>`. */
+    const page = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => said(from + i, `m${from + i}`));
     const serve = (readThread: (args: Record<string, unknown>) => Promise<unknown>) =>
       invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === "list_threads") return Promise.resolve(twoThreads);
@@ -2393,24 +2396,24 @@ describe("Keyboard navigation (accessibility)", () => {
     });
 
     it("opens the newest page and pages older messages in on demand", async () => {
-      serve((args) => {
-        if (args.beforeSeq === 5) return Promise.resolve([said(3, "old three"), said(4, "old four")]);
-        return Promise.resolve([said(5, "newest five"), said(6, "newest six")]);
-      });
+      // A page is 200; asking for 201 is how the app knows more exist.
+      serve((args) => Promise.resolve(args.beforeSeq === 1001 ? page(990, 1000) : page(1000, 1200)));
       render(<App />);
       await openProject();
 
-      expect(await screen.findByText("newest six")).toBeDefined();
-      expect(invokeMock).toHaveBeenCalledWith("read_thread", expect.objectContaining({ limit: 200 }));
-      expect(screen.queryByText("old four")).toBeNull();
+      expect(await screen.findByText("m1200")).toBeDefined();
+      expect(invokeMock).toHaveBeenCalledWith("read_thread", expect.objectContaining({ limit: 201 }));
+      expect(screen.queryByText("m1000")).toBeNull();
 
       fireEvent.click(await screen.findByTestId("load-earlier"));
-      expect(await screen.findByText("old four")).toBeDefined();
-      expect(screen.getByText("newest five")).toBeDefined();
+      expect(await screen.findByText("m1000")).toBeDefined();
+      expect(screen.getByText("m1001")).toBeDefined();
       expect(invokeMock).toHaveBeenCalledWith(
         "read_thread",
-        expect.objectContaining({ beforeSeq: 5, limit: 200 })
+        expect.objectContaining({ beforeSeq: 1001, limit: 201 })
       );
+      // That page came back short: it reached the start of the thread.
+      expect(screen.queryByTestId("load-earlier")).toBeNull();
     });
 
     it("a burst of streamed events all land, and none outlive their turn's done", async () => {
@@ -2443,29 +2446,29 @@ describe("Keyboard navigation (accessibility)", () => {
     it("a refresh that finishes after an earlier page landed does not throw that page away", async () => {
       let releaseRefresh: () => void = () => {};
       serve((args) => {
-        if (args.beforeSeq === 5) return Promise.resolve([said(3, "old three"), said(4, "old four")]);
-        if (args.fromSeq === 5)
-          return new Promise((resolve) => (releaseRefresh = () => resolve([said(5, "newest five"), said(6, "newest six")])));
-        return Promise.resolve([said(5, "newest five"), said(6, "newest six")]);
+        if (args.beforeSeq === 1001) return Promise.resolve(page(990, 1000));
+        if (args.fromSeq === 1001)
+          return new Promise((resolve) => (releaseRefresh = () => resolve(page(1001, 1200))));
+        return Promise.resolve(page(1000, 1200));
       });
       render(<App />);
       await openProject();
-      expect(await screen.findByText("newest six")).toBeDefined();
+      expect(await screen.findByText("m1200")).toBeDefined();
 
       await act(async () => emit("thread-updated", "t1")); // refresh starts, its read is held
       fireEvent.click(await screen.findByTestId("load-earlier"));
-      expect(await screen.findByText("old four")).toBeDefined();
+      expect(await screen.findByText("m1000")).toBeDefined();
 
       await act(async () => releaseRefresh());
-      expect(screen.getByText("old four")).toBeDefined();
-      expect(screen.getByText("newest six")).toBeDefined();
+      expect(screen.getByText("m1000")).toBeDefined();
+      expect(screen.getByText("m1200")).toBeDefined();
     });
 
     it("says so when an earlier page cannot be loaded", async () => {
       serve((args) =>
-        args.beforeSeq === 5
+        args.beforeSeq === 1001
           ? Promise.reject(new Error("disk on fire"))
-          : Promise.resolve([said(5, "newest five")])
+          : Promise.resolve(page(1000, 1200))
       );
       render(<App />);
       await openProject();
@@ -2479,6 +2482,16 @@ describe("Keyboard navigation (accessibility)", () => {
       render(<App />);
       await openProject();
       expect(await screen.findByText("second")).toBeDefined();
+      expect(screen.queryByTestId("load-earlier")).toBeNull();
+    });
+
+    it("offers no earlier page for a short log that doesn't start at seq 0", async () => {
+      // A log truncated by copying forward keeps its later seqs; the page
+      // coming back short is what says nothing is older, not the seq.
+      serve(() => Promise.resolve(page(7, 8)));
+      render(<App />);
+      await openProject();
+      expect(await screen.findByText("m8")).toBeDefined();
       expect(screen.queryByTestId("load-earlier")).toBeNull();
     });
   });

@@ -1145,6 +1145,9 @@ export type SpecChange = {
 
 /** A propose turn produced more than one change; the user picks which. */
 export type SpecLinkAmbiguous = { threadId: string; names: string[] };
+/** `thread-title-pending`: a thread's title is being written in the
+ *  background (`pending`), or has landed. */
+export type TitlePending = { threadId: string; pending: boolean };
 
 // threadId: an agent's proposal lands in the thread's isolated worktree, not
 // the project root (OPE-01) — pass it so the backend reads the tree that
