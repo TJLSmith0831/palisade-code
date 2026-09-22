@@ -63,7 +63,8 @@ pub struct ModelInfo {
 pub struct ModelState {
     /// The config option id used to change the model, if the agent has one.
     pub config_id: Option<String>,
-    /// The currently selected model value id.
+    /// The model value id a session runs on: the live selection, or — from a
+    /// probe, which never switches — the one a new session would select.
     pub current: Option<String>,
     pub models: Vec<ModelInfo>,
 }
