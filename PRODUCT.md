@@ -32,7 +32,7 @@ It pairs that orchestration with a capable local workbench instead of reducing t
 
 Privacy is legible rather than implied. Fill-in-the-middle completion and small editor-assistance tasks use a bundled local model, so Palisade does not silently send a code index to a cloud service for those features. A developer-selected agent or MCP server may still communicate with its own external service; Palisade must make those choices and boundaries visible rather than claiming the entire workflow is offline.
 
-Cross-machine consistency is useful, but it is not the primary product claim. Competitive rationale and the market survey behind this positioning are recorded in `docs/research/ade-market-survey-2026-09.md`; that survey is not itself a claim this document makes.
+Cross-machine consistency is useful, but it is not the primary product claim. The competitive rationale behind this positioning is summarized in `openspec/changes/ade-pivot/design.md` (D10); it is not itself a claim this document makes.
 
 ## Operating Context
 
@@ -80,7 +80,7 @@ Cross-machine consistency is useful, but it is not the primary product claim. Co
 - Project-local configuration lives in `.palisade/project-settings.json`, `.palisade/chains/`, and `.mcp.json`. Session logs, completion telemetry, and database connection records live outside target repositories under Palisade-managed user storage.
 - Database passwords use the operating-system credential store when available. Any fallback to a user-only local file must be disclosed rather than occurring silently, and secrets must not cross frontend IPC or enter logs.
 - File operations are scoped to the selected project root. Concurrent agent events retain both thread and session identity so output, permissions, and attribution reach the correct UI.
-- The packaged application currently targets Apple Silicon macOS. Its local inference sidecar requires hardened-runtime entitlements for JIT and bundled dynamic libraries.
+- The packaged application is a universal macOS build (Apple Silicon and Intel, macOS 11 or later). Its local inference sidecar requires hardened-runtime entitlements for JIT and bundled dynamic libraries; the Intel slice runs inference on the CPU.
 - The Tauri WKWebView cannot be driven by ordinary Playwright browser automation. End-to-end UI verification uses the debug-only Tauri MCP bridge.
 - Cross-machine behavior must not depend on hidden machine-specific configuration. Agent availability is detected locally, and missing capabilities should degrade honestly rather than being fabricated.
 

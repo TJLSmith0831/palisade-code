@@ -11,8 +11,8 @@ concurrency:
 
 jobs:
   test:
-    # aarch64 runner: the app is aarch64-only, so the sidecar target triple
-    # tauri-build resolves has to match what we build for locally.
+    # Tests build for the host triple only; the universal release build lives
+    # in tester-release.yml.
     runs-on: macos-15
 
     steps:
@@ -41,7 +41,7 @@ jobs:
       # test runs. Tests never exec it (they spawn fakes in tempdirs), so an
       # empty file is enough to get past the check.
       - name: Stub the sidecar binary
-        run: touch src-tauri/llama-server-aarch64-apple-darwin
+        run: touch src-tauri/llama-server-aarch64-apple-darwin src-tauri/llama-server-x86_64-apple-darwin
 
       - run: pnpm install --frozen-lockfile
 

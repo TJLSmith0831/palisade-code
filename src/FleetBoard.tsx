@@ -86,18 +86,19 @@ export function groupFleet(
 ): {
   attention: FleetRow[];
   running: FleetRow[];
+  unreviewed: FleetRow[];
   idle: FleetRow[];
 } {
   const status = (r: FleetRow) =>
     r.kind === "thread" && r.status !== "attention" && liveThreadIds.has(r.threadId)
       ? "running"
       : r.status;
-  const attention = rows
-    .filter((r) => status(r) === "attention")
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const newestFirst = (a: FleetRow, b: FleetRow) =>
+    Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
   return {
-    attention,
+    attention: rows.filter((r) => status(r) === "attention").sort(newestFirst),
     running: rows.filter((r) => status(r) === "running"),
+    unreviewed: rows.filter((r) => status(r) === "unreviewed").sort(newestFirst),
     idle: rows.filter((r) => status(r) === "idle"),
   };
 }
@@ -373,6 +374,7 @@ export default function FleetBoard({
   const bands: { key: string; label: string; list: FleetRow[] }[] = [
     { key: "attention", label: "Needs attention", list: groups.attention },
     { key: "running", label: "Running", list: groups.running },
+    { key: "unreviewed", label: "Unreviewed", list: groups.unreviewed },
     { key: "idle", label: "Idle", list: groups.idle },
   ];
 
@@ -403,6 +405,13 @@ export default function FleetBoard({
               {groups.running.length}
             </span>
             <span className="fleet-status-label">Running</span>
+          </div>
+          <div className="fleet-status" data-testid="fleet-count-unreviewed">
+            <span className="fleet-status-value">
+              <span className="fleet-status-dot" data-status="unreviewed" aria-hidden="true" />
+              {groups.unreviewed.length}
+            </span>
+            <span className="fleet-status-label">Unreviewed</span>
           </div>
           <div className="fleet-status" data-testid="fleet-count-idle">
             <span className="fleet-status-value">

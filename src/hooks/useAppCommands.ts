@@ -47,6 +47,10 @@ export type AppCommandDeps = {
   selectedFile: string | null;
   setCommandPaletteOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  /** How many threads finished and have not been opened since; the "Next
+   *  unreviewed thread" command is only offered while there are some. */
+  unreviewedCount: number;
+  onNextUnreviewed: () => void;
   /** Read through refs so a command's `run` always sees the current value
    *  rather than whatever was current when the list was memoised. */
   activePathRef: MutableRefObject<string | null>;
@@ -82,6 +86,8 @@ export function useAppCommands({
   selectedFile,
   setCommandPaletteOpen,
   setSettingsOpen,
+  unreviewedCount,
+  onNextUnreviewed,
   activePathRef,
   closeTabRef,
   tabsRef,
@@ -363,6 +369,20 @@ export function useAppCommands({
         run: () => shell.openPanel("review"),
       },
       {
+        // The Unreviewed band as a workflow: jump to the newest finished
+        // thread you have not read, then the next, until the band is empty.
+        id: "fleet.nextUnreviewed",
+        group: "View",
+        label:
+          unreviewedCount > 0
+            ? `Next unreviewed thread (${unreviewedCount})`
+            : "Next unreviewed thread",
+        chord: "Mod+Shift+U",
+        keywords: "unread finished turn done inbox jump",
+        enabled: !!project && unreviewedCount > 0,
+        run: onNextUnreviewed,
+      },
+      {
         id: "view.theme.auto",
         group: "View",
         label: "System appearance",
@@ -497,6 +517,8 @@ export function useAppCommands({
       runCommand,
       liveSessionId,
       onStop,
+      unreviewedCount,
+      onNextUnreviewed,
     ]
   );
 }

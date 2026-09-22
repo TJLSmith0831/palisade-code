@@ -109,6 +109,22 @@ describe("groupByFleet ordering", () => {
     const bands = groupByFleet([t], rows, new Set(["t"]));
     expect(bands.map((b) => b.key)).toEqual(["attention"]);
   });
+
+  it("heads a finished-but-unopened thread under Unreviewed, between Running and Idle", () => {
+    const a = thread({ id: "a", updatedAt: "2026-08-01T00:00:00Z" });
+    const b = thread({ id: "b", updatedAt: "2026-08-01T00:00:00Z" });
+    const c = thread({ id: "c", updatedAt: "2026-08-01T00:00:00Z" });
+    const rows = new Map<string, FleetRow>([
+      ["a", { status: "running", updatedAt: "2026-08-01T00:00:00Z" } as FleetRow],
+      ["b", { status: "unreviewed", updatedAt: "2026-08-01T00:00:00Z" } as FleetRow],
+    ]);
+    const bands = groupByFleet([a, b, c], rows);
+    expect(bands.map((band) => [band.key, band.list.map((t) => t.id)])).toEqual([
+      ["running", ["a"]],
+      ["unreviewed", ["b"]],
+      ["idle", ["c"]],
+    ]);
+  });
 });
 
 describe("filterThreads", () => {
@@ -402,6 +418,10 @@ describe("SessionList fleet rows", () => {
     expect(screen.getAllByTestId("session-dot")[1].getAttribute("data-state")).toBe(
       "running",
     );
+    renderRows([thread({})], [fleetRow({ status: "unreviewed" })]);
+    const dot = screen.getAllByTestId("session-dot")[2];
+    expect(dot.getAttribute("data-state")).toBe("unreviewed");
+    expect(dot.getAttribute("aria-label")).toBe("Finished — you haven't looked yet");
   });
 
   // The board's diff is measured in the thread's tree by the backend; a

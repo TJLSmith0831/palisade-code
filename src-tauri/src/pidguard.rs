@@ -120,8 +120,13 @@ mod tests {
     /// A process whose *real* command line contains `token`, so `ps` reports
     /// it the way the orphan being simulated would be reported.
     fn process_advertising(token: &str) -> std::process::Child {
+        // Two commands, not one: a lone `sleep 30` lets sh exec it directly,
+        // and then `ps` reports `sleep 30` — no token — and the reaper
+        // (correctly) leaves the process alone, so the test waited 30s and
+        // failed. A compound command keeps sh resident with its full
+        // argv, which is how a real orphaned sidecar advertises itself.
         Command::new("/bin/sh")
-            .args(["-c", &format!("sleep 30 # {token}")])
+            .args(["-c", &format!("sleep 30; true # {token}")])
             .stdout(Stdio::null())
             .spawn()
             .unwrap()

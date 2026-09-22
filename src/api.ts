@@ -122,9 +122,13 @@ export const setThreadArchived = (
 export const deleteThread = (projectHash: string, threadId: string) =>
   invoke<void>("delete_thread", { projectHash, threadId });
 /** Records that the user just looked at this thread, so the Fleet board
- *  stops flagging it as "Turn finished". Idempotent. */
+ *  stops listing it as "Unreviewed". Idempotent. */
 export const markThreadViewed = (projectHash: string, threadId: string) =>
   invoke<void>("mark_thread_viewed", { projectHash, threadId });
+
+/** The macOS dock badge: threads wanting a look (blocked on you, or finished
+ *  and unread). App-wide; 0 clears it. */
+export const setDockBadge = (count: number) => invoke<void>("set_dock_badge", { count });
 
 export const appendMessage = (
   projectHash: string,
@@ -168,6 +172,9 @@ export type Preflight = {
   selected: string | null;
   openspec: boolean;
   ready: boolean;
+  /** False when the ACP registry could not be fetched and nothing is cached,
+   *  so an empty `agents` means "unknown", not "none installed". */
+  registryReachable: boolean;
   warnings: string[];
   checkedAt: string;
 };
@@ -547,13 +554,13 @@ export const setThreadWorktreeEnabled = (
 // ------------------------------------------------------------------ fleet
 
 /** `attention` always carries a reason — a dot that says "look" without
- *  saying why is noise. */
-export type FleetStatus = "attention" | "running" | "idle";
+ *  saying why is noise. `unreviewed` is a turn that ended and has not been
+ *  opened since: nothing blocked, something waiting to be read. */
+export type FleetStatus = "attention" | "running" | "unreviewed" | "idle";
 export type FleetAttention =
   | "permission"
   /** A playbook run is suspended at a human approval gate. */
   | "gate"
-  | "turn_done"
   | "verify_failed"
   | "merge_conflict"
   | "crashed";

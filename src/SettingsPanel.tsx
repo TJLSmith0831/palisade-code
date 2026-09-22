@@ -8,6 +8,7 @@ import {
   COMPLETION_SETTINGS_CHANGED_EVENT,
 } from "./completion/GhostTextPlugin";
 import { describeError } from "./errors";
+import { loadNotifyTurnDone, saveNotifyTurnDone } from "./turnNotifications";
 
 export {
   COMPLETION_ENABLED_KEY,
@@ -398,6 +399,7 @@ export default function SettingsPanel({
   const [editorFont, setEditorFontState] = useState(loadEditorFont);
   const [editorFontSize, setEditorFontSizeState] = useState(loadEditorFontSize);
   const [editorWrap, setEditorWrapState] = useState(loadEditorWrap);
+  const [notifyTurnDone, setNotifyTurnDone] = useState(loadNotifyTurnDone);
   const [completionEnabled, setCompletionEnabledState] = useState(
     () => localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false"
   );
@@ -988,6 +990,48 @@ export default function SettingsPanel({
             data-testid="editor-wrap-toggle"
             aria-label="Wrap long lines"
           />
+        </section>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Notifications                                                      */}
+        {/* ---------------------------------------------------------------- */}
+
+        <section
+          style={{
+            paddingBottom: 16,
+            marginBottom: 16,
+            borderBottom: `1px solid ${borderSubtle}`,
+          }}
+        >
+          <div style={sectionLabel}>Notifications</div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <div>
+              <div style={{ color: text, fontSize: 13, fontWeight: 500 }}>
+                Turn finished while Palisade is in the background
+              </div>
+              <div style={{ marginTop: 3, color: dim, fontSize: 11 }}>
+                A system notification naming the thread. Nothing fires while
+                the window has focus; macOS asks for permission the first time.
+              </div>
+            </div>
+
+            <Switch
+              checked={notifyTurnDone}
+              onChange={(event) => {
+                setNotifyTurnDone(event.currentTarget.checked);
+                saveNotifyTurnDone(event.currentTarget.checked);
+              }}
+              data-testid="notify-turn-done-toggle"
+              aria-label="Notify when a turn finishes in the background"
+            />
+          </div>
         </section>
 
         {/* ---------------------------------------------------------------- */}

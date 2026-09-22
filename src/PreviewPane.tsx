@@ -104,7 +104,15 @@ export default function PreviewPane({ projectHash, url, onNavigate }: Props) {
         if (reason) void api.previewHide(projectHash).catch(() => {});
         else show();
       })
-      .catch(() => live && setUnreachable(null));
+      // A probe that cannot run (a host that will not resolve, a bridge
+      // hiccup) is not evidence the server is down: show the view, as the
+      // backend's own rule says unprobeable URLs count as reachable.
+      // Clearing the error alone left an empty pane with no retry.
+      .catch(() => {
+        if (!live) return;
+        setUnreachable(null);
+        show();
+      });
     return () => {
       live = false;
     };

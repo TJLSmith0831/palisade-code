@@ -68,22 +68,28 @@ export default {
 /**
  * Builds Tauri's updater manifest from a GitHub release.
  *
+ * `targets` is every platform key the one archive serves, space-separated
+ * (`UPDATE_TARGETS`). The archive is universal, so it is offered under
+ * `darwin-universal` for current installs and `darwin-aarch64` for installs
+ * from the Apple-Silicon-only era, which still ask by that key.
+ *
  * Pure so it can be tested without network: see test.mjs.
  */
-export function buildUpdateManifest(release, target, origin, signature) {
+export function buildUpdateManifest(release, targets, origin, signature) {
   const archive = release.assets.find((a) => a.name.endsWith(".app.tar.gz"));
   if (!archive) throw new Error("release has no .app.tar.gz asset");
+
+  const entry = { signature, url: `${origin}/download/${archive.id}` };
+  // A missing var must fail here, not publish a manifest keyed "undefined"
+  // that every installed app would silently fail to match.
+  const keys = typeof targets === "string" ? targets.split(/[\s,]+/).filter(Boolean) : [];
+  if (keys.length === 0) throw new Error("no update targets configured (UPDATE_TARGETS)");
 
   return {
     version: String(release.tag_name || "").replace(/^v/, ""),
     notes: release.body || "",
     pub_date: release.published_at || new Date().toISOString(),
-    platforms: {
-      [target]: {
-        signature,
-        url: `${origin}/download/${archive.id}`,
-      },
-    },
+    platforms: Object.fromEntries(keys.map((key) => [key, entry])),
   };
 }
 
@@ -100,7 +106,7 @@ async function latestManifest(env, origin) {
   // Tauri wants the signature inline, not as a URL.
   const signature = (await assetBody(env, sigAsset.id)).trim();
 
-  return json(buildUpdateManifest(release, env.UPDATE_TARGET, origin, signature), 200, {
+  return json(buildUpdateManifest(release, env.UPDATE_TARGETS, origin, signature), 200, {
     // Testers check on launch and every 30 minutes; a short cache keeps a
     // burst of restarts off the GitHub API without delaying a release.
     "cache-control": "public, max-age=60",

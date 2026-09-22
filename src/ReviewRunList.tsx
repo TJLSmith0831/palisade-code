@@ -12,11 +12,13 @@ export type ReviewRunListProps = {
 const STATUS_LABEL: Record<FleetRow["status"], string> = {
   attention: "Needs attention",
   running: "Running",
+  unreviewed: "Unreviewed",
   idle: "Idle",
 };
 export const STATUS_COLOR: Record<FleetRow["status"], string> = {
-  attention: "warn",
+  attention: "danger",
   running: "success",
+  unreviewed: "warn",
   idle: "neutral",
 };
 

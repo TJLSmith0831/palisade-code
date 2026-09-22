@@ -417,6 +417,17 @@ async fn mark_thread_viewed(project_hash: String, thread_id: String) -> Res<()> 
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// The dock badge: how many threads want a look — blocked on you, or finished
+/// and unread. Tauri applies it app-wide, so whichever window called last
+/// wins; every window derives the same count from the same fleet. Zero clears
+/// it, because a "0" badge is noise.
+#[tauri::command]
+fn set_dock_badge(window: tauri::Window, count: u32) -> Res<()> {
+    window
+        .set_badge_count(if count == 0 { None } else { Some(i64::from(count)) })
+        .map_err(|e| crate::PalisadeError::from(e.to_string()))
+}
+
 #[tauri::command]
 async fn delete_thread(app: tauri::AppHandle, project_hash: String, thread_id: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
@@ -1245,8 +1256,7 @@ fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &s
 fn release_idle_sessions_on_exit(harness: &Harness) {
     let idle: Vec<(String, String)> = harness
         .agent.acp_sessions
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .values()
         .filter(|s| !s.is_busy())
         .map(|s| (s.id.clone(), s.thread_id.clone()))
@@ -2598,10 +2608,13 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     awaiting_permission: live.awaiting_permission,
                     busy: live.busy,
                     turn_ended: last.is_some() && !live.busy,
-                    has_diff: changes.added + changes.removed > 0 || !files_touched.is_empty(),
+                    // Against the agent's newest message, not the session's
+                    // `ended_at`: an idle session stays open until quit, so
+                    // that field is None all day and then newer than every
+                    // view on the next launch (see `store::last_agent_activity`).
                     viewed_since_turn: fleet::viewed_since_turn(
                         thread.last_viewed_at.as_deref(),
-                        last.and_then(|s| s.ended_at.as_deref()),
+                        store::last_agent_activity(&home, &project.hash, &thread.id).as_deref(),
                     ),
                     verify_failed: verify.state == fleet::VerifyState::Fail,
                     merge_conflict: merge == fleet::FleetMerge::Conflicts,
@@ -4206,6 +4219,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .on_page_load(commands::preview_cmds::hide_preview_on_reload);
     #[cfg(debug_assertions)]
     {
@@ -4301,6 +4315,7 @@ pub fn run() {
             delete_thread,
             set_thread_archived,
             mark_thread_viewed,
+            set_dock_badge,
             append_message,
             read_thread,
             preflight,
@@ -4801,6 +4816,7 @@ mod tests {
             agents,
             openspec: true,
             ready: true,
+            registry_reachable: true,
             warnings: vec![],
             checked_at: "2026-08-07T00:00:00Z".into(),
         }

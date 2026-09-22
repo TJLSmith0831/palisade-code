@@ -25,6 +25,7 @@ const flight = {
   openspec: true,
   ready: true,
   warnings: ["No ACP agents found on PATH — chat-only mode, /go unavailable."],
+  registryReachable: true,
   checkedAt: "2026-09-18T00:00:00Z",
 };
 

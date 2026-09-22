@@ -62,7 +62,7 @@ export function filterThreads(threads: ThreadMeta[], query: string) {
  *  "Changed" is deliberately not called "done" — uncommitted edits in a
  *  worktree are evidence that something happened, never evidence that it
  *  worked. Only a verify run can say that. */
-export type ThreadState = "needs-attention" | "running" | "changed" | "idle";
+export type ThreadState = "needs-attention" | "running" | "unreviewed" | "changed" | "idle";
 
 /** How a thread's branch stands against the branch it was cut from, as the
  *  row's readiness badge. Distinct from [`ThreadState`], which is about the
@@ -101,12 +101,14 @@ export function threadState(
   return "idle";
 }
 
-/** The three bands the sidebar shares with the Fleet board, in the order a
- *  band earns your attention. A thread with no fleet row is idle: the backend
- *  having nothing to say about it is not the same as it being busy. */
+/** The four bands the sidebar shares with the Fleet board, in the order a
+ *  band earns your attention. "Unreviewed" is a turn that ended and has not
+ *  been opened since. A thread with no fleet row is idle: the backend having
+ *  nothing to say about it is not the same as it being busy. */
 export const FLEET_BANDS = [
   { key: "attention", label: "Needs attention" },
   { key: "running", label: "Running" },
+  { key: "unreviewed", label: "Unreviewed" },
   { key: "idle", label: "Idle" },
 ] as const;
 
@@ -145,6 +147,7 @@ export function groupByFleet(
 const STATE_LABEL: Record<ThreadState, string> = {
   "needs-attention": "Waiting on you",
   running: "Agent is working",
+  unreviewed: "Finished — you haven't looked yet",
   changed: "Uncommitted changes in this thread's worktree",
   idle: "Idle",
 };

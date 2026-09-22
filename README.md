@@ -1,66 +1,100 @@
-# Palisade Code
+<p align="center">
+  <img src="assets/palisade-wordmark-darkmode-no-bg.png#gh-dark-mode-only" alt="Palisade Code" width="360">
+  <img src="assets/palisade-wordmark-lightmode-no-bg.png#gh-light-mode-only" alt="Palisade Code" width="360">
+</p>
 
-An Agentic Development Environment (ADE): one shell that drives several ACP coding agents (Claude Code, Codex, and others) in parallel, each in its own isolated worktree, through a spec-then-build cycle, then reviews their diffs and gates merge on verification evidence. Sessions are concurrent — a thread can hold more than one, and two threads can run at once.
+<p align="center">
+  <b>An Agentic Development Environment.</b><br>
+  Run several coding agents in parallel, each in its own worktree. Review what they did. Merge only what verified.
+</p>
 
-Built with Rust + Tauri 2 on the backend and React 19 + TypeScript (Vite) on the frontend, using pnpm.
+<p align="center">
+  <a href="https://github.com/TJLSmith0831/palisade-code/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TJLSmith0831/palisade-code?include_prereleases&label=download"></a>
+  <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="https://github.com/TJLSmith0831/palisade-code/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/TJLSmith0831/palisade-code/actions/workflows/test.yml/badge.svg"></a>
+  <img alt="macOS universal" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-black">
+</p>
 
-## Getting started
+<p align="center">
+  <img src="docs/screenshots/fleet.png" alt="The Fleet board: three finished threads waiting under Unreviewed, six idle, each with its branch, diff stat, verify state and overlap with other threads" width="900">
+</p>
+
+---
+
+Palisade is in **public beta**. It is the tool we build Palisade with, every day, and it will have rough edges. [Issues](https://github.com/TJLSmith0831/palisade-code/issues) are read daily.
+
+## What it does
+
+- **Fleet board is home.** Every thread across your open projects is a row: needs attention, running, unreviewed, or idle. Agent, diff stat, verify evidence, merge readiness, and overlap with other running threads, all on one screen. A finished turn you have not opened yet badges the dock, and ⌘⇧U takes you to the next one.
+- **Any ACP agent, none compiled in.** Claude Code, Codex, and whatever else the [ACP registry](https://agentclientprotocol.com/) lists and you have on `PATH`. Palisade discovers agents at runtime and speaks ACP to all of them. Pick a different agent per thread.
+- **One worktree per thread.** Agents never share a working tree, so two threads can run at once on the same project without stepping on each other.
+
+  <img src="docs/screenshots/thread.png" alt="A thread: the sidebar groups threads by status, the conversation runs in the middle, the editor column on the right" width="720">
+- **Spec, then build.** Two modes only: `spec` writes an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change with the agent's permissions locked down; `go` builds it. OpenSpec stays the source of truth; Palisade never writes a spec file.
+- **Verification is the only evidence.** A change is green because a named `verify` command exited 0 at a named commit. Never because a model said so. Merge stays disabled until that happens, or you override it on purpose and it says so.
+- **Review lane.** Read a thread's diff file by file, with per-file viewed state and the verify evidence beside it, before you merge.
+
+  <img src="docs/screenshots/review.png" alt="The Review lane: five changed files on the left, an inline diff of one of them, Run verify above, Merge and Open PR below" width="720">
+- **Playbooks.** Draw a graph of agent nodes with gates between them (a verify command, or your approval), save it, run it as one unit from any thread with `|=`.
+
+  <img src="docs/screenshots/playbooks.png" alt="A two-node playbook on the canvas beside a thread, with the Playbooks panel on the right" width="720">
+- **The rest of an IDE.** Editor with local fill-in-the-middle completion (a bundled model, no upload), terminals, a native Preview browser per project, git, MCP server management, and a command palette.
+- **Local first.** Session logs, completion telemetry and settings live under `~/.palisade-code`. Network traffic is what you would expect: your agents, your git remotes, the ACP and MCP registries, and update checks.
+
+## Install
+
+| Platform | Download |
+|---|---|
+| macOS 11+, Apple Silicon **and** Intel (one universal build) | [Latest `.dmg`](https://github.com/TJLSmith0831/palisade-code/releases/latest) |
+| Windows, Linux | Not yet. Follow [the issue tracker](https://github.com/TJLSmith0831/palisade-code/issues) for progress. |
+
+The app is signed and notarized. It updates itself; each update is checked against the project's signing key before it is installed.
+
+You also need at least one ACP coding agent installed and logged in, for example [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex). With none installed Palisade opens in chat-only mode and tells you what it is missing.
+
+## Build from source
 
 ```bash
 pnpm install
-pnpm start
+pnpm start        # tauri dev: compiles the Rust backend and opens the window
 ```
-
-`pnpm start` runs `tauri dev` and opens the app window.
-
-## Commands
 
 | Command | Purpose |
 |---|---|
-| `pnpm install` | Install frontend deps (standalone repo, not a workspace member) |
-| `pnpm test` | Run all frontend tests (vitest) |
-| `npx vitest run src/__tests__/errors.test.ts` | Run one frontend test file |
-| `npx tsc --noEmit` | Typecheck only |
+| `pnpm test` | All frontend tests (vitest) |
+| `npx tsc --noEmit` | Typecheck |
+| `cd src-tauri && cargo test` | All Rust tests |
 | `pnpm build` | `tsc && vite build` |
-| `cd src-tauri && cargo test` | Run all Rust tests |
-| `cd src-tauri && cargo test git::` | Run one Rust module's tests |
-| `pnpm start` | Launch the dev window (`tauri dev`) |
 
-See [tester releases](docs/tester-releases.md) for the GitHub-only release
-process. Local `package.sh` builds never publish updates.
+Rust + Tauri 2 backend, React 19 + TypeScript frontend, Mantine UI. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the layout, the rules the codebase
+runs on, and a glossary of the words the UI uses.
 
 ## Project layout
 
 - `src/App.tsx` — the IDE shell: panes, threads, chat, routing
 - `src/api.ts` — typed wrapper over every Tauri IPC command
 - `src-tauri/src/lib.rs` — IPC command layer (`generate_handler!` registry at the bottom)
-- `src-tauri/src/executor.rs` — executor detect/spawn, stdout JSON-line parsing for both CLIs
-- `src-tauri/src/store.rs` — append-only session store under `~/.palisade-code`
-- `src-tauri/src/git.rs`, `terminal.rs`, `settings.rs` — git ops, PTY, MCP wiring, `.project-settings.json`
-- `src/__tests__/*` — frontend tests, one per source file; Rust tests live inline as `mod tests`
+- `src-tauri/src/acp_*.rs` — ACP registry, client, and event mapping
+- `src-tauri/src/fleet.rs` — the Fleet board's status derivation
+- `src-tauri/src/chain*.rs` — playbook definitions, runner, history
+- `src-tauri/src/store.rs` — append-only session store
+- `src/__tests__/*` — frontend tests, one per source file; Rust tests are inline `mod tests`
 
-## How it works
+## Documentation
 
-- **Fleet board is home.** Every thread and its isolated worktree shows up as a fleet row: status (attention, running, idle), agent, diff stat, verify evidence, merge readiness, and overlap with other running threads.
-- **Review is a first-class lane.** A thread's diff, per-file viewed state, and verify evidence sit together; merge stays disabled until a named verify command passes, or a human explicitly overrides it.
-- **Agents are discovered at runtime, not compiled in.** `acp_registry.rs` fetches agent manifests from the ACP Registry (24h cache) and speaks to every agent over ACP (JSON-RPC 2.0 on stdio). Adding a new agent means it's listed in the registry and its CLI is on `PATH` — no code change.
-- **Thread vs. Session.** A Thread owns messages, mode intent, and the spec link. A Session owns the process, busy state, agent identity, and the provider resume handle. A thread may hold a live spec session and a live go session at once.
-- **Two modes only: spec and go.** They differ by permission flag (`--permission-mode` / `--sandbox`) and skill focus, not by model.
-- **OpenSpec is authoritative for specs.** Palisade shells out to `openspec list/show/validate --json` and never writes a spec file itself.
-- **Verification is the only evidence of done.** A spec is complete because a named `verify` command exited 0 at a named commit — never because a model said so.
+- [PRODUCT.md](PRODUCT.md) — what Palisade is for, and what it deliberately is not
+- [DESIGN.md](DESIGN.md) — the design system every screen is built from
+- [docs/adr](docs/adr) — architecture decisions
+- [docs/tester-releases.md](docs/tester-releases.md) — how a release is built, signed and published
+- [AGENTS.md](AGENTS.md) — packaging and per-machine codesigning for local builds
 
-### Worktree settings
+## Contributing
 
-`.palisade/project-settings.json` can set `worktreeSetup`, `worktreeCopy`, and
-`cargoTarget`. `cargoTarget: "shared"` keeps Cargo artifacts in Palisade's
-per-project home directory; another string is an explicit path (relative paths
-are project-relative). Cargo locks a shared target during concurrent builds,
-so worktrees may report “Blocking waiting for file lock”; use `sccache` through
-`RUSTC_WRAPPER` if lock-free compiler caching is needed. Palisade does not
-configure `sccache` itself.
+Read [CONTRIBUTING.md](CONTRIBUTING.md), then open an issue or a PR. Security
+problems go through [SECURITY.md](SECURITY.md), never a public issue. This
+project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 
-## Notes
+## License
 
-- No headless test mode — the app uses WKWebView, not Chromium, so Playwright can't drive it. Use the Tauri MCP against the debug-only bridge on `127.0.0.1:9223`.
-- `.agents/` and `.claude/` are gitignored; in-repo skills exist locally but aren't committed.
-- See [AGENTS.md](AGENTS.md) for packaging and per-machine codesigning, and [PRODUCT.md](PRODUCT.md) for product intent and positioning.
+[Apache License 2.0](LICENSE). Palisade bundles [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) as its local completion sidecar; see [NOTICE](NOTICE).

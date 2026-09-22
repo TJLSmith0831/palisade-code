@@ -38,6 +38,13 @@ Each group is independently verifiable and independently shippable.
 
 ## 2. Human-in-the-loop node — definition and scheduling
 
+> **Re-verify before relying on §2–§3 (2026-09-22, launch-prep review).** The
+> boxes below are self-reports. On `main` at that date no `NodeKind`,
+> `human_turn`, `resolve_chain_human` or `chain_humans` symbol exists in
+> `src-tauri/src` or `src/`, so this work is either on an unmerged branch or
+> was never landed. The playbook canvas's empty state no longer advertises
+> human nodes for that reason.
+
 - [x] 2.1 **Red first.** Round-trip tests against stubs: a saved chain JSON
   with no `kind` loads as an agent node; a human-node chain serializes
   without disturbing existing fields; `save` accepts an all-human chain;

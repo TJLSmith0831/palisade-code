@@ -11,11 +11,13 @@ main_checkout="$(git worktree list --porcelain | awk '/^worktree /{print $2; exi
 [ -n "$main_checkout" ] || exit 0
 [ "$(cd "$main_checkout" && pwd)" != "$(pwd)" ] || exit 0
 
-sidecar="src-tauri/llama-server-aarch64-apple-darwin"
-if [ ! -e "$sidecar" ] && [ -e "$main_checkout/$sidecar" ]; then
-  ln -s "$main_checkout/$sidecar" "$sidecar"
-  echo "link-sidecar: linked $sidecar from main checkout"
-fi
+for triple in aarch64-apple-darwin x86_64-apple-darwin universal-apple-darwin; do
+  sidecar="src-tauri/llama-server-$triple"
+  if [ ! -e "$sidecar" ] && [ -e "$main_checkout/$sidecar" ]; then
+    ln -s "$main_checkout/$sidecar" "$sidecar"
+    echo "link-sidecar: linked $sidecar from main checkout"
+  fi
+done
 
 resources="src-tauri/resources"
 if [ ! -e "$resources" ] && [ -e "$main_checkout/$resources" ]; then

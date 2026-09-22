@@ -158,6 +158,8 @@ const STARTER_PROMPTS = [
 import SpecPane from "./SpecPane";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
+import FirstRunChecklist from "./FirstRunChecklist";
+import { notifyTurnDone } from "./turnNotifications";
 // Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
 // nobody loads until they open the panel.
 const DatabasePanel = lazy(() => import("./DatabasePanel"));
@@ -3052,6 +3054,8 @@ export default function App() {
   const setErrors = ex.setErrors;
   const flight = ex.flight;
   const setFlight = ex.setFlight;
+  // The first-run checklist's "Check again" is in flight.
+  const [rechecking, setRechecking] = useState(false);
   const liveBySession = ex.liveBySession;
   const setLiveBySession = ex.setLiveBySession;
   const busyThreads = ex.busyThreads;
@@ -3597,7 +3601,8 @@ export default function App() {
   const selectionRef = useRef(0);
   const selectThread = useCallback(
     async (projectHash: string, next: ThreadMeta | null) => {
-      // Leaving a thread releases its idle sessions (closed `done`, D20);
+      // Leaving a thread lets the backend do its idle housekeeping (worktree
+      // sweeps). Sessions stay alive — idle ones keep their auth state — and
       // anything mid-turn keeps running and keeps streaming into its own key.
       const leaving = current.current.thread?.id;
       if (leaving && leaving !== next?.id) api.leaveThread(leaving).catch(fail);
@@ -4437,6 +4442,10 @@ export default function App() {
   // Keeps the event listener (registered once) pointed at the current thread.
   const current = useRef({ project, thread });
   current.current = { project, thread };
+  // ...and at the thread list, so a turn ending on some other thread can be
+  // named in its notification.
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -4887,9 +4896,30 @@ export default function App() {
           });
           // Each thread's own composer unlocks when its own turn ends.
           setBusyFor(threadId, false);
+          // Away from the window, this is the one moment worth a system
+          // notification; with focus, the board and the sidebar already
+          // moved the thread. The helper is silent when the setting is off.
+          // Only the window whose project owns the thread speaks up:
+          // envelopes reach every window, and two windows must not post
+          // the same notification twice.
+          const ended = threadsRef.current.find((t) => t.id === threadId);
+          if (ended) {
+            void notifyTurnDone({
+              threadTitle: ended.title,
+              kind: event.kind,
+              focused: document.hasFocus(),
+            });
+          }
           // But a session finishing on some other thread must not drag the
           // thread on screen back to its own log.
           if (threadId !== current.current.thread?.id) return;
+          // A turn that ends while its thread is on screen in a focused
+          // window has been seen: record the view now, or the thread would
+          // list itself as "Unreviewed" under the user's nose.
+          const hash = current.current.project?.hash;
+          if (hash && document.hasFocus()) {
+            void api.markThreadViewed(hash, threadId).catch(() => {});
+          }
           setDiffRefreshToken((t) => t + 1);
           await refresh().catch(fail);
           return;
@@ -5577,6 +5607,30 @@ export default function App() {
   // Every action, declared once. The palette lists these and the keyboard
   // handler below dispatches them, so a shortcut can't be bound in one
   // place and described differently in another.
+  // Polled whenever a project is open: the board, Review and the sidebar's
+  // thread rows all read these rows, and the sidebar is on screen far more
+  // often than the board is. One source for "what does the backend actually
+  // know about this thread".
+  const fleet = useFleet({ active: !!project && openingProject === null });
+  // What "Next unreviewed thread" walks: finished, unopened, newest first.
+  const unreviewedThreadIds = useMemo(
+    () =>
+      fleet.rows
+        .filter((r) => r.kind === "thread" && r.status === "unreviewed")
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+        .map((r) => r.threadId),
+    [fleet.rows]
+  );
+  // `onFleetOpen` is defined further down, after the handlers it composes;
+  // the command list is built here, so it reaches it through a ref.
+  const onFleetOpenRef = useRef<(threadId: string) => void>(() => {});
+  const onNextUnreviewed = useCallback(() => {
+    const next =
+      unreviewedThreadIds.find((id) => id !== current.current.thread?.id) ??
+      unreviewedThreadIds[0];
+    if (next) onFleetOpenRef.current(next);
+  }, [unreviewedThreadIds]);
+
   const commands = useAppCommands({
     project,
     projects,
@@ -5605,6 +5659,8 @@ export default function App() {
     selectedFile,
     setCommandPaletteOpen,
     setSettingsOpen,
+    unreviewedCount: unreviewedThreadIds.length,
+    onNextUnreviewed,
     activePathRef,
     closeTabRef,
     tabsRef,
@@ -5703,26 +5759,41 @@ export default function App() {
   const boardPanel =
     shell.activePanel === "fleet" || shell.activePanel === "review";
 
-  // Looking at a thread is what clears its "Turn finished" flag on the
+  // Looking at a thread is what moves it out of "Unreviewed" on the
   // board. Re-marked on window focus too: a turn that finishes while the
   // app is in the background and is read the moment you come back would
   // otherwise keep flagging itself.
+  // The board re-reads right after, so the row leaves the band as the thread
+  // opens instead of on the next 10s poll — seen live: ⌘⇧U landed on the
+  // thread while the sidebar still headed it "Unreviewed".
+  const fleetRefreshAfterView = fleet.refresh;
   useEffect(() => {
     const hash = project?.hash;
     const id = thread?.id;
     if (!hash || !id) return;
-    const mark = () => void api.markThreadViewed(hash, id).catch(() => {});
+    const mark = () =>
+      void api
+        .markThreadViewed(hash, id)
+        .then(() => fleetRefreshAfterView())
+        .catch(() => {});
     mark();
     window.addEventListener("focus", mark);
     return () => window.removeEventListener("focus", mark);
-  }, [project?.hash, thread?.id]);
+  }, [project?.hash, thread?.id, fleetRefreshAfterView]);
 
   // ----------------------------------------------------------------- fleet
-  // Polled whenever a project is open: the board, Review and the sidebar's
-  // thread rows all read these rows, and the sidebar is on screen far more
-  // often than the board is. One source for "what does the backend actually
-  // know about this thread".
-  const fleet = useFleet({ active: !!project && openingProject === null });
+  // The dock badge counts threads wanting a look: blocked on you (a permission
+  // prompt, a gate, a crash) or finished and unread. App-wide, cleared at zero.
+  // Rides useFleet's own coalescing, so a streaming agent does not hammer it.
+  // A window with no project (welcome screen, or one mid-switch) has empty
+  // rows and must not clear a badge another window is keeping up to date.
+  useEffect(() => {
+    if (!project || openingProject !== null) return;
+    const count = fleet.rows.filter(
+      (r) => r.status === "attention" || r.status === "unreviewed"
+    ).length;
+    void api.setDockBadge(count).catch(() => {});
+  }, [fleet.rows, project, openingProject]);
   // Threads whose title the backend is still writing (`title_thread`). The
   // skeleton only clears once the new name has been read back, so no surface
   // flashes the "New thread" placeholder between the two.
@@ -5787,6 +5858,7 @@ export default function App() {
     },
     [selectFleetThread, shell.openPanel]
   );
+  onFleetOpenRef.current = onFleetOpen;
   const onFleetReview = useCallback(
     (threadId: string) => {
       void selectFleetThread(threadId).then((ok) => {
@@ -6862,7 +6934,22 @@ export default function App() {
             </div>
           </div>
         </header>
-        {flight && flight.warnings.length > 0 && (
+        {/* No agent at all is a first-run situation, not a warning line: it
+            gets the checklist. Anything else preflight has to say keeps the
+            plain banner. */}
+        {flight && flight.agents.length === 0 ? (
+          <FirstRunChecklist
+            flight={flight}
+            checking={rechecking}
+            onRecheck={() => {
+              setRechecking(true);
+              api
+                .preflight(true)
+                .then(setFlight, fail)
+                .finally(() => setRechecking(false));
+            }}
+          />
+        ) : flight && flight.warnings.length > 0 ? (
           <Alert
             color="warn"
             variant="light"
@@ -6873,7 +6960,7 @@ export default function App() {
               <div key={warning}>⚠ {warning}</div>
             ))}
           </Alert>
-        )}
+        ) : null}
 
         {specLinkChoice && (
           <Alert

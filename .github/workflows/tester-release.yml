@@ -39,7 +39,7 @@ jobs:
       # Tests never execute the sidecar, but tauri-build requires the declared
       # external binary to exist before it compiles the Rust crate.
       - name: Stub the sidecar for tests
-        run: touch src-tauri/llama-server-aarch64-apple-darwin
+        run: touch src-tauri/llama-server-aarch64-apple-darwin src-tauri/llama-server-x86_64-apple-darwin
 
       - run: pnpm install --frozen-lockfile
 
@@ -94,7 +94,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # The app ships as one universal binary, so the Rust crate is compiled
+      # for both Apple Silicon and Intel and lipo'd by the Tauri CLI.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -104,7 +108,16 @@ jobs:
 
       # This is the exact revision reported by the current local sidecar. CI
       # rebuilds it from source rather than copying an untracked local binary.
-      - name: Build the bundled llama.cpp sidecar
+      #
+      # Two slices: the Apple Silicon one uses Metal, the Intel one is
+      # CPU-only (Metal compute is unavailable on Intel Macs) and is
+      # cross-compiled here with a fixed AVX2 feature set — every Intel Mac
+      # that can run macOS 11 has it. GGML_NATIVE would otherwise tune the
+      # Intel slice to the ARM host's CPU. The slices are lipo'd into the
+      # universal sidecar; all three files are left in place because
+      # tauri-build resolves the per-slice name during each `cargo build`
+      # and the bundler resolves the universal one.
+      - name: Build the bundled llama.cpp sidecar (universal)
         env:
           LLAMA_CPP_REVISION: 308f61c
         run: |
@@ -113,12 +126,33 @@ jobs:
           git -C vendor/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
           git -C vendor/llama.cpp fetch --depth=1 origin "$LLAMA_CPP_REVISION"
           git -C vendor/llama.cpp checkout --detach FETCH_HEAD
-          cmake -S vendor/llama.cpp -B vendor/llama.cpp/build \
-            -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON -DLLAMA_BUILD_SERVER=ON
-          cmake --build vendor/llama.cpp/build --target llama-server --parallel 3
-          install -m 755 vendor/llama.cpp/build/bin/llama-server \
+
+          cmake -S vendor/llama.cpp -B vendor/llama.cpp/build-arm64 \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGGML_METAL=ON -DLLAMA_BUILD_SERVER=ON
+          cmake --build vendor/llama.cpp/build-arm64 --target llama-server --parallel 3
+
+          cmake -S vendor/llama.cpp -B vendor/llama.cpp/build-x86_64 \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DGGML_METAL=OFF -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+            -DLLAMA_BUILD_SERVER=ON
+          cmake --build vendor/llama.cpp/build-x86_64 --target llama-server --parallel 3
+
+          install -m 755 vendor/llama.cpp/build-arm64/bin/llama-server \
             src-tauri/llama-server-aarch64-apple-darwin
+          install -m 755 vendor/llama.cpp/build-x86_64/bin/llama-server \
+            src-tauri/llama-server-x86_64-apple-darwin
+          lipo -create \
+            src-tauri/llama-server-aarch64-apple-darwin \
+            src-tauri/llama-server-x86_64-apple-darwin \
+            -output src-tauri/llama-server-universal-apple-darwin
+
+          # The host can only run its own slice; prove the fat file with lipo.
           src-tauri/llama-server-aarch64-apple-darwin --version
+          info="$(lipo -info src-tauri/llama-server-universal-apple-darwin)"
+          echo "$info"
+          grep -q 'x86_64 arm64\|arm64 x86_64' <<<"$info"
 
       # The model repo is private. Its read token is release-only, just like
       # signing credentials; neither is available to normal CI or local builds.
@@ -172,11 +206,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          pnpm tauri build --config src-tauri/tauri.release.conf.json
-          app="src-tauri/target/release/bundle/macos/Palisade.app"
-          updater="$(find src-tauri/target/release/bundle/macos -type f -name '*.app.tar.gz' -print -quit)"
+          pnpm tauri build --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
+          bundle="src-tauri/target/universal-apple-darwin/release/bundle"
+          app="$bundle/macos/Palisade.app"
+          updater="$(find "$bundle/macos" -type f -name '*.app.tar.gz' -print -quit)"
           [[ -n "$updater" && -f "$updater.sig" ]] || { echo "Missing updater archive or signature" >&2; exit 1; }
           codesign --verify --deep --strict "$app"
+          # A universal app is only universal if both the shell and the
+          # sidecar carry both slices.
+          lipo -info "$app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          lipo -info "$app/Contents/MacOS/llama-server" | grep -q 'x86_64 arm64\|arm64 x86_64'
           mkdir -p release-assets
           cp "$updater" "$updater.sig" release-assets/
 
@@ -188,8 +227,8 @@ jobs:
           APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
         run: |
           set -euo pipefail
-          pnpm tauri build --config src-tauri/tauri.installer-release.conf.json
-          installer_dmg="$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          pnpm tauri build --target universal-apple-darwin --config src-tauri/tauri.installer-release.conf.json
+          installer_dmg="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
           [[ -n "$installer_dmg" ]] || { echo "Missing installer DMG" >&2; exit 1; }
           xcrun notarytool submit "$installer_dmg" --key "$APPLE_API_KEY_PATH" \
             --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
@@ -206,6 +245,7 @@ jobs:
           trap 'hdiutil detach "$mountpoint" -quiet || true; rmdir "$mountpoint" || true' EXIT
           codesign --verify --deep --strict "$mountpoint/Palisade.app"
           spctl -a -vvv -t install "$mountpoint/Palisade.app"
+          lipo -info "$mountpoint/Palisade.app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
 
       - name: Publish the tester prerelease
         env:
@@ -225,9 +265,17 @@ jobs:
             const fs = require("fs");
             const manifest = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/latest.json", "utf8"));
             const expected = process.env.EXPECTED_VERSION.slice(1);
-            const platform = manifest.platforms?.["darwin-aarch64"];
-            if (manifest.version !== expected || !platform?.signature || !platform?.url) {
-              throw new Error("Published update manifest does not describe the new signed macOS artifact");
+            if (manifest.version !== expected) {
+              throw new Error("Published update manifest is not for " + expected);
+            }
+            // The universal build asks for darwin-universal; installs from
+            // the aarch64-only era still ask for darwin-aarch64 and must be
+            // offered the same archive, or they never see another update.
+            for (const key of ["darwin-universal", "darwin-aarch64", "darwin-x86_64"]) {
+              const platform = manifest.platforms?.[key];
+              if (!platform?.signature || !platform?.url) {
+                throw new Error("Published update manifest does not describe " + key);
+              }
             }
           '
 
