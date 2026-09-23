@@ -1193,8 +1193,16 @@ fn spec_mode_violation(
                 permissions::ToolKind::Execute => "execute",
                 _ => "write",
             };
+            // Name what was blocked: the cancelled call never finishes, so
+            // neither the chat nor the agent's own log records the target.
+            let target = file_paths
+                .iter()
+                .find(|p| !permissions::is_openspec_path(p))
+                .map(|p| format!(" `{p}`"))
+                .or_else(|| command.map(|c| format!(" `{c}`")))
+                .unwrap_or_default();
             Some(format!(
-                "Spec mode denies {kind_label} tool calls — switch to Go mode to allow writes."
+                "Spec mode blocked this {kind_label}{target} — only files under openspec/ can be written. Switch to Go mode to build."
             ))
         }
         _ => None,
@@ -2575,6 +2583,8 @@ mod tests {
             reason.to_lowercase().contains("edit"),
             "reason should mention edit: {reason}"
         );
+        // The blocked target is named: the cancelled call is recorded nowhere else.
+        assert!(reason.contains("`src/todo.js`"), "reason should name the file: {reason}");
     }
 
     /// RED→GREEN: spec_mode_violation flags delete and move in Spec mode.

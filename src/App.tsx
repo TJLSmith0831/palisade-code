@@ -3550,7 +3550,11 @@ export default function App() {
       // read for an earlier click must not land its history under this thread.
       const mine = ++selectionRef.current;
       setThread(next);
-      setNewThreadPicker(false);
+      // The whole new-thread flow, not just its first picker: a Spec framing
+      // menu left half-finished otherwise sat over every thread opened after
+      // it — a Fleet run landed on "What would you like to spec out today?"
+      // instead of its own chat.
+      resetNewThreadFlow();
       // The previous thread's history must not sit under the new title while
       // this one loads.
       setMessages([]);

@@ -1690,13 +1690,23 @@ fn send_to<'a>(
         .iter()
         .map(|path| attachments::load(&home, project_hash, path))
         .collect::<Res<Vec<_>>>()?;
-    let prompt = acp_client::Prompt {
+    let mut prompt = acp_client::Prompt {
         images,
         skills: turn.skills.to_vec(),
         chats: store::resolve_thread_mentions(&home, project_hash, turn.content),
         ..acp_client::Prompt::text(turn.content)
     };
     let prefix = harness.pending_prefix(session_id);
+    let (mode, thread_id, root) = {
+        let sessions = harness.agent.acp_sessions.lock_or_recover();
+        let session = sessions.get(session_id).ok_or("executor session is not running")?;
+        (session.mode.clone(), session.thread_id.clone(), session.project_root.clone())
+    };
+    if mode == "spec" {
+        let already_framed = grill_inject::leads_with_skill(turn.content)
+            || prefix.as_deref().is_some_and(grill_inject::leads_with_skill);
+        prompt.context.extend(prepare_spec_turn(project_hash, &thread_id, &root, already_framed));
+    }
     {
         let sessions = harness.agent.acp_sessions.lock_or_recover();
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
@@ -1704,6 +1714,24 @@ fn send_to<'a>(
     }
     harness.clear_pending_prefix(session_id);
     Ok(())
+}
+
+/// Ready a Spec-mode turn: give the project the `openspec/` root it can
+/// write into, and — unless the turn already leads with a grill skill —
+/// return the context telling the agent this turn is spec work (D19).
+/// Without it a plain Spec turn went out bare, the agent started building,
+/// and the write guard cancelled the turn.
+fn prepare_spec_turn(project_hash: &str, thread_id: &str, root: &Path, already_framed: bool) -> Option<String> {
+    // Not installed or failing is not fatal: the grill skill's preflight
+    // tells the user what to do.
+    if let Err(e) = crate::openspec_cache::init_if_missing(root) {
+        eprintln!("openspec init in {}: {e}", root.display());
+    }
+    if already_framed {
+        return None;
+    }
+    let has_change = thread_meta(project_hash, thread_id).is_some_and(|m| m.open_spec_change_name.is_some());
+    grill_inject::spec_turn_context(has_change)
 }
 
 /// Copy a dropped (`path`) or pasted (`data_base64` + `ext`) image into the
@@ -5370,6 +5398,35 @@ mod tests {
             harness.agent.pending_prefix.lock_or_recover().is_empty(),
             "a delivered transcript must not be re-sent on the next turn"
         );
+    }
+
+    /// A turn typed straight into a Spec thread (no framing menu, no
+    /// `/propose`) must still tell the agent to write specs — without it the
+    /// agent scaffolded an app and the write guard cancelled the turn.
+    #[test]
+    fn a_plain_spec_turn_carries_the_grill_skill_once() {
+        let (session, mut rx) = acp_client::stub_session(false);
+        assert_eq!(session.mode, "spec");
+        let harness = Harness::default();
+        let id = session.id.clone();
+        harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
+
+        send_to(&harness, "p1", &id, "build a landing page").unwrap();
+        let sent = match rx.try_recv().expect("a prompt reached the transport") {
+            acp_client::BridgeCommand::Prompt(prompt) => prompt.joined(),
+            _ => panic!("expected a prompt"),
+        };
+        assert!(sent.contains("name: grill-explore"), "spec turn lacks the skill: {sent}");
+        assert!(sent.ends_with("build a landing page"), "the user's turn must be last: {sent}");
+
+        // A turn Palisade already built with the skill is not doubled.
+        harness.agent.acp_sessions.lock_or_recover().get(&id).unwrap().busy.store(false, std::sync::atomic::Ordering::SeqCst);
+        send_to(&harness, "p1", &id, &grill_inject::build_prompt("spec", true, "grill-propose")).unwrap();
+        let sent = match rx.try_recv().expect("a prompt reached the transport") {
+            acp_client::BridgeCommand::Prompt(prompt) => prompt.joined(),
+            _ => panic!("expected a prompt"),
+        };
+        assert_eq!(sent.matches("name: grill-").count(), 1, "skill doubled: {sent}");
     }
 
     #[test]

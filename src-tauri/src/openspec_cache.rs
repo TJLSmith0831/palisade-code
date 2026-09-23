@@ -75,6 +75,17 @@ fn openspec_json(project_root: &Path, args: &[&str]) -> OpenSpecResult {
     run_openspec(&bin, project_root, args, TIMEOUT)
 }
 
+/// Give a project the `openspec/` root Spec mode writes into, via the CLI's
+/// own `init` — Palisade still never writes a spec file. `--tools none` keeps
+/// it to the `openspec/` folder: no agent command files land in the project.
+/// A no-op when the root already exists.
+pub fn init_if_missing(project_root: &Path) -> OpenSpecResult {
+    if project_root.join("openspec").is_dir() {
+        return Ok(String::new());
+    }
+    openspec_json(project_root, &["init", "--tools", "none", "--no-animation", "."])
+}
+
 /// Run one `openspec` invocation to completion, capturing both streams.
 ///
 /// Split out from `openspec_json` so the failure paths can be tested against a
@@ -302,6 +313,16 @@ impl Default for OpenSpecCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project that already has its `openspec/` root is left alone — the
+    /// CLI is never run, so an existing config is never re-initialized.
+    #[test]
+    fn init_is_a_no_op_when_the_root_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("openspec")).unwrap();
+        assert_eq!(init_if_missing(dir.path()).unwrap(), "");
+        assert_eq!(fs::read_dir(dir.path().join("openspec")).unwrap().count(), 0);
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 

@@ -154,7 +154,7 @@ fn is_openspec_command(command: &str) -> bool {
 /// Accepts both absolute paths (ending in `/openspec/...`) and relative
 /// paths (`openspec/...`). The check is path-segment-aware so
 /// `my-openspec/` does not match.
-fn is_openspec_path(path: &str) -> bool {
+pub(crate) fn is_openspec_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     let trimmed = normalized.trim_start_matches("./");
     // Walk the path segments and check if any segment is exactly "openspec".
