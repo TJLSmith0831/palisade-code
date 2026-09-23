@@ -78,13 +78,15 @@ export function rankThreads<T extends { title: string }>(threads: T[], query: st
     .map((row) => row.thread);
 }
 
-/** True when the mention is a path outside the project: `@/…` or `@~/…`. */
+/** True when the mention browses a path rather than the project file index. */
 export const isPathQuery = (query: string) =>
-  query.startsWith("/") || query === "~" || query.startsWith("~/");
+  query.startsWith("/") || query === "~" || query.startsWith("~/") ||
+  query === "." || query === ".." || query.startsWith("./") || query.startsWith("../");
 
 /** A path query split into the folder to list and the name typed so far. */
 export function splitPathQuery(query: string): { dir: string; filter: string } {
   if (query === "~") return { dir: "~/", filter: "" };
+  if (query === "." || query === "..") return { dir: `${query}/`, filter: "" };
   const slash = query.lastIndexOf("/");
   return { dir: query.slice(0, slash + 1), filter: query.slice(slash + 1) };
 }

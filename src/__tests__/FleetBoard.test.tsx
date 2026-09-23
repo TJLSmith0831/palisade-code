@@ -15,6 +15,7 @@ const { apiMock } = vi.hoisted(() => ({
     listSkills: vi.fn().mockResolvedValue([
       { name: "grill-apply", path: "/Users/me/.claude/skills/grill-apply", description: "Implement with the decision log", owner: "claude" },
     ]),
+    listAnyDirectory: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock("../api", () => apiMock);
@@ -626,6 +627,18 @@ describe("FleetBoard attachments", () => {
 });
 
 describe("FleetBoard skills", () => {
+  it("grows the prompt to reveal text beyond its initial three rows", () => {
+    render(<FleetBoard {...props()} />);
+    const input = screen.getByTestId("fleet-prompt") as HTMLTextAreaElement;
+    Object.defineProperties(input, {
+      offsetHeight: { configurable: true, value: 76 },
+      clientHeight: { configurable: true, value: 74 },
+      scrollHeight: { configurable: true, value: 140 },
+    });
+    fireEvent.change(input, { target: { value: "one\ntwo\nthree\nfour" } });
+    expect(input.style.height).toBe("142px");
+  });
+
   const typeAt = (value: string) => {
     const input = screen.getByTestId("fleet-prompt");
     fireEvent.change(input, { target: { value } });
@@ -656,5 +669,17 @@ describe("FleetBoard skills", () => {
     render(<FleetBoard {...props({ agents: [{ id: "claude", name: "Claude Agent", installed: true }] })} />);
     typeAt("/gri");
     expect(await screen.findByTestId("command-menu")).toHaveTextContent("/grill-apply");
+  });
+
+  it("browses a sibling directory from the project and inserts an absolute path", async () => {
+    apiMock.listAnyDirectory.mockResolvedValueOnce([
+      { name: "palisade-website", is_dir: true, path: "/projects/palisade-website" },
+    ]);
+    render(<FleetBoard {...props({ projectHash: "project-1" })} />);
+    const input = typeAt("See @../palisade-web");
+    expect(await screen.findByTestId("mention-menu")).toHaveTextContent("palisade-website");
+    expect(apiMock.listAnyDirectory).toHaveBeenCalledWith("../", false, "project-1");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input).toHaveValue("See @/projects/palisade-website/"));
   });
 });

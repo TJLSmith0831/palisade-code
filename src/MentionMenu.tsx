@@ -4,6 +4,7 @@
 import { Fragment, useEffect, useId, useMemo, useState, type KeyboardEvent } from "react";
 import { Paper, UnstyledButton } from "@mantine/core";
 import { IconFile, IconFolder, IconFolderSearch, IconMessageCircle } from "@tabler/icons-react";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import {
   isPathQuery,
@@ -14,6 +15,7 @@ import {
   type Mention,
   type MentionOption,
   type MentionScope,
+  mentionTarget,
 } from "./mentions";
 import { relativeTime } from "./SessionList";
 
@@ -23,6 +25,18 @@ const SCOPES: MentionScope[] = ["all", "threads", "files"];
 const SCOPE_LABEL: Record<MentionScope, string> = { all: "All", threads: "Threads", files: "Files" };
 
 export type MentionMenuState<T extends MentionThread> = ReturnType<typeof useMentionMenu<T>>;
+
+/** Resolve a menu choice, including the native multi-file picker. */
+export function withMentionTarget<T extends MentionThread>(option: MentionOption<T>, onTarget: (target: string) => void): void {
+  if (option.kind !== "browse") {
+    onTarget(mentionTarget(option));
+    return;
+  }
+  void openFileDialog({ multiple: true, directory: false }).then((picked) => {
+    const paths = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
+    if (paths.length) onTarget(paths.join(" @"));
+  });
+}
 
 /**
  * The mention the caret is inside and what it offers. Unlike `/`, a mention
@@ -34,7 +48,8 @@ export function useMentionMenu<T extends MentionThread>(
   draft: string,
   caret: number,
   sources: { files: string[]; threads: T[] },
-  suppressed = false
+  suppressed = false,
+  projectHash?: string | null
 ) {
   const id = useId();
   const [index, setIndex] = useState(0);
@@ -52,14 +67,14 @@ export function useMentionMenu<T extends MentionThread>(
     if (!pathQuery) return;
     let live = true;
     setPathEntries(null);
-    api.listAnyDirectory(pathQuery.dir, showHidden).then(
+    api.listAnyDirectory(pathQuery.dir, showHidden, projectHash).then(
       (entries) => live && setPathEntries(entries),
       () => live && setPathEntries("error")
     );
     return () => {
       live = false;
     };
-  }, [pathQuery?.dir, showHidden]);
+  }, [pathQuery?.dir, showHidden, projectHash]);
   const options = useMemo(
     (): MentionOption<T>[] =>
       mention
@@ -179,6 +194,7 @@ function emptyMessage<T extends MentionThread>(menu: MentionMenuState<T>): strin
   if (pathQuery) {
     if (pathEntries === null) return `Reading ${pathQuery.dir}…`;
     if (pathEntries === "error") return `Can't read ${pathQuery.dir}.`;
+    if (options.length === 1) return `No matching files in ${shortPath(pathQuery.dir)}.`;
     return null;
   }
   if (options.length === 0) return query ? `No threads match “${query}”.` : "No other threads yet.";

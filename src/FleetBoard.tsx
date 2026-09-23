@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Menu,
@@ -11,7 +11,9 @@ import {
   VisuallyHidden,
 } from "@mantine/core";
 import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
-import { listModels, type AgentCommand, type FleetRow, type ModelInfo } from "./api";
+import { listModels, type AgentCommand, type FleetRow, type ModelInfo, type ThreadMeta } from "./api";
+import { applyMention, type MentionOption } from "./mentions";
+import { handleMentionMenuKey, MentionMenu, useMentionMenu, withMentionTarget } from "./MentionMenu";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
@@ -85,6 +87,9 @@ export type FleetBoardProps = {
   /** Skills live sessions have advertised. A new run has no session yet, so
    *  these plus the user's installed skills are what its `/` menu offers. */
   skillCommands?: AgentCommand[];
+  mentionThreads?: ThreadMeta[];
+  mentionFiles?: string[];
+  onOpenMentions?: () => void;
 };
 
 /** A playbook row's subtitle. The saved playbook's name says which script ran;
@@ -364,6 +369,9 @@ export default function FleetBoard({
   onRemoveFile,
   dragActive = false,
   skillCommands = [],
+  mentionThreads = [],
+  mentionFiles = [],
+  onOpenMentions,
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
   const [prompt, setPrompt] = useState("");
@@ -371,6 +379,15 @@ export default function FleetBoard({
   const [caret, setCaret] = useState(0);
   const [skills, setSkills] = useState<string[]>([]);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    const input = promptRef.current;
+    if (!input) return;
+    if (!prompt) {
+      input.style.height = "";
+      return;
+    }
+    input.style.height = `${Math.max(input.offsetHeight, input.scrollHeight + input.offsetHeight - input.clientHeight)}px`;
+  }, [prompt]);
   const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
   const installedSkills = useInstalledSkills(agentId);
   const skillPool = useMemo(
@@ -378,6 +395,32 @@ export default function FleetBoard({
     [skillCommands, installedSkills, agentId]
   );
   const menu = useSlashMenu(prompt, caret, skillPool);
+  const mentions = useMentionMenu(
+    prompt,
+    caret,
+    useMemo(() => ({ files: mentionFiles, threads: mentionThreads }), [mentionFiles, mentionThreads]),
+    menu.open,
+    projectHash
+  );
+  useEffect(() => {
+    if (mentions.open) onOpenMentions?.();
+  }, [mentions.open, onOpenMentions]);
+  const placeCaret = (text: string, at: number) => {
+    setPrompt(text);
+    setCaret(at);
+    requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.setSelectionRange(at, at);
+    });
+  };
+  const pickMention = (option: MentionOption<ThreadMeta>) => {
+    const mention = mentions.mention;
+    if (!mention) return;
+    withMentionTarget(option, (target) => {
+      const next = applyMention(prompt, mention, target);
+      placeCaret(next.text, next.caret);
+    });
+  };
   const pickSkill = (command: AgentCommand) => {
     if (!menu.slash) return;
     const next = pickSkillIntoTray(prompt, menu.slash, skills, command.name);
@@ -483,7 +526,6 @@ export default function FleetBoard({
 
       <div className={`fleet-composer${dragActive ? " drag-active" : ""}`}>
         <DropHint active={dragActive} />
-        <SlashMenu menu={menu} onPick={pickSkill} />
         <ComposerTray
           projectHash={projectHash}
           skills={skills}
@@ -495,6 +537,9 @@ export default function FleetBoard({
           onRemoveAttachment={(path) => onRemoveAttachment?.(path)}
           onRemoveFile={onRemoveFile}
         />
+        <div className="fleet-prompt-wrap">
+          <SlashMenu menu={menu} onPick={pickSkill} />
+          <MentionMenu menu={mentions} onPick={(option) => void pickMention(option)} />
         <Textarea
           ref={promptRef}
           value={prompt}
@@ -505,6 +550,8 @@ export default function FleetBoard({
           onSelect={trackCaret}
           onClick={trackCaret}
           onKeyDown={(event) => {
+            if (handleMentionMenuKey(event, mentions, (option) => void pickMention(option), (mention) =>
+              placeCaret(prompt.slice(0, mention.start) + prompt.slice(mention.start + 1), mention.start + mention.query.length))) return;
             if (
               event.key === "Backspace" &&
               skills.length > 0 &&
@@ -525,13 +572,15 @@ export default function FleetBoard({
           aria-label="New run prompt"
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={menu.open}
-          aria-controls={menu.open ? menu.id : undefined}
-          aria-activedescendant={menu.open ? menu.activeId : undefined}
+          aria-expanded={menu.open || mentions.open}
+          aria-controls={menu.open ? menu.id : mentions.open ? mentions.id : undefined}
+          aria-activedescendant={menu.open ? menu.activeId : mentions.open ? mentions.activeId : undefined}
           rows={3}
+          resize="vertical"
           classNames={{ input: "fleet-prompt-input" }}
           data-testid="fleet-prompt"
         />
+        </div>
         <div className="fleet-composer-row">
           <Select
             value={agentId}

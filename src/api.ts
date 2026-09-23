@@ -430,7 +430,8 @@ export const specMode = (
    *  work. Null only for older threads framed before it was required. */
   description: string | null,
   bypass: boolean,
-  start: boolean
+  start: boolean,
+  skills: string[] = []
 ) =>
   invoke<ThreadMeta>("spec_mode", {
     projectHash,
@@ -439,6 +440,7 @@ export const specMode = (
     description,
     bypass,
     start,
+    skills,
   });
 export const propose = (
   projectHash: string,
@@ -1426,8 +1428,8 @@ export const listDirectory = (
 
 /** One directory anywhere on disk (`~` expanded), absolute paths back —
  *  for `@~/…` and `@/…` mentions of files outside the project. */
-export const listAnyDirectory = (path: string, includeHidden = false) =>
-  invoke<DirEntry[]>("list_any_directory", { path, includeHidden });
+export const listAnyDirectory = (path: string, includeHidden = false, projectHash?: string | null) =>
+  invoke<DirEntry[]>("list_any_directory", { path, includeHidden, projectHash });
 
 export const listAllFiles = (projectHash: string) =>
   invoke<string[]>("list_all_files", { projectHash });

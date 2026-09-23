@@ -80,10 +80,12 @@ describe("@ threads and outside paths", () => {
     expect(isPathQuery("~/Doc")).toBe(true);
     expect(isPathQuery("/Users")).toBe(true);
     expect(isPathQuery("~")).toBe(true);
+    expect(isPathQuery("../palisade-website")).toBe(true);
     expect(isPathQuery("src/App")).toBe(false);
     expect(splitPathQuery("~/Documents/api")).toEqual({ dir: "~/Documents/", filter: "api" });
     expect(splitPathQuery("~")).toEqual({ dir: "~/", filter: "" });
     expect(splitPathQuery("/")).toEqual({ dir: "/", filter: "" });
+    expect(splitPathQuery("../palisade-website")).toEqual({ dir: "../", filter: "palisade-website" });
   });
 
   it("keeps a picked folder open for the next level", () => {
