@@ -2235,10 +2235,13 @@ fn diff_to_describe(
 /// The prompt behind the Source Control panel's **Generate** button
 /// (Amendment 7). A real summarisation of the diff through the project's
 /// executor — deliberately not a canned template.
-fn commit_message_prompt(scope: &str, diff: &str) -> String {
+fn commit_message_prompt(scope: &str, diff: &str, rules: Option<&str>) -> String {
+    let rules = rules
+        .map(|rules| format!("This project's commit rules (they override the rules below):\n{rules}\n\n"))
+        .unwrap_or_default();
     format!(
         "Write a git commit message for the {scope} diff below.\n\n\
-         Rules:\n\
+         {rules}Rules:\n\
          - Conventional-commits subject line, imperative mood, <= 72 chars.\n\
          - Then a blank line and 1-3 short bullets on *why*, only if the diff \
            is not self-explanatory.\n\
@@ -2265,7 +2268,78 @@ fn cap_diff(diff: &str) -> String {
     format!("{}\n… [diff truncated]", &diff[..end])
 }
 
-/// Draft a commit message from the staged diff via the project's executor.
+/// The commit-message section of the repo's agent instructions: the part of
+/// AGENTS.md (else CLAUDE.md) under a heading that mentions commits, or failing
+/// that its lines about commit messages. `None` when the repo sets no rules.
+fn commit_rules(root: &std::path::Path) -> Option<String> {
+    ["AGENTS.md", "CLAUDE.md"]
+        .iter()
+        .filter_map(|name| std::fs::read_to_string(root.join(name)).ok())
+        .find_map(|text| commit_rules_in(&text))
+}
+
+fn commit_rules_in(text: &str) -> Option<String> {
+    let level = |line: &str| line.chars().take_while(|c| *c == '#').count();
+    let lines: Vec<&str> = text.lines().collect();
+    let section = lines
+        .iter()
+        .position(|l| level(l) > 0 && l.to_lowercase().contains("commit"))
+        .map(|start| {
+            let depth = level(lines[start]);
+            lines[start + 1..]
+                .iter()
+                .take_while(|l| !(level(l) > 0 && level(l) <= depth))
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_else(|| {
+            lines
+                .iter()
+                .filter(|l| l.to_lowercase().contains("commit message"))
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+    let section = section.trim();
+    (!section.is_empty()).then(|| section.chars().take(1500).collect())
+}
+
+/// A commit subject from the local model, in the repo's style. `None` when no
+/// local model is running, it produced nothing usable, or the repo's written
+/// rules ask for more than Conventional Commits — a 0.5B model can't follow
+/// prose rules, so those repos go to the agent, which gets them verbatim.
+fn local_commit_subject(
+    harness: &Harness,
+    bin: &std::path::Path,
+    root: &std::path::Path,
+    diff: &str,
+    rules: Option<&str>,
+) -> Option<String> {
+    let conventional = match rules {
+        Some(rules) if rules.to_lowercase().contains("conventional commit") => true,
+        Some(_) => return None,
+        // No written rules: follow what the history already does.
+        None => {
+            let subjects: Vec<String> = git::log(bin, root, 20)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| entry.subject)
+                .filter(|subject| !subject.starts_with("Merge "))
+                .collect();
+            let conv = subjects.iter().filter(|s| completion::is_conventional_subject(s)).count();
+            conv * 2 > subjects.len()
+        }
+    };
+    let server = harness.completion.completion_server.lock_or_recover();
+    server
+        .as_ref()
+        .filter(|s| s.is_alive())
+        .and_then(|s| s.commit_subject(diff, conventional).ok())
+}
+
+/// Draft a commit message from the staged diff: the local model when one is
+/// running, else the project's executor.
 ///
 /// Runs on a throwaway session rather than the thread's own: the draft is a
 /// value returned to the commit box, and routing it through a live thread
@@ -2300,11 +2374,8 @@ async fn suggest_commit_message(
         let Some((_scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
             return Ok(String::new());
         };
-        let server = harness.completion.completion_server.lock_or_recover();
-        let Some(server) = server.as_ref().filter(|s| s.is_alive()) else {
-            return Ok(String::new());
-        };
-        Ok(server.commit_subject(&diff).unwrap_or_default())
+        let rules = commit_rules(&root);
+        Ok(local_commit_subject(&harness, &bin, &root, &diff, rules.as_deref()).unwrap_or_default())
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2333,6 +2404,12 @@ async fn draft_commit_message(
         let Some((scope, diff)) = diff_to_describe(&staged, &working, &untracked) else {
             return Err("nothing to describe — the working tree is clean".into());
         };
+        // Local model first: no agent process, no provider auth, sub-second.
+        // The agent is the fallback, and the path for repos with custom rules.
+        let rules = commit_rules(&root);
+        if let Some(subject) = local_commit_subject(&harness, &bin, &root, &diff, rules.as_deref()) {
+            return Ok(subject);
+        }
         let (agent, bin) = selected_executor(&app, &harness, &project_hash, thread_id.as_deref())?;
         let model = thread_id
             .as_deref()
@@ -2355,7 +2432,7 @@ async fn draft_commit_message(
         };
         acp_client::agent_oneshot(
             spawn,
-            &commit_message_prompt(scope, &cap_diff(&diff)),
+            &commit_message_prompt(scope, &cap_diff(&diff), rules.as_deref()),
             std::time::Duration::from_secs(90),
         )
     })
@@ -4979,8 +5056,15 @@ mod tests {
 
     #[test]
     fn the_prompt_names_which_diff_it_is_describing() {
-        assert!(commit_message_prompt("working-tree", "+x").contains("working-tree diff"));
-        assert!(commit_message_prompt("staged", "+x").contains("staged diff"));
+        assert!(commit_message_prompt("working-tree", "+x", None).contains("working-tree diff"));
+        assert!(commit_message_prompt("staged", "+x", Some("Prefix with JIRA-123")).contains("JIRA-123"));
+        let agents = "# Repo\n## Commit messages\nUse Conventional Commits.\n### Scopes\nModule name.\n## Testing\nRun it.";
+        assert_eq!(
+            commit_rules_in(agents).as_deref(),
+            Some("Use Conventional Commits.\n### Scopes\nModule name.")
+        );
+        assert_eq!(commit_rules_in("- Write commit messages in English.\n- Never commit .env").as_deref(), Some("- Write commit messages in English."));
+        assert_eq!(commit_rules_in("## Gotchas\n- Never commit the key."), None);
     }
 
     use super::*;

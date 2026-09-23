@@ -329,11 +329,11 @@ impl CompletionServer {
     /// message the moment it opens instead of spending an agent turn on one.
     /// The agent-backed `draft_commit_message` stays as the better answer for
     /// anyone who asks for it.
-    pub fn commit_subject(&self, diff: &str) -> Res<String> {
+    pub fn commit_subject(&self, diff: &str, conventional: bool) -> Res<String> {
         let url = format!("http://127.0.0.1:{}/completion", self.port());
         let resp = ureq::post(&url)
             .timeout(Duration::from_secs(6))
-            .send_json(&commit_request_body(diff))
+            .send_json(&commit_request_body(diff, conventional))
             .map_err(|err| crate::PalisadeError::from(format!("commit-message request failed: {err}")))?;
         let text = resp
             .into_string()
@@ -344,44 +344,137 @@ impl CompletionServer {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        clean_title(&raw).ok_or_else(|| crate::PalisadeError::from("model returned no usable subject"))
+        clean_commit_subject(&raw, diff, conventional)
+            .ok_or_else(|| crate::PalisadeError::from("model returned no usable subject"))
     }
 }
 
-/// The diff handed to the local model. Far smaller than the agent's cap: a
-/// 0.5B model's context is short, and the head of a diff is what a subject
-/// line describes anyway.
-const LOCAL_DIFF_CAP: usize = 4000;
+/// The compacted diff handed to the local model. Far smaller than the
+/// agent's cap: a 0.5B model's context is short, and the head of a diff is
+/// what a subject line describes anyway.
+const LOCAL_DIFF_CAP: usize = 1500;
 
-fn commit_request_body(diff: &str) -> serde_json::Value {
-    let mut end = diff.len().min(LOCAL_DIFF_CAP);
-    while end > 0 && !diff.is_char_boundary(end) {
-        end -= 1;
-    }
+/// Few-shot changes as (compacted diff, conventional subject, plain subject).
+/// Realistic multi-line changes whose scope visibly comes from the path: with
+/// one-line toy diffs the model returned the example answer ("Add retry
+/// helper") for every real diff.
+const COMMIT_EXAMPLES: [(&str, &str, &str); 3] = [
+    (
+        "File: src/billing/invoice.py\n-    total = sum(line.amount for line in lines)\n+    total = sum(line.amount * line.qty for line in lines)",
+        "fix(billing): multiply line amounts by quantity in invoice totals",
+        "Multiply line amounts by quantity in invoice totals",
+    ),
+    (
+        "File: docs/setup.md\n+## Installation\n+Run `pnpm install`, then `pnpm dev`.",
+        "docs: document installation steps",
+        "Document installation steps",
+    ),
+    (
+        "File: src/search/index.ts\n+export function highlightMatches(text: string, query: string) {\n+  return text.replaceAll(query, `<mark>${query}</mark>`);",
+        "feat(search): highlight query matches in results",
+        "Highlight query matches in results",
+    ),
+];
+
+/// Scopes the examples use. A subject carrying one the real diff never
+/// mentions copied it from an example.
+const EXAMPLE_SCOPES: [&str; 2] = ["billing", "search"];
+
+fn commit_request_body(diff: &str, conventional: bool) -> serde_json::Value {
     serde_json::json!({
-        "prompt": build_commit_prompt(&diff[..end]),
-        "n_predict": 24,
+        "prompt": build_commit_prompt(&compact_diff(diff), conventional),
+        "n_predict": 32,
         "temperature": DEFAULT_TEMPERATURE,
         "repeat_penalty": DEFAULT_REPEAT_PENALTY,
         "top_p": DEFAULT_TOP_P,
-        "stop": ["\n", "Diff:", "Message:", FIM_END.to_string()],
+        "stop": ["\n", "Change:", "Subject:", FIM_END.to_string()],
     })
 }
 
-/// Few-shot for the same reason the title prompt is: asked bare for "a commit
-/// message", a small model narrates the diff instead of naming it.
-pub fn build_commit_prompt(diff: &str) -> String {
-    format!(
-        "Write a one-line git commit subject for the diff below. \
-         Imperative mood, under 72 characters. Subject only, no quotes, no body.\n\n\
-         Diff: +def retry(fn, attempts=3):\n\
-         Message: Add retry helper\n\n\
-         Diff: -timeout = 5\n+timeout = 30\n\
-         Message: Raise request timeout to 30s\n\n\
-         Diff: {}\n\
-         Message:",
-        diff.trim()
-    )
+/// Whether a subject is a Conventional Commit: `type(scope)!: summary`.
+pub fn is_conventional_subject(subject: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^[a-z]+(\([^)]+\))?!?: \S").expect("valid regex"))
+        .is_match(subject)
+}
+
+/// File names plus changed lines only. Hunk headers, index lines and context
+/// lines are noise to a small model and crowd the real change out of its
+/// short window.
+pub fn compact_diff(diff: &str) -> String {
+    let mut out = String::new();
+    for line in diff.lines() {
+        let kept = if let Some(rest) = line.strip_prefix("diff --git ") {
+            format!("File: {}", rest.rsplit(" b/").next().unwrap_or(rest))
+        } else if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        } else if (line.starts_with('+') || line.starts_with('-')) && !line[1..].trim().is_empty() {
+            line.to_string()
+        } else {
+            continue;
+        };
+        if out.len() + kept.len() + 1 > LOCAL_DIFF_CAP {
+            break;
+        }
+        out.push_str(&kept);
+        out.push('\n');
+    }
+    out
+}
+
+/// Few-shot because asked bare, a small model narrates the diff instead of
+/// naming it. The examples teach the repo's style: `conventional` when its
+/// rules or recent history use Conventional Commits, plain imperative
+/// otherwise. Prose rules are deliberately *not* included: a 0.5B model
+/// follows examples, and a paragraph of rules made it answer "chore: update
+/// docs" to everything.
+pub fn build_commit_prompt(diff: &str, conventional: bool) -> String {
+    let style = if conventional {
+        "as type(scope): summary, where scope is the changed module"
+    } else {
+        "in imperative mood"
+    };
+    let mut prompt = format!("Write a one-line git commit subject for each change, {style}.\n\n");
+    for (example, conv, plain) in COMMIT_EXAMPLES {
+        let subject = if conventional { conv } else { plain };
+        prompt.push_str(&format!("Change:\n{example}\nSubject: {subject}\n\n"));
+    }
+    prompt.push_str(&format!("Change:\n{}\nSubject:", diff.trim()));
+    prompt
+}
+
+/// Strips what a small model decorates a subject with, and rejects answers
+/// copied from the examples. A scope lifted from an example is dropped rather
+/// than rejected: the summary after it is usually still about the real diff.
+pub fn clean_commit_subject(raw: &str, diff: &str, conventional: bool) -> Option<String> {
+    let line = raw.lines().find(|l| !l.trim().is_empty())?;
+    let mut subject = line
+        .trim()
+        .trim_matches(['"', '\'', '`', '*'])
+        .trim_end_matches(['.', '…'])
+        .trim()
+        .to_string();
+    if subject.is_empty() || subject.chars().count() > 100 {
+        return None;
+    }
+    if COMMIT_EXAMPLES
+        .iter()
+        .any(|(_, conv, plain)| subject.eq_ignore_ascii_case(conv) || subject.eq_ignore_ascii_case(plain))
+    {
+        return None;
+    }
+    let diff = diff.to_ascii_lowercase();
+    for scope in EXAMPLE_SCOPES {
+        if !diff.contains(scope) {
+            subject = subject.replacen(&format!("({scope})"), "", 1);
+        }
+    }
+    if conventional {
+        return Some(subject);
+    }
+    let mut chars = subject.chars();
+    let first = chars.next()?;
+    Some(first.to_uppercase().collect::<String>() + chars.as_str())
 }
 
 /// Ask the bundled model for the task's topic rather than continuing the
@@ -1045,6 +1138,25 @@ pub fn flush_telemetry(telemetry: &CompletionTelemetry) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_subject_drops_copied_scopes_and_example_answers() {
+        let diff = "diff --git a/src/titles.rs b/src/titles.rs\n+fn name_thread() {}\n";
+        assert_eq!(
+            clean_commit_subject("feat(search): name threads from requests", diff, true).as_deref(),
+            Some("feat: name threads from requests")
+        );
+        assert_eq!(clean_commit_subject("docs: document installation steps", diff, true), None);
+        assert_eq!(clean_commit_subject("name threads.", diff, false).as_deref(), Some("Name threads"));
+        assert!(is_conventional_subject("fix(titles): name a thread"));
+        assert!(!is_conventional_subject("Repair legacy automatic thread titles"));
+    }
+
+    #[test]
+    fn compact_diff_keeps_file_names_and_changed_lines_only() {
+        let diff = "diff --git a/src/x.rs b/src/x.rs\nindex 1..2 100644\n--- a/src/x.rs\n+++ b/src/x.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-let t = 5;\n+let t = 30;\n+\n";
+        assert_eq!(compact_diff(diff), "File: src/x.rs\n-let t = 5;\n+let t = 30;\n");
+    }
 
     #[test]
     fn fim_prompt_contains_control_tokens() {
