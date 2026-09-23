@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Menu,
@@ -11,12 +11,22 @@ import {
   VisuallyHidden,
 } from "@mantine/core";
 import { IconAiAgent, IconDots, IconRoute } from "@tabler/icons-react";
-import { listModels, type FleetRow, type ModelInfo } from "./api";
+import { listModels, type AgentCommand, type FleetRow, type ModelInfo } from "./api";
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 import WorktreeModeBadge from "./WorktreeModeBadge";
+import { ComposerTray, DropHint, imagePasteHandler } from "./ComposerTray";
+import {
+  handleSlashMenuKey,
+  pickSkillIntoTray,
+  SlashMenu,
+  useInstalledSkills,
+  useSlashMenu,
+  withInstalled,
+  withoutSigil,
+} from "./SkillMenu";
 
 export type NewRunInput = {
   prompt: string;
@@ -27,6 +37,10 @@ export type NewRunInput = {
   model?: string;
   mode: "spec" | "go";
   isolated: boolean;
+  /** Stored image paths from the tray. */
+  attachments?: string[];
+  /** Skills from the tray; the backend leads the prompt with them. */
+  skills?: string[];
 };
 
 export type FleetBoardProps = {
@@ -59,6 +73,18 @@ export type FleetBoardProps = {
   onOpenPr(projectId: string, threadId: string): void;
   onArchive(projectId: string, threadId: string): void;
   onNewRun(input: NewRunInput): void;
+  /** Images dropped or pasted onto the board's composer (stored paths). */
+  attachments?: string[];
+  onRemoveAttachment?: (path: string) => void;
+  onPasteImages?: (images: { dataBase64: string; ext: string }[]) => void;
+  /** Other dropped files, sent as `@path` mentions. */
+  files?: string[];
+  onRemoveFile?: (path: string) => void;
+  /** A file is being dragged over the window. */
+  dragActive?: boolean;
+  /** Skills live sessions have advertised. A new run has no session yet, so
+   *  these plus the user's installed skills are what its `/` menu offers. */
+  skillCommands?: AgentCommand[];
 };
 
 /** A playbook row's subtitle. The saved playbook's name says which script ran;
@@ -331,10 +357,40 @@ export default function FleetBoard({
   onCancelRun,
   onArchiveRun,
   onNewRun,
+  attachments = [],
+  onRemoveAttachment,
+  onPasteImages,
+  files = [],
+  onRemoveFile,
+  dragActive = false,
+  skillCommands = [],
 }: FleetBoardProps) {
   const installed = agents.filter((a) => a.installed);
   const [prompt, setPrompt] = useState("");
+  // The same `/` menu and tray the thread composer has (SkillMenu.tsx).
+  const [caret, setCaret] = useState(0);
+  const [skills, setSkills] = useState<string[]>([]);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const [agentId, setAgentId] = useState<string | null>(installed[0]?.id ?? null);
+  const installedSkills = useInstalledSkills(agentId);
+  const skillPool = useMemo(
+    () => withInstalled(skillCommands, installedSkills, agentId),
+    [skillCommands, installedSkills, agentId]
+  );
+  const menu = useSlashMenu(prompt, caret, skillPool);
+  const pickSkill = (command: AgentCommand) => {
+    if (!menu.slash) return;
+    const next = pickSkillIntoTray(prompt, menu.slash, skills, command.name);
+    setPrompt(next.text);
+    setSkills(next.skills);
+    setCaret(next.caret);
+    requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+  const trackCaret = (event: React.SyntheticEvent<HTMLTextAreaElement>) =>
+    setCaret(event.currentTarget.selectionStart ?? 0);
   const [modelId, setModelId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -378,7 +434,9 @@ export default function FleetBoard({
     { key: "idle", label: "Idle", list: groups.idle },
   ];
 
-  const canStart = prompt.trim().length > 0 && installed.length > 0;
+  const canStart =
+    (prompt.trim().length > 0 || skills.length > 0 || attachments.length > 0 || files.length > 0) &&
+    installed.length > 0;
 
   return (
     <section
@@ -423,12 +481,53 @@ export default function FleetBoard({
         </div>
       </div>
 
-      <div className="fleet-composer">
+      <div className={`fleet-composer${dragActive ? " drag-active" : ""}`}>
+        <DropHint active={dragActive} />
+        <SlashMenu menu={menu} onPick={pickSkill} />
+        <ComposerTray
+          projectHash={projectHash}
+          skills={skills}
+          attachments={attachments}
+          files={files}
+          commands={skillPool}
+          installed={installedSkills}
+          onRemoveSkill={(name) => setSkills(skills.filter((s) => s !== name))}
+          onRemoveAttachment={(path) => onRemoveAttachment?.(path)}
+          onRemoveFile={onRemoveFile}
+        />
         <Textarea
+          ref={promptRef}
           value={prompt}
-          onChange={(e) => setPrompt(e.currentTarget.value)}
+          onChange={(e) => {
+            setPrompt(e.currentTarget.value);
+            setCaret(e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+          }}
+          onSelect={trackCaret}
+          onClick={trackCaret}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Backspace" &&
+              skills.length > 0 &&
+              event.currentTarget.selectionStart === 0 &&
+              event.currentTarget.selectionEnd === 0
+            ) {
+              event.preventDefault();
+              setSkills(skills.slice(0, -1));
+              return;
+            }
+            handleSlashMenuKey(event, menu, pickSkill, (token) => {
+              setPrompt(withoutSigil(prompt, token));
+              setCaret(Math.max(0, caret - token.sigil.length));
+            });
+          }}
+          onPaste={imagePasteHandler(onPasteImages)}
           placeholder="What should the agent do?"
           aria-label="New run prompt"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={menu.open}
+          aria-controls={menu.open ? menu.id : undefined}
+          aria-activedescendant={menu.open ? menu.activeId : undefined}
           rows={3}
           classNames={{ input: "fleet-prompt-input" }}
           data-testid="fleet-prompt"
@@ -488,13 +587,16 @@ export default function FleetBoard({
             data-testid="fleet-start"
             onClick={() => {
               onNewRun({
-                prompt: prompt.trim(),
+                prompt: [prompt.trim(), ...files.map((f) => `@${f}`)].filter(Boolean).join(" "),
+                attachments,
+                skills,
                 agentId: agentId ?? undefined,
                 model: modelId ?? undefined,
                 mode,
                 isolated,
               });
               setPrompt("");
+              setSkills([]);
             }}
           >
             Start run

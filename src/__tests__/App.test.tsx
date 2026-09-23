@@ -5282,6 +5282,8 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         mode: "spec",
         model: null,
         bypass: true,
+        attachments: [],
+        skills: [],
       })
     );
   });
@@ -5730,8 +5732,11 @@ describe("Vibe spec tabs (vibe-spec-tabs)", () => {
 // a project's own .claude/skills/*/SKILL.md arrives through this channel, so
 // Palisade never scans a skill directory or hardcodes an agent's layout.
 describe("Agent command menu", () => {
-  const openThread = async () => {
+  const openThread = async (
+    cached: { name: string; description: string }[] = []
+  ) => {
     invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "agent_commands") return Promise.resolve(cached);
       if (cmd === "list_projects") {
         return Promise.resolve([
           {
@@ -5815,6 +5820,18 @@ describe("Agent command menu", () => {
     });
     const menu = await screen.findByTestId("command-menu");
     expect(menu).toHaveTextContent(/no skills advertised/i);
+  });
+
+  it("re-seeds a selected thread's menu from the backend without an event", async () => {
+    // A webview reload drops every `agent-commands` event while the ACP
+    // session lives on; the backend's cache is the only source left.
+    await openThread([{ name: "review", description: "Review code changes" }]);
+    expect(invokeMock).toHaveBeenCalledWith("agent_commands", { threadId: "t1" });
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "/" },
+    });
+    const menu = await screen.findByTestId("command-menu");
+    await waitFor(() => expect(menu).toHaveTextContent("/review"));
   });
 
   it("distinguishes a query with no matches from an empty pool", async () => {
@@ -6295,9 +6312,11 @@ describe("Beta feedback #32 — @ mentions", () => {
     fireEvent.change(input, { target: { value: "look at @app" } });
     fireEvent.select(input, { target: { selectionStart: 12 } });
 
-    const rows = await screen.findAllByTestId("mention-row");
-    expect(rows[0]).toHaveTextContent("src/App.tsx");
-    fireEvent.click(rows[0]);
+    // The Browse… row is there from the start; files join it once read.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("mention-row")[0]).toHaveTextContent("src/App.tsx")
+    );
+    fireEvent.click(screen.getAllByTestId("mention-row")[0]);
 
     await waitFor(() =>
       expect(screen.getByTestId("composer-input")).toHaveValue(
@@ -7002,5 +7021,173 @@ describe("Native macOS menu", () => {
     // IPCs race, and if the `false` lands last Quit discards the edit without
     // asking. Only the unmount is allowed to report this window clean.
     expect(reportedDirty()).toEqual([false, true]);
+  });
+});
+
+describe("Composer: skills anywhere, @ threads, images", () => {
+  const threads = [
+    { id: "t1", projectHash: "proj-1", title: "Test thread", currentMode: "go", createdAt: "", updatedAt: "", openSpecChangeName: null },
+    { id: "t2", projectHash: "proj-1", title: "Auth token refresh fix", currentMode: "go", createdAt: "", updatedAt: "2026-09-20T00:00:00Z", openSpecChangeName: null },
+  ];
+  const setup = async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads") return Promise.resolve(threads);
+      if (cmd === "list_all_files") return Promise.resolve(["src/App.tsx"]);
+      if (cmd === "save_attachment") return Promise.resolve("/h/.palisade-code/projects/proj-1/attachments/1.png");
+      if (cmd === "read_attachment") return Promise.resolve("data:image/png;base64,AA==");
+      if (cmd === "send_message")
+        return Promise.resolve({ seq: 7, ts: "", role: "user", mode: "go", ...(args as { content: string; skills: string[] }) });
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    emit("agent-commands", {
+      sessionId: "s1",
+      threadId: "t1",
+      commands: [
+        { name: "tdd", description: "Test-driven development loop" },
+        { name: "grill-apply", description: "Implement with the decision log" },
+      ],
+    });
+    return screen.getByTestId("composer-input") as HTMLTextAreaElement;
+  };
+  const type = (input: HTMLTextAreaElement, value: string) => {
+    fireEvent.change(input, { target: { value } });
+    fireEvent.select(input, { target: { selectionStart: value.length } });
+  };
+  const sentContent = () =>
+    invokeMock.mock.calls.find(([cmd]) => cmd === "send_message")?.[1] as
+      | { content: string; attachments: string[]; skills: string[] }
+      | undefined;
+
+  it("picks a skill mid-sentence into the tray and sends it beside the text", async () => {
+    const input = await setup();
+    type(input, "fix it, /td");
+    await screen.findByTestId("command-menu");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("composer-chip")).toHaveTextContent("/tdd"));
+    expect(screen.getByTestId("composer-input")).toHaveValue("fix it, ");
+
+    type(screen.getByTestId("composer-input") as HTMLTextAreaElement, "fix it, /gr");
+    fireEvent.keyDown(screen.getByTestId("composer-input"), { key: "Enter" });
+    await waitFor(() => expect(screen.getAllByTestId("composer-chip")).toHaveLength(2));
+
+    type(screen.getByTestId("composer-input") as HTMLTextAreaElement, "fix it, test first");
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    // The skills travel beside the text; the backend leads the prompt with them.
+    await waitFor(() =>
+      expect(sentContent()).toMatchObject({ content: "fix it, test first", skills: ["tdd", "grill-apply"] })
+    );
+    // The sent turn keeps its chips.
+    expect(await screen.findByTestId("message-skills")).toHaveTextContent("/tdd");
+  });
+
+  it("shows a skill's description on hover, not its body", async () => {
+    const input = await setup();
+    type(input, "/td");
+    await screen.findByTestId("command-menu");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.mouseEnter(await screen.findByTestId("composer-chip"));
+    expect(await screen.findByTestId("skill-hovercard")).toHaveTextContent(
+      "Test-driven development loop"
+    );
+  });
+
+  it("lets a mid-sentence path through: no menu, Enter sends", async () => {
+    const input = await setup();
+    type(input, "check /tmp");
+    expect(screen.queryByTestId("command-menu")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(sentContent()?.content).toBe("check /tmp"));
+  });
+
+  it("searches threads and files in separate @ scopes", async () => {
+    const input = await setup();
+    type(input, "redo @auth");
+    const menu = await screen.findByTestId("mention-menu");
+    await within(menu).findByText("Auth token refresh fix");
+    expect(menu).toHaveTextContent("Threads");
+    fireEvent.keyDown(input, { key: "Tab", ctrlKey: true });
+    expect(screen.getByTestId("mention-scope-threads")).toHaveAttribute("aria-pressed", "true");
+    expect(within(menu).queryByText("Browse…")).toBeNull();
+    fireEvent.click(screen.getByTestId("mention-scope-files"));
+    expect(within(menu).queryByText("Auth token refresh fix")).toBeNull();
+    fireEvent.click(screen.getByTestId("mention-scope-all"));
+    fireEvent.click(within(menu).getByText("Auth token refresh fix").closest("[data-testid='mention-row']")!);
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-input")).toHaveValue("redo @thread:t2::Auth-token-refresh-fix ")
+    );
+  });
+
+  it("attaches pasted images and sends them with the turn", async () => {
+    const input = await setup();
+    const files = [
+      new File(["a"], "a.png", { type: "image/png" }),
+      new File(["b"], "b.png", { type: "image/png" }),
+    ];
+    fireEvent.paste(input, { clipboardData: { files } });
+    await waitFor(() => expect(screen.getAllByTestId("attachment-thumb")).toHaveLength(2));
+    expect(invokeMock).toHaveBeenCalledWith(
+      "save_attachment",
+      expect.objectContaining({ projectHash: "proj-1", ext: "png", path: null })
+    );
+    // An image alone is a sendable turn.
+    fireEvent.keyDown(screen.getByTestId("composer-input"), { key: "Enter" });
+    await waitFor(() => expect(sentContent()?.attachments).toHaveLength(2));
+    expect(screen.queryByTestId("composer-tray")).toBeNull();
+  });
+
+  // A stored attachment is only readable by the project that stored it, so
+  // an image left in the tray must not ride along into another project.
+  it("empties the image tray when the project changes", async () => {
+    const project = (hash: string) => ({
+      hash,
+      root: `/tmp/${hash}`,
+      displayName: hash,
+      createdAt: "2026-08-06T00:00:00Z",
+      lastAccessedAt: "2026-08-06T00:00:00Z",
+    });
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_projects") return Promise.resolve([project("proj-1"), project("proj-2")]);
+      if (cmd === "switch_project") return Promise.resolve(project(String((args as { hash?: string })?.hash ?? "proj-1")));
+      if (cmd === "list_threads") return Promise.resolve(threads);
+      if (cmd === "save_attachment") return Promise.resolve("/h/.palisade-code/projects/proj-1/attachments/1.png");
+      if (cmd === "read_attachment") return Promise.resolve("data:image/png;base64,AA==");
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    // A switch lands on the Fleet board, whose composer has a tray too.
+    fireEvent.change(openWorkspacePanel(), { target: { value: "proj-2" } });
+    const prompt = await screen.findByTestId("fleet-prompt");
+    fireEvent.paste(prompt, { clipboardData: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
+    await screen.findByTestId("attachment-thumb");
+
+    fireEvent.change(openWorkspacePanel(), { target: { value: "proj-1" } });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("switch_project", expect.objectContaining({ hash: "proj-1" })));
+    await screen.findByTestId("fleet-prompt");
+    await waitFor(() => expect(screen.queryByTestId("attachment-thumb")).toBeNull());
+  });
+});
+
+describe("Composer: installed skills before any session", () => {
+  it("offers installed skills in a thread's very first message", async () => {
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_threads")
+        return Promise.resolve([
+          { id: "t1", projectHash: "proj-1", title: "Fresh", currentMode: "go", createdAt: "", updatedAt: "", openSpecChangeName: null },
+        ]);
+      if (cmd === "list_skills")
+        return Promise.resolve([
+          { name: "microcopy-voice", path: "/Users/me/.claude/skills/microcopy-voice", description: "Write UI microcopy", owner: "claude" },
+        ]);
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    const input = screen.getByTestId("composer-input");
+    fireEvent.change(input, { target: { value: "tighten this copy, /micro" } });
+    fireEvent.select(input, { target: { selectionStart: 25 } });
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/microcopy-voice");
   });
 });

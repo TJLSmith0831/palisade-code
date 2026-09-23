@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Alert, Badge, Box, Button, Code, Group, Paper, Stack } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import {
@@ -26,7 +26,7 @@ export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
-  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; failureClass?: Message["failureClass"] }
+  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; failureClass?: Message["failureClass"]; attachments?: string[]; skills?: string[] }
   /** A zero-height marker at the first turn of a session, so a chain node can
    *  scroll the transcript to what it actually did. Lives on `Item` and not on
    *  `ExecutorEvent`, which D13 caps at nine variants. */
@@ -137,6 +137,8 @@ function itemFromMessage(message: Message): Item {
       text: message.content,
       seq: message.seq,
       failureClass: message.failureClass,
+      attachments: message.attachments,
+      skills: message.skills,
     };
   })(message);
 }
@@ -586,7 +588,11 @@ export const EventList = memo(function EventList({
   agentLogins = [],
   onAgentLogin,
   agentLoginsFor,
+  renderUserMessage,
 }: {
+  /** Draws a user turn's body — the composer uses it to show the skill chips
+   *  and images a turn was sent with. Plain markdown when absent. */
+  renderUserMessage?: (item: Extract<Item, { kind: "plain" }>) => ReactNode;
   items: Item[];
   executor: Preflight["selected"];
   /** The live session id these events belong to — needed to resolve a
@@ -809,7 +815,11 @@ export const EventList = memo(function EventList({
             }
             return (
               <div key={index} className={`message ${item.role}`}>
-                <MDEditor.Markdown source={item.text} className="content" />
+                {item.role === "user" && renderUserMessage ? (
+                  renderUserMessage(item)
+                ) : (
+                  <MDEditor.Markdown source={item.text} className="content" />
+                )}
               </div>
             );
           case "text":

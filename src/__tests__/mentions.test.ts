@@ -61,3 +61,100 @@ describe("rankMentions (#32)", () => {
       toHaveLength(50);
   });
 });
+
+import { isPathQuery, rankThreads, splitPathQuery, threadSlug } from "../mentions";
+
+describe("@ threads and outside paths", () => {
+  it("slugs a title into one token", () => {
+    expect(threadSlug("  Auth  token refresh fix ")).toBe("Auth-token-refresh-fix");
+  });
+
+  it("ranks threads by title, with or without the thread: prefix", () => {
+    const threads = [{ title: "Auth token refresh fix" }, { title: "Preview pane" }];
+    expect(rankThreads(threads, "auth")).toEqual([threads[0]]);
+    expect(rankThreads(threads, "thread:Preview")).toEqual([threads[1]]);
+    expect(rankThreads(threads, "")).toEqual(threads);
+  });
+
+  it("recognises paths outside the project and splits them", () => {
+    expect(isPathQuery("~/Doc")).toBe(true);
+    expect(isPathQuery("/Users")).toBe(true);
+    expect(isPathQuery("~")).toBe(true);
+    expect(isPathQuery("src/App")).toBe(false);
+    expect(splitPathQuery("~/Documents/api")).toEqual({ dir: "~/Documents/", filter: "api" });
+    expect(splitPathQuery("~")).toEqual({ dir: "~/", filter: "" });
+    expect(splitPathQuery("/")).toEqual({ dir: "/", filter: "" });
+  });
+
+  it("keeps a picked folder open for the next level", () => {
+    const text = "see @~/Doc";
+    const mention = mentionAt(text, text.length)!;
+    expect(applyMention(text, mention, "/Users/me/Documents/")).toEqual({
+      text: "see @/Users/me/Documents/",
+      caret: "see @/Users/me/Documents/".length,
+    });
+  });
+});
+
+import { mentionOptions, mentionTarget } from "../mentions";
+
+describe("mentionOptions", () => {
+  const threads = [{ id: "t2", title: "Auth token refresh fix" }];
+
+  it("offers threads, then files, then Browse… for a project query", () => {
+    const rows = mentionOptions("auth", { files: ["src/auth.ts"], threads, entries: null });
+    expect(rows.map((r) => r.kind)).toEqual(["thread", "file", "browse"]);
+    expect(mentionTarget(rows[0] as Exclude<(typeof rows)[number], { kind: "browse" }>)).toBe(
+      "thread:t2::Auth-token-refresh-fix"
+    );
+  });
+
+  it("keeps recent threads visible ahead of a large file list", () => {
+    const manyThreads = Array.from({ length: 10 }, (_, n) => ({ id: `t${n}`, title: `Thread ${n}` }));
+    const manyFiles = Array.from({ length: 100 }, (_, n) => `src/file-${n}.ts`);
+    const rows = mentionOptions("", { files: manyFiles, threads: manyThreads, entries: null });
+    expect(rows.slice(0, 4).map((r) => r.kind)).toEqual(["thread", "thread", "thread", "thread"]);
+    expect(rows[4]?.kind).toBe("file");
+    expect(rows.filter((r) => r.kind === "file")).toHaveLength(50);
+    expect(mentionOptions("", { files: manyFiles, threads: manyThreads, entries: null }, "threads")).toHaveLength(10);
+    expect(mentionOptions("", { files: manyFiles, threads: manyThreads, entries: null }, "files").map((r) => r.kind).slice(0, 2)).toEqual(["file", "file"]);
+  });
+
+  it("lists a folder by name prefix for a path query, folders keeping the menu open", () => {
+    const entries = [
+      { name: "Documents", is_dir: true, path: "/Users/me/Documents" },
+      { name: "Downloads", is_dir: true, path: "/Users/me/Downloads" },
+      { name: "notes.pdf", is_dir: false, path: "/Users/me/notes.pdf" },
+    ];
+    const rows = mentionOptions("~/Doc", { files: ["src/a.ts"], threads, entries });
+    expect(rows.map((r) => r.kind)).toEqual(["path", "browse"]);
+    expect(mentionTarget(rows[0] as Exclude<(typeof rows)[number], { kind: "browse" }>)).toBe(
+      "/Users/me/Documents/"
+    );
+    // Still loading: only Browse… is offered.
+    expect(mentionOptions("~/", { files: [], threads, entries: null })).toEqual([{ kind: "browse" }]);
+  });
+});
+
+import { shortPath } from "../mentions";
+
+describe("shortPath", () => {
+  it("shows home as ~ and keeps the distinguishing tail of a long path", () => {
+    expect(shortPath("/Users/me/.claude/skills/tdd")).toBe("~/.claude/skills/tdd");
+    expect(shortPath("/Users/me")).toBe("~");
+    expect(shortPath("/private/tmp/a/very/long/chain/of/folders/fixtures/", 20)).toBe("…/folders/fixtures/");
+    expect(shortPath("/tmp/x")).toBe("/tmp/x");
+  });
+});
+
+import { displayMentions } from "../mentions";
+
+describe("displayMentions", () => {
+  it("shows threads by title and outside paths short, leaving emails alone", () => {
+    expect(displayMentions("redo @thread:Auth-token-fix now")).toBe("redo `@Auth token fix` now");
+    expect(displayMentions("redo @thread:t2::Auth-token-fix now")).toBe("redo `@Auth token fix` now");
+    expect(displayMentions("read @/Users/me/a/b/spec.md")).toBe("read `@~/a/b/spec.md`");
+    expect(displayMentions("read @/private/tmp/some-long-session-folder/scratchpad/fixtures/spec.md")).toBe("read `@…/fixtures/spec.md`");
+    expect(displayMentions("@src/App.tsx and me@example.com")).toBe("`@src/App.tsx` and me@example.com");
+  });
+});

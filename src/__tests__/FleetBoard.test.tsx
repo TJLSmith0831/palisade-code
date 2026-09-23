@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import FleetBoard, { groupFleet, playbookSubtitle } from "../FleetBoard";
+import { withInstalled } from "../SkillMenu";
 import type { FleetBoardProps } from "../FleetBoard";
 import type { FleetRow } from "../api";
 import { ArchivingContext } from "../archiving";
@@ -10,12 +11,25 @@ import { ArchivingContext } from "../archiving";
 const { apiMock } = vi.hoisted(() => ({
   apiMock: {
     listModels: vi.fn().mockResolvedValue({ configId: null, current: null, models: [] }),
+    readAttachment: vi.fn().mockResolvedValue("data:image/png;base64,AA=="),
+    listSkills: vi.fn().mockResolvedValue([
+      { name: "grill-apply", path: "/Users/me/.claude/skills/grill-apply", description: "Implement with the decision log", owner: "claude" },
+    ]),
   },
 }));
 vi.mock("../api", () => apiMock);
 
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
+
+it("does not offer the same installed skill twice when Codex advertises its dollar sigil", () => {
+  expect(withInstalled(
+    [{ name: "$grill-apply", description: "Agent version" }],
+    [{ name: "grill-apply", path: "/skills/grill-apply", owner: "agents" }]
+  )).toEqual([{ name: "$grill-apply", description: "Agent version" }]);
+  expect(withInstalled([], [{ name: "grill-apply", path: "/skills/grill-apply", owner: "agents" }], "codex"))
+    .toEqual([{ name: "$grill-apply", description: "" }]);
+});
 
 const row = (over: Partial<FleetRow> = {}): FleetRow => ({
   kind: "thread",
@@ -249,6 +263,8 @@ describe("FleetBoard", () => {
       agentId: "a1",
       mode: "spec",
       isolated: true,
+      attachments: [],
+      skills: [],
     });
   });
 
@@ -440,6 +456,8 @@ describe("FleetBoard", () => {
       model: "m1",
       mode: "spec",
       isolated: true,
+      attachments: [],
+      skills: [],
     });
   });
 
@@ -582,5 +600,61 @@ describe("FleetBoard — archive in flight", () => {
   it("leaves other rows alone", () => {
     withArchiving(["t1"], [row(), row({ threadId: "t2" })]);
     expect(screen.getAllByLabelText("Archiving")).toHaveLength(1);
+  });
+});
+
+describe("FleetBoard attachments", () => {
+  it("starts a run with dropped images and files, even with no prompt", () => {
+    const onNewRun = vi.fn();
+    render(
+      <FleetBoard
+        {...props({ onNewRun })}
+        attachments={["/home/.palisade-code/projects/p/attachments/a.png"]}
+        files={["/Users/me/notes.pdf", "/Users/me/spec.md"]}
+      />
+    );
+    expect(screen.getAllByTestId("attachment-thumb")).toHaveLength(1);
+    expect(screen.getAllByTestId("file-chip")).toHaveLength(2);
+    fireEvent.click(screen.getByTestId("fleet-start"));
+    expect(onNewRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "@/Users/me/notes.pdf @/Users/me/spec.md",
+        attachments: ["/home/.palisade-code/projects/p/attachments/a.png"],
+      })
+    );
+  });
+});
+
+describe("FleetBoard skills", () => {
+  const typeAt = (value: string) => {
+    const input = screen.getByTestId("fleet-prompt");
+    fireEvent.change(input, { target: { value } });
+    fireEvent.select(input, { target: { selectionStart: value.length } });
+    return input;
+  };
+
+  it("picks an advertised skill mid-sentence and sends it beside the run's prompt", async () => {
+    const onNewRun = vi.fn();
+    render(
+      <FleetBoard
+        {...props({ onNewRun })}
+        skillCommands={[{ name: "tdd", description: "Test-driven development loop" }]}
+      />
+    );
+    const input = typeAt("ship the login fix, /td");
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/tdd");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("composer-chip")).toHaveTextContent("/tdd"));
+    expect(screen.getByTestId("fleet-prompt")).toHaveValue("ship the login fix, ");
+    fireEvent.click(screen.getByTestId("fleet-start"));
+    expect(onNewRun).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "ship the login fix,", skills: ["tdd"] })
+    );
+  });
+
+  it("offers installed skills even before any session has advertised one", async () => {
+    render(<FleetBoard {...props({ agents: [{ id: "claude", name: "Claude Agent", installed: true }] })} />);
+    typeAt("/gri");
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/grill-apply");
   });
 });

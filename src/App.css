@@ -32,6 +32,7 @@
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
   --border: oklch(30% 0.01 250);
+  --image-outline: oklch(1 0 0 / 0.1);
   /* The accent's lightness and chroma, named so the settings swatches can
      paint the colour the theme will actually ship instead of guessing at it.
      --accent is derived from them, so the preview cannot drift again. */
@@ -97,6 +98,7 @@
     --fg: oklch(20% 0.006 250);
     --muted: oklch(46% 0.012 250);
     --border: oklch(85% 0.01 250);
+    --image-outline: oklch(0 0 0 / 0.1);
     --accent-l: 46%;
     --accent-c: 0.16;
     --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
@@ -143,6 +145,7 @@
   --fg: oklch(20% 0.006 250);
   --muted: oklch(46% 0.012 250);
   --border: oklch(85% 0.01 250);
+  --image-outline: oklch(0 0 0 / 0.1);
   --accent-l: 46%;
   --accent-c: 0.16;
   --accent: oklch(var(--accent-l) var(--accent-c) var(--accent-hue, 145));
@@ -5379,6 +5382,36 @@ button.ds-onboarding-status {
   overflow-y: auto;
 }
 
+.ds-mention-scopes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-mention-scopes button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ds-mention-scopes button:hover { background: var(--surface-warm); color: var(--fg); }
+.ds-mention-scopes button[aria-pressed="true"] { background: var(--active-row); color: var(--fg); }
+.ds-mention-scopes button:focus-visible { outline: 2px solid var(--accent); }
+
+.ds-mention-scopes-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* Names the menu before the list scrolls into it, so "Skills" and "Chains"
    read as two distinct places rather than one list that happens to change
    contents depending on which sigil was typed. */
@@ -5387,7 +5420,7 @@ button.ds-onboarding-status {
   align-items: center;
   gap: 5px;
   padding: 6px 12px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -5413,6 +5446,15 @@ button.ds-onboarding-status {
   background: var(--active-row);
 }
 
+.ds-command-menu-row:hover:not([data-active]) {
+  background: var(--surface-warm);
+}
+
+.ds-command-menu-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .ds-command-menu-name {
   display: block;
   font-size: 12px;
@@ -5426,7 +5468,7 @@ button.ds-onboarding-status {
    you are picking by — the description only has to disambiguate. */
 .ds-command-menu-desc {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--muted);
   overflow: hidden;
@@ -5482,6 +5524,298 @@ button.ds-onboarding-status {
 .ds-composer-chip[data-kind="chain"] {
   color: var(--code-keyword);
   background: color-mix(in oklch, var(--code-keyword) 16%, var(--active-row));
+}
+
+/* --- Composer tray -------------------------------------------------------
+   Skills picked from the `/` menu, attached images and dropped files, above
+   the text box. Wraps rather than scrolls: a tray is a handful of items. */
+.ds-composer-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 0;
+}
+
+/* In the thread composer (an `align-items: flex-end` column) the tray spans
+   the full width, and its first row stays clear of the Isolated badge and
+   permission shield pinned absolutely in the top-right corner (~117px). */
+.composer > .ds-composer-tray {
+  align-self: stretch;
+  padding-right: 124px;
+}
+
+.ds-composer-tray .ds-composer-chip {
+  margin-top: 0;
+}
+
+.ds-composer-chip[data-kind="file"] {
+  color: var(--fg);
+  background: var(--surface-warm);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.ds-composer-chip[data-missing] {
+  color: var(--muted);
+  background: var(--surface-warm);
+}
+
+.ds-composer-chip:focus-visible,
+.ds-attachment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The × stays reachable on touch and keyboard as well as pointer hover. */
+.ds-tray-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px -4px 0;
+  border-radius: 9999px;
+  color: currentColor;
+  opacity: 0.8;
+  transition: opacity 120ms ease-out, background-color 120ms ease-out;
+}
+
+.ds-tray-remove:hover,
+.ds-tray-remove:focus-visible {
+  opacity: 1;
+  background: color-mix(in oklab, currentColor, transparent 84%);
+}
+
+.ds-tray-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ds-attachment {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  border-radius: 6px;
+  transition: box-shadow 120ms ease-out, transform 120ms ease-out;
+}
+
+.ds-attachment:hover {
+  box-shadow: 0 0 0 2px var(--accent);
+  transform: translateY(-1px);
+}
+
+.ds-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  outline: 1px solid var(--image-outline);
+  outline-offset: -1px;
+}
+
+/* On a thumbnail the × floats on its corner, over a surface disc so it
+   reads on any image, and only shows once the thumbnail is reached. */
+.ds-attachment .ds-tray-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  margin: 0;
+  width: 24px;
+  height: 24px;
+  opacity: 1;
+  color: var(--fg);
+  background: var(--surface-warm);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.ds-attachment .ds-tray-remove:hover {
+  background: var(--danger);
+  color: var(--danger-on);
+}
+
+.ds-attachment-warn {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  color: var(--warn);
+  background: color-mix(in oklab, var(--bg), transparent 20%);
+}
+
+/* A sent turn's images, under its text. */
+.ds-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* --- Skill hover card: what a skill is, never its body ------------------ */
+.ds-skill-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ds-skill-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ds-skill-card-glyph {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--accent);
+  background: var(--active-row);
+}
+
+.ds-skill-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-skill-card-source {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ds-skill-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in oklab, var(--fg), var(--muted) 30%);
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ds-skill-card-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.ds-skill-card-path {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* --- Image hover card: the picture, then what it is ---------------------- */
+.ds-image-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.ds-image-card img {
+  display: block;
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: var(--editor-bg);
+  outline: 1px solid var(--image-outline);
+  outline-offset: -1px;
+}
+
+.ds-image-card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ds-image-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+/* --- Drop hint: says what a drop will do before the user lets go -------- */
+.ds-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: inherit;
+  border: 1.5px dashed color-mix(in oklab, var(--accent), transparent 30%);
+  background: color-mix(in oklab, var(--surface), var(--accent) 7%);
+  color: var(--accent);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-attachment { transition: none; }
+  .ds-attachment:hover { transform: none; }
+}
+
+.ds-drop-hint-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ds-drop-hint-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* A path in the `@` menu's header reads as a path: mono, as typed, and
+   ellipsized from the middle by `shortPath` rather than shouted. */
+.ds-command-menu-header[data-path] {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg);
+}
+
+.ds-command-menu-header[data-path] .ds-command-menu-header-note {
+  margin-left: auto;
+  font-family: inherit;
+  color: var(--muted);
 }
 
 /* --- MCP servers panel ----------------------------------------------------
@@ -6744,6 +7078,22 @@ button.ds-onboarding-status {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
+}
+
+/* The Fleet composer sits at the top of the board, so its `/` menu opens
+   downward over the run list instead of up into the header. */
+.fleet-composer .ds-command-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
+/* Same drop affordance as the thread composer's `.composer.drag-active`. */
+.fleet-composer.drag-active {
+  border-color: var(--accent);
+}
+
+.fleet-composer {
+  position: relative;
 }
 
 .fleet-prompt-input {

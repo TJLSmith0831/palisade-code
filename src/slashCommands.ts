@@ -50,7 +50,7 @@ export function menuKind(draft: string): MenuKind | null {
 }
 
 /** The name without its sigil, for matching and display. */
-const bareName = (name: string) => {
+export const bareName = (name: string) => {
   const sigil = sigilOf(name);
   return sigil ? name.slice(sigil.length) : name;
 };
@@ -199,4 +199,60 @@ export function matchCommands<T extends AgentCommand>(
     .filter((hit): hit is { command: T; score: number } => hit !== null)
     .sort((a, b) => b.score - a.score)
     .map((hit) => hit.command);
+}
+
+/**
+ * The skill token the caret is inside, or `null` when no menu should open.
+ * `start` indexes the sigil.
+ *
+ * At the head of the draft every sigil opens the menu (the grammar above).
+ * Past the head only `/` does, and only at a word start — a skill can be
+ * picked mid-sentence ("the form double-submits, /tdd") and still reach the
+ * agent as a command, because the backend moves it to the front on send.
+ * A mid-sentence `$` stays money and `|=` stays head-only: a chain is a run,
+ * not a word in a message. A second `/` inside the token makes it a path.
+ */
+export type SlashToken = { sigil: string; query: string; start: number; leading: boolean };
+
+export function slashAt(text: string, caret: number): SlashToken | null {
+  const before = text.slice(0, caret);
+  const lead = before.length - before.trimStart().length;
+  const sigil = sigilOf(before.slice(lead));
+  if (sigil) {
+    const query = before.slice(lead + sigil.length);
+    if (!/\s/.test(query)) return { sigil, query, start: lead, leading: true };
+  }
+  const at = before.lastIndexOf("/");
+  if (at <= 0 || !/\s/.test(before[at - 1])) return null;
+  const query = before.slice(at + 1);
+  if (/[\s/]/.test(query)) return null;
+  return { sigil: "/", query, start: at, leading: false };
+}
+
+/** `text` with `token` cut out, and where the caret goes. */
+export function removeToken(
+  text: string,
+  token: SlashToken
+): { text: string; caret: number } {
+  const end = token.start + token.sigil.length + token.query.length;
+  const head = text.slice(0, token.start);
+  let tail = text.slice(end);
+  // Don't leave "networks,  and" behind — one space where the token was.
+  if (/\s$/.test(head) || head === "") tail = tail.replace(/^ /, "");
+  return { text: head + tail, caret: head.length };
+}
+
+/** How a skill reads on a chip: `/tdd`, or `$tdd` for
+ *  an agent that carries its own sigil. `commandTrigger` without the space. */
+export const skillTrigger = (name: string) => `${sigilOf(name) ? "" : "/"}${name}`;
+/**
+ * The menu rows for a `/` token. At the head, everything `matchCommands`
+ * finds. Mid-sentence, names only: a description hit would open the menu on
+ * almost any word ("check /tmp" fuzzy-matches plenty of descriptions).
+ */
+export function matchToken<T extends AgentCommand>(pool: T[], token: SlashToken): T[] {
+  const matches = matchCommands(pool, token.query);
+  return token.leading
+    ? matches
+    : matches.filter((c) => fuzzyMatch(token.query, bareName(c.name)) !== null);
 }

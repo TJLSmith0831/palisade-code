@@ -267,3 +267,41 @@ describe("parseChainInvocation with known chain names", () => {
     });
   });
 });
+
+import { slashAt, removeToken } from "../slashCommands";
+
+describe("slashAt — skills anywhere", () => {
+  it("opens at the head of the draft for every sigil", () => {
+    expect(slashAt("/rev", 4)).toEqual({ sigil: "/", query: "rev", start: 0, leading: true });
+    expect(slashAt("$td", 3)).toMatchObject({ sigil: "$", leading: true });
+    expect(slashAt("|=qa", 4)).toMatchObject({ sigil: "|=", query: "qa" });
+  });
+
+  it("opens mid-sentence on a word-start slash", () => {
+    const text = "the form double-submits, /td";
+    expect(slashAt(text, text.length)).toEqual({ sigil: "/", query: "td", start: 25, leading: false });
+  });
+
+  it("stays shut for paths, mid-word slashes, money and closed tokens", () => {
+    expect(slashAt("see /usr/bin", 12)).toBeNull();
+    expect(slashAt("and/or", 6)).toBeNull();
+    expect(slashAt("costs $5", 8)).toBeNull();
+    expect(slashAt("run /tdd now", 12)).toBeNull();
+  });
+
+  it("follows the caret, not the end of the draft", () => {
+    expect(slashAt("fix /td and more", 7)).toMatchObject({ query: "td", start: 4 });
+  });
+});
+
+describe("removeToken", () => {
+  it("cuts the typed token and leaves one space behind", () => {
+    const text = "fix it, /td please";
+    const token = slashAt(text, 11)!;
+    expect(removeToken(text, token)).toEqual({ text: "fix it, please", caret: 8 });
+  });
+
+  it("empties a draft that was only the token", () => {
+    expect(removeToken("/rev", slashAt("/rev", 4)!)).toEqual({ text: "", caret: 0 });
+  });
+});

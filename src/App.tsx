@@ -51,7 +51,6 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCommand,
-  IconFile,
   IconPlayerPlay,
   IconFolder,
   IconFolders,
@@ -76,6 +75,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import MDEditor from "@uiw/react-md-editor";
 
 import * as api from "./api";
 import { useAppShell } from "./hooks/useAppShell";
@@ -98,12 +98,32 @@ import { onActivateKey } from "./a11y";
 import { describeError, errorKind, isAuthError } from "./errors";
 import { fuzzyMatch } from "./fuzzyMatch";
 import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
-import { applyMention, mentionAt, rankMentions } from "./mentions";
+import {
+  applyMention,
+  displayMentions,
+  mentionTarget,
+  type MentionOption,
+} from "./mentions";
+import { handleMentionMenuKey, MentionMenu, useMentionMenu } from "./MentionMenu";
+import {
+  handleSlashMenuKey,
+  pickSkillIntoTray,
+  SlashMenu,
+  useInstalledSkills,
+  useSlashMenu,
+  withInstalled,
+  withoutSigil,
+} from "./SkillMenu";
+import {
+  ComposerTray,
+  DropHint,
+  SkillChip,
+  AttachmentThumb,
+  imagePasteHandler,
+  isAttachableImage,
+} from "./ComposerTray";
 import {
   commandTrigger,
-  matchCommands,
-  slashQuery,
-  menuKind,
   leadingCommand,
   chainCommands,
   isChainCommand,
@@ -273,7 +293,19 @@ type ChatSurfaceProps = {
   chains?: api.Chain[];
   draft: string;
   setDraft: (value: string) => void;
+  /** Skills picked into the composer tray; sent apart from the text. */
+  skills?: string[];
+  setSkills?: (next: string[]) => void;
+  /** Stored image paths waiting in the composer tray. */
+  attachments?: string[];
+  onRemoveAttachment?: (path: string) => void;
+  /** Images pasted into the text box, to be stored and added to the tray. */
+  onPasteImages?: (images: { dataBase64: string; ext: string }[]) => void;
+  /** False once the thread's live agent said it takes no image blocks. */
+  imageSupport?: boolean;
   onSend: () => void;
+  /** Every thread in the project, for `@thread:` mentions (not just open tabs). */
+  mentionThreads?: ThreadMeta[];
   /** #32: every file in the project, for the `@` mention menu. */
   mentionFiles?: string[];
   /** #32: the mention menu opened — load the file list if it isn't cached. */
@@ -609,7 +641,14 @@ export const ChatSurface = memo(
     commands = [],
     draft,
     setDraft,
+    skills = [],
+    setSkills,
+    attachments = [],
+    onRemoveAttachment,
+    onPasteImages,
+    imageSupport = true,
     onSend,
+    mentionThreads = [],
     mentionFiles = [],
     onOpenMentions,
     queued = [],
@@ -769,98 +808,125 @@ export const ChatSurface = memo(
     // moment before an agent resolves — this must only fire when nothing
     // could ever answer a turn.
     const noAgentsInstalled = !!flight && flight.agents.length === 0;
-    const commandQuery = slashQuery(draft);
-    // Which of the two menus is open — skills (`/`, `$`) or chains (`|=`).
-    // The sigils never overlap in one draft, so this is never ambiguous, and
-    // the header can name the list instead of the generic "commands".
-    const openMenuKind = menuKind(draft);
-    // Every command of the typed sigil's kind, before the query narrows it —
-    // an empty pool means the agent hasn't advertised anything yet (skills)
-    // or the project has no saved chains, which reads differently from a
-    // query that just has no matches, so the menu tells them apart.
-    const commandPool = useMemo(
-      () =>
-        openMenuKind === null
-          ? []
-          : commands.filter(
-              (command) => menuKind(commandTrigger(command)) === openMenuKind
-            ),
-      [commands, openMenuKind]
-    );
-    const commandMatches = useMemo(
-      () => (commandQuery === null ? [] : matchCommands(commandPool, commandQuery)),
-      [commandPool, commandQuery]
-    );
-    // The menu stays open on a valid sigil even with nothing to show — a
-    // silently-closed menu looked identical to a stray `/` that did nothing,
-    // and gave no way to tell "nothing advertised yet" from "typo".
-    const commandMenuOpen = commandQuery !== null;
-    const [commandIndex, setCommandIndex] = useState(0);
-    // A new query can be shorter than the old list; clamping here rather than
-    // in the key handler keeps the highlight on a row that actually exists.
-    const activeCommand = commandMatches[commandIndex] ?? commandMatches[0];
-    useEffect(() => {
-      setCommandIndex(0);
-    }, [commandQuery]);
-
-    // The `@` mention menu (#32). Unlike `/`, a mention is a reference inside
-    // a sentence — "compare @src/api.ts with @src/App.tsx" — so it opens
-    // wherever the caret is rather than only at the start of the draft, and
-    // the caret position is what decides which mention is being typed.
+    // The caret decides which `/` or `@` token is being typed. Declared first
+    // because both menus read it.
     const [caret, setCaret] = useState(0);
-    const [mentionIndex, setMentionIndex] = useState(0);
-    const mention = useMemo(
-      () => (commandMenuOpen ? null : mentionAt(draft, caret)),
-      [draft, caret, commandMenuOpen]
+    // The command a draft *opens with* (D-chip) — chains only now. A picked
+    // skill goes to the tray instead, wherever in the sentence it was typed;
+    // a chain is a run, not a word in a message, so it keeps the head pill.
+    const chipCommand = useMemo(
+      () => leadingCommand(commands.filter(isChainCommand), draft),
+      [commands, draft]
     );
-    const mentionMatches = useMemo(
-      () => (mention ? rankMentions(mentionFiles, mention.query) : []),
-      [mention?.query, mentionFiles]
+    // The `/` menu, shared with the Fleet composer (SkillMenu.tsx).
+    const installedSkills = useInstalledSkills(executor);
+    const menuCommands = useMemo(
+      () => withInstalled(commands, installedSkills, executor),
+      [commands, installedSkills, executor]
     );
-    const mentionMenuOpen = mention !== null;
-    const activeMention = mentionMatches[mentionIndex] ?? mentionMatches[0];
-    useEffect(() => {
-      setMentionIndex(0);
-    }, [mention?.query]);
+    const menu = useSlashMenu(draft, caret, menuCommands, !!chipCommand);
+    const commandMenuOpen = menu.open;
+
+    // A sent turn shows the chips and images it was sent with. Memoized so
+    // EventList (itself memoized) doesn't re-render every keystroke.
+    const renderUserMessage = useCallback(
+      (item: { text: string; attachments?: string[]; skills?: string[] }) => {
+        const sent = item.skills ?? [];
+        const text = item.text;
+        return (
+          <>
+            {sent.length > 0 && (
+              <div className="ds-composer-tray" data-testid="message-skills">
+                {sent.map((name) => (
+                  <SkillChip key={name} name={name} commands={menuCommands} installed={installedSkills} />
+                ))}
+              </div>
+            )}
+            {text && <MDEditor.Markdown source={displayMentions(text)} className="content" />}
+            {item.attachments && item.attachments.length > 0 && (
+              <div className="ds-message-attachments">
+                {item.attachments.map((path) => (
+                  <AttachmentThumb key={path} projectHash={project?.hash} path={path} size={72} />
+                ))}
+              </div>
+            )}
+          </>
+        );
+      },
+      [menuCommands, installedSkills, project?.hash]
+    );
+
+    // The `@` menu (#32), in MentionMenu.tsx. Never open with the `/` menu.
+    const otherThreads = useMemo(
+      () => mentionThreads.filter((t) => t.id !== thread?.id),
+      [mentionThreads, thread?.id]
+    );
+    const mentions = useMentionMenu(
+      draft,
+      caret,
+      useMemo(() => ({ files: mentionFiles, threads: otherThreads }), [mentionFiles, otherThreads]),
+      commandMenuOpen
+    );
+    const mention = mentions.mention;
+    const mentionMenuOpen = mentions.open;
     // Walking the project tree costs a round trip, so it happens when the
     // menu first opens rather than on every keystroke or on mount.
     useEffect(() => {
       if (mentionMenuOpen) onOpenMentions?.();
     }, [mentionMenuOpen, onOpenMentions]);
 
-    /** Swap the typed fragment for the real path and put the caret after it. */
-    const pickMention = (path: string) => {
-      if (!mention) return;
-      const next = applyMention(draft, mention, path);
-      setDraft(next.text);
-      setCaret(next.caret);
+    /** Put `text` in the draft with the caret at `at`, after React writes it. */
+    const placeCaret = (text: string, at: number) => {
+      setDraft(text);
+      setCaret(at);
       const input = composerInputRef.current;
       // After React has written the new value, or the browser puts the caret
       // back at the end of the old one.
       requestAnimationFrame(() => {
         input?.focus();
-        input?.setSelectionRange(next.caret, next.caret);
+        input?.setSelectionRange(at, at);
       });
+    };
+    /** Swap the typed fragment for what was picked and put the caret after it. */
+    const pickMention = async (option: MentionOption<ThreadMeta>) => {
+      if (!mention) return;
+      let target: string;
+      if (option.kind !== "browse") target = mentionTarget(option);
+      else {
+        // Several files at once: the first replaces the typed `@`, the rest
+        // follow it as mentions of their own.
+        const picked = await open({ multiple: true, directory: false });
+        const list = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
+        if (list.length === 0) return;
+        target = list.join(" @");
+      }
+      const next = applyMention(draft, mention, target);
+      placeCaret(next.text, next.caret);
     };
     /** Keep `caret` honest for arrow keys, clicks and selections alike. */
     const trackCaret = (
       event: React.SyntheticEvent<HTMLTextAreaElement>
     ) => setCaret(event.currentTarget.selectionStart ?? 0);
 
-    // Completing a command just rewrites the draft — ACP invokes one by
-    // sending its name as the prompt. The sigil is the agent's, not ours.
+    // A chain rewrites the draft into its head pill (ACP-free: Palisade runs
+    // it). A skill leaves the sentence and joins the tray; the backend puts
+    // it back at the head on send, where the agent will run it.
     const pickCommand = (command: api.AgentCommand) => {
-      setDraft(commandTrigger(command));
+      if (isChainCommand(command)) {
+        setDraft(commandTrigger(command));
+        return;
+      }
+      if (!menu.slash) return;
+      const next = pickSkillIntoTray(draft, menu.slash, skills, command.name);
+      setSkills?.(next.skills);
+      placeCaret(next.text, next.caret);
     };
-
-    // The command a draft *opens with* (D-chip): once the name is complete
-    // and typing has moved past it into argument position, the composer
-    // collapses the sigil+name back into a stylized pill instead of raw text
-    // — the same treatment Cursor/Windsurf give a picked slash command.
-    const chipCommand = useMemo(
-      () => leadingCommand(commands, draft),
-      [commands, draft]
+    /** Paste of a screenshot: store it and add it to the tray. */
+    const handlePaste = imagePasteHandler(onPasteImages, (err) =>
+      onError?.(describeError(err))
     );
+    const canSend = !!draft.trim() || skills.length > 0 || attachments.length > 0;
+
     const chipRemainder = useMemo(() => {
       if (!chipCommand) return "";
       const text = draft.trimStart();
@@ -1562,6 +1628,7 @@ export const ChatSurface = memo(
               agentLogins={agentLogins}
               agentLoginsFor={agentLoginsFor}
               onAgentLogin={onAgentLogin}
+              renderUserMessage={renderUserMessage}
             />
           </>
           {/* The chat live run card (D-h/D-j, PLAN §4.5): chat is the
@@ -1752,121 +1819,9 @@ export const ChatSurface = memo(
         >
           {/* The `/` menu, anchored above the composer so the input it is
               completing stays visible and in place while it filters. */}
-          {commandMenuOpen && (
-            <Paper
-              withBorder
-              shadow="md"
-              radius="md"
-              className="ds-command-menu"
-              data-testid="command-menu"
-              data-kind={openMenuKind ?? undefined}
-              role="listbox"
-              aria-label={openMenuKind === "chains" ? "Playbooks" : "Skills"}
-            >
-              <div className="ds-command-menu-header">
-                {openMenuKind === "chains" ? (
-                  <>
-                    <IconRoute size={12} />
-                    Playbooks
-                  </>
-                ) : (
-                  <>
-                    <IconWand size={12} />
-                    Skills
-                  </>
-                )}
-              </div>
-              <div className="ds-command-menu-scroll">
-                {commandPool.length === 0 ? (
-                  <p className="ds-command-menu-empty">
-                    {openMenuKind === "chains"
-                      ? "No playbooks saved for this project yet."
-                      : "No skills advertised for this session yet — send a message to start one."}
-                  </p>
-                ) : commandMatches.length === 0 ? (
-                  <p className="ds-command-menu-empty">
-                    No matches for “{commandQuery}”.
-                  </p>
-                ) : (
-                  commandMatches.map((command, index) => (
-                  <UnstyledButton
-                    key={command.name}
-                    role="option"
-                    aria-selected={command === activeCommand}
-                    data-active={command === activeCommand || undefined}
-                    className="ds-command-menu-row"
-                    // Mouse and keyboard drive the same highlight, so hovering
-                    // never leaves two rows looking selected at once.
-                    onMouseEnter={() => setCommandIndex(index)}
-                    onClick={() => pickCommand(command)}
-                  >
-                    <span className="ds-command-menu-name">
-                      {isChainCommand(command) && (
-                        <IconRoute
-                          size={12}
-                          // A chain runs several agents against each other —
-                          // a different kind of thing than a skill, and the
-                          // row says so before it is picked (D14).
-                          style={{ marginRight: 4, verticalAlign: "-1px" }}
-                        />
-                      )}
-                      {commandTrigger(command).trimEnd()}
-                    </span>
-                    <span className="ds-command-menu-desc">
-                      {command.description}
-                    </span>
-                  </UnstyledButton>
-                  ))
-                )}
-              </div>
-            </Paper>
-          )}
+          <SlashMenu menu={menu} onPick={pickCommand} />
 
-          {/* The `@` file mention menu (#32), sharing the `/` menu's shape so
-              the two read as one control with two grammars. */}
-          {mentionMenuOpen && (
-            <Paper
-              withBorder
-              shadow="md"
-              radius="md"
-              className="ds-command-menu"
-              data-testid="mention-menu"
-              role="listbox"
-              aria-label="Project files"
-            >
-              <div className="ds-command-menu-header">
-                <IconFile size={12} />
-                Files
-              </div>
-              <div className="ds-command-menu-scroll">
-                {mentionMatches.length === 0 ? (
-                  <p className="ds-command-menu-empty">
-                    {mentionFiles.length === 0
-                      ? "Reading the project's files…"
-                      : `No files match “${mention.query}”.`}
-                  </p>
-                ) : (
-                  mentionMatches.map((path, index) => (
-                    <UnstyledButton
-                      key={path}
-                      role="option"
-                      aria-selected={path === activeMention}
-                      data-active={path === activeMention || undefined}
-                      className="ds-command-menu-row"
-                      data-testid="mention-row"
-                      onMouseEnter={() => setMentionIndex(index)}
-                      onClick={() => pickMention(path)}
-                    >
-                      <span className="ds-command-menu-name">
-                        {path.split("/").pop()}
-                      </span>
-                      <span className="ds-command-menu-desc">{path}</span>
-                    </UnstyledButton>
-                  ))
-                )}
-              </div>
-            </Paper>
-          )}
+          <MentionMenu menu={mentions} onPick={(option) => void pickMention(option)} />
 
           {/* Worktree isolation, sitting next to the permission toggle because
               it is the same kind of decision: what this thread is allowed to
@@ -2005,6 +1960,19 @@ export const ChatSurface = memo(
             </Popover.Dropdown>
           </Popover>
 
+
+          <DropHint active={dragActive} />
+          <ComposerTray
+            projectHash={project?.hash}
+            skills={skills}
+            attachments={attachments}
+            commands={menuCommands}
+            installed={installedSkills}
+            noImageSupport={!imageSupport}
+            onRemoveSkill={(name) => setSkills?.(skills.filter((s) => s !== name))}
+            onRemoveAttachment={(path) => onRemoveAttachment?.(path)}
+          />
+
           {/* Message input. Once the draft opens with a complete command, the
               sigil+name collapses into a pill (D-chip) and only the argument
               text stays in an editable box — the composer never asks the
@@ -2087,76 +2055,44 @@ export const ChatSurface = memo(
               }}
               onSelect={trackCaret}
               onClick={trackCaret}
+              onPaste={handlePaste}
               onKeyDown={(event) => {
+                // Backspace at the very start eats the last skill chip, the
+                // same one-keystroke contract the head pill always had.
+                if (
+                  event.key === "Backspace" &&
+                  skills.length > 0 &&
+                  event.currentTarget.selectionStart === 0 &&
+                  event.currentTarget.selectionEnd === 0
+                ) {
+                  event.preventDefault();
+                  setSkills?.(skills.slice(0, -1));
+                  return;
+                }
                 // The mention menu owns the same keys the `/` menu does, and
                 // the two are never open at once.
-                if (mentionMenuOpen) {
-                  if (
-                    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                    mentionMatches.length > 0
-                  ) {
-                    event.preventDefault();
-                    const step = event.key === "ArrowDown" ? 1 : -1;
-                    setMentionIndex(
-                      (i) =>
-                        (i + step + mentionMatches.length) %
-                        mentionMatches.length
-                    );
-                    return;
-                  }
-                  if (
-                    (event.key === "Tab" ||
-                      (event.key === "Enter" && !event.shiftKey)) &&
-                    activeMention
-                  ) {
-                    event.preventDefault();
-                    pickMention(activeMention);
-                    return;
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
+                if (
+                  handleMentionMenuKey(event, mentions, (option) => void pickMention(option), (m) => {
                     // Keep the text, drop the `@`, so Escape never destroys
                     // what the user typed — same contract as the `/` menu.
-                    const end = mention.start + 1 + mention.query.length;
-                    setDraft(
-                      draft.slice(0, mention.start) + draft.slice(mention.start + 1)
-                    );
-                    setCaret(end - 1);
-                    return;
-                  }
-                }
+                    setDraft(draft.slice(0, m.start) + draft.slice(m.start + 1));
+                    setCaret(m.start + m.query.length);
+                  })
+                )
+                  return;
                 // The menu owns the arrows, Tab, Enter and Escape while it is
                 // open — otherwise Enter would send a half-typed command name.
-                if (commandMenuOpen) {
-                  if (
-                    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                    commandMatches.length > 0
-                  ) {
-                    event.preventDefault();
-                    const step = event.key === "ArrowDown" ? 1 : -1;
-                    setCommandIndex(
-                      (i) =>
-                        (i + step + commandMatches.length) % commandMatches.length
-                    );
-                    return;
-                  }
-                  if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
-                    event.preventDefault();
-                    if (activeCommand) pickCommand(activeCommand);
-                    return;
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    // Closing without choosing: keep what was typed, drop the
-                    // sigil, so Escape never destroys the user's text.
-                    setDraft(draft.replace(/^(\s*)[/$]/, "$1"));
-                    return;
-                  }
-                }
+                if (
+                  handleSlashMenuKey(event, menu, pickCommand, (token) => {
+                    setDraft(withoutSigil(draft, token));
+                    setCaret(Math.max(0, caret - token.sigil.length));
+                  })
+                )
+                  return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   // Mid-turn Enter queues rather than doing nothing (#26).
-                  if (draft.trim()) {
+                  if (canSend) {
                     event.currentTarget.form?.requestSubmit();
                   }
                 }
@@ -2169,6 +2105,11 @@ export const ChatSurface = memo(
                     : "Message, or / for commands"
               }
               aria-label="Message"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={commandMenuOpen || mentionMenuOpen}
+              aria-controls={commandMenuOpen ? menu.id : mentionMenuOpen ? mentions.id : undefined}
+              aria-activedescendant={commandMenuOpen ? menu.activeId : mentionMenuOpen ? mentions.activeId : undefined}
               data-testid="composer-input"
               minRows={1}
               maxRows={6}
@@ -2588,7 +2529,6 @@ const DEFAULT_PROJECT_SETTINGS = `{
 }
 `;
 const lastThreadKey = (hash: string) => `palisade:lastThread:${hash}`;
-const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 /** Executor event kinds that are never persisted to the session store (same
  *  D-design comment as ExecutorEvent::TextDelta/ToolOutputDelta): a refresh
  *  that rebuilds `messages` from disk must keep these in the live buffer
@@ -2931,7 +2871,7 @@ const WorkspacePicker = memo(function WorkspacePicker({
 // The executor (Claude Code / Codex) has its own file-read tooling, so we
 // hand it a path rather than threading image bytes through the IPC channel.
 export const imagePathsFrom = (paths: string[]): string[] =>
-  paths.filter((p) => IMAGE_PATH.test(p));
+  paths.filter(isAttachableImage);
 
 export function clearRecoveredNotebook(
   paths: Set<string>,
@@ -4537,19 +4477,85 @@ export default function App() {
     return set;
   }, [liveBySession]);
 
+  // Images waiting in a composer's tray, as stored copies (see
+  // `attachments.rs`). The thread composer and the Fleet composer each keep
+  // their own, so a drop lands in whichever one is on screen.
+  const [composerAttachments, setComposerAttachments] = useState<string[]>([]);
+  const [fleetAttachments, setFleetAttachments] = useState<string[]>([]);
+  const [fleetFiles, setFleetFiles] = useState<string[]>([]);
+  // A stored attachment is only readable by its own project, so the trays
+  // never outlive a project switch.
+  const projectHash = project?.hash;
+  useEffect(() => {
+    setComposerAttachments([]);
+    setFleetAttachments([]);
+    setFleetFiles([]);
+  }, [projectHash]);
+  // What Fleet's `/` menu offers: every skill any live session advertised,
+  // once each. A new run has no session of its own to ask yet.
+  const fleetSkills = useMemo(() => {
+    const byName = new Map<string, api.AgentCommand>();
+    for (const list of commandsByThread.values())
+      for (const command of list) if (!byName.has(command.name)) byName.set(command.name, command);
+    return [...byName.values()];
+  }, [commandsByThread]);
+  // Skills picked into the thread composer's tray (sent as `skills`).
+  const [composerSkills, setComposerSkills] = useState<string[]>([]);
+  // Per thread: whether its live agent takes image blocks. Unknown (no
+  // session yet) counts as yes — every agent Palisade has probed does.
+  const [imageSupportByThread, setImageSupportByThread] = useState<Map<string, boolean>>(new Map());
+  useEffect(() => {
+    const unlisten = listen<{ threadId: string; images: boolean }>(
+      "agent-image-support",
+      ({ payload }) =>
+        setImageSupportByThread((prev) => new Map(prev).set(payload.threadId, payload.images))
+    );
+    return () => {
+      unlisten.then((un) => un());
+    };
+  }, []);
+  const activePanelRef = useRef(shell.activePanel);
+  activePanelRef.current = shell.activePanel;
+  /** Store each image and add it to the tray on screen. */
+  const attachImages = useCallback(
+    async (
+      sources: ({ path: string } | { dataBase64: string; ext: string })[],
+      toFleet = activePanelRef.current === "fleet"
+    ) => {
+      const hash = current.current.project?.hash;
+      if (!hash) return;
+      const add = toFleet ? setFleetAttachments : setComposerAttachments;
+      for (const source of sources) {
+        try {
+          const stored = await api.saveAttachment(hash, source);
+          add((prev) => [...prev, stored]);
+        } catch (err) {
+          fail(err);
+        }
+      }
+    },
+    []
+  );
+
   // OS-level drag-drop gives real absolute paths (unlike HTML5 File objects
-  // in WKWebView, which often lack them). Dropped images get appended to the
-  // draft as paths — the executor already has file-read tools of its own.
+  // in WKWebView, which often lack them). Images become tray thumbnails the
+  // agent receives as real image blocks; any other file goes into the draft
+  // as an `@path` mention the agent can open with its own tools.
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "drop") {
         setDragActive(false);
-        if (!current.current.thread) return;
-        const images = imagePathsFrom(event.payload.paths);
-        if (!images.length) return;
-        setDraft((prev) =>
-          prev ? `${prev} ${images.join(" ")}` : images.join(" ")
-        );
+        if (!current.current.project) return;
+        const paths = event.payload.paths;
+        const images = imagePathsFrom(paths);
+        if (images.length) void attachImages(images.map((path) => ({ path })));
+        const others = paths.filter((p) => !images.includes(p));
+        if (others.length && activePanelRef.current === "fleet") {
+          setFleetFiles((prev) => [...prev, ...others.filter((p) => !prev.includes(p))]);
+        } else if (others.length) {
+          const mentions = others.map((p) => `@${p}`).join(" ");
+          setDraft((prev) => (prev ? `${prev} ${mentions} ` : `${mentions} `));
+        }
         return;
       }
       setDragActive(event.payload.type !== "leave");
@@ -4557,7 +4563,7 @@ export default function App() {
     return () => {
       unlisten.then((un) => un());
     };
-  }, []);
+  }, [attachImages]);
 
   // Each thread's own worktree and what has changed in it, keyed by thread —
   // this is what the sidebar's diff stat and branch line read.
@@ -4965,6 +4971,27 @@ export default function App() {
     };
   }, [refresh, setBusyFor]);
 
+  // The agent advertises its `/` menu only when a session starts, so after a
+  // webview reload the listener above has nothing until the next session.
+  // Re-seed from the backend's cache; a live event that landed first wins.
+  const threadId = thread?.id;
+  useEffect(() => {
+    if (!threadId) return;
+    let cancelled = false;
+    api
+      .agentCommands(threadId)
+      .then((commands) => {
+        if (cancelled || !commands?.length) return;
+        setCommandsByThread((prev) =>
+          prev.has(threadId) ? prev : new Map(prev).set(threadId, commands)
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, setCommandsByThread]);
+
   // Files changing for a reason that wasn't us — an agent turn writing
   // directly to disk, a branch switch, another editor. Kept as its own
   // effect (rather than folded into the executor stream above) because the
@@ -5320,7 +5347,9 @@ export default function App() {
           queued.threadId,
           queued.text,
           mode,
-          prefs.bypass
+          prefs.bypass,
+          queued.attachments,
+          queued.skills
         );
         // Only the thread the user is actually looking at gets its transcript
         // patched; a background thread's history is re-read when it is opened.
@@ -5341,16 +5370,25 @@ export default function App() {
   const queue = useMessageQueue(busyThreads, sendQueued);
 
   const onSend = async () => {
-    if (!project || !draft.trim()) return;
     const text = draft.trim();
+    const attachments = composerAttachments;
+    // Tray skills travel beside the text; the backend leads the prompt with them.
+    const skills = composerSkills;
+    if (!project || (!text && !skills.length && !attachments.length)) return;
     setDraft("");
-    // /go and /propose are the same functions the buttons call.
-    if (text === "/go") return onGo();
-    if (text === "/spec") return onSpec();
-    if (text === "/propose") return onPropose();
+    setComposerSkills([]);
+    setComposerAttachments([]);
+    // /go and /propose are the same functions the buttons call. A turn that
+    // carries images or skills is a message, never one of these — they
+    // would otherwise vanish with the switch.
+    if (!attachments.length && !skills.length) {
+      if (text === "/go") return onGo();
+      if (text === "/spec") return onSpec();
+      if (text === "/propose") return onPropose();
+    }
     // Mid-turn: queue instead of dropping the text on the floor (#26).
     if (thread && busyThreads.has(thread.id)) {
-      queue.enqueue(project.hash, thread.id, text);
+      queue.enqueue(project.hash, thread.id, text, attachments, skills);
       return;
     }
     // `|=<chain> <seed>` runs a saved chain instead of prompting the agent
@@ -5360,10 +5398,12 @@ export default function App() {
     // needs a thread to run on, and go-mode's composer is exactly where none
     // exists yet, so bailing here made the first `|=` typed into a fresh
     // composer do nothing at all.
-    const invocation = parseChainInvocation(
-      text,
-      chains.map((c) => c.name)
-    );
+    const invocation = skills.length
+      ? null
+      : parseChainInvocation(
+          text,
+          chains.map((c) => c.name)
+        );
     const chainToRun =
       invocation && chains.some((c) => c.name === invocation.name)
         ? invocation
@@ -5408,6 +5448,8 @@ export default function App() {
       role: "user",
       mode: activeThread.currentMode,
       content: text,
+      attachments,
+      skills,
     };
     setMessages((prev) => [...prev, optimistic]);
     try {
@@ -5424,7 +5466,9 @@ export default function App() {
         activeThread.id,
         text,
         activeThread.currentMode,
-        prefs.bypass
+        prefs.bypass,
+        attachments,
+        skills
       );
       setMessages((prev) => {
         // A fast turn may have already refreshed history (which includes
@@ -5943,9 +5987,11 @@ export default function App() {
   /** A run started from the board is the same first send the composer does:
    *  create the thread, put the picks on it, send, and land on it. */
   const onNewRun = useCallback(
-    async ({ prompt, agentId, model, mode, isolated }: NewRunInput) => {
+    async ({ prompt, agentId, model, mode, isolated, attachments = [], skills = [] }: NewRunInput) => {
       if (!project) return;
       const hash = project.hash;
+      setFleetAttachments([]);
+      setFleetFiles([]);
       try {
         const created = await api.createThread(hash, "New thread");
         if (agentId) await api.setThreadExecutor(hash, created.id, agentId, model ?? null);
@@ -5970,7 +6016,9 @@ export default function App() {
           activeThread.id,
           prompt,
           mode,
-          prefs.bypass
+          prefs.bypass,
+          attachments,
+          skills
         );
         setMessages((prev) =>
           prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
@@ -6344,7 +6392,16 @@ export default function App() {
     chains,
     draft,
     setDraft,
+    skills: composerSkills,
+    setSkills: setComposerSkills,
+    attachments: composerAttachments,
+    onRemoveAttachment: (path: string) =>
+      setComposerAttachments((prev) => prev.filter((p) => p !== path)),
+    onPasteImages: (images: { dataBase64: string; ext: string }[]) =>
+      void attachImages(images, false),
+    imageSupport: thread ? (imageSupportByThread.get(thread.id) ?? true) : true,
     onSend,
+    mentionThreads: threads,
     mentionFiles: paletteFiles,
     onOpenMentions: ensurePaletteFiles,
     queued: queue.items.filter((m) => m.threadId === thread?.id),
@@ -7131,6 +7188,15 @@ export default function App() {
                   onCancelRun={onFleetCancelRun}
                   onArchiveRun={onFleetArchiveRun}
                   onNewRun={onNewRun}
+                  skillCommands={fleetSkills}
+                  attachments={fleetAttachments}
+                  onRemoveAttachment={(path) =>
+                    setFleetAttachments((prev) => prev.filter((p) => p !== path))
+                  }
+                  onPasteImages={(images) => void attachImages(images, true)}
+                  files={fleetFiles}
+                  onRemoveFile={(path) => setFleetFiles((prev) => prev.filter((p) => p !== path))}
+                  dragActive={dragActive}
                 />
               ) : shell.activePanel === "review" ? (
                 renderReview()

@@ -11,7 +11,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "scripts/link-sidecar.sh || true",
-    "start": "tauri dev",
+    "start": "scripts/link-sidecar.sh && tauri dev",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
