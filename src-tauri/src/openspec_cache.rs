@@ -25,7 +25,7 @@ use crate::locks::MutexExt;
 /// a non-zero exit but "we can't tell" for the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenSpecError {
-    /// No `openspec` on PATH — nothing ran.
+    /// Neither `openspec` nor `npx` on PATH — nothing ran.
     NotInstalled,
     /// The binary is there but wouldn't start.
     Spawn(String),
@@ -39,7 +39,7 @@ pub enum OpenSpecError {
 impl fmt::Display for OpenSpecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotInstalled => write!(f, "`openspec` is not on PATH"),
+            Self::NotInstalled => write!(f, "`openspec` is not on PATH, and there is no `npx` to fetch it"),
             Self::Spawn(e) => write!(f, "couldn't run `openspec`: {e}"),
             Self::TimedOut { seconds } => write!(f, "`openspec` timed out after {seconds}s"),
             Self::Exit { code, output } => {
@@ -70,9 +70,33 @@ fn openspec_dir_mtime(project_root: &Path) -> Option<SystemTime> {
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The OpenSpec release Palisade runs when the user has none installed.
+/// Pinned because Palisade parses its `--json` output; bump it deliberately
+/// after checking `list`/`show`/`status`/`validate`/`archive`/`init` still
+/// answer in the shape the parsers here expect.
+pub const OPENSPEC_PACKAGE: &str = "@fission-ai/openspec@1.13.1";
+
+/// A first `npx` run downloads the package before it answers.
+const NPX_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How to run OpenSpec on this machine: the user's own `openspec` when it is
+/// on PATH, otherwise the pinned package through `npx`. Spec mode can't work
+/// without the CLI, and Node is already there for npx-distributed agents, so
+/// this makes OpenSpec part of Palisade rather than a manual install step.
+pub fn openspec_command(
+    find_on_path: &dyn Fn(&str) -> Option<PathBuf>,
+) -> Option<(PathBuf, Vec<&'static str>, Duration)> {
+    if let Some(bin) = find_on_path("openspec") {
+        return Some((bin, vec![], TIMEOUT));
+    }
+    let npx = find_on_path("npx")?;
+    Some((npx, vec!["-y", OPENSPEC_PACKAGE], NPX_TIMEOUT))
+}
+
 fn openspec_json(project_root: &Path, args: &[&str]) -> OpenSpecResult {
-    let bin = crate::executor::find_on_path("openspec").ok_or(OpenSpecError::NotInstalled)?;
-    run_openspec(&bin, project_root, args, TIMEOUT)
+    let (bin, mut full, timeout) = openspec_command(&crate::executor::find_on_path).ok_or(OpenSpecError::NotInstalled)?;
+    full.extend_from_slice(args);
+    run_openspec(&bin, project_root, &full, timeout)
 }
 
 /// Give a project the `openspec/` root Spec mode writes into, via the CLI's
@@ -314,6 +338,35 @@ impl Default for OpenSpecCache {
 mod tests {
     use super::*;
 
+    /// The grill skills tell the agent which OpenSpec to run when none is
+    /// installed; it must be the same pin Palisade itself runs.
+    #[test]
+    fn the_skills_and_readme_name_the_pinned_openspec() {
+        use crate::executor::{GRILL_APPLY, GRILL_ARCHIVE, GRILL_EXPLORE, GRILL_PROPOSE};
+        for skill in [GRILL_APPLY, GRILL_ARCHIVE, GRILL_EXPLORE, GRILL_PROPOSE] {
+            assert!(skill.contains(OPENSPEC_PACKAGE), "skill drifted from {OPENSPEC_PACKAGE}: {}", &skill[..60]);
+        }
+        assert!(
+            include_str!("../../README.md").contains(OPENSPEC_PACKAGE),
+            "README's install note drifted from {OPENSPEC_PACKAGE}"
+        );
+    }
+
+    /// The user's own `openspec` wins; without it the pinned package runs
+    /// through `npx`; with neither there is nothing to run.
+    #[test]
+    fn openspec_command_prefers_path_then_pinned_npx() {
+        let only = |names: &'static [&'static str]| {
+            move |bin: &str| names.contains(&bin).then(|| PathBuf::from(format!("/bin/{bin}")))
+        };
+        let (bin, args, _) = openspec_command(&only(&["openspec", "npx"])).unwrap();
+        assert_eq!((bin, args), (PathBuf::from("/bin/openspec"), vec![]), "PATH openspec should win");
+        let (bin, args, timeout) = openspec_command(&only(&["npx"])).unwrap();
+        assert_eq!((bin, args), (PathBuf::from("/bin/npx"), vec!["-y", OPENSPEC_PACKAGE]), "npx fallback runs the pinned package");
+        assert!(timeout > TIMEOUT, "a cold npx download needs longer than a local run");
+        assert!(openspec_command(&only(&[])).is_none(), "no openspec and no npx means not installed");
+    }
+
     /// A project that already has its `openspec/` root is left alone — the
     /// CLI is never run, so an existing config is never re-initialized.
     #[test]
@@ -425,7 +478,7 @@ mod tests {
 
     #[test]
     fn a_missing_binary_is_its_own_error_not_a_failed_run() {
-        assert_eq!(OpenSpecError::NotInstalled.to_string(), "`openspec` is not on PATH");
+        assert_eq!(OpenSpecError::NotInstalled.to_string(), "`openspec` is not on PATH, and there is no `npx` to fetch it");
     }
 
     /// Counts calls so the cache's memoization can be asserted on directly.

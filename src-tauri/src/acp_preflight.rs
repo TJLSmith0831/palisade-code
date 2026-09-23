@@ -75,7 +75,7 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
     let selected = agents.first().map(|a| a.id.clone());
     let is_empty = agents.is_empty();
 
-    let openspec = find_on_path("openspec").is_some();
+    let openspec = crate::openspec_cache::openspec_command(find_on_path).is_some();
 
     let mut warnings = vec![];
     if registry_agents.is_empty() {
@@ -93,7 +93,7 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
     }
     if !openspec {
         warnings.push(
-            "`openspec` not on PATH — change-linked /go will not work.".into(),
+            "Neither `openspec` nor `npx` is on PATH — install Node.js so Spec mode can create and read specs.".into(),
         );
     }
 

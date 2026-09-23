@@ -19,10 +19,12 @@ immediately, so nothing depends on the chat surviving.
 
 ## Preflight
 
-Check `command -v openspec` succeeds and the project resolves an OpenSpec
-root (`openspec context` works, or an `openspec/` directory exists). If
-not, stop and tell the user: `npm i -g @fission-ai/openspec`, then
-`openspec init`. Never fall through to a raw CLI error.
+If `command -v openspec` fails, run every `openspec` command in this skill
+as `npx -y @fission-ai/openspec@1.13.1` instead — the version Palisade pins.
+The project needs an OpenSpec root: `openspec/` exists, or create it with
+`openspec init --tools none .`. Only if neither `openspec` nor `npx` is
+available, stop and tell the user to install Node.js. Never fall through to
+a raw CLI error.
 
 ## The decision log
 

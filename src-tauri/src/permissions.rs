@@ -148,6 +148,9 @@ fn is_openspec_command(command: &str) -> bool {
         || trimmed.starts_with("openspec ")
         || trimmed.contains(" openspec ")
         || trimmed.starts_with("npx openspec")
+        // The pinned fallback the grill skills use when `openspec` isn't
+        // installed (`openspec_cache::OPENSPEC_PACKAGE`).
+        || trimmed.starts_with("npx -y @fission-ai/openspec")
 }
 
 /// Check if a file path is inside the `openspec/` directory.
@@ -259,6 +262,16 @@ mod tests {
     /// RED→GREEN 5.6: openspec execute is auto-approved in spec-mode.
     #[test]
     fn openspec_is_whitelisted_in_spec_mode() {
+        assert_eq!(
+            decide_permission(
+                PermissionMode::Go,
+                ToolKind::Execute,
+                Some(&format!("npx -y {} status --change x --json", crate::openspec_cache::OPENSPEC_PACKAGE)),
+                &[],
+            ),
+            PermissionDecision::Allow,
+            "the pinned npx fallback is still openspec"
+        );
         assert_eq!(
             decide_permission(PermissionMode::Spec, ToolKind::Execute, Some("openspec list --json"), &[]),
             PermissionDecision::Allow,

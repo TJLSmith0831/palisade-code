@@ -205,7 +205,7 @@ export default function SpecPane({
                 </Tooltip>
               )}
               {valid === null && !loading && (
-                <Tooltip label="`openspec` is not on PATH, so validity is unknown — not invalid.">
+                <Tooltip label="Neither `openspec` nor `npx` is on PATH, so validity is unknown — not invalid.">
                   <Badge size="xs" color="neutral" variant="light">
                     unknown
                   </Badge>
