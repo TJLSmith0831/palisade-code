@@ -288,6 +288,7 @@ async fn switch_project(window: tauri::Window, app: tauri::AppHandle, hash: Stri
         if let Some(message) = warning {
             let _ = app.emit("harness-warning", message);
         }
+        repair_legacy_titles(app.clone(), project.hash.clone());
         Ok(project)
     })
     .await
@@ -1565,6 +1566,42 @@ fn title_thread(app: &tauri::AppHandle, request: TitleRequest, agent_fallback: b
         let _ = app.emit("thread-title-pending", TitlePending { thread_id: &thread_id, pending: false });
         if local.is_none() && agent_fallback {
             agent_title_later(&app, &project_hash, &thread_id, &prompt);
+        }
+    });
+}
+
+/// Give old truncated automatic names the same local-model treatment as new
+/// threads. Work runs after project open; manual names and short names stay put.
+fn repair_legacy_titles(app: tauri::AppHandle, project_hash: String) {
+    std::thread::spawn(move || {
+        if !local_title_installed(&app) {
+            return;
+        }
+        let home = palisade_home();
+        let Ok(threads) = store::list_threads(&home, &project_hash) else {
+            return;
+        };
+        for thread in threads.into_iter().filter(store::needs_model_retitle) {
+            let Some(_claim) = TitlingClaim::take(&thread.id) else {
+                continue;
+            };
+            let Ok(messages) = store::read_thread(&home, &project_hash, &thread.id) else {
+                continue;
+            };
+            let Some(prompt) = messages
+                .into_iter()
+                .find(|m| m.role == "user")
+                .map(|m| title_source(&m.content).to_string())
+            else {
+                continue;
+            };
+            let harness: tauri::State<'_, Harness> = app.state();
+            let Some(title) = model_title(&app, &harness, &prompt) else {
+                continue;
+            };
+            if store::upgrade_auto_title(&home, &project_hash, &thread.id, &title).is_ok() {
+                let _ = app.emit("thread-updated", &thread.id);
+            }
         }
     });
 }

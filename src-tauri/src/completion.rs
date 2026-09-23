@@ -319,7 +319,7 @@ impl CompletionServer {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        clean_thread_title(&raw).ok_or_else(|| crate::PalisadeError::from("model returned no usable title"))
+        clean_thread_title(&raw, prompt).ok_or_else(|| crate::PalisadeError::from("model returned no usable title"))
     }
 
     /// A one-line commit subject for a diff, from the local model.
@@ -391,8 +391,8 @@ pub fn build_title_prompt(request: &str) -> String {
     // first part carries the intent.
     let request: String = request.chars().take(600).collect();
     format!(
-        "Condense the user request into a meaningful title of 3-4 words. \
-         Never copy the opening phrase. No punctuation.\nRequest: {}\nTitle:",
+        "Write a 3-4 word task title. Name the action and specific subject. \
+         Do not answer the request. Avoid generic words.\nRequest: {}\nTitle:",
         request.trim()
     )
 }
@@ -424,7 +424,7 @@ pub fn clean_title(raw: &str) -> Option<String> {
         .trim_start_matches("Title:")
         .trim()
         .trim_matches(['"', '\'', '`', '*'])
-        .trim_end_matches('.')
+        .trim_end_matches(['.', '…'])
         .trim();
     // A model that echoed the instruction back, or produced a sentence, has
     // not produced a title.
@@ -437,8 +437,14 @@ pub fn clean_title(raw: &str) -> Option<String> {
     Some(first.to_uppercase().collect::<String>() + chars.as_str())
 }
 
-fn clean_thread_title(raw: &str) -> Option<String> {
+fn clean_thread_title(raw: &str, request: &str) -> Option<String> {
     let title = clean_title(raw)?;
+    if matches!(
+        title.split_whitespace().next()?.to_ascii_lowercase().as_str(),
+        "i" | "i'm" | "we" | "you"
+    ) {
+        return None;
+    }
     // The small model often adds articles even when asked for four words.
     // Keep its chosen topic words; never cut the user's request to make a title.
     let words: Vec<&str> = title
@@ -449,7 +455,16 @@ fn clean_thread_title(raw: &str) -> Option<String> {
         })
         .take(4)
         .collect();
-    (words.len() >= 3).then(|| words.join(" "))
+    let request = request.to_lowercase();
+    (words.len() >= 3
+        && words.iter().any(|word| {
+            let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-').to_lowercase();
+            word.chars().count() >= 3
+                && request
+                    .split(|c: char| !c.is_alphanumeric() && c != '-')
+                    .any(|term| term == word)
+        }))
+    .then(|| words.join(" "))
 }
 
 impl Default for CompletionServer {
@@ -1452,12 +1467,15 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
 
     #[test]
     fn thread_titles_have_three_or_four_words() {
-        assert_eq!(clean_thread_title("Git Push Error Message"), Some("Git Push Error Message".into()));
-        assert_eq!(clean_thread_title("Fix login redirect"), Some("Fix login redirect".into()));
-        assert_eq!(clean_thread_title("Clarify Git Push Error Message"), Some("Clarify Git Push Error".into()));
-        assert_eq!(clean_thread_title("Google Login Redirects To A 404 Error"), Some("Google Login Redirects 404".into()));
-        assert_eq!(clean_thread_title("Git push"), None);
-        assert!(build_title_prompt("fix git push").contains("3-4 words"));
+        assert_eq!(clean_thread_title("Git Push Error Message", "clarify failed git push error"), Some("Git Push Error Message".into()));
+        assert_eq!(clean_thread_title("Fix login redirect", "fix login"), Some("Fix login redirect".into()));
+        assert_eq!(clean_thread_title("Clarify Git Push Error Message", "failed git push error"), Some("Clarify Git Push Error".into()));
+        assert_eq!(clean_thread_title("Google Login Redirects To A 404 Error", "google login redirect"), Some("Google Login Redirects 404".into()));
+        assert_eq!(clean_thread_title("Clearer Empty-State Line", "suggest a clearer empty-state line for a thread list"), Some("Clearer Empty-State Line".into()));
+        assert_eq!(clean_thread_title("Clear concise description", "suggest a clearer empty-state line for a thread list"), None);
+        assert_eq!(clean_thread_title("I am able to view", "confirm you can view this project"), None);
+        assert_eq!(clean_thread_title("Git push", "git push"), None);
+        assert!(build_title_prompt("fix git push").contains("3-4 word"));
     }
 
     #[test]

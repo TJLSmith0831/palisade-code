@@ -550,6 +550,15 @@ pub fn needs_auto_title(m: &ThreadMeta) -> bool {
     palisade_owns_title(m) && PLACEHOLDER_TITLES.contains(&m.title.as_str())
 }
 
+/// Older fallback names copied the first line and often ended in an ellipsis.
+/// Retry only those or names longer than the current four-word title budget.
+pub fn needs_model_retitle(m: &ThreadMeta) -> bool {
+    palisade_owns_title(m)
+        && (m.title.ends_with('…')
+            || m.title.ends_with("...")
+            || m.title.split_whitespace().count() > 4)
+}
+
 /// Name a thread after the turn that opened it, so the user never has to.
 ///
 /// Fires once, on the first turn: a thread already named — by an earlier turn
@@ -2734,6 +2743,23 @@ mod tests {
         for thread in list_threads(home.path(), &project.hash).unwrap() {
             assert!(!needs_auto_title(&thread), "{} should keep its name", thread.title);
         }
+    }
+
+    #[test]
+    fn only_old_automatic_fallback_names_need_repair() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let mut thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+        thread.title = "Suggest a clearer error message for a failed git…".into();
+        assert!(needs_model_retitle(&thread));
+        thread.title = "Improve status label rendering today".into();
+        assert!(needs_model_retitle(&thread));
+        thread.title = "Status Label Computation".into();
+        assert!(!needs_model_retitle(&thread));
+        thread.title = "Suggest a clearer error message for a failed git…".into();
+        thread.title_source = "manual".into();
+        assert!(!needs_model_retitle(&thread));
     }
 
     /// A name the user typed is theirs. Auto-titling never overwrites it.
