@@ -64,8 +64,24 @@ pub trait OpenSpecAdapter: Send + Sync + 'static {
     fn archive(&self, project_root: &Path, name: &str) -> OpenSpecResult;
 }
 
+/// The newest mtime anywhere under `openspec/`. The folder's own mtime only
+/// moves when a direct child is added or removed, so a change the agent
+/// writes into `openspec/changes/<name>/` left the cache serving the empty
+/// list from before it existed — the Specs pane stayed blank for the whole
+/// Spec session. Walking the tree also catches in-place edits to a file.
+/// ponytail: full stat walk per call; ~350 entries on this repo's own tree.
 fn openspec_dir_mtime(project_root: &Path) -> Option<SystemTime> {
-    fs::metadata(project_root.join("openspec")).ok()?.modified().ok()
+    fn newest(path: &Path) -> Option<SystemTime> {
+        let meta = fs::symlink_metadata(path).ok()?;
+        let mut latest = meta.modified().ok();
+        if meta.is_dir() {
+            for entry in fs::read_dir(path).ok()?.flatten() {
+                latest = latest.max(newest(&entry.path()));
+            }
+        }
+        latest
+    }
+    newest(&project_root.join("openspec"))
 }
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -526,6 +542,35 @@ mod tests {
         assert_eq!(cache.list(dir.path()), Err(OpenSpecError::NotInstalled));
         assert_eq!(cache.list(dir.path()), Err(OpenSpecError::NotInstalled));
         assert_eq!(counter.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A change written deep under `openspec/` must refresh the list while
+    /// the Spec session is still running. The folder's own mtime never moves
+    /// for it, which kept the Specs pane blank until the flow was over.
+    #[test]
+    fn a_change_written_below_openspec_refreshes_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("openspec/changes")).unwrap();
+        let counter = Arc::new(CountingAdapter::new(Ok("{}".into())));
+        let cache = OpenSpecCache::new(Arc::new(counter.clone()));
+        let later = |secs| SystemTime::now() + Duration::from_secs(secs);
+
+        let _ = cache.list(dir.path());
+        let _ = cache.list(dir.path());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 1, "unchanged tree is served from cache");
+
+        // Explicit future mtimes: a same-tick write must not make this flaky.
+        fs::create_dir_all(dir.path().join("openspec/changes/landing-page")).unwrap();
+        let proposal = dir.path().join("openspec/changes/landing-page/proposal.md");
+        fs::write(&proposal, "# Proposal").unwrap();
+        fs::File::options().write(true).open(&proposal).unwrap().set_modified(later(60)).unwrap();
+        let _ = cache.list(dir.path());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 2, "a new change must refresh the list");
+
+        // Rewriting an existing file changes no directory — only its own mtime.
+        fs::File::options().write(true).open(&proposal).unwrap().set_modified(later(120)).unwrap();
+        let _ = cache.list(dir.path());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 3, "an edit to a spec file must refresh the list");
     }
 
     /// Archiving mutates the project, so it has never been cached — a second
