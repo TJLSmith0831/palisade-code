@@ -268,7 +268,7 @@ describe("parseChainInvocation with known chain names", () => {
   });
 });
 
-import { slashAt, removeToken, buildPrompt, parseSentPrompt } from "../slashCommands";
+import { slashAt, removeToken } from "../slashCommands";
 
 describe("slashAt — skills anywhere", () => {
   it("opens at the head of the draft for every sigil", () => {
@@ -303,33 +303,5 @@ describe("removeToken", () => {
 
   it("empties a draft that was only the token", () => {
     expect(removeToken("/rev", slashAt("/rev", 4)!)).toEqual({ text: "", caret: 0 });
-  });
-});
-
-describe("buildPrompt / parseSentPrompt", () => {
-  const known = [
-    { name: "tdd", description: "" },
-    { name: "grill-apply", description: "" },
-    { name: "$codex-skill", description: "" },
-  ];
-
-  it("leads with the first skill and lists the rest after", () => {
-    expect(buildPrompt("fix it", [])).toBe("fix it");
-    expect(buildPrompt("fix it", ["tdd"])).toBe("/tdd fix it");
-    expect(buildPrompt("", ["tdd"])).toBe("/tdd");
-    expect(buildPrompt("fix it", ["tdd", "grill-apply"])).toBe(
-      "/tdd fix it\n\nAlso use these skills: grill-apply"
-    );
-    expect(buildPrompt("go", ["$codex-skill"])).toBe("$codex-skill go");
-  });
-
-  it("round-trips back into chips and text", () => {
-    const sent = buildPrompt("fix it\nplease", ["tdd", "grill-apply"]);
-    expect(parseSentPrompt(sent, known)).toEqual({ skills: ["tdd", "grill-apply"], text: "fix it\nplease" });
-  });
-
-  it("leaves a message that only looks like a command alone", () => {
-    expect(parseSentPrompt("/usr/bin is broken", known)).toEqual({ skills: [], text: "/usr/bin is broken" });
-    expect(parseSentPrompt("Also use these skills: x", known).skills).toEqual([]);
   });
 });

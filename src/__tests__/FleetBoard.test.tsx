@@ -264,6 +264,7 @@ describe("FleetBoard", () => {
       mode: "spec",
       isolated: true,
       attachments: [],
+      skills: [],
     });
   });
 
@@ -456,6 +457,7 @@ describe("FleetBoard", () => {
       mode: "spec",
       isolated: true,
       attachments: [],
+      skills: [],
     });
   });
 
@@ -631,7 +633,7 @@ describe("FleetBoard skills", () => {
     return input;
   };
 
-  it("picks an advertised skill mid-sentence and leads the run's prompt with it", async () => {
+  it("picks an advertised skill mid-sentence and sends it beside the run's prompt", async () => {
     const onNewRun = vi.fn();
     render(
       <FleetBoard
@@ -646,7 +648,7 @@ describe("FleetBoard skills", () => {
     expect(screen.getByTestId("fleet-prompt")).toHaveValue("ship the login fix, ");
     fireEvent.click(screen.getByTestId("fleet-start"));
     expect(onNewRun).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: "/tdd ship the login fix," })
+      expect.objectContaining({ prompt: "ship the login fix,", skills: ["tdd"] })
     );
   });
 

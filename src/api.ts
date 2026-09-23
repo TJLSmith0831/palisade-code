@@ -65,6 +65,8 @@ export type Message = {
   failureClass?: "authRequired" | "transientProvider" | "other" | null;
   /** Stored image paths a user turn carried; absent when it had none. */
   attachments?: string[];
+  /** Skills picked into the tray for a user turn, apart from `content`. */
+  skills?: string[];
 };
 
 /** Open an independent native window, initialized to this project. */
@@ -346,7 +348,8 @@ export const sendMessage = (
   content: string,
   mode: Mode,
   bypass: boolean,
-  attachments: string[] = []
+  attachments: string[] = [],
+  skills: string[] = []
 ) =>
   invoke<Message>("send_message", {
     projectHash,
@@ -356,6 +359,7 @@ export const sendMessage = (
     model: null,
     bypass,
     attachments,
+    skills,
   });
 
 /** Copy a dropped image (`path`) or pasted bytes (`dataBase64` + `ext`) into

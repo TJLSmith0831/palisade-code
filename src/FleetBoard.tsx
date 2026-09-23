@@ -27,7 +27,6 @@ import {
   withInstalled,
   withoutSigil,
 } from "./SkillMenu";
-import { buildPrompt } from "./slashCommands";
 
 export type NewRunInput = {
   prompt: string;
@@ -40,6 +39,8 @@ export type NewRunInput = {
   isolated: boolean;
   /** Stored image paths from the tray. */
   attachments?: string[];
+  /** Skills from the tray; the backend leads the prompt with them. */
+  skills?: string[];
 };
 
 export type FleetBoardProps = {
@@ -586,12 +587,9 @@ export default function FleetBoard({
             data-testid="fleet-start"
             onClick={() => {
               onNewRun({
-                // Skills lead the prompt, the same as a thread's first turn.
-                prompt: buildPrompt(
-                  [prompt.trim(), ...files.map((f) => `@${f}`)].filter(Boolean).join(" "),
-                  skills
-                ),
+                prompt: [prompt.trim(), ...files.map((f) => `@${f}`)].filter(Boolean).join(" "),
                 attachments,
+                skills,
                 agentId: agentId ?? undefined,
                 model: modelId ?? undefined,
                 mode,

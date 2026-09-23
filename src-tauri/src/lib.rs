@@ -1315,19 +1315,21 @@ async fn send_message(
     model: Option<String>,
     bypass: bool,
     attachments: Option<Vec<String>>,
+    skills: Option<Vec<String>>,
 ) -> Res<Message> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let attachments = attachments.unwrap_or_default();
         // Recorded before the executor is resolved, deliberately: a chat-only
         // project still keeps the user's turn. There is no session to name yet.
-        let message = store::append_user_message(
+        let message = store::append_row(
             &palisade_home(),
             &project_hash,
             &thread_id,
-            &mode,
-            &content,
-            attachments.clone(),
+            Message {
+                attachments: attachments.unwrap_or_default(),
+                skills: skills.unwrap_or_default(),
+                ..Message::row("user", &mode, &content)
+            },
         )?;
         // Name the thread after the turn that opened it, so "New thread" is
         // never what the user has to live with. In the background and silent
@@ -1362,7 +1364,8 @@ async fn send_message(
                         content: content.clone(),
                         mode: mode.clone(),
                         bypass,
-                        attachments: attachments.clone(),
+                        attachments: message.attachments.clone(),
+                        skills: message.skills.clone(),
                     },
                 );
                 // A system row keeps the recovery action durable and gives
@@ -1385,7 +1388,7 @@ async fn send_message(
             }
             Err(error) => return Err(error),
         };
-        send_turn(&harness, &project_hash, &id, &content, &attachments)?;
+        send_to(&harness, &project_hash, &id, &message)?;
         Ok(message)
     })
     .await
@@ -1410,7 +1413,7 @@ async fn retry_message(
             .ok_or_else(|| crate::PalisadeError::not_found("the original user message is no longer available"))?;
         let harness: tauri::State<'_, Harness> = app.state();
         let id = ensure_session(&app, &harness, &project_hash, &thread_id, &message.mode, None, false)?;
-        send_turn(&harness, &project_hash, &id, &message.content, &message.attachments)
+        send_to(&harness, &project_hash, &id, &message)
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -1484,18 +1487,16 @@ impl TitleRequest {
     }
 }
 
-/// What a turn is *about*, for naming its thread: the composer puts a picked
-/// skill at the head (`/tdd …`) and any others in an "Also use these skills"
-/// line, and neither says what the user asked for. Mirrors the grammar of
-/// `buildPrompt` in `src/slashCommands.ts`.
+/// What a turn is *about*, for naming its thread: a command typed at the
+/// head (`/tdd …`) says how, not what the user asked for. Tray skills are
+/// stored apart from `content`, so only a typed one can be here.
 fn title_source(content: &str) -> &str {
-    let body = content.split("\n\nAlso use these skills: ").next().unwrap_or(content);
-    match body.strip_prefix('/').or_else(|| body.strip_prefix('$')) {
+    match content.strip_prefix('/').or_else(|| content.strip_prefix('$')) {
         Some(rest) => match rest.split_once(char::is_whitespace) {
             Some((_, text)) if !text.trim().is_empty() => text.trim_start(),
-            _ => body,
+            _ => content,
         },
-        None => body,
+        None => content,
     }
 }
 
@@ -1570,8 +1571,9 @@ fn title_thread(app: &tauri::AppHandle, request: TitleRequest, agent_fallback: b
     });
 }
 
-/// Give old truncated automatic names the same local-model treatment as new
-/// threads. Work runs after project open; manual names and short names stay put.
+/// Give truncated automatic names the same local-model treatment as new
+/// threads, once each. Work runs after project open; manual names and short
+/// names stay put.
 fn repair_legacy_titles(app: tauri::AppHandle, project_hash: String) {
     std::thread::spawn(move || {
         if !local_title_installed(&app) {
@@ -1596,10 +1598,8 @@ fn repair_legacy_titles(app: tauri::AppHandle, project_hash: String) {
                 continue;
             };
             let harness: tauri::State<'_, Harness> = app.state();
-            let Some(title) = model_title(&app, &harness, &prompt) else {
-                continue;
-            };
-            if store::upgrade_auto_title(&home, &project_hash, &thread.id, &title).is_ok() {
+            let title = model_title(&app, &harness, &prompt);
+            if store::finish_title_repair(&home, &project_hash, &thread.id, title.as_deref()).is_ok() && title.is_some() {
                 let _ = app.emit("thread-updated", &thread.id);
             }
         }
@@ -1640,37 +1640,67 @@ fn model_title(app: &tauri::AppHandle, harness: &Harness, prompt: &str) -> Optio
     server.title(prompt).ok()
 }
 
+/// One user turn as a caller hands it to [`send_to`]: the words, plus any
+/// stored image paths and tray skills. Plain Palisade-authored prompts
+/// (`/go`'s handoff, chain steps) convert from a string.
+pub(crate) struct UserTurn<'a> {
+    content: &'a str,
+    attachments: &'a [String],
+    skills: &'a [String],
+}
+
+impl<'a> From<&'a str> for UserTurn<'a> {
+    fn from(content: &'a str) -> Self {
+        Self { content, attachments: &[], skills: &[] }
+    }
+}
+
+impl<'a> From<&'a String> for UserTurn<'a> {
+    fn from(content: &'a String) -> Self {
+        content.as_str().into()
+    }
+}
+
+impl<'a> From<&'a Message> for UserTurn<'a> {
+    fn from(m: &'a Message) -> Self {
+        Self { content: &m.content, attachments: &m.attachments, skills: &m.skills }
+    }
+}
+
+impl<'a> From<&'a executor::PendingAuthTurn> for UserTurn<'a> {
+    fn from(p: &'a executor::PendingAuthTurn) -> Self {
+        Self { content: &p.content, attachments: &p.attachments, skills: &p.skills }
+    }
+}
+
 /// Send one turn to a named live session, carrying any handoff transcript
 /// parked on it by `ensure_session`. Draining here — rather than at each call
 /// site — is what keeps a caller that starts a session without prompting
 /// (`/go`) from silently discarding the conversation so far.
-fn send_to(
+fn send_to<'a>(
     harness: &Harness,
     project_hash: &str,
     session_id: &str,
-    content: &str,
+    turn: impl Into<UserTurn<'a>>,
 ) -> Res<()> {
-    send_turn(harness, project_hash, session_id, content, &[])
-}
-
-/// [`send_to`] for a user turn that may carry attached images (stored paths).
-fn send_turn(
-    harness: &Harness,
-    project_hash: &str,
-    session_id: &str,
-    content: &str,
-    attachments: &[String],
-) -> Res<()> {
-    let images = attachments
+    let turn = turn.into();
+    let home = palisade_home();
+    let images = turn
+        .attachments
         .iter()
-        .map(|path| attachments::load(&palisade_home(), project_hash, path))
+        .map(|path| attachments::load(&home, project_hash, path))
         .collect::<Res<Vec<_>>>()?;
-    let content = store::expand_thread_mentions(&palisade_home(), project_hash, content);
+    let prompt = acp_client::Prompt {
+        images,
+        skills: turn.skills.to_vec(),
+        chats: store::resolve_thread_mentions(&home, project_hash, turn.content),
+        ..acp_client::Prompt::text(turn.content)
+    };
     let prefix = harness.pending_prefix(session_id);
     {
         let sessions = harness.agent.acp_sessions.lock_or_recover();
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
-        acp_client::send_acp_prompt(session, prefix.as_deref(), &content, images)?;
+        acp_client::send_acp_prompt(session, prefix.as_deref(), prompt)?;
     }
     harness.clear_pending_prefix(session_id);
     Ok(())
@@ -2101,13 +2131,7 @@ async fn agent_authenticate(
                 None,
                 pending.bypass,
             ) {
-                Ok(session_id) => send_turn(
-                    &harness,
-                    &pending.project_hash,
-                    &session_id,
-                    &pending.content,
-                    &pending.attachments,
-                )?,
+                Ok(session_id) => send_to(&harness, &pending.project_hash, &session_id, &pending)?,
                 Err(error) if error.kind == crate::error::ErrorKind::AuthRequired => {
                     let mut remaining = vec![pending];
                     remaining.extend(queued);
@@ -5046,6 +5070,7 @@ mod tests {
             title_source: "manual".into(),
             auth_blocked: None,
             last_viewed_at: None,
+            title_retried: false,
         }
     }
 
@@ -5222,7 +5247,7 @@ mod tests {
     #[test]
     fn a_thread_is_named_for_the_request_not_the_skill_that_leads_it() {
         assert_eq!(title_source("/tdd fix the login form"), "fix the login form");
-        assert_eq!(title_source("$tdd fix it\n\nAlso use these skills: grill-apply"), "fix it");
+        assert_eq!(title_source("$tdd fix it"), "fix it");
         // A bare command has nothing else to name the thread for.
         assert_eq!(title_source("/review"), "/review");
         assert_eq!(title_source("plain request"), "plain request");
@@ -5269,7 +5294,7 @@ mod tests {
         let harness = Harness::default();
         let id = session.id.clone();
         harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
-        assert!(send_turn(&harness, "p1", &id, "look at this", &["/missing/image.png".into()]).is_err());
+        assert!(send_to(&harness, "p1", &id, &Message { attachments: vec!["/missing/image.png".into()], ..Message::row("user", "go", "look at this") }).is_err());
         assert!(rx.try_recv().is_err());
     }
 

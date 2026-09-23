@@ -208,7 +208,7 @@ export function matchCommands<T extends AgentCommand>(
  * At the head of the draft every sigil opens the menu (the grammar above).
  * Past the head only `/` does, and only at a word start — a skill can be
  * picked mid-sentence ("the form double-submits, /tdd") and still reach the
- * agent as a command, because `buildPrompt` moves it to the front on send.
+ * agent as a command, because the backend moves it to the front on send.
  * A mid-sentence `$` stays money and `|=` stays head-only: a chain is a run,
  * not a word in a message. A second `/` inside the token makes it a path.
  */
@@ -242,54 +242,9 @@ export function removeToken(
   return { text: head + tail, caret: head.length };
 }
 
-/** How a skill reads in the composer and on the wire: `/tdd`, or `$tdd` for
+/** How a skill reads on a chip: `/tdd`, or `$tdd` for
  *  an agent that carries its own sigil. `commandTrigger` without the space. */
 export const skillTrigger = (name: string) => `${sigilOf(name) ? "" : "/"}${name}`;
-const ALSO = "Also use these skills: ";
-
-/**
- * What the agent receives for a draft plus the skills picked into the tray.
- * The first skill leads the prompt — agents only run a command that opens
- * the turn — and any others follow as a plain instruction, since no agent
- * runs two commands in one turn.
- */
-export function buildPrompt(text: string, skills: readonly string[]): string {
-  if (skills.length === 0) return text;
-  const [first, ...rest] = skills;
-  const lead = text ? `${skillTrigger(first)} ${text}` : skillTrigger(first);
-  return rest.length ? `${lead}\n\n${ALSO}${rest.map(bareName).join(", ")}` : lead;
-}
-
-/**
- * `buildPrompt` read back, so a sent turn shows the same chips it was
- * written with. Only names in `known` become chips on the leading side — a
- * message that merely starts with a path must not turn into a skill.
- */
-export function parseSentPrompt(
-  content: string,
-  known: readonly AgentCommand[]
-): { skills: string[]; text: string } {
-  let text = content;
-  const skills: string[] = [];
-  const lead = text.match(/^([/$][^\s]+)(?:\s+|$)/);
-  if (lead) {
-    const hit = known.find((c) => skillTrigger(c.name) === lead[1]);
-    if (hit && !isChainCommand(hit)) {
-      skills.push(hit.name);
-      text = text.slice(lead[0].length);
-    }
-  }
-  const also = text.lastIndexOf(`\n\n${ALSO}`);
-  if (skills.length && also !== -1) {
-    const names = text.slice(also + 2 + ALSO.length).split(",").map((n) => n.trim());
-    if (names.every((n) => /^\S+$/.test(n))) {
-      skills.push(...names);
-      text = text.slice(0, also);
-    }
-  }
-  return { skills, text };
-}
-
 /**
  * The menu rows for a `/` token. At the head, everything `matchCommands`
  * finds. Mid-sentence, names only: a description hit would open the menu on

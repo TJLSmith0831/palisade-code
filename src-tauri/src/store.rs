@@ -371,6 +371,11 @@ pub struct ThreadMeta {
     /// Absent on records written before viewing was tracked.
     #[serde(default)]
     pub last_viewed_at: Option<String>,
+    /// Set once the old-title repair has asked the local model about this
+    /// thread, whatever it answered — a title the model can't improve is
+    /// asked about once, not on every project open.
+    #[serde(default)]
+    pub title_retried: bool,
 }
 
 fn manual_title_source() -> String {
@@ -396,41 +401,38 @@ pub fn thread_slug(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join("-")
 }
 
-/// `content` with a "Referenced chats" list appended for every
-/// `@thread:<slug>` it mentions, pointing the agent at that thread's
-/// transcript so it can read the whole conversation with its own tools.
-/// Unknown slugs are left as typed. Nothing is copied into the prompt.
-pub fn expand_thread_mentions(home: &Path, hash: &str, content: &str) -> String {
+/// The threads `content` mentions as `@thread:<id>::<slug>` (or, for older
+/// mentions, `@thread:<slug>`), each once: its title and transcript path.
+/// Unknown slugs resolve to nothing. How they are worded for the agent is
+/// `acp_client::Prompt`'s business, not the store's.
+pub fn resolve_thread_mentions(home: &Path, hash: &str, content: &str) -> Vec<(String, String)> {
     let slugs: Vec<&str> = content
         .split_whitespace()
         .filter_map(|word| word.strip_prefix("@thread:"))
         .filter(|slug| !slug.is_empty())
         .collect();
     if slugs.is_empty() {
-        return content.to_string();
+        return Vec::new();
     }
     let threads = list_threads(home, hash).unwrap_or_default();
-    let mut lines = Vec::new();
+    let mut found: Vec<(String, String)> = Vec::new();
     for slug in slugs {
         // Exact first: an auto-title can itself end in "..." — then without
         // the sentence punctuation typed after the mention ("@thread:x,").
         let bare = slug.trim_end_matches(|c: char| ".,;:!?)".contains(c));
-        let found = slug.split_once("::")
+        let thread = slug.split_once("::")
             .and_then(|(id, _)| threads.iter().find(|t| t.id == id))
             // Older mentions only carried a title; keep those readable.
             .or_else(|| threads.iter().find(|t| thread_slug(&t.title) == slug))
             .or_else(|| threads.iter().find(|t| thread_slug(&t.title) == bare));
-        if let Some(thread) = found {
-            let line = format!("- {} → {}", thread.title, log_path(home, hash, &thread.id).display());
-            if !lines.contains(&line) {
-                lines.push(line);
+        if let Some(thread) = thread {
+            let entry = (thread.title.clone(), log_path(home, hash, &thread.id).display().to_string());
+            if !found.contains(&entry) {
+                found.push(entry);
             }
         }
     }
-    if lines.is_empty() {
-        return content.to_string();
-    }
-    format!("{content}\n\nReferenced chats (JSONL transcripts, one message per line):\n{}", lines.join("\n"))
+    found
 }
 
 pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
@@ -461,6 +463,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         title_source: "auto".into(),
         auth_blocked: None,
         last_viewed_at: None,
+        title_retried: false,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
     write_json(&meta_path(home, hash, &id), &meta)?;
@@ -550,10 +553,12 @@ pub fn needs_auto_title(m: &ThreadMeta) -> bool {
     palisade_owns_title(m) && PLACEHOLDER_TITLES.contains(&m.title.as_str())
 }
 
-/// Older fallback names copied the first line and often ended in an ellipsis.
-/// Retry only those or names longer than the current four-word title budget.
+/// A fallback name (the first line, often cut with an ellipsis) or one longer
+/// than the four-word title budget — each asked about once: a thread the
+/// model couldn't improve is marked by [`finish_title_repair`] and left be.
 pub fn needs_model_retitle(m: &ThreadMeta) -> bool {
     palisade_owns_title(m)
+        && !m.title_retried
         && (m.title.ends_with('…')
             || m.title.ends_with("...")
             || m.title.split_whitespace().count() > 4)
@@ -596,6 +601,18 @@ pub fn upgrade_auto_title(home: &Path, hash: &str, id: &str, title: &str) -> Res
             m.title = title.to_string();
             m.title_source = "auto".into();
         }
+    })?;
+    Ok(())
+}
+
+/// Close one old-title repair attempt: take the model's title if it gave one
+/// (and the name is still Palisade's), and never ask about this thread again.
+pub fn finish_title_repair(home: &Path, hash: &str, id: &str, title: Option<&str>) -> Res<()> {
+    update_thread(home, hash, id, |m| {
+        if let (Some(title), true) = (title, palisade_owns_title(m)) {
+            m.title = title.to_string();
+        }
+        m.title_retried = true;
     })?;
     Ok(())
 }
@@ -1095,6 +1112,28 @@ pub struct Message {
     /// every row written before attachments existed still parses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
+    /// Skills picked into the composer tray for a user turn, kept apart from
+    /// `content` (the user's own words) so history can show them as chips.
+    /// How they reach the agent is `acp_client::Prompt`'s business.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+}
+
+impl Message {
+    /// A row to hand [`append_row`]; `seq` and `ts` are assigned there.
+    pub fn row(role: &str, mode: &str, content: &str) -> Self {
+        Self {
+            seq: 0,
+            ts: String::new(),
+            role: role.to_string(),
+            mode: mode.to_string(),
+            content: content.to_string(),
+            session_id: None,
+            failure_class: None,
+            attachments: Vec::new(),
+            skills: Vec::new(),
+        }
+    }
 }
 
 /// Next `seq` per log path, alongside the file length it was computed at.
@@ -1139,33 +1178,16 @@ pub fn append_message_with_failure_class(
     session_id: Option<&str>,
     failure_class: Option<crate::acp_client::FailureClass>,
 ) -> Res<Message> {
-    append_row(home, hash, id, role, mode, content, session_id, failure_class, Vec::new())
+    append_row(
+        home,
+        hash,
+        id,
+        Message { session_id: session_id.map(str::to_string), failure_class, ..Message::row(role, mode, content) },
+    )
 }
 
-/// A user turn that carries attached images.
-pub fn append_user_message(
-    home: &Path,
-    hash: &str,
-    id: &str,
-    mode: &str,
-    content: &str,
-    attachments: Vec<String>,
-) -> Res<Message> {
-    append_row(home, hash, id, "user", mode, content, None, None, attachments)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_row(
-    home: &Path,
-    hash: &str,
-    id: &str,
-    role: &str,
-    mode: &str,
-    content: &str,
-    session_id: Option<&str>,
-    failure_class: Option<crate::acp_client::FailureClass>,
-    attachments: Vec<String>,
-) -> Res<Message> {
+/// Append `row` (see [`Message::row`]) with its `seq` and `ts` filled in.
+pub fn append_row(home: &Path, hash: &str, id: &str, row: Message) -> Res<Message> {
     let path = log_path(home, hash, id);
 
     let (message, over_threshold) = {
@@ -1177,16 +1199,7 @@ fn append_row(
         let mut cache = SEQ_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let cache = cache.get_or_insert_with(HashMap::new);
         let NextLine { seq, torn_newline_len } = next_line(&writer, &path, cache, expected_len)?;
-        let message = Message {
-            seq,
-            ts: now(),
-            role: role.to_string(),
-            mode: mode.to_string(),
-            content: content.to_string(),
-            session_id: session_id.map(str::to_string),
-            failure_class,
-            attachments,
-        };
+        let message = Message { seq, ts: now(), ..row };
         let line = serde_json::to_string(&message).map_err(|err| e("serialize message", err))?;
 
         if let Some(parent) = path.parent() {
@@ -2463,6 +2476,7 @@ mod tests {
             session_id: None,
             failure_class: None,
             attachments: Vec::new(),
+            skills: Vec::new(),
         };
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{}", serde_json::to_string(&smuggled).unwrap()).unwrap();
@@ -2488,27 +2502,25 @@ mod tests {
     }
 
     #[test]
-    fn thread_mentions_expand_to_transcript_paths() {
+    fn thread_mentions_resolve_to_transcript_paths() {
         let home = home();
         let repo = tempfile::tempdir().unwrap();
         let project = add_project(home.path(), repo.path()).unwrap();
         let thread = create_thread(home.path(), &project.hash, "Auth  token fix").unwrap();
         assert_eq!(thread_slug(&thread.title), "Auth-token-fix");
 
-        let out = expand_thread_mentions(home.path(), &project.hash, "redo @thread:Auth-token-fix, but faster");
-        assert!(out.starts_with("redo @thread:Auth-token-fix, but faster\n\nReferenced chats"));
-        assert!(out.contains(&format!("{}.jsonl", thread.id)));
+        let path_of = |id: &str| log_path(home.path(), &project.hash, id).display().to_string();
+        let out = resolve_thread_mentions(home.path(), &project.hash, "redo @thread:Auth-token-fix, but faster");
+        assert_eq!(out, vec![("Auth  token fix".to_string(), path_of(&thread.id))]);
         let duplicate = create_thread(home.path(), &project.hash, "Auth  token fix").unwrap();
-        let out = expand_thread_mentions(home.path(), &project.hash, &format!("redo @thread:{}::Auth-token-fix", duplicate.id));
-        assert!(out.contains(&format!("{}.jsonl", duplicate.id)));
-        assert!(!out.contains(&format!("{}.jsonl", thread.id)));
+        let out = resolve_thread_mentions(home.path(), &project.hash, &format!("redo @thread:{}::Auth-token-fix", duplicate.id));
+        assert_eq!(out, vec![("Auth  token fix".to_string(), path_of(&duplicate.id))]);
         // A title that ends in punctuation (auto-titles end in "...") still resolves.
         let dotted = create_thread(home.path(), &project.hash, "Reply with exactly...").unwrap();
-        let out = expand_thread_mentions(home.path(), &project.hash, "what did @thread:Reply-with-exactly... ask?");
-        assert!(out.contains(&format!("{}.jsonl", dotted.id)), "{out}");
-        // An unknown slug is left alone and adds nothing.
-        let plain = "see @thread:Nope";
-        assert_eq!(expand_thread_mentions(home.path(), &project.hash, plain), plain);
+        let out = resolve_thread_mentions(home.path(), &project.hash, "what did @thread:Reply-with-exactly... ask?");
+        assert_eq!(out, vec![("Reply with exactly...".to_string(), path_of(&dotted.id))]);
+        // An unknown slug resolves to nothing.
+        assert!(resolve_thread_mentions(home.path(), &project.hash, "see @thread:Nope").is_empty());
     }
 
     fn append_message_fixture(session: &str) -> Message {
@@ -2760,6 +2772,27 @@ mod tests {
         thread.title = "Suggest a clearer error message for a failed git…".into();
         thread.title_source = "manual".into();
         assert!(!needs_model_retitle(&thread));
+    }
+
+    /// A title the model declined to improve is asked about once — not again
+    /// on every project open.
+    #[test]
+    fn a_declined_title_repair_is_not_retried() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "New thread").unwrap();
+        set_auto_title(home.path(), &project.hash, &thread.id, "Suggest a clearer error message for a failed git push", None).unwrap();
+        let find = || list_threads(home.path(), &project.hash).unwrap().into_iter().find(|t| t.id == thread.id).unwrap();
+        assert!(needs_model_retitle(&find()));
+
+        finish_title_repair(home.path(), &project.hash, &thread.id, None).unwrap();
+        let after = find();
+        assert!(after.title.ends_with('…'), "the fallback name stays: {}", after.title);
+        assert!(!needs_model_retitle(&after));
+
+        finish_title_repair(home.path(), &project.hash, &thread.id, Some("Git Push Error")).unwrap();
+        assert_eq!(find().title, "Git Push Error");
     }
 
     /// A name the user typed is theirs. Auto-titling never overwrites it.

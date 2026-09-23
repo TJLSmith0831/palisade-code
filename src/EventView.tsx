@@ -26,7 +26,7 @@ export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
-  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; failureClass?: Message["failureClass"]; attachments?: string[] }
+  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; failureClass?: Message["failureClass"]; attachments?: string[]; skills?: string[] }
   /** A zero-height marker at the first turn of a session, so a chain node can
    *  scroll the transcript to what it actually did. Lives on `Item` and not on
    *  `ExecutorEvent`, which D13 caps at nine variants. */
@@ -138,6 +138,7 @@ function itemFromMessage(message: Message): Item {
       seq: message.seq,
       failureClass: message.failureClass,
       attachments: message.attachments,
+      skills: message.skills,
     };
   })(message);
 }

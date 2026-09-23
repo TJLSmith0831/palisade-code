@@ -580,7 +580,23 @@ pub(crate) struct Prompt {
     /// Palisade-authored instructions and handoff transcripts, in order.
     pub context: Vec<String>,
     pub images: Vec<PromptImage>,
+    /// Skills picked in the composer tray (`tdd`, or `$tdd` for an agent
+    /// with its own sigil). The first leads the user's text; see
+    /// [`Prompt::user_text`].
+    pub skills: Vec<String>,
+    /// Threads the user's text mentions: title and transcript path. The
+    /// agent is pointed at each transcript to read with its own tools;
+    /// nothing is copied into the prompt.
+    pub chats: Vec<(String, String)>,
     pub text: String,
+}
+
+/// The one place the tray's skills become prompt text. Stored turns keep
+/// `skills` and `text` apart, so nothing ever has to parse this back.
+const ALSO_USE: &str = "Also use these skills: ";
+
+fn skill_trigger(name: &str) -> String {
+    if name.starts_with(['/', '$']) { name.to_string() } else { format!("/{name}") }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -602,8 +618,34 @@ impl Prompt {
     #[cfg(test)]
     pub fn joined(&self) -> String {
         let mut parts = self.context.clone();
-        parts.push(self.text.clone());
+        parts.push(self.user_text());
         parts.join("\n\n")
+    }
+
+    /// The user's words with the tray's skills applied: the first skill
+    /// leads, since an agent only runs a command that opens the turn, and
+    /// the rest follow as a plain instruction — no agent runs two commands
+    /// in one turn.
+    fn user_text(&self) -> String {
+        let mut text = match self.skills.split_first() {
+            None => self.text.clone(),
+            Some((first, rest)) => {
+                let trigger = skill_trigger(first);
+                let mut lead = if self.text.is_empty() { trigger } else { format!("{trigger} {}", self.text) };
+                if !rest.is_empty() {
+                    let names: Vec<&str> = rest.iter().map(|n| n.trim_start_matches(['/', '$'])).collect();
+                    lead.push_str(&format!("\n\n{ALSO_USE}{}", names.join(", ")));
+                }
+                lead
+            }
+        };
+        if !self.chats.is_empty() {
+            text.push_str("\n\nReferenced chats (JSONL transcripts, one message per line):");
+            for (title, path) in &self.chats {
+                text.push_str(&format!("\n- {title} → {path}"));
+            }
+        }
+        text
     }
 
     /// The wire form. An agent that never said it takes images gets their
@@ -615,7 +657,7 @@ impl Prompt {
             .iter()
             .map(|c| v1::ContentBlock::Text(v1::TextContent::new(c.clone())))
             .collect();
-        let mut text = self.text.clone();
+        let mut text = self.user_text();
         if images_supported {
             blocks.extend(self.images.iter().map(|image| {
                 v1::ContentBlock::Image(v1::ImageContent::new(
@@ -1922,12 +1964,9 @@ impl SessionIdentity {
 
 /// Send a user message to a live ACP session. The prompt response arrives
 /// on the bridge thread, which emits `Done` (or `Crashed`) and clears busy.
-pub fn send_acp_prompt(
-    session: &AcpSession,
-    prefix: Option<&str>,
-    message: &str,
-    images: Vec<PromptImage>,
-) -> Res<()> {
+/// `prompt` carries the user's own turn; Palisade's instructions and any
+/// parked handoff `prefix` are put ahead of it here.
+pub fn send_acp_prompt(session: &AcpSession, prefix: Option<&str>, mut prompt: Prompt) -> Res<()> {
     if session.is_busy() {
         return Err("executor is mid-turn".into());
     }
@@ -1939,7 +1978,9 @@ pub fn send_acp_prompt(
     let preview = include_str!("../skills/palisade-preview.md");
     let mut context = vec![preview.to_string()];
     context.extend(prefix.map(str::to_string));
-    tx.send(BridgeCommand::Prompt(Prompt { context, images, text: message.to_string() }))
+    context.append(&mut prompt.context);
+    prompt.context = context;
+    tx.send(BridgeCommand::Prompt(prompt))
         .map_err(|_| crate::PalisadeError::from("agent connection is closed"))
 }
 
@@ -2698,7 +2739,7 @@ mod tests {
     #[test]
     fn send_rejects_when_busy() {
         let (session, mut cmd_rx) = stub_session(true);
-        let result = send_acp_prompt(&session, None, "hello", vec![]);
+        let result = send_acp_prompt(&session, None, Prompt::text("hello"));
         assert!(result.unwrap_err().contains("mid-turn"));
         assert!(cmd_rx.try_recv().is_err());
     }
@@ -2707,7 +2748,7 @@ mod tests {
     #[test]
     fn send_queues_prompt_when_idle() {
         let (session, mut cmd_rx) = stub_session(false);
-        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
+        send_acp_prompt(&session, None, Prompt::text("hello")).unwrap();
         assert!(session.is_busy());
         match cmd_rx.try_recv() {
             Ok(BridgeCommand::Prompt(prompt)) => assert!(prompt.joined().ends_with("\n\nhello")),
@@ -2733,11 +2774,33 @@ mod tests {
         let prompt = Prompt {
             context: vec!["preview".into(), "handoff".into()],
             images: vec![PromptImage { path: "/a.png".into(), mime_type: "image/png".into(), data: "AAA".into() }],
+            skills: vec![],
+            chats: vec![],
             text: "/tdd fix it".into(),
         };
         let blocks = prompt.blocks(true);
         assert_eq!(block_kinds(&blocks), ["text", "text", "image", "text"]);
         let v1::ContentBlock::Text(last) = blocks.last().unwrap() else { panic!() };
+        assert_eq!(last.text, "/tdd fix it");
+    }
+
+    /// Tray skills reach the agent as a leading command plus a plain
+    /// instruction for the rest, in the final text block.
+    #[test]
+    fn tray_skills_lead_the_users_text() {
+        let with = |skills: &[&str], text: &str| {
+            Prompt { skills: skills.iter().map(|s| s.to_string()).collect(), ..Prompt::text(text) }.user_text()
+        };
+        assert_eq!(with(&[], "fix it"), "fix it");
+        assert_eq!(with(&["tdd"], "fix it"), "/tdd fix it");
+        assert_eq!(with(&["tdd"], ""), "/tdd");
+        assert_eq!(with(&["$codex-skill"], "go"), "$codex-skill go");
+        assert_eq!(with(&["tdd", "grill-apply"], "fix it"), "/tdd fix it\n\nAlso use these skills: grill-apply");
+        let chat = ("Auth fix".to_string(), "/t/1.jsonl".to_string());
+        let prompt = Prompt { skills: vec!["tdd".into()], chats: vec![chat], ..Prompt::text("fix it") };
+        assert!(prompt.user_text().ends_with("\n- Auth fix → /t/1.jsonl"));
+        let prompt = Prompt { context: vec!["ctx".into()], skills: vec!["tdd".into()], ..Prompt::text("fix it") };
+        let v1::ContentBlock::Text(last) = prompt.blocks(true).pop().unwrap() else { panic!() };
         assert_eq!(last.text, "/tdd fix it");
     }
 
@@ -2747,6 +2810,8 @@ mod tests {
         let prompt = Prompt {
             context: vec![],
             images: vec![PromptImage { path: "/a.png".into(), mime_type: "image/png".into(), data: "AAA".into() }],
+            skills: vec![],
+            chats: vec![],
             text: "look".into(),
         };
         let blocks = prompt.blocks(false);
@@ -2761,7 +2826,7 @@ mod tests {
             let (mut session, mut cmd_rx) = stub_session(false);
             session.mode = mode.into();
             session.agent_id = "any-registry-agent".into();
-            send_acp_prompt(&session, None, "Show my app", vec![]).unwrap();
+            send_acp_prompt(&session, None, Prompt::text("Show my app")).unwrap();
             let BridgeCommand::Prompt(prompt) = cmd_rx.try_recv().unwrap() else {
                 panic!("expected a prompt");
             };
@@ -3135,7 +3200,7 @@ mod tests {
 
         let session = SessionIdentity::from(&test_spawn(None))
             .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
+        send_acp_prompt(&session, None, Prompt::text("hello")).unwrap();
 
         // Live deltas stream first…
         let first = recv_event(&rx);
@@ -3166,7 +3231,7 @@ mod tests {
                 .unwrap();
         let session = SessionIdentity::from(&test_spawn(None))
             .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
+        send_acp_prompt(&session, None, Prompt::text("hello")).unwrap();
 
         // Reasoning deltas stream before the text ones (FakeAgent's order).
         let first = recv_event(&rx);
@@ -3222,7 +3287,7 @@ mod tests {
         .unwrap();
         let session = SessionIdentity::from(&spawn_for_identity)
             .into_session(id, ModelState::default(), cmds, busy, pending);
-        send_acp_prompt(&session, None, "hello", vec![]).unwrap();
+        send_acp_prompt(&session, None, Prompt::text("hello")).unwrap();
 
         // Both the permission prompt and the turn's own text chunk must
         // reach the sink before either is answered — the dispatch loop must

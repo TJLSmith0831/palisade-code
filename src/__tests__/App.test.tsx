@@ -5283,6 +5283,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
         model: null,
         bypass: true,
         attachments: [],
+        skills: [],
       })
     );
   });
@@ -7035,7 +7036,7 @@ describe("Composer: skills anywhere, @ threads, images", () => {
       if (cmd === "save_attachment") return Promise.resolve("/h/.palisade-code/projects/proj-1/attachments/1.png");
       if (cmd === "read_attachment") return Promise.resolve("data:image/png;base64,AA==");
       if (cmd === "send_message")
-        return Promise.resolve({ seq: 7, ts: "", role: "user", mode: "go", content: (args as { content: string }).content });
+        return Promise.resolve({ seq: 7, ts: "", role: "user", mode: "go", ...(args as { content: string; skills: string[] }) });
       return defaultInvoke(cmd, args);
     });
     render(<App />);
@@ -7056,10 +7057,10 @@ describe("Composer: skills anywhere, @ threads, images", () => {
   };
   const sentContent = () =>
     invokeMock.mock.calls.find(([cmd]) => cmd === "send_message")?.[1] as
-      | { content: string; attachments: string[] }
+      | { content: string; attachments: string[]; skills: string[] }
       | undefined;
 
-  it("picks a skill mid-sentence into the tray and sends it leading the prompt", async () => {
+  it("picks a skill mid-sentence into the tray and sends it beside the text", async () => {
     const input = await setup();
     type(input, "fix it, /td");
     await screen.findByTestId("command-menu");
@@ -7073,10 +7074,9 @@ describe("Composer: skills anywhere, @ threads, images", () => {
 
     type(screen.getByTestId("composer-input") as HTMLTextAreaElement, "fix it, test first");
     fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    // The skills travel beside the text; the backend leads the prompt with them.
     await waitFor(() =>
-      expect(sentContent()?.content).toBe(
-        "/tdd fix it, test first\n\nAlso use these skills: grill-apply"
-      )
+      expect(sentContent()).toMatchObject({ content: "fix it, test first", skills: ["tdd", "grill-apply"] })
     );
     // The sent turn keeps its chips.
     expect(await screen.findByTestId("message-skills")).toHaveTextContent("/tdd");
@@ -7135,6 +7135,38 @@ describe("Composer: skills anywhere, @ threads, images", () => {
     fireEvent.keyDown(screen.getByTestId("composer-input"), { key: "Enter" });
     await waitFor(() => expect(sentContent()?.attachments).toHaveLength(2));
     expect(screen.queryByTestId("composer-tray")).toBeNull();
+  });
+
+  // A stored attachment is only readable by the project that stored it, so
+  // an image left in the tray must not ride along into another project.
+  it("empties the image tray when the project changes", async () => {
+    const project = (hash: string) => ({
+      hash,
+      root: `/tmp/${hash}`,
+      displayName: hash,
+      createdAt: "2026-08-06T00:00:00Z",
+      lastAccessedAt: "2026-08-06T00:00:00Z",
+    });
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_projects") return Promise.resolve([project("proj-1"), project("proj-2")]);
+      if (cmd === "switch_project") return Promise.resolve(project(String((args as { hash?: string })?.hash ?? "proj-1")));
+      if (cmd === "list_threads") return Promise.resolve(threads);
+      if (cmd === "save_attachment") return Promise.resolve("/h/.palisade-code/projects/proj-1/attachments/1.png");
+      if (cmd === "read_attachment") return Promise.resolve("data:image/png;base64,AA==");
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    // A switch lands on the Fleet board, whose composer has a tray too.
+    fireEvent.change(openWorkspacePanel(), { target: { value: "proj-2" } });
+    const prompt = await screen.findByTestId("fleet-prompt");
+    fireEvent.paste(prompt, { clipboardData: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
+    await screen.findByTestId("attachment-thumb");
+
+    fireEvent.change(openWorkspacePanel(), { target: { value: "proj-1" } });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("switch_project", expect.objectContaining({ hash: "proj-1" })));
+    await screen.findByTestId("fleet-prompt");
+    await waitFor(() => expect(screen.queryByTestId("attachment-thumb")).toBeNull());
   });
 });
 

@@ -509,6 +509,8 @@ pub struct PendingAuthTurn {
     pub bypass: bool,
     /// Stored image paths the blocked turn carried.
     pub attachments: Vec<String>,
+    /// Skills picked into the tray for the blocked turn.
+    pub skills: Vec<String>,
 }
 
 /// Everything belonging to a live ACP agent conversation.
@@ -896,6 +898,7 @@ mod tests {
             mode: "go".into(),
             bypass: false,
             attachments: Vec::new(),
+            skills: Vec::new(),
         };
         harness.queue_pending_auth_turn("codex", turn("first message"));
         harness.queue_pending_auth_turn("codex", turn("second message"));
@@ -920,6 +923,7 @@ mod tests {
             mode: "go".into(),
             bypass: false,
             attachments: Vec::new(),
+            skills: Vec::new(),
         };
         let mut queued = harness.take_pending_auth_turns("codex");
         queued.push(turn("still-blocked"));

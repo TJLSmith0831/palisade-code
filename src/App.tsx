@@ -1,11 +1,9 @@
 import {
-  Fragment,
   lazy,
   memo,
   Suspense,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -53,16 +51,13 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCommand,
-  IconFile,
   IconPlayerPlay,
   IconFolder,
-  IconFolderSearch,
   IconFolders,
   IconGitBranch,
   IconLayoutBottombar,
   IconLayoutSidebar,
   IconLayoutSidebarRightFilled,
-  IconMessageCircle,
   IconPlayerStopFilled,
   IconRoute,
   IconSettings,
@@ -106,15 +101,10 @@ import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
 import {
   applyMention,
   displayMentions,
-  isPathQuery,
-  mentionAt,
-  mentionOptions as buildMentionOptions,
   mentionTarget,
-  shortPath,
-  splitPathQuery,
-  type MentionOption as MentionRow,
-  type MentionScope,
+  type MentionOption,
 } from "./mentions";
+import { handleMentionMenuKey, MentionMenu, useMentionMenu } from "./MentionMenu";
 import {
   handleSlashMenuKey,
   pickSkillIntoTray,
@@ -134,8 +124,6 @@ import {
 } from "./ComposerTray";
 import {
   commandTrigger,
-  buildPrompt,
-  parseSentPrompt,
   leadingCommand,
   chainCommands,
   isChainCommand,
@@ -230,7 +218,7 @@ import WorktreeModeBadge from "./WorktreeModeBadge";
 import ReviewPane, { type ReviewFile } from "./ReviewPane";
 import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
-import SessionList, { relativeTime } from "./SessionList";
+import SessionList from "./SessionList";
 import { VerifyBadge } from "./fleetBadges";
 import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
 import SearchPanel from "./SearchPanel";
@@ -305,7 +293,7 @@ type ChatSurfaceProps = {
   chains?: api.Chain[];
   draft: string;
   setDraft: (value: string) => void;
-  /** Skills picked into the composer tray; `buildPrompt` leads with them. */
+  /** Skills picked into the composer tray; sent apart from the text. */
   skills?: string[];
   setSkills?: (next: string[]) => void;
   /** Stored image paths waiting in the composer tray. */
@@ -842,10 +830,9 @@ export const ChatSurface = memo(
     // A sent turn shows the chips and images it was sent with. Memoized so
     // EventList (itself memoized) doesn't re-render every keystroke.
     const renderUserMessage = useCallback(
-      (item: { text: string; attachments?: string[] }) => {
-        // Installed skills count too: after a restart the agent hasn't
-        // re-advertised yet, and history should still show its chips.
-        const { skills: sent, text } = parseSentPrompt(item.text, menuCommands);
+      (item: { text: string; attachments?: string[]; skills?: string[] }) => {
+        const sent = item.skills ?? [];
+        const text = item.text;
         return (
           <>
             {sent.length > 0 && (
@@ -869,57 +856,19 @@ export const ChatSurface = memo(
       [menuCommands, installedSkills, project?.hash]
     );
 
-    // The `@` mention menu (#32). Unlike `/`, a mention is a reference inside
-    // a sentence — "compare @src/api.ts with @src/App.tsx" — so it opens
-    // wherever the caret is rather than only at the start of the draft, and
-    // the caret position is what decides which mention is being typed.
-    const [mentionIndex, setMentionIndex] = useState(0);
-    const [mentionScope, setMentionScope] = useState<MentionScope>("all");
-    const mentionMenuId = useId();
-    const mention = useMemo(
-      () => (commandMenuOpen ? null : mentionAt(draft, caret)),
-      [draft, caret, commandMenuOpen]
+    // The `@` menu (#32), in MentionMenu.tsx. Never open with the `/` menu.
+    const otherThreads = useMemo(
+      () => mentionThreads.filter((t) => t.id !== thread?.id),
+      [mentionThreads, thread?.id]
     );
-    // `@/…` and `@~/…` browse the disk outside the project, one folder at a time.
-    const pathQuery = mention && isPathQuery(mention.query) ? splitPathQuery(mention.query) : null;
-    const [pathEntries, setPathEntries] = useState<api.DirEntry[] | "error" | null>(null);
-    useEffect(() => {
-      if (!pathQuery) return;
-      let live = true;
-      setPathEntries(null);
-      api.listAnyDirectory(pathQuery.dir, pathQuery.filter.startsWith(".")).then(
-        (entries) => live && setPathEntries(entries),
-        () => live && setPathEntries("error")
-      );
-      return () => {
-        live = false;
-      };
-    }, [pathQuery?.dir, pathQuery?.filter.startsWith(".")]);
-    type MentionOption = MentionRow<ThreadMeta>;
-    const mentionOptions = useMemo(
-      (): MentionOption[] =>
-        mention
-          ? buildMentionOptions(mention.query, {
-              files: mentionFiles,
-              threads: mentionThreads.filter((t) => t.id !== thread?.id),
-              entries: Array.isArray(pathEntries) ? pathEntries : null,
-            }, mentionScope)
-          : [],
-      [mention?.query, mentionFiles, mentionThreads, thread?.id, pathEntries, mentionScope]
+    const mentions = useMentionMenu(
+      draft,
+      caret,
+      useMemo(() => ({ files: mentionFiles, threads: otherThreads }), [mentionFiles, otherThreads]),
+      commandMenuOpen
     );
-    const mentionMenuOpen = mention !== null;
-    const activeMention = mentionOptions[mentionIndex] ?? mentionOptions[0];
-    useEffect(() => {
-      if (mentionMenuOpen && activeMention) {
-        document.getElementById(`${mentionMenuId}-option-${mentionOptions.indexOf(activeMention)}`)?.scrollIntoView?.({ block: "nearest" });
-      }
-    }, [mentionMenuOpen, activeMention, mentionMenuId, mentionOptions]);
-    useEffect(() => {
-      setMentionIndex(0);
-    }, [mention?.query, mentionScope]);
-    useEffect(() => {
-      if (!mentionMenuOpen) setMentionScope("all");
-    }, [mentionMenuOpen]);
+    const mention = mentions.mention;
+    const mentionMenuOpen = mentions.open;
     // Walking the project tree costs a round trip, so it happens when the
     // menu first opens rather than on every keystroke or on mount.
     useEffect(() => {
@@ -939,7 +888,7 @@ export const ChatSurface = memo(
       });
     };
     /** Swap the typed fragment for what was picked and put the caret after it. */
-    const pickMention = async (option: MentionOption) => {
+    const pickMention = async (option: MentionOption<ThreadMeta>) => {
       if (!mention) return;
       let target: string;
       if (option.kind !== "browse") target = mentionTarget(option);
@@ -960,8 +909,8 @@ export const ChatSurface = memo(
     ) => setCaret(event.currentTarget.selectionStart ?? 0);
 
     // A chain rewrites the draft into its head pill (ACP-free: Palisade runs
-    // it). A skill leaves the sentence and joins the tray; `buildPrompt`
-    // puts it back at the head on send, where the agent will run it.
+    // it). A skill leaves the sentence and joins the tray; the backend puts
+    // it back at the head on send, where the agent will run it.
     const pickCommand = (command: api.AgentCommand) => {
       if (isChainCommand(command)) {
         setDraft(commandTrigger(command));
@@ -1872,136 +1821,7 @@ export const ChatSurface = memo(
               completing stays visible and in place while it filters. */}
           <SlashMenu menu={menu} onPick={pickCommand} />
 
-          {/* Scopes let large projects keep every matching thread reachable.
-              `@/` or `@~/` browses the disk directly. */}
-          {mentionMenuOpen && (
-            <Paper
-              withBorder
-              shadow="md"
-              radius="md"
-              className="ds-command-menu"
-              data-testid="mention-menu"
-            >
-              {!pathQuery && (
-                <div className="ds-mention-scopes" role="group" aria-label="Mention search scope">
-                  {(["all", "threads", "files"] as const).map((scope) => (
-                    <button
-                      key={scope}
-                      type="button"
-                      aria-pressed={mentionScope === scope}
-                      data-testid={`mention-scope-${scope}`}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => setMentionScope(scope)}
-                    >
-                      {scope === "all" ? "All" : scope === "threads" ? "Threads" : "Files"}
-                    </button>
-                  ))}
-                  <span className="ds-mention-scopes-hint">⌃Tab to switch</span>
-                </div>
-              )}
-              <div className="ds-command-menu-scroll" id={mentionMenuId} role="listbox" aria-label={pathQuery ? "Files on disk" : `${mentionScope} mentions`}>
-                {pathQuery ? (
-                  <div className="ds-command-menu-header" data-path title={pathQuery.dir}>
-                    <IconFolder size={12} />
-                    {shortPath(pathQuery.dir)}
-                  </div>
-                ) : null}
-                {!pathQuery && mentionOptions.every((o) => o.kind === "browse") && (
-                  <p className="ds-command-menu-empty">
-                    {mentionFiles.length === 0
-                      ? "Reading the project's files…"
-                      : `No ${mentionScope === "all" ? "files or threads" : mentionScope} match “${mention.query}”.`}
-                  </p>
-                )}
-                {!pathQuery && mentionOptions.length === 0 && (
-                  <p className="ds-command-menu-empty">{mention.query ? `No threads match “${mention.query}”.` : "No other threads yet."}</p>
-                )}
-                {pathQuery && pathEntries === null && (
-                  <p className="ds-command-menu-empty">Reading {pathQuery.dir}…</p>
-                )}
-                {pathQuery && pathEntries === "error" && (
-                  <p className="ds-command-menu-empty">Can't read {pathQuery.dir}.</p>
-                )}
-                {mentionOptions.map((option, index) => {
-                  const firstThread =
-                    option.kind === "thread" &&
-                    mentionOptions.findIndex((o) => o.kind === "thread") === index;
-                  const firstFile =
-                    option.kind === "file" &&
-                    mentionOptions.findIndex((o) => o.kind === "file") === index;
-                  const key =
-                    option.kind === "file"
-                      ? `f:${option.path}`
-                      : option.kind === "thread"
-                        ? `t:${option.thread.id}`
-                        : option.kind === "path"
-                          ? `p:${option.entry.path}`
-                          : "browse";
-                  return (
-                    <Fragment key={key}>
-                      {firstThread && (
-                        <div className="ds-command-menu-header">
-                          <IconMessageCircle size={12} />
-                          {mentionScope === "all" && !mention.query ? "Recent threads" : "Threads"}
-                        </div>
-                      )}
-                      {firstFile && (
-                        <div className="ds-command-menu-header">
-                          <IconFile size={12} />
-                          Files
-                        </div>
-                      )}
-                      <UnstyledButton
-                        id={`${mentionMenuId}-option-${index}`}
-                        role="option"
-                        aria-selected={option === activeMention}
-                        data-active={option === activeMention || undefined}
-                        className="ds-command-menu-row"
-                        data-testid="mention-row"
-                        data-kind={option.kind}
-                        onMouseEnter={() => setMentionIndex(index)}
-                        onClick={() => void pickMention(option)}
-                      >
-                        {option.kind === "file" && (
-                          <>
-                            <span className="ds-command-menu-name">
-                              {option.path.split("/").pop()}
-                            </span>
-                            <span className="ds-command-menu-desc">{option.path}</span>
-                          </>
-                        )}
-                        {option.kind === "thread" && (
-                          <>
-                            <span className="ds-command-menu-name">{option.thread.title}</span>
-                            <span className="ds-command-menu-desc">
-                              {relativeTime(option.thread.updatedAt)}
-                            </span>
-                          </>
-                        )}
-                        {option.kind === "path" && (
-                          <span className="ds-command-menu-name">
-                            {option.entry.is_dir ? (
-                              <IconFolder size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-                            ) : (
-                              <IconFile size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-                            )}
-                            {option.entry.name}
-                            {option.entry.is_dir ? "/" : ""}
-                          </span>
-                        )}
-                        {option.kind === "browse" && (
-                          <span className="ds-command-menu-name">
-                            <IconFolderSearch size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-                            Browse…
-                          </span>
-                        )}
-                      </UnstyledButton>
-                    </Fragment>
-                  );
-                })}
-              </div>
-            </Paper>
-          )}
+          <MentionMenu menu={mentions} onPick={(option) => void pickMention(option)} />
 
           {/* Worktree isolation, sitting next to the permission toggle because
               it is the same kind of decision: what this thread is allowed to
@@ -2251,47 +2071,15 @@ export const ChatSurface = memo(
                 }
                 // The mention menu owns the same keys the `/` menu does, and
                 // the two are never open at once.
-                if (mentionMenuOpen) {
-                  if (!pathQuery && event.key === "Tab" && event.ctrlKey) {
-                    event.preventDefault();
-                    const scopes: MentionScope[] = ["all", "threads", "files"];
-                    setMentionScope((scope) => scopes[(scopes.indexOf(scope) + (event.shiftKey ? scopes.length - 1 : 1)) % scopes.length]);
-                    return;
-                  }
-                  if (
-                    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                    mentionOptions.length > 0
-                  ) {
-                    event.preventDefault();
-                    const step = event.key === "ArrowDown" ? 1 : -1;
-                    setMentionIndex(
-                      (i) =>
-                        (i + step + mentionOptions.length) %
-                        mentionOptions.length
-                    );
-                    return;
-                  }
-                  if (
-                    ((event.key === "Tab" && !event.ctrlKey) ||
-                      (event.key === "Enter" && !event.shiftKey)) &&
-                    activeMention
-                  ) {
-                    event.preventDefault();
-                    void pickMention(activeMention);
-                    return;
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
+                if (
+                  handleMentionMenuKey(event, mentions, (option) => void pickMention(option), (m) => {
                     // Keep the text, drop the `@`, so Escape never destroys
                     // what the user typed — same contract as the `/` menu.
-                    const end = mention.start + 1 + mention.query.length;
-                    setDraft(
-                      draft.slice(0, mention.start) + draft.slice(mention.start + 1)
-                    );
-                    setCaret(end - 1);
-                    return;
-                  }
-                }
+                    setDraft(draft.slice(0, m.start) + draft.slice(m.start + 1));
+                    setCaret(m.start + m.query.length);
+                  })
+                )
+                  return;
                 // The menu owns the arrows, Tab, Enter and Escape while it is
                 // open — otherwise Enter would send a half-typed command name.
                 if (
@@ -2320,8 +2108,8 @@ export const ChatSurface = memo(
               role="combobox"
               aria-autocomplete="list"
               aria-expanded={commandMenuOpen || mentionMenuOpen}
-              aria-controls={commandMenuOpen ? menu.id : mentionMenuOpen ? mentionMenuId : undefined}
-              aria-activedescendant={commandMenuOpen ? menu.activeId : mentionMenuOpen && activeMention ? `${mentionMenuId}-option-${mentionOptions.indexOf(activeMention)}` : undefined}
+              aria-controls={commandMenuOpen ? menu.id : mentionMenuOpen ? mentions.id : undefined}
+              aria-activedescendant={commandMenuOpen ? menu.activeId : mentionMenuOpen ? mentions.activeId : undefined}
               data-testid="composer-input"
               minRows={1}
               maxRows={6}
@@ -4695,6 +4483,14 @@ export default function App() {
   const [composerAttachments, setComposerAttachments] = useState<string[]>([]);
   const [fleetAttachments, setFleetAttachments] = useState<string[]>([]);
   const [fleetFiles, setFleetFiles] = useState<string[]>([]);
+  // A stored attachment is only readable by its own project, so the trays
+  // never outlive a project switch.
+  const projectHash = project?.hash;
+  useEffect(() => {
+    setComposerAttachments([]);
+    setFleetAttachments([]);
+    setFleetFiles([]);
+  }, [projectHash]);
   // What Fleet's `/` menu offers: every skill any live session advertised,
   // once each. A new run has no session of its own to ask yet.
   const fleetSkills = useMemo(() => {
@@ -4703,7 +4499,7 @@ export default function App() {
       for (const command of list) if (!byName.has(command.name)) byName.set(command.name, command);
     return [...byName.values()];
   }, [commandsByThread]);
-  // Skills picked into the thread composer's tray (see `buildPrompt`).
+  // Skills picked into the thread composer's tray (sent as `skills`).
   const [composerSkills, setComposerSkills] = useState<string[]>([]);
   // Per thread: whether its live agent takes image blocks. Unknown (no
   // session yet) counts as yes — every agent Palisade has probed does.
@@ -5552,7 +5348,8 @@ export default function App() {
           queued.text,
           mode,
           prefs.bypass,
-          queued.attachments
+          queued.attachments,
+          queued.skills
         );
         // Only the thread the user is actually looking at gets its transcript
         // patched; a background thread's history is re-read when it is opened.
@@ -5573,25 +5370,25 @@ export default function App() {
   const queue = useMessageQueue(busyThreads, sendQueued);
 
   const onSend = async () => {
-    const typed = draft.trim();
+    const text = draft.trim();
     const attachments = composerAttachments;
-    if (!project || (!typed && !composerSkills.length && !attachments.length)) return;
-    // Skills in the tray lead the prompt wherever they were picked.
-    const text = buildPrompt(typed, composerSkills);
+    // Tray skills travel beside the text; the backend leads the prompt with them.
+    const skills = composerSkills;
+    if (!project || (!text && !skills.length && !attachments.length)) return;
     setDraft("");
     setComposerSkills([]);
     setComposerAttachments([]);
     // /go and /propose are the same functions the buttons call. A turn that
-    // carries images is a message, never one of these — the images would
-    // otherwise vanish with the switch.
-    if (!attachments.length) {
+    // carries images or skills is a message, never one of these — they
+    // would otherwise vanish with the switch.
+    if (!attachments.length && !skills.length) {
       if (text === "/go") return onGo();
       if (text === "/spec") return onSpec();
       if (text === "/propose") return onPropose();
     }
     // Mid-turn: queue instead of dropping the text on the floor (#26).
     if (thread && busyThreads.has(thread.id)) {
-      queue.enqueue(project.hash, thread.id, text, attachments);
+      queue.enqueue(project.hash, thread.id, text, attachments, skills);
       return;
     }
     // `|=<chain> <seed>` runs a saved chain instead of prompting the agent
@@ -5601,10 +5398,12 @@ export default function App() {
     // needs a thread to run on, and go-mode's composer is exactly where none
     // exists yet, so bailing here made the first `|=` typed into a fresh
     // composer do nothing at all.
-    const invocation = parseChainInvocation(
-      text,
-      chains.map((c) => c.name)
-    );
+    const invocation = skills.length
+      ? null
+      : parseChainInvocation(
+          text,
+          chains.map((c) => c.name)
+        );
     const chainToRun =
       invocation && chains.some((c) => c.name === invocation.name)
         ? invocation
@@ -5650,6 +5449,7 @@ export default function App() {
       mode: activeThread.currentMode,
       content: text,
       attachments,
+      skills,
     };
     setMessages((prev) => [...prev, optimistic]);
     try {
@@ -5667,7 +5467,8 @@ export default function App() {
         text,
         activeThread.currentMode,
         prefs.bypass,
-        attachments
+        attachments,
+        skills
       );
       setMessages((prev) => {
         // A fast turn may have already refreshed history (which includes
@@ -6186,7 +5987,7 @@ export default function App() {
   /** A run started from the board is the same first send the composer does:
    *  create the thread, put the picks on it, send, and land on it. */
   const onNewRun = useCallback(
-    async ({ prompt, agentId, model, mode, isolated, attachments = [] }: NewRunInput) => {
+    async ({ prompt, agentId, model, mode, isolated, attachments = [], skills = [] }: NewRunInput) => {
       if (!project) return;
       const hash = project.hash;
       setFleetAttachments([]);
@@ -6216,7 +6017,8 @@ export default function App() {
           prompt,
           mode,
           prefs.bypass,
-          attachments
+          attachments,
+          skills
         );
         setMessages((prev) =>
           prev.some((m) => m.seq === sent.seq) ? prev : [...prev, sent]
