@@ -101,10 +101,9 @@ import { useMessageQueue, type QueuedMessage } from "./hooks/useMessageQueue";
 import {
   applyMention,
   displayMentions,
-  mentionTarget,
   type MentionOption,
 } from "./mentions";
-import { handleMentionMenuKey, MentionMenu, useMentionMenu } from "./MentionMenu";
+import { handleMentionMenuKey, MentionMenu, useMentionMenu, withMentionTarget } from "./MentionMenu";
 import {
   handleSlashMenuKey,
   pickSkillIntoTray,
@@ -339,7 +338,7 @@ type ChatSurfaceProps = {
   onSpecTypeBack?: () => void;
   /** D5: spec-type selection starts grill-explore. The card is the framing;
    *  `description` is what the user actually asked for (Kiro's model). */
-  onPickSpecType?: (specType: string, description: string) => void;
+  onPickSpecType?: (specType: string, description: string, skills: string[]) => void;
   /** D9: composer-toggle framing menu — shown when toggling an existing thread to spec mode. */
   composerSpecTypePicker?: boolean;
   /** D19/D20: true during async thread creation — prevents mode picker flash. */
@@ -353,7 +352,7 @@ type ChatSurfaceProps = {
   /** D21: set the framing-menu model (stored locally, persisted on thread creation). */
   onPickFramingModel?: (modelId: string) => void;
   /** D9: spec-type selection from the composer-toggle framing menu. */
-  onPickComposerSpecType?: (specType: string, description: string) => void;
+  onPickComposerSpecType?: (specType: string, description: string, skills: string[]) => void;
   /** D13: Back button on the composer-toggle framing menu returns to the chat. */
   onComposerSpecTypeBack?: () => void;
   onPickMode: (mode: api.Mode) => void;
@@ -711,7 +710,17 @@ export const ChatSurface = memo(
     // D6/D15: "Other" spec-type text input state — local to the framing menu.
     // What the user typed, and which card frames it (#35).
     const [otherSpecText, setOtherSpecText] = useState("");
+    const [specSkills, setSpecSkills] = useState<string[]>([]);
+    const [specCaret, setSpecCaret] = useState(0);
+    const specInputRef = useRef<HTMLTextAreaElement | null>(null);
     const [specFraming, setSpecFraming] = useState<string | null>(null);
+    useEffect(() => {
+      if (!specTypePicker && !composerSpecTypePicker) return;
+      setSpecFraming(null);
+      setOtherSpecText("");
+      setSpecSkills([]);
+      setSpecCaret(0);
+    }, [specTypePicker, composerSpecTypePicker]);
     const specRequestRef = useRef<HTMLDivElement | null>(null);
     // The field opens below the fold on a short window, and `autoFocus`
     // alone does not scroll a flex scroll container — the user was left
@@ -819,10 +828,11 @@ export const ChatSurface = memo(
       [commands, draft]
     );
     // The `/` menu, shared with the Fleet composer (SkillMenu.tsx).
-    const installedSkills = useInstalledSkills(executor);
+    const menuExecutor = framingExecutor ?? executor;
+    const installedSkills = useInstalledSkills(menuExecutor);
     const menuCommands = useMemo(
-      () => withInstalled(commands, installedSkills, executor),
-      [commands, installedSkills, executor]
+      () => withInstalled(commands, installedSkills, menuExecutor),
+      [commands, installedSkills, menuExecutor]
     );
     const menu = useSlashMenu(draft, caret, menuCommands, !!chipCommand);
     const commandMenuOpen = menu.open;
@@ -865,15 +875,46 @@ export const ChatSurface = memo(
       draft,
       caret,
       useMemo(() => ({ files: mentionFiles, threads: otherThreads }), [mentionFiles, otherThreads]),
-      commandMenuOpen
+      commandMenuOpen,
+      project?.hash
     );
     const mention = mentions.mention;
     const mentionMenuOpen = mentions.open;
+    const specMenu = useSlashMenu(otherSpecText, specCaret, menuCommands.filter((c) => !isChainCommand(c)));
+    const specMentions = useMentionMenu(
+      otherSpecText,
+      specCaret,
+      useMemo(() => ({ files: mentionFiles, threads: otherThreads }), [mentionFiles, otherThreads]),
+      specMenu.open,
+      project?.hash
+    );
     // Walking the project tree costs a round trip, so it happens when the
     // menu first opens rather than on every keystroke or on mount.
     useEffect(() => {
-      if (mentionMenuOpen) onOpenMentions?.();
-    }, [mentionMenuOpen, onOpenMentions]);
+      if (mentionMenuOpen || specMentions.open) onOpenMentions?.();
+    }, [mentionMenuOpen, specMentions.open, onOpenMentions]);
+    const placeSpecCaret = (text: string, at: number) => {
+      setOtherSpecText(text);
+      setSpecCaret(at);
+      requestAnimationFrame(() => {
+        specInputRef.current?.focus();
+        specInputRef.current?.setSelectionRange(at, at);
+      });
+    };
+    const pickSpecSkill = (command: api.AgentCommand) => {
+      if (!specMenu.slash) return;
+      const next = pickSkillIntoTray(otherSpecText, specMenu.slash, specSkills, command.name);
+      setSpecSkills(next.skills);
+      placeSpecCaret(next.text, next.caret);
+    };
+    const pickSpecMention = (option: MentionOption<ThreadMeta>) => {
+      const mention = specMentions.mention;
+      if (!mention) return;
+      withMentionTarget(option, (target) => {
+        const next = applyMention(otherSpecText, mention, target);
+        placeSpecCaret(next.text, next.caret);
+      });
+    };
 
     /** Put `text` in the draft with the caret at `at`, after React writes it. */
     const placeCaret = (text: string, at: number) => {
@@ -888,20 +929,12 @@ export const ChatSurface = memo(
       });
     };
     /** Swap the typed fragment for what was picked and put the caret after it. */
-    const pickMention = async (option: MentionOption<ThreadMeta>) => {
+    const pickMention = (option: MentionOption<ThreadMeta>) => {
       if (!mention) return;
-      let target: string;
-      if (option.kind !== "browse") target = mentionTarget(option);
-      else {
-        // Several files at once: the first replaces the typed `@`, the rest
-        // follow it as mentions of their own.
-        const picked = await open({ multiple: true, directory: false });
-        const list = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
-        if (list.length === 0) return;
-        target = list.join(" @");
-      }
-      const next = applyMention(draft, mention, target);
-      placeCaret(next.text, next.caret);
+      withMentionTarget(option, (target) => {
+        const next = applyMention(draft, mention, target);
+        placeCaret(next.text, next.caret);
+      });
     };
     /** Keep `caret` honest for arrow keys, clicks and selections alike. */
     const trackCaret = (
@@ -1265,15 +1298,15 @@ export const ChatSurface = memo(
       SPEC_FRAMINGS.find((f) => f.id === specFraming) ?? null;
 
     const specTypeMenu = (
-      onPick: (specType: string, description: string) => void,
+      onPick: (specType: string, description: string, skills: string[]) => void,
       onBack?: () => void
     ) => (
           <div
-            className="ds-new-thread-picker"
+            className="ds-new-thread-picker ds-spec-type-picker"
             data-testid="spec-type-picker"
             onKeyDown={(event) => {
               // Esc backs out, the same as the button at the bottom.
-              if (event.key === "Escape" && onBack) {
+              if (event.key === "Escape" && !event.defaultPrevented && onBack) {
                 event.preventDefault();
                 onBack();
               }
@@ -1318,33 +1351,63 @@ export const ChatSurface = memo(
             </div>
             {activeFraming && (
               <div ref={specRequestRef} className="ds-spec-request">
+                {specSkills.length > 0 && (
+                  <div className="ds-composer-tray" data-testid="composer-tray">
+                    {specSkills.map((name) => (
+                      <SkillChip key={name} name={name} commands={menuCommands} installed={installedSkills}
+                        onRemove={() => setSpecSkills(specSkills.filter((skill) => skill !== name))} />
+                    ))}
+                  </div>
+                )}
+                <div className="ds-spec-input-wrap">
+                <SlashMenu menu={specMenu} onPick={pickSpecSkill} />
+                <MentionMenu menu={specMentions} onPick={(option) => void pickSpecMention(option)} />
                 <Textarea
+                  ref={specInputRef}
                   value={otherSpecText}
-                  onChange={(event) =>
-                    setOtherSpecText(event.currentTarget.value)
-                  }
+                  onChange={(event) => {
+                    setOtherSpecText(event.currentTarget.value);
+                    setSpecCaret(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+                  }}
+                  onSelect={(event) => setSpecCaret(event.currentTarget.selectionStart ?? 0)}
                   onKeyDown={(event) => {
+                    if (event.key === "Backspace" && specSkills.length > 0 &&
+                        event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
+                      event.preventDefault();
+                      setSpecSkills(specSkills.slice(0, -1));
+                      return;
+                    }
+                    if (handleMentionMenuKey(event, specMentions, (option) => void pickSpecMention(option), (mention) =>
+                      placeSpecCaret(otherSpecText.slice(0, mention.start) + otherSpecText.slice(mention.start + 1), mention.start + mention.query.length))) return;
+                    if (handleSlashMenuKey(event, specMenu, pickSpecSkill, (token) =>
+                      placeSpecCaret(withoutSigil(otherSpecText, token), Math.max(0, specCaret - token.sigil.length)))) return;
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       const trimmed = otherSpecText.trim();
                       if (trimmed && providerSelected)
-                        onPick(activeFraming.id, trimmed);
+                        onPick(activeFraming.id, trimmed, specSkills);
                     }
                   }}
                   label={activeFraming.label}
-                  description="Enter to start · Shift+Enter for a new line"
+                  description="Enter to start · ⇧Enter new line · / skills · @ references"
                   placeholder={activeFraming.placeholder}
                   data-testid="other-spec-input"
-                  minRows={2}
-                  maxRows={6}
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={specMenu.open || specMentions.open}
+                  aria-controls={specMenu.open ? specMenu.id : specMentions.open ? specMentions.id : undefined}
+                  aria-activedescendant={specMenu.open ? specMenu.activeId : specMentions.open ? specMentions.activeId : undefined}
+                  rows={5}
+                  resize="vertical"
                   autoFocus
                   styles={{ root: { width: "100%" } }}
                 />
+                </div>
                 <Button
                   size="sm"
                   data-testid="other-spec-submit"
                   disabled={!otherSpecText.trim() || !providerSelected}
-                  onClick={() => onPick(activeFraming.id, otherSpecText.trim())}
+                  onClick={() => onPick(activeFraming.id, otherSpecText.trim(), specSkills)}
                   leftSection={<IconListCheck size={14} />}
                   style={{ alignSelf: "flex-start" }}
                 >
@@ -1369,7 +1432,7 @@ export const ChatSurface = memo(
             <strong>New thread</strong>
           </div>
           {specTypeMenu(
-            (specType, description) => onPickSpecType?.(specType, description),
+            (specType, description, skills) => onPickSpecType?.(specType, description, skills),
             onSpecTypeBack
           )}
         </>
@@ -1386,8 +1449,8 @@ export const ChatSurface = memo(
             <strong data-testid="thread-title">{thread.title}</strong>
           </div>
           {specTypeMenu(
-            (specType, description) =>
-              onPickComposerSpecType?.(specType, description),
+            (specType, description, skills) =>
+              onPickComposerSpecType?.(specType, description, skills),
             onComposerSpecTypeBack
           )}
         </>
@@ -4331,7 +4394,7 @@ export default function App() {
   // D5/D19: spec-type selection creates the thread + fires grill-explore with
   // the spec type as the user turn body. "Other" is handled separately (D6,
   // Group 9) — this handler covers Feature and Bugfix.
-  const onPickSpecType = async (specType: string, description: string) => {
+  const onPickSpecType = async (specType: string, description: string, skills: string[]) => {
     if (!project) return;
     // Optimistic: create the thread, swap to chat immediately, then fire
     // specMode in the background. The agent's response streams in via events.
@@ -4360,12 +4423,13 @@ export default function App() {
           role: "user",
           mode: "spec",
           content: description,
+          skills,
         },
       ]);
       // Fire specMode without awaiting — don't block the UI. The busy state
       // stays true until the agent's turn ends (ExecutorEvent::Done clears it).
       api
-        .specMode(project.hash, updated.id, specType, description, false, true)
+        .specMode(project.hash, updated.id, specType, description, false, true, skills)
         .then((meta) => {
           setThreads((prev) => prev.map((t) => (t.id === meta.id ? meta : t)));
           if (current.current.thread?.id === meta.id) setThread(meta);
@@ -5284,7 +5348,8 @@ export default function App() {
   // thread already exists, so this calls specMode directly (no createThread).
   const onPickComposerSpecType = async (
     specType: string,
-    description: string
+    description: string,
+    skills: string[]
   ) => {
     const { project, thread } = current.current;
     if (!project || !thread) return;
@@ -5294,7 +5359,7 @@ export default function App() {
     // Fire specMode without awaiting — busy stays true until the agent's
     // turn ends (ExecutorEvent::Done clears it).
     api
-      .specMode(project.hash, thread.id, specType, description, prefs.bypass, true)
+      .specMode(project.hash, thread.id, specType, description, prefs.bypass, true, skills)
       .then(() => refresh())
       .catch((err) => {
         setBusy(false);
@@ -7179,6 +7244,9 @@ export default function App() {
                   error={fleet.error}
                   projectName={project?.displayName}
                   projectHash={project?.hash}
+                  mentionThreads={threads}
+                  mentionFiles={paletteFiles}
+                  onOpenMentions={ensurePaletteFiles}
                   agents={fleetAgents}
                   liveThreadIds={busyThreads}
                   titlePendingIds={titlePending}

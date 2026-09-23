@@ -1948,8 +1948,10 @@ async fn spec_mode(
     description: Option<String>,
     bypass: bool,
     start: bool,
+    skills: Option<Vec<String>>,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
+        let skills = skills.unwrap_or_default();
         let harness: tauri::State<'_, Harness> = app.state();
         let meta = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "spec")?;
         // Persist the spec_type framing on the thread (D11) — survives restarts
@@ -1976,16 +1978,17 @@ async fn spec_mode(
                 // the skill instructions and the framing guidance go to the
                 // agent but are not shown in the chat. Older threads framed
                 // before a request was required fall back to the label.
-                store::append_message(
+                store::append_row(
                     &palisade_home(),
                     &project_hash,
                     &thread_id,
-                    "user",
-                    "spec",
-                    request.unwrap_or(&spec_type),
-                    Some(&id),
+                    store::Message {
+                        session_id: Some(id.clone()),
+                        skills: skills.clone(),
+                        ..store::Message::row("user", "spec", request.unwrap_or(&spec_type))
+                    },
                 )?;
-                send_to(&harness, &project_hash, &id, &prompt)?;
+                send_to(&harness, &project_hash, &id, UserTurn { content: &prompt, attachments: &[], skills: &skills })?;
             }
         }
         Ok(meta)

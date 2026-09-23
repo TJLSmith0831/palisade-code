@@ -6967,6 +6967,38 @@ button.ds-onboarding-status {
   gap: 8px;
   width: 100%;
   margin-top: 12px;
+  position: relative;
+  max-width: 560px;
+}
+
+.ds-spec-type-picker .ds-mode-picker {
+  flex-direction: column;
+  max-width: 560px;
+}
+
+.ds-spec-type-picker .ds-mode-card {
+  flex: none;
+  gap: 3px;
+  padding: 10px 14px;
+  border-radius: 8px;
+}
+
+.ds-spec-type-picker .ds-spec-note {
+  max-width: 560px;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.ds-spec-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.ds-spec-input-wrap .mantine-Textarea-input {
+  min-height: 120px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--editor-bg);
 }
 
 .ds-spec-back {
@@ -7090,9 +7122,12 @@ button.ds-onboarding-status {
   background: var(--surface);
 }
 
-/* The Fleet composer sits at the top of the board, so its `/` menu opens
-   downward over the run list instead of up into the header. */
-.fleet-composer .ds-command-menu {
+/* Keep completion next to the growing input, above the action controls. */
+.fleet-prompt-wrap {
+  position: relative;
+}
+
+.fleet-prompt-wrap .ds-command-menu {
   top: calc(100% + 6px);
   bottom: auto;
 }
@@ -7113,7 +7148,6 @@ button.ds-onboarding-status {
   background: var(--editor-bg);
   font-size: 13px;
   line-height: 1.5;
-  resize: vertical;
   transition-property: border-color, box-shadow;
   transition-duration: 150ms;
   transition-timing-function: ease-out;

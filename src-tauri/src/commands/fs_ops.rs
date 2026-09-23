@@ -74,16 +74,23 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
     }
 }
 
-/// One directory anywhere on disk, for the composer's `@~/…` and `@/…`
-/// mentions (files outside the project). Read-only and one level deep; the
-/// entries carry absolute paths, which is what the agent is sent.
+fn resolve_browse_dir(path: &str, root: Option<&Path>) -> Res<PathBuf> {
+    let target = expand_home(path);
+    let target = if target.is_absolute() { target } else {
+        root.ok_or("relative path needs a project")?.join(target)
+    };
+    target.canonicalize().map_err(|e| crate::PalisadeError::from(format!("cannot resolve directory: {e}")))
+}
+
+/// One directory anywhere on disk, including `../` relative to the project.
+/// Read-only and one level deep; entries carry absolute paths for the agent.
 #[tauri::command]
-pub async fn list_any_directory(path: String, include_hidden: bool) -> Res<Vec<DirEntry>> {
+pub async fn list_any_directory(path: String, include_hidden: bool, project_hash: Option<String>) -> Res<Vec<DirEntry>> {
     tokio::task::spawn_blocking(move || {
-        let target = expand_home(&path);
-        if !target.is_absolute() {
-            return Err("path must start with / or ~".into());
-        }
+        let root = if expand_home(&path).is_absolute() { None } else {
+            Some(project_root(project_hash.as_deref().ok_or("relative path needs a project")?)?)
+        };
+        let target = resolve_browse_dir(&path, root.as_deref())?;
         let mut entries: Vec<DirEntry> = Vec::new();
         for entry in std::fs::read_dir(&target).map_err(|e| crate::PalisadeError::from(format!("cannot read directory: {e}")))? {
             let Ok(entry) = entry else { continue };
@@ -661,6 +668,16 @@ mod tests {
         let error = check_not_stale(&file, Some("line one\n"), "notes.txt").unwrap_err();
         assert!(error.starts_with(CONFLICT_PREFIX), "frontend keys off this prefix: {error}");
         assert!(error.contains("notes.txt"), "got {error}");
+    }
+
+    #[test]
+    fn browse_parent_resolves_from_the_project_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let project = parent.path().join("project");
+        let sibling = parent.path().join("palisade-website");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&sibling).unwrap();
+        assert_eq!(resolve_browse_dir("../palisade-website", Some(&project)).unwrap(), sibling.canonicalize().unwrap());
     }
 
     #[test]

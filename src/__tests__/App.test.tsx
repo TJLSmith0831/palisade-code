@@ -3862,6 +3862,7 @@ describe("Workspace shell", () => {
         // The framing menu is the deliberate "start" act — this is the one
         // path that may fire grill-explore (#17).
         start: true,
+        skills: [],
       },
     ]);
     // The thread title appears — the transition completed.
@@ -6163,6 +6164,54 @@ describe("Mode toggle (#17)", () => {
     expect(specMode.specType).toBe("Feature");
     expect(specMode.description).toBe("add a CSV export");
     unmount();
+  });
+
+  it("carries skills and file mentions through the Spec framing request", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    const invoke = trackedInvoke(calls, { specType: null });
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "list_skills") return Promise.resolve([{ name: "tdd", path: "/skills/tdd", owner: "agents" }]);
+      if (cmd === "list_all_files") return Promise.resolve(["src/App.tsx"]);
+      return invoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    await toggle(/Spec/);
+    fireEvent.click(await screen.findByTestId("spec-type-feature"));
+    const input = screen.getByTestId("other-spec-input") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "fix /td" } });
+    fireEvent.select(input, { target: { selectionStart: 7 } });
+    expect(await screen.findByTestId("command-menu")).toHaveTextContent("/tdd");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.getByTestId("spec-type-picker")).toBeDefined();
+    fireEvent.change(input, { target: { value: "fix /td" } });
+    fireEvent.select(input, { target: { selectionStart: 7 } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByTestId("composer-chip")).toHaveTextContent("/tdd");
+    fireEvent.change(input, { target: { value: "fix @App" } });
+    fireEvent.select(input, { target: { selectionStart: 8 } });
+    const mention = await screen.findByTestId("mention-menu");
+    fireEvent.click(within(mention).getByText("App.tsx").closest("[data-testid='mention-row']")!);
+    expect(input.value).toBe("fix @src/App.tsx ");
+    fireEvent.click(screen.getByTestId("other-spec-submit"));
+    await waitFor(() => expect(calls.find(([cmd]) => cmd === "spec_mode")?.[1]).toMatchObject({
+      description: "fix @src/App.tsx",
+      skills: ["tdd"],
+    }));
+  });
+
+  it("starts a fresh Spec framing draft when the picker is reopened", async () => {
+    invokeMock.mockImplementation(trackedInvoke([], { specType: null }));
+    render(<App />);
+    await openProject();
+    await toggle(/Spec/);
+    fireEvent.click(await screen.findByTestId("spec-type-feature"));
+    fireEvent.change(screen.getByTestId("other-spec-input"), { target: { value: "first request" } });
+    fireEvent.click(screen.getByTestId("spec-type-back"));
+    await toggle(/Spec/);
+    expect(screen.queryByTestId("other-spec-input")).toBeNull();
+    fireEvent.click(screen.getByTestId("spec-type-feature"));
+    expect(screen.getByTestId("other-spec-input")).toHaveValue("");
   });
 });
 

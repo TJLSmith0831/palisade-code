@@ -27,6 +27,7 @@ describe("api.specMode", () => {
       description: "a CSV export",
       bypass: false,
       start: true,
+      skills: [],
     });
   });
 });
