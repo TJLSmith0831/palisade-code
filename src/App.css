@@ -3362,11 +3362,18 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   background: var(--editor-bg);
+  /* When chat takes the whole row the column is squeezed to 0px; without
+     this its tab-bar icons still paint, over the side panel's title. */
+  overflow: clip;
 }
 
 .ds-chat-rail {
   width: var(--panel-w, 300px);
-  flex-shrink: 0;
+  /* Keeps its dragged width while it fits, and gives way when it doesn't.
+     With shrink off, opening a side panel on a narrower window left the
+     chat at full width inside a row that had shrunk around it: the messages
+     and composer ran underneath the Specs panel. */
+  flex-shrink: 1;
   /* Without min-width:0 a long chat line refuses to shrink below its
      content and shoves the rail and its panel off the window edge. */
   min-width: 0;
@@ -3477,7 +3484,10 @@ input[type="checkbox"] {
   border-left: none;
   border-right: 1px solid var(--border);
 }
-[data-preset="vibe"] .ds-editor-col { order: 1; flex: 1 1 auto; }
+/* A zero basis: the editor takes whatever chat leaves. With `auto` its
+   content width set the basis, so when the row overflowed it out-weighed
+   the chat and squeezed it to a sliver instead of yielding itself. */
+[data-preset="vibe"] .ds-editor-col { order: 1; flex: 1 1 0%; }
 
 /* Editor column collapsed (Vibe's mirror of Editor's chat collapse): chat is
    sized from its own resizable, so without this it keeps its 520px and leaves

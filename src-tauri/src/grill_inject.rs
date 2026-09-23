@@ -75,11 +75,50 @@ pub fn build_prompt(mode: &str, has_change: bool, user_message: &str) -> String 
     }
 }
 
+/// Whether `text` was built by [`inject_skill`] — it opens with a bundled
+/// grill skill's frontmatter. Lets a send path avoid adding a second copy.
+pub fn leads_with_skill(text: &str) -> bool {
+    text.starts_with("---\nname: grill-")
+}
+
+/// The context a plain Spec-mode turn carries: the spec-stage skill plus a
+/// directive that it governs this turn. The bare skill text alone was read as
+/// reference — Sonnet scaffolded the app and the write guard cancelled the
+/// turn — so the directive says plainly what Spec mode may and may not do.
+pub fn spec_turn_context(has_change: bool) -> Option<String> {
+    let skill = GrillSkill::for_mode("spec", has_change)?;
+    Some(format!(
+        "<palisade-mode name=\"spec\">\nThis thread is in Palisade's Spec mode. Handle the user's message below by following the {} skill: explore and write the spec, never implement. Only files under `openspec/` can be written — any other file write cancels the turn — and do not scaffold, install or generate code through the shell either. Building starts when the user switches to Go.\n</palisade-mode>\n\n{}",
+        skill.label(),
+        skill.content()
+    ))
+}
+
 // ------------------------------------------------------------------ tests
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plain Spec turn's context names the stage skill and says it governs
+    /// the turn; an open change moves it from explore to propose.
+    #[test]
+    fn spec_turn_context_directs_the_agent_to_the_stage_skill() {
+        let explore = spec_turn_context(false).unwrap();
+        assert!(explore.contains("following the grill-explore skill"), "{explore}");
+        assert!(explore.contains("name: grill-explore"), "skill body missing: {explore}");
+        assert!(explore.contains("Only files under `openspec/`"), "write rule missing: {explore}");
+        let propose = spec_turn_context(true).unwrap();
+        assert!(propose.contains("name: grill-propose"), "{propose}");
+    }
+
+    /// `leads_with_skill` recognises exactly what `inject_skill` produces.
+    #[test]
+    fn leads_with_skill_matches_injected_prompts_only() {
+        assert!(leads_with_skill(&build_prompt("spec", true, "grill-propose")));
+        assert!(!leads_with_skill("build a landing page"));
+        assert!(!leads_with_skill(&spec_turn_context(false).unwrap()), "the directive wrapper is not a bare skill");
+    }
 
     // --------------------------------------------------------- 6.1: spec-mode → grill-explore
 

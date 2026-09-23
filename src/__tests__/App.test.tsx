@@ -1024,6 +1024,56 @@ describe("New thread always starts a new thread", () => {
     fireEvent.click(await screen.findByTestId("new-thread"));
     expect(await screen.findByTestId("mode-picker")).toBeDefined();
   });
+
+  it("opening a thread closes a half-finished Spec framing menu", async () => {
+    // A framing menu left open used to sit over every thread opened after
+    // it — a Fleet run landed on the menu instead of its own chat.
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads")
+          return Promise.resolve([
+            {
+              id: "t1",
+              projectHash: "proj-1",
+              title: "Older conversation",
+              createdAt: "2026-08-06T00:00:00Z",
+              updatedAt: "2026-08-06T00:00:00Z",
+              currentMode: "spec",
+              openSpecChangeName: null,
+            },
+          ]);
+        if (cmd === "read_thread")
+          return Promise.resolve([
+            { seq: 1, ts: "2026-08-06T00:00:00Z", role: "user", mode: "spec", content: "build the landing page" },
+          ]);
+        if (cmd === "preflight")
+          return Promise.resolve({
+            agents: [{ id: "claude", name: "Claude Code", cmd: "claude" }],
+            selected: "claude",
+            openspec: true,
+            grillApply: true,
+            ponytail: true,
+            ready: true,
+            warnings: [],
+            checkedAt: "2026-08-06T00:00:00Z",
+          });
+        return defaultInvoke(cmd, args);
+      }
+    );
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("rail-history"));
+    fireEvent.click(await screen.findByTestId("new-thread"));
+    fireEvent.click(await screen.findByTestId("pick-spec"));
+    expect(await screen.findByTestId("spec-type-picker")).toBeDefined();
+
+    fireEvent.click(
+      within(screen.getByTestId("session-list")).getByText("Older conversation")
+    );
+
+    expect(await screen.findByText("build the landing page")).toBeDefined();
+    expect(screen.queryByTestId("spec-type-picker")).toBeNull();
+  });
 });
 
 describe("Picking a provider/model before the thread exists", () => {

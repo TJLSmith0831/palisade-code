@@ -25,7 +25,7 @@ use crate::locks::MutexExt;
 /// a non-zero exit but "we can't tell" for the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenSpecError {
-    /// No `openspec` on PATH — nothing ran.
+    /// Neither `openspec` nor `npx` on PATH — nothing ran.
     NotInstalled,
     /// The binary is there but wouldn't start.
     Spawn(String),
@@ -39,7 +39,7 @@ pub enum OpenSpecError {
 impl fmt::Display for OpenSpecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotInstalled => write!(f, "`openspec` is not on PATH"),
+            Self::NotInstalled => write!(f, "`openspec` is not on PATH, and there is no `npx` to fetch it"),
             Self::Spawn(e) => write!(f, "couldn't run `openspec`: {e}"),
             Self::TimedOut { seconds } => write!(f, "`openspec` timed out after {seconds}s"),
             Self::Exit { code, output } => {
@@ -64,15 +64,66 @@ pub trait OpenSpecAdapter: Send + Sync + 'static {
     fn archive(&self, project_root: &Path, name: &str) -> OpenSpecResult;
 }
 
+/// The newest mtime anywhere under `openspec/`. The folder's own mtime only
+/// moves when a direct child is added or removed, so a change the agent
+/// writes into `openspec/changes/<name>/` left the cache serving the empty
+/// list from before it existed — the Specs pane stayed blank for the whole
+/// Spec session. Walking the tree also catches in-place edits to a file.
+/// ponytail: full stat walk per call; ~350 entries on this repo's own tree.
 fn openspec_dir_mtime(project_root: &Path) -> Option<SystemTime> {
-    fs::metadata(project_root.join("openspec")).ok()?.modified().ok()
+    fn newest(path: &Path) -> Option<SystemTime> {
+        let meta = fs::symlink_metadata(path).ok()?;
+        let mut latest = meta.modified().ok();
+        if meta.is_dir() {
+            for entry in fs::read_dir(path).ok()?.flatten() {
+                latest = latest.max(newest(&entry.path()));
+            }
+        }
+        latest
+    }
+    newest(&project_root.join("openspec"))
 }
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The OpenSpec release Palisade runs when the user has none installed.
+/// Pinned because Palisade parses its `--json` output; bump it deliberately
+/// after checking `list`/`show`/`status`/`validate`/`archive`/`init` still
+/// answer in the shape the parsers here expect.
+pub const OPENSPEC_PACKAGE: &str = "@fission-ai/openspec@1.13.1";
+
+/// A first `npx` run downloads the package before it answers.
+const NPX_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How to run OpenSpec on this machine: the user's own `openspec` when it is
+/// on PATH, otherwise the pinned package through `npx`. Spec mode can't work
+/// without the CLI, and Node is already there for npx-distributed agents, so
+/// this makes OpenSpec part of Palisade rather than a manual install step.
+pub fn openspec_command(
+    find_on_path: &dyn Fn(&str) -> Option<PathBuf>,
+) -> Option<(PathBuf, Vec<&'static str>, Duration)> {
+    if let Some(bin) = find_on_path("openspec") {
+        return Some((bin, vec![], TIMEOUT));
+    }
+    let npx = find_on_path("npx")?;
+    Some((npx, vec!["-y", OPENSPEC_PACKAGE], NPX_TIMEOUT))
+}
+
 fn openspec_json(project_root: &Path, args: &[&str]) -> OpenSpecResult {
-    let bin = crate::executor::find_on_path("openspec").ok_or(OpenSpecError::NotInstalled)?;
-    run_openspec(&bin, project_root, args, TIMEOUT)
+    let (bin, mut full, timeout) = openspec_command(&crate::executor::find_on_path).ok_or(OpenSpecError::NotInstalled)?;
+    full.extend_from_slice(args);
+    run_openspec(&bin, project_root, &full, timeout)
+}
+
+/// Give a project the `openspec/` root Spec mode writes into, via the CLI's
+/// own `init` — Palisade still never writes a spec file. `--tools none` keeps
+/// it to the `openspec/` folder: no agent command files land in the project.
+/// A no-op when the root already exists.
+pub fn init_if_missing(project_root: &Path) -> OpenSpecResult {
+    if project_root.join("openspec").is_dir() {
+        return Ok(String::new());
+    }
+    openspec_json(project_root, &["init", "--tools", "none", "--no-animation", "."])
 }
 
 /// Run one `openspec` invocation to completion, capturing both streams.
@@ -302,6 +353,45 @@ impl Default for OpenSpecCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grill skills tell the agent which OpenSpec to run when none is
+    /// installed; it must be the same pin Palisade itself runs.
+    #[test]
+    fn the_skills_and_readme_name_the_pinned_openspec() {
+        use crate::executor::{GRILL_APPLY, GRILL_ARCHIVE, GRILL_EXPLORE, GRILL_PROPOSE};
+        for skill in [GRILL_APPLY, GRILL_ARCHIVE, GRILL_EXPLORE, GRILL_PROPOSE] {
+            assert!(skill.contains(OPENSPEC_PACKAGE), "skill drifted from {OPENSPEC_PACKAGE}: {}", &skill[..60]);
+        }
+        assert!(
+            include_str!("../../README.md").contains(OPENSPEC_PACKAGE),
+            "README's install note drifted from {OPENSPEC_PACKAGE}"
+        );
+    }
+
+    /// The user's own `openspec` wins; without it the pinned package runs
+    /// through `npx`; with neither there is nothing to run.
+    #[test]
+    fn openspec_command_prefers_path_then_pinned_npx() {
+        let only = |names: &'static [&'static str]| {
+            move |bin: &str| names.contains(&bin).then(|| PathBuf::from(format!("/bin/{bin}")))
+        };
+        let (bin, args, _) = openspec_command(&only(&["openspec", "npx"])).unwrap();
+        assert_eq!((bin, args), (PathBuf::from("/bin/openspec"), vec![]), "PATH openspec should win");
+        let (bin, args, timeout) = openspec_command(&only(&["npx"])).unwrap();
+        assert_eq!((bin, args), (PathBuf::from("/bin/npx"), vec!["-y", OPENSPEC_PACKAGE]), "npx fallback runs the pinned package");
+        assert!(timeout > TIMEOUT, "a cold npx download needs longer than a local run");
+        assert!(openspec_command(&only(&[])).is_none(), "no openspec and no npx means not installed");
+    }
+
+    /// A project that already has its `openspec/` root is left alone — the
+    /// CLI is never run, so an existing config is never re-initialized.
+    #[test]
+    fn init_is_a_no_op_when_the_root_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("openspec")).unwrap();
+        assert_eq!(init_if_missing(dir.path()).unwrap(), "");
+        assert_eq!(fs::read_dir(dir.path().join("openspec")).unwrap().count(), 0);
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -404,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_missing_binary_is_its_own_error_not_a_failed_run() {
-        assert_eq!(OpenSpecError::NotInstalled.to_string(), "`openspec` is not on PATH");
+        assert_eq!(OpenSpecError::NotInstalled.to_string(), "`openspec` is not on PATH, and there is no `npx` to fetch it");
     }
 
     /// Counts calls so the cache's memoization can be asserted on directly.
@@ -452,6 +542,35 @@ mod tests {
         assert_eq!(cache.list(dir.path()), Err(OpenSpecError::NotInstalled));
         assert_eq!(cache.list(dir.path()), Err(OpenSpecError::NotInstalled));
         assert_eq!(counter.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A change written deep under `openspec/` must refresh the list while
+    /// the Spec session is still running. The folder's own mtime never moves
+    /// for it, which kept the Specs pane blank until the flow was over.
+    #[test]
+    fn a_change_written_below_openspec_refreshes_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("openspec/changes")).unwrap();
+        let counter = Arc::new(CountingAdapter::new(Ok("{}".into())));
+        let cache = OpenSpecCache::new(Arc::new(counter.clone()));
+        let later = |secs| SystemTime::now() + Duration::from_secs(secs);
+
+        let _ = cache.list(dir.path());
+        let _ = cache.list(dir.path());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 1, "unchanged tree is served from cache");
+
+        // Explicit future mtimes: a same-tick write must not make this flaky.
+        fs::create_dir_all(dir.path().join("openspec/changes/landing-page")).unwrap();
+        let proposal = dir.path().join("openspec/changes/landing-page/proposal.md");
+        fs::write(&proposal, "# Proposal").unwrap();
+        fs::File::options().write(true).open(&proposal).unwrap().set_modified(later(60)).unwrap();
+        let _ = cache.list(dir.path());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 2, "a new change must refresh the list");
+
+        // Rewriting an existing file changes no directory — only its own mtime.
+        fs::File::options().write(true).open(&proposal).unwrap().set_modified(later(120)).unwrap();
+        let _ = cache.list(dir.path());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 3, "an edit to a spec file must refresh the list");
     }
 
     /// Archiving mutates the project, so it has never been cached — a second

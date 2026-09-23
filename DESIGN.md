@@ -114,15 +114,16 @@ components:
 
 **Creative North Star: "The Minimalist, Intuitive Agent Workbench"**
 
-Palisade Code should feel like an idyllic place to do serious work: ordered, calm, and quietly alive. Dense tools sit in a legible hierarchy of neutral planes, while Agent Signal marks the current selection, live process, or next meaningful action. The result is minimalist without becoming anhedonic—visual pleasure comes from clarity, responsive state, and moments of restrained warmth rather than ornament.
+Palisade Code should feel like an ordered, calm, and quietly alive place to supervise serious work. The fleet board makes concurrent agent runs legible at a glance; the review lane puts changed files and verification evidence beside the decision to merge. Dense tools sit in a hierarchy of neutral planes, while Agent Signal marks the current selection, live process, or next meaningful action. Visual pleasure comes from clarity, responsive state, and restrained warmth.
 
 The system practices quietly tactile restraint. Controls answer with a tonal lift, a crisp focus halo, or a short transition; running sessions pulse softly; chain nodes change state with deliberate color; onboarding carries one ambient glow. Those responses make the workbench feel inhabited while keeping attention on code, agents, and evidence.
 
-Editor and Vibe are two arrangements of the same mounted workspace rather than separate identities. The theme can move between dark and light, and users can change the accent hue, shell colors, editor colors, and editor font without breaking the hierarchy.
+The fleet board is home, while Editor and Vibe are two arrangements of the same mounted thread workspace rather than separate identities. The theme can move between dark and light, and users can change the accent hue, shell colors, editor colors, and editor font without breaking the hierarchy.
 
 **Key Characteristics:**
 
 - Compact desktop density with a 36px utility chrome, a 44px activity rail, and resizable work surfaces.
+- Fleet rows group attention, running, unreviewed, and idle work; review pairs file diffs with verification and merge state.
 - Themeable neutral planes organized around one configurable Agent Signal accent.
 - Human-readable sans text paired with mono for code, paths, commands, values, and technical status.
 - Borders and tonal steps at rest; shadow only for floating context or an intentional active lift.
@@ -182,11 +183,15 @@ So the presets clear the semantics instead. Red (25) sat on `--danger` exactly a
 
 ## Layout
 
-The application fills a desktop window beneath a fixed utility bar. A narrow activity rail opens one task-focused side panel beside the main editor and chat workspace; a terminal and problems region can rise from the bottom. Editor prioritizes files and code, while Vibe reorders the same surfaces to prioritize sessions and conversation.
+The application fills a desktop window beneath a fixed utility bar. The fleet board occupies the main work area when supervising runs: a project heading and compact status counts sit above the new-run composer and grouped rows. Attention, running, unreviewed, and idle are separate scan bands. A run opens its thread workspace; Review opens a file list, diff, verification evidence, and merge controls in one lane.
+
+A narrow activity rail opens one task-focused side panel beside the editor and chat workspace; a terminal and problems region can rise from the bottom. Editor prioritizes files and code, while Vibe reorders the same surfaces to prioritize sessions and conversation. The rail groups run-loop, code, and setup destinations, keeping Fleet and Review easy to reach without making the workbench another dashboard column.
 
 The spacing rhythm is compact and deliberate. Small steps structure rows, icon groups, labels, and inline controls; larger steps are reserved for messages, overlays, onboarding cards, and breathing room around primary decisions. Resizable regions preserve user choice, while collapsed regions leave the flex layout entirely rather than covering content.
 
 At narrower desktop widths, the session list yields first, then fixed side widths compress, then the side panel hides while the activity rail remains available. The shell protects a usable editor/chat surface before preserving every simultaneous column.
+
+The fleet heading stacks above its status counts below 700px. Fleet rows stay compact and truncate long titles; their status, agent, diff summary, and evidence must remain scannable. Review keeps the file list and diff as fitted panes with borders rather than floating cards.
 
 **The One Workspace Rule.** Editor and Vibe may reorder or emphasize surfaces, but they must share the same component vocabulary, state language, and mounted project context.
 
@@ -242,6 +247,14 @@ Borders are functional separators. Editor and panel surfaces remain square where
 ### Navigation
 
 The activity rail uses muted Tabler icons in compact square targets. Hover adds a neutral lift; active state combines Selected Surface, Agent Signal, and a thin inset edge that follows the work-facing side when the shell reverses. Tabs use mono labels and lift onto their content plane; flatter chat and bottom tabs use an accent edge or underline.
+
+### Fleet Row
+
+A fleet row is a flat, full-width work item: agent identity, title, compact metadata, diff counts, verification, and overlap or attention badges share one line where space permits. Hover adds Surface and a structural border; status color belongs to the small indicator and badge, never the whole row. Group headings and counts make urgency readable without relying on color alone.
+
+### Review Lane
+
+The review header names the run before its evidence. Verification forms a compact band above a 280px file list and flexible diff. Selected files use Selected Surface; file hover uses Warm Surface. Merge controls sit below the evidence so the visual order follows the decision: identify, inspect, verify, then land.
 
 ### Agent Chain Node
 
