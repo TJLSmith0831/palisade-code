@@ -12,12 +12,12 @@ const render_ = (ui: ReactElement) => render(ui, { wrapper: MantineProvider });
 const tab = (path: string, overrides: Partial<OpenTab> = {}): OpenTab => ({
   path,
   dirty: false,
-  mdPreview: false,
+  mdSource: false,
   ...overrides,
 });
 
 describe("TabBar", () => {
-  it("shows the Markdown preview toggle for an active .md file", () => {
+  it("shows the Visual mode control for an active .md file", () => {
     render_(
       <TabBar
         tabs={[tab("README.md")]}
@@ -26,14 +26,14 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
-    expect(screen.getByTestId("toggle-md-preview")).toBeDefined();
+    expect(screen.getByTestId("toggle-md-mode")).toHaveTextContent("Visual");
   });
 
-  it("shows the Markdown preview toggle for an active .markdown file", () => {
+  it("shows the Visual mode control for an active .markdown file", () => {
     render_(
       <TabBar
         tabs={[tab("notes.markdown")]}
@@ -42,11 +42,11 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
-    expect(screen.getByTestId("toggle-md-preview")).toBeDefined();
+    expect(screen.getByTestId("toggle-md-mode")).toHaveTextContent("Visual");
   });
 
   it("hides the Markdown preview toggle for a non-markdown active file", () => {
@@ -58,11 +58,11 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
-    expect(screen.queryByTestId("toggle-md-preview")).toBeNull();
+    expect(screen.queryByTestId("toggle-md-mode")).toBeNull();
   });
 
   it("hides the Markdown preview toggle when no tab is active", () => {
@@ -74,15 +74,15 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
-    expect(screen.queryByTestId("toggle-md-preview")).toBeNull();
+    expect(screen.queryByTestId("toggle-md-mode")).toBeNull();
   });
 
-  it("calls onToggleMdPreview when the button is clicked", () => {
-    const onToggleMdPreview = vi.fn();
+  it("calls onToggleMdSource when the button is clicked", () => {
+    const onToggleMdSource = vi.fn();
     render_(
       <TabBar
         tabs={[tab("README.md")]}
@@ -91,34 +91,34 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={onToggleMdPreview}
+        activeMdSource={false}
+        onToggleMdSource={onToggleMdSource}
       />
     );
-    fireEvent.click(screen.getByTestId("toggle-md-preview"));
-    expect(onToggleMdPreview).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("toggle-md-mode"));
+    expect(onToggleMdSource).toHaveBeenCalledTimes(1);
   });
 
-  it("renders pressed/filled when preview is active", () => {
+  it("labels Markdown source mode", () => {
     render_(
       <TabBar
-        tabs={[tab("README.md", { mdPreview: true })]}
+        tabs={[tab("README.md", { mdSource: true })]}
         activePath="README.md"
         onSelect={() => {}}
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={true}
-        onToggleMdPreview={() => {}}
+        activeMdSource={true}
+        onToggleMdSource={() => {}}
       />
     );
-    expect(screen.getByTestId("toggle-md-preview")).toHaveAttribute(
+    expect(screen.getByTestId("toggle-md-mode")).toHaveAttribute(
       "aria-pressed",
       "true"
     );
   });
 
-  it("renders unpressed when preview is off", () => {
+  it("labels Visual mode", () => {
     render_(
       <TabBar
         tabs={[tab("README.md")]}
@@ -127,11 +127,11 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
-    expect(screen.getByTestId("toggle-md-preview")).toHaveAttribute(
+    expect(screen.getByTestId("toggle-md-mode")).toHaveAttribute(
       "aria-pressed",
       "false"
     );
@@ -146,11 +146,11 @@ describe("TabBar", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
-    const md = screen.getByTestId("toggle-md-preview");
+    const md = screen.getByTestId("toggle-md-mode");
     const diff = screen.getByTestId("toggle-diff");
     // Compare document position — md should come before diff in DOM order.
     // Node.DOCUMENT_POSITION_PRECEDING = 2
@@ -176,8 +176,8 @@ describe("TabBar — closing a tab without a mouse", () => {
         onClose={over.onClose ?? (() => {})}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
       />
     );
 
@@ -214,8 +214,8 @@ describe("TabBar — closing a tab without a mouse", () => {
         onClose={() => {}}
         diffOpen={false}
         onToggleDiff={() => {}}
-        activeMdPreview={false}
-        onToggleMdPreview={() => {}}
+        activeMdSource={false}
+        onToggleMdSource={() => {}}
         onGoToFile={onGoToFile}
       />
     );

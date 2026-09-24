@@ -1,8 +1,9 @@
-import { ActionIcon, CloseButton, Menu, Tabs, Tooltip } from "@mantine/core";
+import { ActionIcon, Button, CloseButton, Menu, Tabs, Tooltip } from "@mantine/core";
 import {
   IconFilePlus,
   IconGitCompare,
-  IconMarkdown,
+  IconCode,
+  IconEye,
   IconNotebook,
   IconPlus,
   IconSearch,
@@ -22,9 +23,9 @@ type Props = {
   /** Whether the centre pane is showing the diff rather than a file. */
   diffOpen: boolean;
   onToggleDiff: () => void;
-  /** Whether the active Markdown tab is showing its preview pane. */
-  activeMdPreview: boolean;
-  onToggleMdPreview: () => void;
+  /** Whether the active Markdown tab shows exact source. */
+  activeMdSource: boolean;
+  onToggleMdSource: () => void;
   /** "+" menu: creates an untitled file at the project root (D14). */
   onNewFile: () => void;
   /** "+" menu: opens/focuses the singleton Preview tab (D13). */
@@ -96,8 +97,8 @@ export default function TabBar({
   onClose,
   diffOpen,
   onToggleDiff,
-  activeMdPreview,
-  onToggleMdPreview,
+  activeMdSource,
+  onToggleMdSource,
   onNewFile,
   onNewPreview,
   onNewChain,
@@ -242,20 +243,22 @@ export default function TabBar({
 
       {isMarkdownPath(activePath) && (
         <Tooltip
-          label={activeMdPreview ? "Hide preview" : "Show preview"}
+          label={activeMdSource ? "Switch to Visual (⌘⇧V)" : "Switch to Markdown (⌘⇧V)"}
           withinPortal
         >
-          <ActionIcon
-            variant={activeMdPreview ? "filled" : "subtle"}
-            aria-label={activeMdPreview ? "Hide preview" : "Show preview"}
-            aria-pressed={activeMdPreview}
-            onClick={onToggleMdPreview}
-            data-testid="toggle-md-preview"
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            leftSection={activeMdSource ? <IconCode size={14} /> : <IconEye size={14} />}
+            aria-label={activeMdSource ? "Markdown mode; switch to Visual" : "Visual mode; switch to Markdown"}
+            aria-pressed={activeMdSource}
+            onClick={onToggleMdSource}
+            data-testid="toggle-md-mode"
             ml="auto"
             style={{ marginBottom: "0.25rem" }}
           >
-            <IconMarkdown size={16} />
-          </ActionIcon>
+            {activeMdSource ? "Markdown" : "Visual"}
+          </Button>
         </Tooltip>
       )}
 

@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { act } from "react";
 import { openSearchPanel, searchKeymap } from "@codemirror/search";
+import { redo, undo } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import type { ReactElement } from "react";
 
@@ -23,27 +24,13 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// Lightweight stand-in for the WYSIWYG Markdown editor — the real one is a
-// heavy dependency that doesn't need to be exercised to verify the pane's
-// wiring. The mock exposes the same controlled-editor surface the pane uses.
+// Rendering HTML and images is checked in the real Tauri app. Keep this unit
+// test focused on CodeMirror's source edits and widget controls.
 vi.mock("@uiw/react-md-editor", () => {
-  const MDEditor = ({
-    value,
-    onChange,
-  }: {
-    value: string;
-    onChange?: (value: string) => void;
-  }) => (
-    <textarea
-      data-testid="md-editor"
-      value={value}
-      onChange={(event) => onChange?.(event.target.value)}
-    />
-  );
-  MDEditor.Markdown = ({ source }: { source: string }) => (
+  const Markdown = ({ source }: { source: string }) => (
     <div data-testid="md-preview">{source}</div>
   );
-  return { default: MDEditor };
+  return { default: { Markdown } };
 });
 
 import FileEditorPane, { evictProjectSessions } from "../FileEditorPane";
@@ -811,21 +798,18 @@ describe("FileEditorPane", () => {
     );
   });
 
-  describe("Markdown RTE and preview mode", () => {
-    it("renders the WYSIWYG editor (no preview) for a .md file by default", async () => {
+  describe("Markdown Visual and source modes", () => {
+    it("opens a .md file as a formatted, directly editable CodeMirror document", async () => {
       render(<FileEditorPane projectHash="abc" path="README.md" />);
-      // Wait for the file to load and seed the WYSIWYG editor.
       await waitFor(() =>
-        expect(
-          (screen.getByTestId("md-editor") as HTMLTextAreaElement).value
-        ).toContain("line one")
+        expect(document.querySelector(".cm-content")?.textContent).toContain("line one")
       );
-      // CodeMirror stays mounted as the backing store but is hidden.
-      const cm = screen.getByTestId("file-editor-cm");
-      expect(cm.style.display).toBe("none");
+      expect(screen.getByTestId("file-editor-cm")).toHaveClass("ds-md-visual");
+      expect(document.querySelector(".cm-content")).toHaveAttribute("aria-label", "Markdown document");
+      expect(screen.getByRole("toolbar", { name: "Markdown formatting" })).toBeDefined();
     });
 
-    it("renders CodeMirror (not the RTE) for a non-markdown file", async () => {
+    it("renders CodeMirror without Markdown controls for a non-markdown file", async () => {
       render(<FileEditorPane projectHash="abc" path="src/foo.ts" />);
       await waitFor(() =>
         expect(screen.getByTestId("file-editor-cm")).toBeDefined()
@@ -833,13 +817,13 @@ describe("FileEditorPane", () => {
       expect(screen.queryByTestId("md-editor")).toBeNull();
     });
 
-    it("fires onToggleMdPreview on Cmd+Shift+V for a .md file", async () => {
-      const onToggleMdPreview = vi.fn();
+    it("fires onToggleMdSource on Cmd+Shift+V for a .md file", async () => {
+      const onToggleMdSource = vi.fn();
       render(
         <FileEditorPane
           projectHash="abc"
           path="README.md"
-          onToggleMdPreview={onToggleMdPreview}
+          onToggleMdSource={onToggleMdSource}
         />
       );
       await waitFor(() =>
@@ -851,16 +835,16 @@ describe("FileEditorPane", () => {
         metaKey: true,
         shiftKey: true,
       });
-      expect(onToggleMdPreview).toHaveBeenCalledTimes(1);
+      expect(onToggleMdSource).toHaveBeenCalledTimes(1);
     });
 
-    it("fires onToggleMdPreview on Ctrl+Shift+V for a .md file (Windows/Linux)", async () => {
-      const onToggleMdPreview = vi.fn();
+    it("fires onToggleMdSource on Ctrl+Shift+V for a .md file (Windows/Linux)", async () => {
+      const onToggleMdSource = vi.fn();
       render(
         <FileEditorPane
           projectHash="abc"
           path="README.md"
-          onToggleMdPreview={onToggleMdPreview}
+          onToggleMdSource={onToggleMdSource}
         />
       );
       await waitFor(() =>
@@ -872,16 +856,16 @@ describe("FileEditorPane", () => {
         ctrlKey: true,
         shiftKey: true,
       });
-      expect(onToggleMdPreview).toHaveBeenCalledTimes(1);
+      expect(onToggleMdSource).toHaveBeenCalledTimes(1);
     });
 
-    it("does not fire onToggleMdPreview on Cmd+Shift+V for a non-markdown file", async () => {
-      const onToggleMdPreview = vi.fn();
+    it("does not fire onToggleMdSource on Cmd+Shift+V for a non-markdown file", async () => {
+      const onToggleMdSource = vi.fn();
       render(
         <FileEditorPane
           projectHash="abc"
           path="src/foo.ts"
-          onToggleMdPreview={onToggleMdPreview}
+          onToggleMdSource={onToggleMdSource}
         />
       );
       await waitFor(() =>
@@ -893,108 +877,78 @@ describe("FileEditorPane", () => {
         metaKey: true,
         shiftKey: true,
       });
-      expect(onToggleMdPreview).not.toHaveBeenCalled();
+      expect(onToggleMdSource).not.toHaveBeenCalled();
     });
 
-    it("marks dirty and saves from the RTE", async () => {
-      const user = userEvent.setup();
+    it("formats and saves through the one CodeMirror document", async () => {
       const onSave = vi.fn();
       invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.resolve("# Title\n");
+        if (cmd === "read_file_content") return Promise.resolve("# Title\n\nUnchanged.\n");
         if (cmd === "write_file_content") return Promise.resolve();
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
-      render(
-        <FileEditorPane projectHash="abc" path="README.md" onSave={onSave} />
-      );
-      await waitFor(() =>
-        expect(screen.getByTestId("md-editor")).toBeDefined()
-      );
-
-      const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
-      await user.type(editor, "!");
-      // The save button should become enabled (dirty).
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /save \*/i })).toBeDefined()
-      );
-      await user.click(screen.getByRole("button", { name: /save \*/i }));
+      render(<FileEditorPane projectHash="abc" path="README.md" onSave={onSave} />);
+      await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
+      const view = viewFromDom();
+      act(() => view.dispatch({ selection: { anchor: 9, head: 18 } }));
+      fireEvent.click(screen.getByRole("button", { name: "Bold" }));
+      expect(view.state.doc.toString()).toBe("# Title\n\n**Unchanged**.\n");
+      act(() => expect(undo(view)).toBe(true));
+      expect(view.state.doc.toString()).toBe("# Title\n\nUnchanged.\n");
+      act(() => expect(redo(view)).toBe(true));
+      expect(view.state.doc.toString()).toBe("# Title\n\n**Unchanged**.\n");
+      fireEvent.click(screen.getByRole("button", { name: /save \*/i }));
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      expect(onSave.mock.calls[0][0].after).toContain("!");
+      expect(onSave.mock.calls[0][0].after).toBe("# Title\n\n**Unchanged**.\n");
     });
 
-    it("saves a Markdown edit on Cmd+S from the rich editor", async () => {
-      const onSave = vi.fn();
-      invokeMock.mockImplementation((cmd: string) => {
-        if (cmd === "read_file_content") return Promise.resolve("# Title\n");
-        if (cmd === "write_file_content") return Promise.resolve();
-        return Promise.reject(new Error(`unexpected command ${cmd}`));
-      });
-      render(
-        <FileEditorPane projectHash="abc" path="README.md" onSave={onSave} />
+    it("switches modes without changing bytes or undo history", async () => {
+      const original = "# Title\n\nA **bold** word.\n";
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "read_file_content" ? Promise.resolve(original) : Promise.resolve()
       );
-      const editor = await screen.findByTestId("md-editor");
-      fireEvent.change(editor, { target: { value: "# Updated\n" } });
-
-      fireEvent.keyDown(editor, { key: "s", metaKey: true });
-
-      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      expect(onSave.mock.calls[0][0].after).toBe("# Updated\n");
+      const { rerender } = render(<FileEditorPane projectHash="abc" path="README.md" />);
+      await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
+      const view = viewFromDom();
+      expect(view.state.doc.toString()).toBe(original);
+      rerender(<MantineProvider><FileEditorPane projectHash="abc" path="README.md" mdSource /></MantineProvider>);
+      await waitFor(() => expect(screen.getByTestId("file-editor-cm")).not.toHaveClass("ds-md-visual"));
+      expect(viewFromDom().state.doc.toString()).toBe(original);
     });
 
-    it("promotes a list line to a nested item on Tab at the marker (no selection)", async () => {
-      // jsdom doesn't implement execCommand; simulate what a real browser
-      // does so the fix's insertText/delete calls actually mutate the
-      // textarea and fire a real "input" event React will observe.
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        "value"
-      )!.set!;
-      document.execCommand = vi.fn((command: string, _ui?: boolean, value?: string) => {
-        const active = document.activeElement as HTMLTextAreaElement;
-        const start = active.selectionStart ?? 0;
-        const end = active.selectionEnd ?? 0;
-        const next =
-          command === "delete"
-            ? active.value.slice(0, start) + active.value.slice(end)
-            : active.value.slice(0, start) + (value ?? "") + active.value.slice(end);
-        nativeSetter.call(active, next);
-        active.dispatchEvent(new Event("input", { bubbles: true }));
-        return true;
-      }) as typeof document.execCommand;
+    it("uses Mod+B to format the selected document text", async () => {
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "read_file_content" ? Promise.resolve("A note\n") : Promise.resolve()
+      );
+      render(<FileEditorPane projectHash="abc" path="note.markdown" />);
+      await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
+      const view = viewFromDom();
+      act(() => view.dispatch({ selection: { anchor: 2, head: 6 } }));
+      fireEvent.keyDown(document.querySelector(".cm-content")!, { key: "b", ctrlKey: true });
+      expect(view.state.doc.toString()).toBe("A **note**\n");
+    });
 
+    it("renders task, table, image, and HTML controls from the source document", async () => {
+      const original = "# Note\n\n- [ ] todo\n\n| A | B |\n| --- | --- |\n| x | y |\n| one\\|two |  |\n\n![alt](image.png)\n\n<div>hello</div>\n";
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "read_file_content" ? Promise.resolve(original) : Promise.resolve()
+      );
       render(<FileEditorPane projectHash="abc" path="README.md" />);
-      await waitFor(() =>
-        expect(screen.getByTestId("md-editor")).toBeDefined()
-      );
-      const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
-      await waitFor(() =>
-        expect(editor.value).toBe("line one\nline two\n")
-      );
-
-      fireEvent.change(editor, { target: { value: "- item\n- " } });
-      editor.focus();
-      editor.setSelectionRange(9, 9); // caret right after "- " on the new line
-
-      fireEvent.keyDown(editor, { key: "Tab" });
-      expect(editor.value).toBe("- item\n    - ");
-
-      fireEvent.keyDown(editor, { key: "Tab", shiftKey: true });
-      expect(editor.value).toBe("- item\n- ");
-    });
-
-    it("leaves Tab on a non-list line to the RTE's own caret behavior", async () => {
-      render(<FileEditorPane projectHash="abc" path="README.md" />);
-      await waitFor(() =>
-        expect(screen.getByTestId("md-editor")).toBeDefined()
-      );
-      const editor = screen.getByTestId("md-editor") as HTMLTextAreaElement;
-
-      fireEvent.change(editor, { target: { value: "plain text" } });
-      editor.setSelectionRange(5, 5);
-
-      const event = fireEvent.keyDown(editor, { key: "Tab" });
-      // Not a list line: the fix's handler must not intercept the event.
-      expect(event).toBe(true);
+      await waitFor(() => expect(screen.getByRole("checkbox", { name: "Mark task complete" })).toBeDefined());
+      expect(document.querySelector(".cm-content")?.textContent).not.toContain("# Note");
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Row 1, column 1" })).toHaveValue("A"));
+      expect(screen.getByRole("textbox", { name: "Row 3, column 1" })).toHaveValue("one|two");
+      expect(screen.getByRole("textbox", { name: "Row 3, column 2" })).toHaveValue("");
+      fireEvent.change(screen.getByRole("textbox", { name: "Row 2, column 1" }), { target: { value: "new" } });
+      await waitFor(() => expect(viewFromDom().state.doc.toString()).toContain("| new | y |"));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task complete" }));
+      expect(viewFromDom().state.doc.toString()).toContain("- [x] todo");
+      fireEvent.click(screen.getByRole("button", { name: "Edit HTML" }));
+      const htmlSource = await screen.findByRole("textbox", { name: "Edit HTML" });
+      fireEvent.change(htmlSource, { target: { value: "<div>updated</div>" } });
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+      expect(viewFromDom().state.doc.toString()).toContain("<div>updated</div>");
+      expect(screen.getByRole("button", { name: "Edit image" })).toBeDefined();
     });
 
     it("sanitizes raw HTML embedded in Markdown while keeping syntax-highlighting classes", async () => {

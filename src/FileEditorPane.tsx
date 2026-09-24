@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActionIcon, Alert, Button, Group, Loader } from "@mantine/core";
-import { IconMinus, IconPlus } from "@tabler/icons-react";
-import MDEditor from "@uiw/react-md-editor";
-import "@uiw/react-md-editor/markdown-editor.css";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import { ActionIcon, Alert, Button, Group, Loader, Menu, Modal, Textarea } from "@mantine/core";
+import { IconBold, IconCode, IconH2, IconItalic, IconLink, IconList, IconMinus, IconPhoto, IconPlus, IconQuote, IconTable, IconCheckbox, IconDots } from "@tabler/icons-react";
 import { EditorState, Compartment } from "@codemirror/state";
 import {
   EditorView,
@@ -63,6 +60,9 @@ import { describeError } from "./errors";
 import { documentLanguageId, fileUri, languageForPath } from "./lsp";
 import { clientFor } from "./lspClients";
 import { isMarkdownPath } from "./openTabs";
+import { markdownVisual } from "./markdownVisual";
+import { formatMarkdown, type MarkdownFormat } from "./markdownFormat";
+export { markdownPreviewSchema } from "./markdownVisual";
 import {
   setTestMarkers,
   testMarkerGutter,
@@ -117,41 +117,9 @@ type Props = {
   onToggleBreakpoint?: (line: number) => void;
   /** The line execution is stopped on, when it is stopped in this file. */
   debugLine?: number | null;
-  /** Whether to show the Markdown preview pane alongside the WYSIWYG editor.
-   * Only honored for `.md`/`.markdown` files; ignored otherwise. */
-  mdPreview?: boolean;
-  onToggleMdPreview?: () => void;
-};
-
-/** Resolves the app's effective color mode from the `data-theme` attribute on
- * <html> ("light" | "dark" | absent for "auto"), falling back to the system
- * preference via `prefers-color-scheme`. The WYSIWYG Markdown editor needs a
- * concrete "light" | "dark" value for its `data-color-mode` prop since it
- * doesn't read the app's own `data-theme` cascade. */
-const resolvedColorMode = (): "light" | "dark" => {
-  const attr = document.documentElement.dataset.theme;
-  if (attr === "light" || attr === "dark") return attr;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
-};
-
-// The WYSIWYG preview renders raw HTML embedded in a Markdown file (a
-// `<script>`, an `<img onerror>`, an `<iframe>`) by default — this app opens
-// arbitrary, often untrusted, project files inside a Tauri webview with IPC
-// access, so an unsanitized preview is a live code-execution surface, not a
-// cosmetic gap. `rehype-sanitize`'s default (GitHub) schema already covers
-// GFM task-list checkboxes; the only addition is unconditionally allowing
-// `className` on the elements Prism annotates for syntax highlighting
-// (`code`, `span`, `pre`) — those values are inert strings, never markup.
-export const markdownPreviewSchema = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    code: ["className"],
-    span: ["className"],
-    pre: ["className"],
-  },
+  /** Whether to show exact Markdown source instead of Visual mode. */
+  mdSource?: boolean;
+  onToggleMdSource?: () => void;
 };
 
 const MIN_ZOOM = 0.1;
@@ -434,13 +402,13 @@ export default function FileEditorPane({
   breakpoints,
   onToggleBreakpoint,
   debugLine,
-  mdPreview = false,
-  onToggleMdPreview,
+  mdSource = false,
+  onToggleMdSource,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const mdWrapperRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const languageCompartment = useRef(new Compartment());
+  const visualCompartment = useRef(new Compartment());
   const fontCompartment = useRef(new Compartment());
   const wrapCompartment = useRef(new Compartment());
   const fimCompartment = useRef(new Compartment());
@@ -458,23 +426,18 @@ export default function FileEditorPane({
   onPositionRef.current = onCursorPosition;
   const initialCursorRef = useRef(initialCursor);
   initialCursorRef.current = initialCursor;
-  const onToggleMdPreviewRef = useRef(onToggleMdPreview);
-  onToggleMdPreviewRef.current = onToggleMdPreview;
+  const onToggleMdSourceRef = useRef(onToggleMdSource);
+  onToggleMdSourceRef.current = onToggleMdSource;
   const onToggleBreakpointRef = useRef(onToggleBreakpoint);
   onToggleBreakpointRef.current = onToggleBreakpoint;
 
   const [mediaSrc, setMediaSrc] = useState<string | null>(null);
-  // The controlled value for the WYSIWYG Markdown editor. The CodeMirror doc
-  // remains the source of truth for save/dirty/session; this mirrors it so
-  // the rich editor renders the same text and writes edits back through
-  // `view.dispatch`.
-  const [mdValue, setMdValue] = useState("");
-  // Resolved color mode for the WYSIWYG editor, which uses `data-color-mode`
-  // rather than inheriting from the app's `data-theme` cascade. Tracks the
-  // app's theme attribute on <html> and the system preference when it's "auto".
-  const [colorMode, setColorMode] = useState<"light" | "dark">(() =>
-    resolvedColorMode()
-  );
+  const [sourceEdit, setSourceEdit] = useState<{
+    from: number; to: number; before: string; value: string; label: string;
+  } | null>(null);
+  const [sourceEditStale, setSourceEditStale] = useState(false);
+  const mdSourceRef = useRef(mdSource);
+  mdSourceRef.current = mdSource;
   const [imageZoom, setImageZoom] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -571,17 +534,29 @@ export default function FileEditorPane({
   const saveRef = useRef(save);
   saveRef.current = save;
 
-  // Writes a WYSIWYG edit back into the CodeMirror doc, which owns save/dirty
-  // state. A full-document replacement keeps the session in sync; the undo
-  // stack grows one entry per edit, which is acceptable for a first pass.
-  const handleMdChange = useCallback((value?: string) => {
-    if (value === undefined) return;
-    setMdValue(value);
+  const editMarkdownBlock = useCallback((from: number, to: number, label: string) => {
+    const before = viewRef.current?.state.doc.sliceString(from, to);
+    if (before !== undefined) {
+      setSourceEditStale(false);
+      setSourceEdit({ from, to, before, value: before, label });
+    }
+  }, []);
+
+  const applyMarkdownBlock = useCallback(() => {
     const view = viewRef.current;
-    if (!view) return;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-    });
+    if (!view || !sourceEdit) return;
+    if (view.state.doc.sliceString(sourceEdit.from, sourceEdit.to) !== sourceEdit.before) {
+      setSourceEditStale(true);
+      return;
+    }
+    view.dispatch({ changes: { from: sourceEdit.from, to: sourceEdit.to, insert: sourceEdit.value } });
+    setSourceEdit(null);
+    view.focus();
+  }, [sourceEdit]);
+
+  const applyFormat = useCallback((kind: MarkdownFormat) => {
+    const view = viewRef.current;
+    if (view) formatMarkdown(view, kind);
   }, []);
 
   const buildExtensions = useCallback(
@@ -621,6 +596,9 @@ export default function FileEditorPane({
       definitionClick(),
       keymap.of([
         { key: "Mod-s", run: () => (saveRef.current(), true) },
+        { key: "Mod-b", run: (view) => isMarkdownPath(forPath) && !mdSourceRef.current && (formatMarkdown(view, "bold"), true) },
+        { key: "Mod-i", run: (view) => isMarkdownPath(forPath) && !mdSourceRef.current && (formatMarkdown(view, "italic"), true) },
+        { key: "Mod-k", run: (view) => isMarkdownPath(forPath) && !mdSourceRef.current && (formatMarkdown(view, "link"), true) },
         ...closeBracketsKeymap,
         ...searchKeymap,
         ...foldKeymap,
@@ -629,6 +607,12 @@ export default function FileEditorPane({
         indentWithTab,
       ]),
       languageCompartment.current.of(languageExtensionFor(forPath)),
+      EditorView.contentAttributes.of({ "aria-label": isMarkdownPath(forPath) ? "Markdown document" : `Editor for ${forPath}` }),
+      visualCompartment.current.of(
+        isMarkdownPath(forPath) && !mdSourceRef.current
+          ? markdownVisual(editMarkdownBlock, projectHash, forPath)
+          : []
+      ),
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.docChanged) {
           const head = update.state.selection.main.head;
@@ -647,7 +631,7 @@ export default function FileEditorPane({
       ),
       fontCompartment.current.of(editorFontTheme()),
     ],
-    [projectHash, path, markDirty]
+    [projectHash, path, markDirty, editMarkdownBlock]
   );
 
   // Read through a ref so this reacts only to a new change event, not to the
@@ -945,36 +929,18 @@ export default function FileEditorPane({
     view.dispatch({ effects: setDebugLine.of(debugLine ?? null) });
   }, [debugLine, viewSeq, path]);
 
-  // Seed the WYSIWYG editor from the CodeMirror doc whenever a Markdown file
-  // is loaded. CodeMirror stays the source of truth, so this is a one-way
-  // pull at the view-build boundary.
+  // Both modes are one CodeMirror document; changing modes only changes its
+  // presentation extension, never the buffer, history, or selection.
   useEffect(() => {
     if (!isMarkdownPath(path) || viewSeq === 0) return;
-    setMdValue(viewRef.current?.state.doc.toString() ?? "");
-  }, [path, viewSeq]);
-
-  // Keep the WYSIWYG editor's color mode in sync with the app's theme. The
-  // app sets `data-theme` on <html>; when it's "auto" the system preference
-  // decides. We watch both so cycling the theme updates the RTE live.
-  useEffect(() => {
-    const update = () => setColorMode(resolvedColorMode());
-    update();
-    const themeObserver = new MutationObserver(update);
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
+    viewRef.current?.dispatch({
+      effects: visualCompartment.current.reconfigure(
+        mdSource ? [] : markdownVisual(editMarkdownBlock, projectHash, path ?? "")
+      ),
     });
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", update);
-    return () => {
-      themeObserver.disconnect();
-      media.removeEventListener("change", update);
-    };
-  }, []);
+  }, [path, viewSeq, mdSource, editMarkdownBlock, projectHash]);
 
-  // Cmd+Shift+V (Ctrl+Shift+V on Windows/Linux) toggles the Markdown preview
-  // pane, but only for Markdown files. Bound at the window level so it works
-  // whether focus is in the WYSIWYG editor or its preview.
+  // Cmd+Shift+V toggles Visual/Markdown while focus is in the document.
   useEffect(() => {
     if (!isMarkdownPath(path)) return;
     const onKey = (event: KeyboardEvent) => {
@@ -984,7 +950,7 @@ export default function FileEditorPane({
         event.key.toLowerCase() === "v"
       ) {
         event.preventDefault();
-        onToggleMdPreviewRef.current?.();
+        onToggleMdSourceRef.current?.();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -999,9 +965,6 @@ export default function FileEditorPane({
   useEffect(() => {
     const onNativeEditorCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
-      // Save works whatever this pane is showing — Markdown's WYSIWYG editor
-      // has no CodeMirror view, and the menu accelerator now reaches us
-      // before the window keydown handler below ever sees Cmd+S.
       if (command === "save") return void saveRef.current();
       const view = viewRef.current;
       if (!view) return;
@@ -1018,77 +981,6 @@ export default function FileEditorPane({
     window.addEventListener("palisade-editor-command", onNativeEditorCommand);
     return () => window.removeEventListener("palisade-editor-command", onNativeEditorCommand);
   }, [path, viewSeq]);
-
-  // CodeMirror owns the ordinary editor shortcut, but it is intentionally
-  // hidden while Markdown's WYSIWYG editor has focus. Catch Cmd/Ctrl+S at the
-  // window capture phase so the rich editor cannot consume it first, then use
-  // the same save path and CodeMirror-backed source of truth as every file.
-  useEffect(() => {
-    if (!isMarkdownPath(path)) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "s"
-      ) {
-        event.preventDefault();
-        saveRef.current();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [path]);
-
-  // Enter on a list line correctly starts a new "- "/"1. " line (the RTE's
-  // own behavior), but its Tab handler only inserts spaces at the caret —
-  // with nothing selected (the common case right after that Enter) the
-  // marker itself never moves, so the line never actually promotes to a
-  // nested item the way every other list editor (Notion, VS Code, GitHub's
-  // own comment box) would treat it. Intercepted in the capture phase so it
-  // runs before the RTE's own listener sees the event; a real text
-  // selection (multi-line reindent) is left to the RTE's own — correct —
-  // handling.
-  useEffect(() => {
-    if (!isMarkdownPath(path)) return;
-    const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])(\s)/;
-    // Matches the RTE's own default tabSize=2 (`Array(tabSize + 1).join('  ')`
-    // resolves to 4 spaces) — see @uiw/react-md-editor's handleKeyDown.
-    const INDENT = "    ";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const target = event.target;
-      if (
-        !(target instanceof HTMLTextAreaElement) ||
-        !mdWrapperRef.current?.contains(target) ||
-        target.selectionStart !== target.selectionEnd
-      ) {
-        return;
-      }
-      const value = target.value;
-      const caret = target.selectionStart;
-      const lineStart = value.lastIndexOf("\n", caret - 1) + 1;
-      const lineEnd = value.indexOf("\n", caret);
-      const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
-      if (!LIST_MARKER.test(line)) return;
-      if (event.shiftKey) {
-        if (!line.startsWith(INDENT)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        target.setSelectionRange(lineStart, lineStart + INDENT.length);
-        document.execCommand("delete");
-        target.setSelectionRange(caret - INDENT.length, caret - INDENT.length);
-      } else {
-        event.preventDefault();
-        event.stopPropagation();
-        target.setSelectionRange(lineStart, lineStart);
-        document.execCommand("insertText", false, INDENT);
-        target.setSelectionRange(caret + INDENT.length, caret + INDENT.length);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () =>
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [path]);
 
   // Highlighting for file types that aren't bundled (HTML, YAML, SQL, shell
   // and the rest) arrives a moment after the view, via the same compartment
@@ -1248,6 +1140,25 @@ export default function FileEditorPane({
           {saving ? "Saving…" : dirty ? "Save *" : "Save"}
         </button>
       </div>
+      {isMarkdownPath(path) && !mdSource && (
+        <div className="ds-md-format-toolbar" role="toolbar" aria-label="Markdown formatting">
+          <ActionIcon variant="subtle" aria-label="Bold" title="Bold (⌘B)" onClick={() => applyFormat("bold")}><IconBold size={17} /></ActionIcon>
+          <ActionIcon variant="subtle" aria-label="Italic" title="Italic (⌘I)" onClick={() => applyFormat("italic")}><IconItalic size={17} /></ActionIcon>
+          <ActionIcon variant="subtle" aria-label="Heading" title="Heading" onClick={() => applyFormat("heading")}><IconH2 size={17} /></ActionIcon>
+          <ActionIcon variant="subtle" aria-label="List" title="List" onClick={() => applyFormat("list")}><IconList size={17} /></ActionIcon>
+          <ActionIcon variant="subtle" aria-label="Link" title="Link (⌘K)" onClick={() => applyFormat("link")}><IconLink size={17} /></ActionIcon>
+          <Menu withinPortal position="bottom-start">
+            <Menu.Target><ActionIcon variant="subtle" aria-label="More formatting" title="More formatting"><IconDots size={17} /></ActionIcon></Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item leftSection={<IconCheckbox size={16} />} onClick={() => applyFormat("task")}>Task</Menu.Item>
+              <Menu.Item leftSection={<IconQuote size={16} />} onClick={() => applyFormat("quote")}>Quote</Menu.Item>
+              <Menu.Item leftSection={<IconCode size={16} />} onClick={() => applyFormat("code")}>Inline code</Menu.Item>
+              <Menu.Item leftSection={<IconPhoto size={16} />} onClick={() => applyFormat("image")}>Image</Menu.Item>
+              <Menu.Item leftSection={<IconTable size={16} />} onClick={() => applyFormat("table")}>Table</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        </div>
+      )}
       {conflict && (
         <Alert
           color="warn"
@@ -1282,41 +1193,24 @@ export default function FileEditorPane({
           </Group>
         </Alert>
       )}
-      {isMarkdownPath(path) && (
-        <div
-          className="ds-editor-body ds-md-rich"
-          data-testid="file-editor-md"
-          ref={mdWrapperRef}
-        >
-          <MDEditor
-            value={mdValue}
-            onChange={handleMdChange}
-            data-color-mode={colorMode}
-            preview={mdPreview ? "live" : "edit"}
-            height="100%"
-            // The library's own edit/live/preview/fullscreen buttons are a
-            // second, unsynced control for the one thing the toolbar's
-            // dedicated preview toggle already does — clicking one doesn't
-            // update the other, and could leave the pane stuck in a
-            // preview-only mode (no visible editor, no obvious way back)
-            // that the app's own toggle can't represent or undo. One
-            // control, one job: only the formatting commands stay.
-            extraCommands={[]}
-            previewOptions={{
-              rehypePlugins: [[rehypeSanitize, markdownPreviewSchema]],
-            }}
-          />
-        </div>
-      )}
-      {/* CodeMirror stays mounted (hidden for Markdown files) so it remains
-       * the source of truth for save/dirty/session state. The WYSIWYG editor
-       * writes back through `view.dispatch`. */}
       <div
-        className="ds-editor-body"
+        className={`ds-editor-body${isMarkdownPath(path) && !mdSource ? " ds-md-visual" : ""}`}
         ref={hostRef}
         data-testid="file-editor-cm"
-        style={isMarkdownPath(path) ? { display: "none" } : undefined}
       />
+      <Modal opened={sourceEdit !== null} onClose={() => setSourceEdit(null)} title={sourceEdit?.label} centered>
+        {sourceEditStale && <Alert color="warn" mb="sm">This block changed while you were editing it. Close and reopen it to avoid overwriting newer text.</Alert>}
+        <Textarea
+          aria-label={sourceEdit?.label}
+          rows={8}
+          value={sourceEdit?.value ?? ""}
+          onChange={(event) => setSourceEdit((current) => current && { ...current, value: event.target.value })}
+        />
+        <Group justify="flex-end" mt="md">
+          <Button variant="subtle" onClick={() => setSourceEdit(null)}>Cancel</Button>
+          <Button onClick={applyMarkdownBlock} disabled={sourceEditStale}>Apply</Button>
+        </Group>
+      </Modal>
     </div>
   );
 }
