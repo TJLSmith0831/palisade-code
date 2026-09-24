@@ -775,6 +775,36 @@ pub fn set_thread_mode(home: &Path, hash: &str, id: &str, mode: &str) -> Res<Thr
     Ok(meta)
 }
 
+/// Atomically change a thread's mode only when it is still in `expected`.
+/// The Apply path uses this as its single-flight claim: two callers can read
+/// Spec concurrently, but only one can claim the transition to Go.
+pub fn transition_thread_mode(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    expected: &str,
+    mode: &str,
+) -> Res<Option<ThreadMeta>> {
+    if !matches!(expected, "spec" | "go") || !matches!(mode, "spec" | "go") {
+        return Err(format!("invalid mode transition: {expected} -> {mode}").into());
+    }
+    let meta = {
+        let _guard = THREAD_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = meta_path(home, hash, id);
+        let body = fs::read_to_string(&path).map_err(|err| e(&format!("unknown thread {id}"), err))?;
+        let mut meta: ThreadMeta = serde_json::from_str(&body).map_err(|err| e("parse meta", err))?;
+        if meta.current_mode != expected {
+            return Ok(None);
+        }
+        meta.current_mode = mode.to_string();
+        meta.updated_at = now();
+        write_json(&path, &meta)?;
+        meta
+    };
+    append_message(home, hash, id, "tool", mode, &format!("Switched to {mode} mode"), None)?;
+    Ok(Some(meta))
+}
+
 // ---------------------------------------------------------------- sessions
 
 /// One run of one agent against one thread. Appended twice — once open, once
@@ -2260,6 +2290,27 @@ mod tests {
         assert_eq!(messages[1].mode, "spec");
 
         assert!(set_thread_mode(home.path(), &project.hash, &thread.id, "turbo").is_err());
+    }
+
+    #[test]
+    fn conditional_mode_transition_has_one_winner() {
+        let home = home();
+        let project = add_project(home.path(), tempfile::tempdir().unwrap().path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| transition_thread_mode(
+                home.path(), &project.hash, &thread.id, "spec", "go",
+            ).unwrap());
+            let second = scope.spawn(|| transition_thread_mode(
+                home.path(), &project.hash, &thread.id, "spec", "go",
+            ).unwrap());
+            (first.join().unwrap(), second.join().unwrap())
+        });
+
+        assert_eq!([first, second].into_iter().flatten().count(), 1);
+        assert_eq!(list_threads(home.path(), &project.hash).unwrap()[0].current_mode, "go");
+        flush_session_log_writer().unwrap();
+        assert_eq!(read_thread(home.path(), &project.hash, &thread.id).unwrap().len(), 1);
     }
 
     /// A sidecar still carrying the retired `executorSessionId` must load —

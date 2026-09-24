@@ -2528,35 +2528,33 @@ async fn apply_skill(
         if executor::openspec_change_status(&harness.workspace.openspec_cache, &spec_tree, &change) != Some(true) {
             return Err("Proposal is not complete yet — finish it before applying".into());
         }
-
-        if let Some(chain_name) = selected_chain(&project_hash, &thread_id) {
-            let chain = chains::load(&project_root(&project_hash)?, &chain_name)?;
-            check_agents_available(&harness, &chain)?;
-            let thread = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
-            let seed = format!("Apply the OpenSpec change \"{change}\".");
-            match launch_chain_run(app.clone(), project_hash.clone(), chain, seed, thread_id.clone(), None) {
-                Ok(run_id) => Ok(ApplyLaunch { thread, chain_name: Some(chain_name), chain_run_id: Some(run_id) }),
-                Err(error) => {
-                    let _ = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "spec");
-                    Err(error)
-                }
-            }
-        } else {
-            let thread = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
-            let result = (|| {
+        let thread = store::transition_thread_mode(
+            &palisade_home(), &project_hash, &thread_id, "spec", "go",
+        )?.ok_or("Apply requires a Spec-mode thread")?;
+        let result = (|| {
+            if let Some(chain_name) = selected_chain(&project_hash, &thread_id) {
+                let chain = chains::load(&project_root(&project_hash)?, &chain_name)?;
+                check_agents_available(&harness, &chain)?;
+                let seed = format!("Apply the OpenSpec change \"{change}\".");
+                let run_id = launch_chain_run(app.clone(), project_hash.clone(), chain, seed, thread_id.clone(), None)?;
+                Ok(ApplyLaunch { thread, chain_name: Some(chain_name), chain_run_id: Some(run_id) })
+            } else {
                 let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go", None, bypass)?;
                 let prompt = apply_skill_prompt(&change);
                 store::append_message(
                     &palisade_home(), &project_hash, &thread_id, "user", "go",
                     &format!("grill-apply {change}"), Some(&id),
-                ).and_then(|_| send_to(&harness, &project_hash, &id, &prompt))
-            })();
-            match result {
-                Ok(()) => Ok(ApplyLaunch { thread, chain_name: None, chain_run_id: None }),
-                Err(error) => {
-                    let _ = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "spec");
-                    Err(error)
-                }
+                ).and_then(|_| send_to(&harness, &project_hash, &id, &prompt))?;
+                Ok(ApplyLaunch { thread, chain_name: None, chain_run_id: None })
+            }
+        })();
+        match result {
+            Ok(launch) => Ok(launch),
+            Err(error) => {
+                let _ = store::transition_thread_mode(
+                    &palisade_home(), &project_hash, &thread_id, "go", "spec",
+                );
+                Err(error)
             }
         }
     })
