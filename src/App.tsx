@@ -176,6 +176,7 @@ const STARTER_PROMPTS = [
 import SpecPane from "./SpecPane";
 import { buildTarget, displaySkillCommand } from "./skillLabel";
 import { BuildLaunch, armBuildLaunch } from "./BuildLaunch";
+import { mergeRefreshed } from "./messageMerge";
 import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
@@ -4658,9 +4659,8 @@ export default function App() {
     setThreads(found);
     setThread(updated);
     // Everything from `history` on is fresh; keep any older page that landed
-    // while this read was out (an optimistic bubble is superseded by its real row).
-    const newest = history[0]?.seq ?? Number.POSITIVE_INFINITY;
-    setMessages((prev) => [...prev.filter((m) => m.seq !== OPTIMISTIC_SEQ && m.seq < newest), ...history]);
+    // while this read was out. An optimistic bubble stays until its real row lands.
+    setMessages((prev) => mergeRefreshed(prev, history, OPTIMISTIC_SEQ));
     clearLiveFor(thread.id);
     // Fetch change status when the thread has an open spec change.
     if (updated.openSpecChangeName) {
