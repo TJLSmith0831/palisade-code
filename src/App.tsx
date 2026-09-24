@@ -21,7 +21,6 @@ import {
   Textarea,
   TextInput,
   Box,
-  SegmentedControl,
   ActionIcon,
   Button,
   Loader,
@@ -219,7 +218,8 @@ import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
 import SessionList from "./SessionList";
 import { VerifyBadge } from "./fleetBadges";
-import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
+import { ModeSelector } from "./ModeSelector";
+import { SpecProgress } from "./SpecProgress";
 import SearchPanel from "./SearchPanel";
 import SourceControlPanel from "./SourceControlPanel";
 import type { PanelId } from "./hooks/useAppShell";
@@ -320,7 +320,7 @@ type ChatSurfaceProps = {
   onRenameThread: (target: ThreadMeta) => void;
   onSpec: () => void;
   onGo: () => void;
-  /** "Apply" — fires grill-apply one-shot in ready_to_apply stage. */
+  /** Applies the ready proposal in a write-enabled Go session. */
   onApply: () => void;
   agentLogins?: api.AgentLogin[];
   agentLoginsFor?: (crashText: string) => api.AgentLogin[];
@@ -794,21 +794,6 @@ export const ChatSurface = memo(
         ),
       [messages, live]
     );
-    // #35: the gap between picking a framing card and the agent's first
-    // question is a cold agent spawn — seconds, sometimes tens of them —
-    // and all it used to show was one italic line over an empty transcript.
-    // A first-time user had nothing telling them what spec mode was about to
-    // do to them, or that answering was their next move.
-    // Anything the agent has produced ends it: a streamed event, a tool call,
-    // or a persisted assistant message. A `plain` item with a `tool` role is
-    // Palisade's own marker ("Switched to spec mode"), not the agent talking.
-    const specStarting =
-      thread?.currentMode === "spec" &&
-      busy &&
-      !items.some(
-        (item) => item.kind !== "plain" || item.role === "assistant"
-      );
-
     // The `/` menu. Opens on a leading slash and closes on the first space —
     // ACP takes the whole line as the prompt, so the rest is the command's
     // own input and there is nothing left to complete.
@@ -1592,6 +1577,9 @@ export const ChatSurface = memo(
           {verify && <VerifyBadge verify={verify} />}
           <div className="spacer" />
         </div>
+        {thread && (thread.currentMode === "spec" || thread.openSpecChangeName) && (
+          <SpecProgress stage={stage} busy={busy} canApply={!!flightSelected} onApply={onApply} />
+        )}
         {/* Amendment 5: switching agents mid-session used to be explained
             only by a hint inside the dropdown, which closes the instant you
             choose — the explanation vanished exactly when it was needed.
@@ -1707,63 +1695,13 @@ export const ChatSurface = memo(
               onOpenRun={onChainOpenRun}
             />
           )}
-          {busy && specStarting && (
-            <Paper
-              withBorder
-              radius="md"
-              p="sm"
-              data-testid="spec-primer"
-              role="status"
-              style={{ background: "var(--surface)", marginTop: 8 }}
-            >
-              <Group gap={8} wrap="nowrap" mb={6}>
-                <Loader type="dots" size={14} color="neutral" />
-                <strong style={{ fontSize: 13 }}>
-                  Starting {executorLabel ?? "the agent"}…
-                </strong>
-              </Group>
-              <ol
-                style={{
-                  margin: 0,
-                  paddingLeft: 18,
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                  color: "var(--muted)",
-                }}
-              >
-                <li>
-                  It asks one question at a time. Answer in the composer below.
-                </li>
-                <li>
-                  When the picture is clear, it writes a proposal for you to
-                  read.
-                </li>
-                <li>Nothing in your code changes until you approve it.</li>
-              </ol>
-              <span className="hint" style={{ display: "block", marginTop: 6 }}>
-                The first question usually takes a few seconds.
-              </span>
-            </Paper>
-          )}
-          {busy && !specStarting && (
+          {busy && (
             <div className="working" data-testid="working">
               Agent working…
               <Loader type="dots" size={16} color="neutral" />
             </div>
           )}
         </div>
-        {stage === "ready_to_apply" && !busy && flightSelected && (
-          <div style={{ display: "flex", gap: 8, padding: "0 8px 4px" }}>
-            <Button
-              data-testid="apply-skill"
-              size="xs"
-              variant="filled"
-              onClick={onApply}
-            >
-              Apply
-            </Button>
-          </div>
-        )}
         {/* What this thread has changed inside its own worktree, sitting
             where the user is already looking when a turn ends. Renders only
             once there is something to report — an empty worktree gets no
@@ -2378,9 +2316,9 @@ export const ChatSurface = memo(
               </Menu.Dropdown>
             </Menu>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <SegmentedControl
-                data-testid="mode-selector"
+            <div className="ds-composer-actions">
+              <ModeSelector
+                testId="mode-selector"
                 value={thread?.currentMode ?? "go"}
                 onChange={(value) => {
                   if (value === "spec") {
@@ -2390,16 +2328,7 @@ export const ChatSurface = memo(
                   }
                 }}
                 disabled={busy || !flightSelected}
-                data={[
-                  { label: "Spec", value: "spec" },
-                  { label: "Go", value: "go" },
-                ]}
-                size="xs"
-                styles={MODE_SELECTOR_STYLES}
-                classNames={{
-                  control: "mode-selector-control",
-                  label: "mode-selector-label",
-                }}
+                ariaLabel="Task mode"
               />
 
               {busy ? (
@@ -3602,6 +3531,7 @@ export default function App() {
 
   /** Bumped by every thread selection; a read that finds it moved on discards itself. */
   const selectionRef = useRef(0);
+  const changeStatusRequestRef = useRef(0);
   const selectThread = useCallback(
     async (projectHash: string, next: ThreadMeta | null) => {
       // Leaving a thread lets the backend do its idle housekeeping (worktree
@@ -3612,7 +3542,17 @@ export default function App() {
       // Each selection owns the screen until a newer one replaces it: a slow
       // read for an earlier click must not land its history under this thread.
       const mine = ++selectionRef.current;
+      const statusRequest = ++changeStatusRequestRef.current;
       setThread(next);
+      setChangeComplete(null);
+      if (next?.openSpecChangeName) {
+        void api.changeStatus(projectHash, next.id, next.openSpecChangeName).then(
+          (complete) => {
+            if (statusRequest === changeStatusRequestRef.current) setChangeComplete(complete);
+          },
+          () => {}
+        );
+      }
       // The whole new-thread flow, not just its first picker: a Spec framing
       // menu left half-finished otherwise sat over every thread opened after
       // it — a Fleet run landed on "What would you like to spec out today?"
@@ -4704,10 +4644,26 @@ export default function App() {
     clearLiveFor(thread.id);
     // Fetch change status when the thread has an open spec change.
     if (updated.openSpecChangeName) {
+      setChangeComplete(null);
+      const changeName = updated.openSpecChangeName;
+      const statusRequest = ++changeStatusRequestRef.current;
       api
-        .changeStatus(project.hash, updated.openSpecChangeName)
-        .then(setChangeComplete, () => setChangeComplete(null));
+        .changeStatus(project.hash, updated.id, changeName)
+        .then(
+          (complete) => {
+            if (statusRequest === changeStatusRequestRef.current &&
+                current.current.project?.hash === project.hash &&
+                current.current.thread?.id === updated.id &&
+                current.current.thread?.openSpecChangeName === changeName) {
+              setChangeComplete(complete);
+            }
+          },
+          () => {
+            if (statusRequest === changeStatusRequestRef.current) setChangeComplete(null);
+          }
+        );
     } else {
+      changeStatusRequestRef.current++;
       setChangeComplete(null);
     }
   }, []);
@@ -5392,7 +5348,22 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
-      await api.applySkill(project.hash, thread.id, prefs.bypass);
+      const launch = await api.applySkill(project.hash, thread.id, prefs.bypass);
+      setThread(launch.thread);
+      if (launch.chainName && launch.chainRunId) {
+        tabs.openChain(launch.chainName);
+        setChainRun({
+          runId: launch.chainRunId,
+          chain: launch.chainName,
+          threadId: thread.id,
+          startedAt: new Date().toISOString(),
+          states: {},
+          nodes: {},
+          awaiting: null,
+          outcome: null,
+        });
+        setBusy(false);
+      }
       await refresh();
     } catch (err) {
       setBusy(false);

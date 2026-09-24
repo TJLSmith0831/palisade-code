@@ -4,7 +4,7 @@ import {
   IconSearch,
   IconGitBranch,
   IconDeviceWorkstation,
-  IconFileDescription,
+  IconListCheck,
   IconPlayerPlay,
   IconPlug,
   IconDatabase,
@@ -31,7 +31,7 @@ type RailItem = {
 // first icon, and files are the fourth, not the sixth.
 const TOP_AGENT: RailItem[] = [
   { id: "fleet", label: "Fleet", Icon: IconAiAgents },
-  { id: "specs", label: "Specs", Icon: IconFileDescription },
+  { id: "specs", label: "Specs", Icon: IconListCheck },
   { id: "review", label: "Review", Icon: IconChecklist },
 ];
 

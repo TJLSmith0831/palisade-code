@@ -180,6 +180,16 @@ pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
         .ok_or_else(|| crate::PalisadeError::not_found(format!("unknown project: {hash}")))
 }
 
+/// Read a thread's spec from the same tree where its agent writes.
+fn spec_root(project_hash: &str, thread_id: &str) -> Res<PathBuf> {
+    let meta = thread_meta(project_hash, thread_id).ok_or("thread not found")?;
+    match meta.worktree_path {
+        Some(path) if Path::new(&path).is_dir() => Ok(PathBuf::from(path)),
+        Some(_) => Err("thread worktree is missing".into()),
+        None => project_root(project_hash),
+    }
+}
+
 /// A fresh Palisade process owns no chain workers. Sweep every persisted
 /// project's open records before windows or IPC can surface them, closing
 /// each as `interrupted` rather than attempting auto-resume (D-c).
@@ -686,6 +696,7 @@ impl Sink for AppSink {
 
         match &envelope_ref.event {
             ExecutorEvent::Crashed { message, failure_class, .. } => {
+                self.app.state::<Harness>().agent.pending_changes.lock_or_recover().remove(&envelope_ref.session_id);
                 end_session(&self.app.state::<Harness>(), &thread_id, &envelope_ref.session_id, "crashed");
                 // #18: only a dead agent drops the thread back to spec. A
                 // retryable turn failure (expired auth, a cancelled turn)
@@ -723,9 +734,9 @@ impl Sink for AppSink {
                     );
                     let _ = self.app.emit("thread-updated", &thread_id);
                 }
-                let watch = harness.agent.pending_propose.lock_or_recover().take();
+                let watch = harness.agent.pending_changes.lock_or_recover().remove(&envelope_ref.session_id);
                 if let Some(watch) = watch {
-                    let after = executor::openspec_changes(&harness.workspace.openspec_cache, &watch.project_root);
+                    let after = executor::openspec_change_dirs(&watch.project_root);
                     match executor::newly_added_change(&watch.before, &after) {
                         executor::ProposeOutcome::One(name) => {
                             let _ = store::set_open_spec_change(
@@ -745,7 +756,9 @@ impl Sink for AppSink {
                                 SpecLinkAmbiguous { thread_id: thread_id.clone(), names },
                             );
                         }
-                        executor::ProposeOutcome::None => {}
+                        executor::ProposeOutcome::None => {
+                            harness.agent.pending_changes.lock_or_recover().insert(envelope_ref.session_id.clone(), watch);
+                        }
                     }
                 }
             }
@@ -1244,6 +1257,7 @@ fn park_prefix(harness: &Harness, session_id: &str, prefix: Option<String>) {
 
 /// Drop a session from the live map and close its record. Idempotent.
 fn end_session(harness: &Harness, thread_id: &str, session_id: &str, outcome: &str) {
+    harness.agent.pending_changes.lock_or_recover().remove(session_id);
     harness.agent.pending_prefix.lock_or_recover().remove(session_id);
     harness.agent.session_commands.lock_or_recover().remove(session_id);
     if let Some(mut session) = harness.agent.acp_sessions.lock_or_recover().remove(session_id) {
@@ -1703,6 +1717,16 @@ fn send_to<'a>(
         (session.mode.clone(), session.thread_id.clone(), session.project_root.clone())
     };
     if mode == "spec" {
+        if thread_meta(project_hash, &thread_id).is_some_and(|meta| meta.open_spec_change_name.is_none()) {
+            harness.agent.pending_changes.lock_or_recover()
+                .entry(session_id.to_string())
+                .or_insert_with(|| executor::ChangeWatch {
+                    project_hash: project_hash.to_string(),
+                    thread_id: thread_id.clone(),
+                    before: executor::openspec_change_dirs(&root),
+                    project_root: root.clone(),
+                });
+        }
         let already_framed = grill_inject::leads_with_skill(turn.content)
             || prefix.as_deref().is_some_and(grill_inject::leads_with_skill);
         prompt.context.extend(prepare_spec_turn(project_hash, &thread_id, &root, already_framed));
@@ -1710,7 +1734,10 @@ fn send_to<'a>(
     {
         let sessions = harness.agent.acp_sessions.lock_or_recover();
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
-        acp_client::send_acp_prompt(session, prefix.as_deref(), prompt)?;
+        if let Err(error) = acp_client::send_acp_prompt(session, prefix.as_deref(), prompt) {
+            harness.agent.pending_changes.lock_or_recover().remove(session_id);
+            return Err(error.into());
+        }
     }
     harness.clear_pending_prefix(session_id);
     Ok(())
@@ -2196,17 +2223,9 @@ async fn propose(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let root = project_root(&project_hash)?;
         let id =
             ensure_session(&app, &harness, &project_hash, &thread_id, "spec", model, bypass)?;
         let prompt = grill_inject::build_prompt("spec", true, "grill-propose");
-
-        *harness.agent.pending_propose.lock_or_recover() = Some(executor::ProposeWatch {
-            project_hash: project_hash.clone(),
-            thread_id: thread_id.clone(),
-            before: executor::openspec_changes(&harness.workspace.openspec_cache, &root),
-            project_root: root,
-        });
 
         // Persist only the short label — the skill content goes to the agent
         // but is not shown in the chat.
@@ -2471,48 +2490,73 @@ async fn draft_commit_message(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
-/// Build the grill-apply prompt for a one-shot injection in spec-mode.
-/// Per amended D19: grill-apply is UI-triggered, not mode-triggered. The
-/// user clicks "Apply" after the proposal is complete; this builds the
-/// prompt that goes to the agent.
+/// Build the grill-apply prompt for a one-shot injection in go-mode.
 fn apply_skill_prompt(change: &str) -> String {
     grill_inject::inject_skill(&grill_inject::GrillSkill::Apply, &format!("grill-apply {change}"))
 }
 
-/// `apply_skill`: UI-triggered one-shot grill-apply injection in spec-mode.
-/// The user clicks "Apply" after the proposal artifacts are complete; this
-/// starts (or reuses) a spec-mode session and sends the grill-apply prompt.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyLaunch {
+    thread: store::ThreadMeta,
+    chain_name: Option<String>,
+    chain_run_id: Option<String>,
+}
+
+/// Apply a complete proposal in a write-enabled session without requiring a
+/// separate mode switch. A failed launch restores Spec so Apply can be retried.
 #[tauri::command]
 async fn apply_skill(
     app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
     bypass: bool,
-) -> Res<()> {
+) -> Res<ApplyLaunch> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
         let meta = store::list_threads(&palisade_home(), &project_hash)?
             .into_iter()
             .find(|t| t.id == thread_id)
             .ok_or("thread not found")?;
+        if meta.current_mode != "spec" {
+            return Err("Apply requires a Spec-mode thread".into());
+        }
         let change = meta
             .open_spec_change_name
             .ok_or("no open spec change — apply requires a proposal")?;
-        let id =
-            ensure_session(&app, &harness, &project_hash, &thread_id, "spec", None, bypass)?;
-        let prompt = apply_skill_prompt(&change);
-        // Persist only the short label — the skill content goes to the agent
-        // but is not shown in the chat.
-        store::append_message(
-            &palisade_home(),
-            &project_hash,
-            &thread_id,
-            "user",
-            "spec",
-            &format!("grill-apply {change}"),
-            Some(&id),
-        )?;
-        send_to(&harness, &project_hash, &id, &prompt)
+        let spec_tree = spec_root(&project_hash, &thread_id)?;
+        if executor::openspec_change_status(&harness.workspace.openspec_cache, &spec_tree, &change) != Some(true) {
+            return Err("Proposal is not complete yet — finish it before applying".into());
+        }
+
+        if let Some(chain_name) = selected_chain(&project_hash, &thread_id) {
+            let chain = chains::load(&project_root(&project_hash)?, &chain_name)?;
+            check_agents_available(&harness, &chain)?;
+            let thread = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
+            let seed = format!("Apply the OpenSpec change \"{change}\".");
+            match launch_chain_run(app.clone(), project_hash.clone(), chain, seed, thread_id.clone(), None) {
+                Ok(run_id) => Ok(ApplyLaunch { thread, chain_name: Some(chain_name), chain_run_id: Some(run_id) }),
+                Err(error) => {
+                    let _ = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "spec");
+                    Err(error)
+                }
+            }
+        } else {
+            let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go", None, bypass)?;
+            let thread = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
+            let prompt = apply_skill_prompt(&change);
+            let result = store::append_message(
+                &palisade_home(), &project_hash, &thread_id, "user", "go",
+                &format!("grill-apply {change}"), Some(&id),
+            ).and_then(|_| send_to(&harness, &project_hash, &id, &prompt));
+            match result {
+                Ok(()) => Ok(ApplyLaunch { thread, chain_name: None, chain_run_id: None }),
+                Err(error) => {
+                    let _ = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "spec");
+                    Err(error)
+                }
+            }
+        }
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2525,11 +2569,12 @@ async fn apply_skill(
 async fn change_status(
     app: tauri::AppHandle,
     project_hash: String,
+    thread_id: String,
     change_name: String,
 ) -> Res<Option<bool>> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        let root = project_root(&project_hash)?;
+        let root = spec_root(&project_hash, &thread_id)?;
         Ok(executor::openspec_change_status(&cache, &root, &change_name))
     })
     .await

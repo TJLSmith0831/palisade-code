@@ -5,9 +5,9 @@ export const MODE_SELECTOR_STYLES = {
   root: {
     // Flexible, not fixed: 190px is the comfortable size, but a rigid block
     // here is what forced the controls row to wrap in a narrow chat pane.
-    width: 190,
-    minWidth: 104,
-    height: 36,
+    width: "var(--mode-selector-width, 190px)",
+    minWidth: "var(--mode-selector-min-width, 104px)",
+    height: "var(--mode-selector-height, 36px)",
     padding: 2,
     gap: 0,
     background: "transparent",
@@ -23,10 +23,10 @@ export const MODE_SELECTOR_STYLES = {
   },
   control: {
     flex: "1 1 0",
-    width: "50%",
+    width: "var(--mode-control-width, 50%)",
     minWidth: 0,
-    height: 32,
-    minHeight: 32,
+    height: "var(--mode-control-height, 32px)",
+    minHeight: "var(--mode-control-height, 32px)",
     padding: 0,
     border: 0,
     borderRadius: 999,
