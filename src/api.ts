@@ -129,6 +129,12 @@ export const deleteThread = (projectHash: string, threadId: string) =>
  *  stops listing it as "Unreviewed". Idempotent. */
 export const markThreadViewed = (projectHash: string, threadId: string) =>
   invoke<void>("mark_thread_viewed", { projectHash, threadId });
+/** Acknowledges only this session's crash; a later crash remains attention. */
+export const acknowledgeThreadCrash = (
+  projectHash: string,
+  threadId: string,
+  sessionId: string | null
+) => invoke<ThreadMeta>("acknowledge_thread_crash", { projectHash, threadId, sessionId });
 
 /** The macOS dock badge: threads wanting a look (blocked on you, or finished
  *  and unread). App-wide; 0 clears it. */

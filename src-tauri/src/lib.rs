@@ -429,6 +429,25 @@ async fn mark_thread_viewed(project_hash: String, thread_id: String) -> Res<()> 
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// Stop surfacing this exact crashed run as an outstanding notification.
+#[tauri::command]
+async fn acknowledge_thread_crash(
+    project_hash: String,
+    thread_id: String,
+    session_id: Option<String>,
+) -> Res<store::ThreadMeta> {
+    tokio::task::spawn_blocking(move || {
+        store::acknowledge_thread_crash(
+            &palisade_home(),
+            &project_hash,
+            &thread_id,
+            session_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// The dock badge: how many threads want a look — blocked on you, or finished
 /// and unread. Tauri applies it app-wide, so whichever window called last
 /// wins; every window derives the same count from the same fleet. Zero clears
@@ -2954,7 +2973,10 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                     ),
                     verify_failed: verify.state == fleet::VerifyState::Fail,
                     merge_conflict: merge == fleet::FleetMerge::Conflicts,
-                    crashed: last.is_some_and(|s| s.outcome.as_deref() == Some("crashed")),
+                    crashed: last.is_some_and(|s| {
+                        s.outcome.as_deref() == Some("crashed")
+                            && thread.acknowledged_crash_session_id.as_deref() != Some(&s.id)
+                    }),
                 });
                 rows.push(fleet::FleetRow {
                     kind: fleet::FleetKind::Thread,
@@ -4652,6 +4674,7 @@ pub fn run() {
             delete_thread,
             set_thread_archived,
             mark_thread_viewed,
+            acknowledge_thread_crash,
             set_dock_badge,
             append_message,
             read_thread,
@@ -5230,6 +5253,7 @@ mod tests {
             title_source: "manual".into(),
             auth_blocked: None,
             last_viewed_at: None,
+            acknowledged_crash_session_id: None,
             title_retried: false,
         }
     }

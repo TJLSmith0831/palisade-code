@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import "../App.css";
 import {
@@ -456,6 +456,23 @@ describe("EventList crash banner", () => {
     );
     fireEvent.click(screen.getByTestId("crash-banner-retry"));
     expect(onRetry).toHaveBeenCalledWith("Hello?");
+  });
+
+  it("offers acknowledgement only on the latest crash, including legacy records", async () => {
+    const onAcknowledgeCrash = vi.fn().mockResolvedValue(undefined);
+    renderWithMantine(
+      <EventList
+        items={[
+          { kind: "plain", role: "system", mode: "spec", text: "Earlier crash.", sessionId: "s1" },
+          { kind: "plain", role: "system", mode: "spec", text: "Latest crash." },
+        ]}
+        executor={null}
+        onAcknowledgeCrash={onAcknowledgeCrash}
+      />
+    );
+    expect(screen.getAllByTestId("crash-banner-acknowledge")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("crash-banner-acknowledge"));
+    await waitFor(() => expect(onAcknowledgeCrash).toHaveBeenCalledWith(null));
   });
 
   it("does not offer a second retry while Palisade owns the queued auth recovery", () => {

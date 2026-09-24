@@ -26,7 +26,7 @@ export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
-  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; failureClass?: Message["failureClass"]; attachments?: string[]; skills?: string[] }
+  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; sessionId?: string | null; failureClass?: Message["failureClass"]; attachments?: string[]; skills?: string[] }
   /** A zero-height marker at the first turn of a session, so a chain node can
    *  scroll the transcript to what it actually did. Lives on `Item` and not on
    *  `ExecutorEvent`, which D13 caps at nine variants. */
@@ -136,6 +136,7 @@ function itemFromMessage(message: Message): Item {
       mode: message.mode,
       text: message.content,
       seq: message.seq,
+      sessionId: message.sessionId,
       failureClass: message.failureClass,
       attachments: message.attachments,
       skills: message.skills,
@@ -585,6 +586,7 @@ export const EventList = memo(function EventList({
   sessionId = null,
   onPermissionAnswered,
   onRetry,
+  onAcknowledgeCrash,
   agentLogins = [],
   onAgentLogin,
   agentLoginsFor,
@@ -609,6 +611,8 @@ export const EventList = memo(function EventList({
    *  they've fixed the agent's login outside Palisade. Omitted on read-only
    *  render paths (e.g. the diff tab), which have nowhere to route a send. */
   onRetry?: (message: number | string) => void;
+  /** Marks this exact crashed run handled without hiding its transcript. */
+  onAcknowledgeCrash?: (sessionId: string | null) => Promise<void>;
   /** Interactive logins the thread's agent advertised over ACP. An agent that
    *  offers one expects the *client* to run it (its own `authenticate` can't),
    *  which is how an expired login gets fixed without leaving the app (#19).
@@ -625,6 +629,15 @@ export const EventList = memo(function EventList({
    */
   agentLoginsFor?: (crashText: string) => AgentLogin[];
 }) {
+  const [acknowledgingSessionId, setAcknowledgingSessionId] = useState<string | null>(null);
+  const [acknowledgedSessionIds, setAcknowledgedSessionIds] = useState<Set<string>>(() => new Set());
+  const latestCrashIndex = useMemo(() => {
+    for (let index = items.length - 1; index >= 0; index--) {
+      const item = items[index];
+      if (item.kind === "plain" && item.role === "system") return index;
+    }
+    return -1;
+  }, [items]);
   // Tool output arrives as its own event; pair it back to the call it belongs to.
   const results = useMemo(() => {
     const map = new Map<
@@ -803,6 +816,30 @@ export const EventList = memo(function EventList({
                     >
                       <IconRefresh size={12} />
                       Retry
+                    </button>
+                  )}
+                  {onAcknowledgeCrash && index === latestCrashIndex && (
+                    <button
+                      type="button"
+                      className="ds-crash-banner-retry"
+                      disabled={
+                        acknowledgingSessionId === (item.sessionId ?? `legacy-${index}`) ||
+                        acknowledgedSessionIds.has(item.sessionId ?? `legacy-${index}`)
+                      }
+                      onClick={() => {
+                        const sessionId = item.sessionId ?? null;
+                        const key = sessionId ?? `legacy-${index}`;
+                        setAcknowledgingSessionId(key);
+                        void onAcknowledgeCrash(sessionId)
+                          .then(() => setAcknowledgedSessionIds((seen) => new Set(seen).add(key)))
+                          .catch(() => {})
+                          .finally(() => setAcknowledgingSessionId(null));
+                      }}
+                      data-testid="crash-banner-acknowledge"
+                    >
+                      {acknowledgedSessionIds.has(item.sessionId ?? `legacy-${index}`)
+                        ? "Acknowledged"
+                        : "Acknowledge"}
                     </button>
                   )}
                 </Alert>

@@ -371,6 +371,10 @@ pub struct ThreadMeta {
     /// Absent on records written before viewing was tracked.
     #[serde(default)]
     pub last_viewed_at: Option<String>,
+    /// The crashed session the user has acknowledged. Kept as an id instead
+    /// of a boolean so the next crash asks for attention again.
+    #[serde(default)]
+    pub acknowledged_crash_session_id: Option<String>,
     /// Set once the old-title repair has asked the local model about this
     /// thread, whatever it answered — a title the model can't improve is
     /// asked about once, not on every project open.
@@ -463,6 +467,7 @@ pub fn create_thread(home: &Path, hash: &str, title: &str) -> Res<ThreadMeta> {
         title_source: "auto".into(),
         auth_blocked: None,
         last_viewed_at: None,
+        acknowledged_crash_session_id: None,
         title_retried: false,
     };
     fs::create_dir_all(threads_dir(home, hash)).map_err(|err| e("create threads dir", err))?;
@@ -657,6 +662,32 @@ pub fn set_thread_archived(home: &Path, hash: &str, id: &str, archived: bool) ->
 pub fn mark_thread_viewed(home: &Path, hash: &str, id: &str) -> Res<ThreadMeta> {
     let stamp = now();
     update_thread(home, hash, id, |m| m.last_viewed_at = Some(stamp))
+}
+
+/// Acknowledge the current failed run. A known id prevents an old banner from
+/// dismissing a newer crash; `None` supports records from before ids existed.
+pub fn acknowledge_thread_crash(
+    home: &Path,
+    hash: &str,
+    id: &str,
+    session_id: Option<&str>,
+) -> Res<ThreadMeta> {
+    flush_session_log_writer()?;
+    let Some(current) = read_sessions(home, hash, id)?.last().cloned() else {
+        return Err(crate::error::PalisadeError::from(
+            "This crash is no longer current.",
+        ));
+    };
+    if current.outcome.as_deref() != Some("crashed")
+        || session_id.is_some_and(|requested| current.id != requested)
+    {
+        return Err(crate::error::PalisadeError::from(
+            "This crash is no longer current.",
+        ));
+    }
+    update_thread(home, hash, id, |m| {
+        m.acknowledged_crash_session_id = Some(current.id);
+    })
 }
 
 /// Record the worktree a thread's sessions run in. Written once, by the
@@ -2627,6 +2658,22 @@ mod tests {
         // Calling it again only advances the stamp; it never errors or resets.
         let viewed_again = mark_thread_viewed(home.path(), &project.hash, &thread.id).unwrap();
         assert!(viewed_again.last_viewed_at >= first);
+    }
+
+    #[test]
+    fn acknowledging_a_crash_accepts_legacy_messages_but_not_an_old_session() {
+        let home = home();
+        let repo = tempfile::tempdir().unwrap();
+        let project = add_project(home.path(), repo.path()).unwrap();
+        let thread = create_thread(home.path(), &project.hash, "t").unwrap();
+        open_session(home.path(), &project.hash, &thread.id, "s1", "codex", "go", None, None, None).unwrap();
+        close_session(home.path(), &project.hash, &thread.id, "s1", "crashed", None).unwrap();
+        open_session(home.path(), &project.hash, &thread.id, "s2", "codex", "go", None, None, None).unwrap();
+        close_session(home.path(), &project.hash, &thread.id, "s2", "crashed", None).unwrap();
+
+        assert!(acknowledge_thread_crash(home.path(), &project.hash, &thread.id, Some("s1")).is_err());
+        let acknowledged = acknowledge_thread_crash(home.path(), &project.hash, &thread.id, None).unwrap();
+        assert_eq!(acknowledged.acknowledged_crash_session_id.as_deref(), Some("s2"));
     }
 
     #[test]

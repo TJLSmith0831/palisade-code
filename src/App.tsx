@@ -258,6 +258,8 @@ type ChatSurfaceProps = {
   sessionId: string | null;
   /** A permission prompt was answered in the chat surface. */
   onPermissionAnswered?: (requestId: string) => void;
+  /** A crashed run was handled; its notification can leave Fleet. */
+  onAcknowledgeCrash?: (sessionId: string | null) => Promise<void>;
   busy: boolean;
   /** This thread's isolated worktree, absent until its first session runs
    *  and for every thread in a non-git project. */
@@ -622,6 +624,7 @@ export const ChatSurface = memo(
     live,
     sessionId,
     onPermissionAnswered,
+    onAcknowledgeCrash,
     busy,
     worktree,
     verify,
@@ -1666,6 +1669,7 @@ export const ChatSurface = memo(
               executor={executor}
               sessionId={sessionId}
               onPermissionAnswered={onPermissionAnswered}
+              onAcknowledgeCrash={onAcknowledgeCrash}
               onRetry={(message) => {
                 if (typeof message === "number" && project && thread) {
                   void api.retryMessage(project.hash, thread.id, message).catch((err) => onError?.(describeError(err)));
@@ -6398,6 +6402,18 @@ export default function App() {
         }
         return changed ? next : previous;
       });
+    },
+    onAcknowledgeCrash: async (sessionId: string | null) => {
+      if (!project || !thread) return;
+      try {
+        const updated = await api.acknowledgeThreadCrash(project.hash, thread.id, sessionId);
+        setThread(updated);
+        setThreads((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+        await fleet.refresh();
+      } catch (err) {
+        banner(describeError(err), "error");
+        throw err;
+      }
     },
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
