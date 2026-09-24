@@ -446,15 +446,7 @@ pub fn openspec_change_dirs(project_root: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Snapshot for `newly_added_change` to diff against.
-pub fn openspec_changes(
-    cache: &crate::openspec_cache::OpenSpecCache,
-    project_root: &Path,
-) -> Vec<String> {
-    openspec_list(cache, project_root).into_iter().map(|c| c.name).collect()
-}
-
-/// What a `/propose` turn produced. Ambiguity is surfaced, never dropped:
+/// What a Spec turn produced. Ambiguity is surfaced, never dropped:
 /// returning `None` for "two appeared" is how the durable spec link used to go
 /// missing silently (D12).
 #[derive(Debug, Clone, PartialEq)]
@@ -487,9 +479,9 @@ pub fn on_crash(home: &Path, hash: &str, thread_id: &str) -> Res<()> {
     Ok(())
 }
 
-/// Set when `/propose` is in flight, so the change that `grill-propose`
-/// creates can be spotted the moment the turn finishes.
-pub struct ProposeWatch {
+/// Snapshot for a Spec session so a newly created change can be linked to
+/// its thread, whether the agent used grill-propose or created it directly.
+pub struct ChangeWatch {
     pub project_hash: String,
     pub thread_id: String,
     pub project_root: PathBuf,
@@ -533,7 +525,7 @@ pub struct AgentState {
     /// OAuth flow; queuing (not dropping) is what backs the "will resume
     /// automatically" message a blocked turn is given.
     pub pending_auth_turns: Mutex<HashMap<String, Vec<PendingAuthTurn>>>,
-    pub pending_propose: Mutex<Option<ProposeWatch>>,
+    pub pending_changes: Mutex<HashMap<String, ChangeWatch>>,
     /// The last slash commands each session's agent advertised, keyed by
     /// session id. Agents send the list only at session start, so a reloaded
     /// webview reads it back from here instead of waiting for a new session.

@@ -2485,6 +2485,7 @@ input[type="checkbox"] {
 }
 
 .composer {
+  container: composer / inline-size;
   display: flex;
   gap: 12px;
   padding: 12px 16px;
@@ -3216,6 +3217,26 @@ input[type="checkbox"] {
 
 .mode-selector-control[data-active] {
   color: var(--accent-on);
+}
+
+.mode-selector-label .mantine-SegmentedControl-innerLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mode-selector-label svg {
+  flex-shrink: 0;
+}
+
+@container composer-controls (max-width: 420px) {
+  .ds-mode-selector { --mode-selector-width: 104px; }
+  .ds-mode-selector .mode-selector-text { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+}
+
+@container fleet-controls (max-width: 720px) {
+  .ds-mode-selector { --mode-selector-width: 104px; }
+  .ds-mode-selector .mode-selector-text { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 }
 
 /* ==========================================================================
@@ -5104,23 +5125,12 @@ button.ds-onboarding-status {
   white-space: nowrap;
 }
 
-/* --- composer control row -------------------------------------------------
-   The Editor preset's chat column defaults to 300px, so this row wraps
-   rather than letting the provider/model buttons overlap the mode toggle. */
-
-/* Two clusters, one row: [agent · model] reads as context on the left,
-   [mode · send] is the action and pins right. `nowrap` on purpose — with
-   wrap, flexbox breaks the line *before* it shrinks anything, so one long
-   model name threw the Spec/Go control onto its own row. Now the labels
-   ellipsize down to their glyph floor instead, and the row keeps this shape
-   at every resize point. */
+/* Agent and model are context; mode and Send stay together at the right.
+   The action group stacks at narrow chat widths so Send remains reachable. */
 .ds-composer-controls {
+  container: composer-controls / inline-size;
   display: flex;
   align-items: center;
-  /* Wrap is the last resort, not the first: the chips below shrink to a
-     56px floor before the line can break, so the row stays single at every
-     ordinary size — and when it truly cannot fit, the send button drops to a
-     second row instead of being clipped off the pane's edge. */
   flex-wrap: wrap;
   gap: 8px;
   width: 100%;
@@ -5134,15 +5144,48 @@ button.ds-onboarding-status {
   margin-top: 8px;
 }
 
-/* Mode + send: the action pair, always last, never shrinks. A truncated
-   model name still reads; a clipped Go button does not. */
 .ds-composer-controls > :last-child {
-  /* Shrinks only down to its own content (the Spec/Go control's own 104px
-     floor plus the send button), so it compresses instead of forcing a wrap,
-     but can never squeeze the send button out of reach. */
   flex: 0 1 auto;
   min-width: min-content;
   margin-left: auto;
+}
+
+.ds-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@container composer (max-width: 320px) {
+  .ds-composer-controls {
+    display: grid;
+    grid-template-columns: minmax(96px, 1fr) 36px;
+    grid-template-rows: 68px 34px;
+    gap: 4px;
+  }
+  .ds-composer-controls > .ds-composer-picker {
+    grid-column: 1;
+    width: 100%;
+    max-width: none;
+  }
+  .ds-composer-controls > .ds-composer-picker:first-child { grid-row: 1; align-self: end; }
+  .ds-composer-controls > .ds-composer-picker:nth-child(2) { grid-row: 2; }
+  .ds-composer-actions { display: contents; }
+  .ds-composer-actions .ds-mode-selector {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: column;
+    --mode-selector-width: 36px;
+    --mode-selector-min-width: 36px;
+    --mode-selector-height: 68px;
+    --mode-control-width: 100%;
+    --mode-control-height: 31px;
+  }
+  .ds-composer-actions > :last-child {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: center;
+  }
 }
 
 /* Context chips absorb all of the shrink, and the model chip — long
@@ -5158,6 +5201,10 @@ button.ds-onboarding-status {
   flex: 0 1 auto;
   min-width: 96px;
   max-width: max-content;
+}
+
+@container composer (max-width: 320px) {
+  .ds-composer-controls > .ds-composer-picker { max-width: none; }
 }
 
 /* The composer's two chips: icon · name · chevron, matching the mockup.
@@ -5294,6 +5341,94 @@ button.ds-onboarding-status {
 
 .ds-thread-tab.active .ds-thread-tab-mode {
   color: var(--accent);
+}
+
+.ds-spec-progress {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ds-spec-progress ol {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ds-spec-progress li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ds-spec-progress li:not(:last-child)::after {
+  content: "";
+  width: 16px;
+  height: 1px;
+  margin-left: 3px;
+  background: var(--border);
+}
+
+.ds-spec-progress li[data-state="done"],
+.ds-spec-progress li[data-state="current"] {
+  color: var(--accent);
+}
+
+.ds-spec-progress li[data-state="done"]::after {
+  background: var(--accent);
+}
+
+.ds-spec-progress li[data-state="current"] {
+  font-weight: 600;
+}
+
+.ds-spec-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  height: 18px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 10px;
+}
+
+.ds-spec-step-label { flex-shrink: 0; }
+.ds-spec-progress > button { flex-shrink: 0; }
+
+@container (max-width: 520px) {
+  .ds-spec-progress li { flex-shrink: 0; }
+  .ds-spec-progress li:not([data-state="current"]) .ds-spec-step-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .ds-spec-progress li:not(:last-child)::after { display: none; }
+  .ds-spec-progress li[data-state="current"] { flex: 1 0 auto; }
+}
+
+@container (max-width: 340px) {
+  .ds-spec-progress ol { flex: 1 1 100%; }
+  .ds-spec-progress > button { margin-left: auto; }
 }
 
 .ds-thread-tab-new {
@@ -7203,6 +7338,7 @@ button.ds-onboarding-status {
 }
 
 .fleet-composer-row {
+  container: fleet-controls / inline-size;
   display: flex;
   align-items: center;
   gap: 8px;

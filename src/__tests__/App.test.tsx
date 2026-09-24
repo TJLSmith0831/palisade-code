@@ -3869,10 +3869,7 @@ describe("Workspace shell", () => {
     await waitFor(() =>
       expect(screen.getByTestId("thread-title")).toHaveTextContent("New thread")
     );
-    // The wait is explained rather than just labelled "working" (#35).
-    expect(screen.getByTestId("spec-primer")).toHaveTextContent(
-      /one question at a time/i
-    );
+    expect(screen.getByTestId("spec-progress")).toHaveTextContent("Exploring");
     // The echo is what the user typed, not the card they pressed.
     expect(screen.getByTestId("messages")).toHaveTextContent(
       "a CSV export on the reports page"
@@ -6531,7 +6528,7 @@ describe("Beta feedback #35 — custom spec framing (Other)", () => {
 });
 
 
-describe("Beta feedback #35 — the wait before the agent's first question", () => {
+describe("Spec progress while the agent starts", () => {
   const startSpec = async (specType: "feature" | "bugfix" = "feature") => {
     let created = false;
     invokeMock.mockImplementation((cmd, args) => {
@@ -6577,20 +6574,16 @@ describe("Beta feedback #35 — the wait before the agent's first question", () 
     fireEvent.click(screen.getByTestId("other-spec-submit"));
   };
 
-  it("says what is happening and what the user should do, not just 'working'", async () => {
+  it("shows the Exploring stage without an instructional message", async () => {
     await startSpec();
-    // The whole wait used to be one italic line over an empty transcript —
-    // a new user had nothing telling them what spec mode was about to do.
-    const primer = await screen.findByTestId("spec-primer");
-    expect(primer).toHaveTextContent(/one question at a time/i);
-    expect(primer).toHaveTextContent(/approve/i);
-    // And it names what is being waited on, rather than "executor working".
-    expect(primer).toHaveTextContent(/claude/i);
+    const progress = await screen.findByTestId("spec-progress");
+    expect(progress.querySelector('[aria-current="step"]')).toHaveTextContent("Exploring");
+    expect(screen.queryByTestId("spec-primer")).toBeNull();
   });
 
-  it("gets out of the way as soon as the agent actually says something", async () => {
+  it("keeps the progress visible as the agent starts answering", async () => {
     await startSpec();
-    await screen.findByTestId("spec-primer");
+    await screen.findByTestId("spec-progress");
     await act(async () => {
       emit("executor-event", {
         sessionId: "s1",
@@ -6598,7 +6591,111 @@ describe("Beta feedback #35 — the wait before the agent's first question", () 
         event: { kind: "text", text: "What problem are you solving?" },
       });
     });
-    await waitFor(() => expect(screen.queryByTestId("spec-primer")).toBeNull());
+    expect(screen.getByTestId("spec-progress")).toHaveTextContent("Exploring");
+  });
+});
+
+describe("Apply proposal", () => {
+  const specThread = {
+    id: "t-spec-ready",
+    projectHash: "proj-1",
+    title: "Ready proposal",
+    createdAt: "2026-08-06T00:00:00Z",
+    updatedAt: "2026-08-06T00:00:00Z",
+    currentMode: "spec",
+    specType: "Feature",
+    openSpecChangeName: "ready-change",
+    executor: "claude",
+  };
+
+  const setup = (apply: () => Promise<unknown>, complete: boolean | null = true) => {
+    let thread = specThread;
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([thread]);
+      if (cmd === "change_status") return Promise.resolve(complete);
+      if (cmd === "preflight") return defaultInvoke(cmd, args).then((flight: unknown) => ({
+        ...(flight as object), selected: "claude", ready: true,
+      }));
+      if (cmd === "apply_skill") return apply().then((result) => {
+        if (result && typeof result === "object" && "thread" in result) {
+          thread = result.thread as typeof specThread;
+        }
+        return result;
+      });
+      return defaultInvoke(cmd, args);
+    });
+  };
+
+  it("moves from Ready to apply to Implementing with one Apply click", async () => {
+    let calls = 0;
+    setup(async () => {
+      calls++;
+      return { thread: { ...specThread, currentMode: "go" }, chainName: null, chainRunId: null };
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(await screen.findByRole("button", { name: "Apply proposal" }));
+    await waitFor(() => expect(screen.getByTestId("spec-progress").querySelector('[aria-current="step"]')).toHaveTextContent("Implementing"));
+    expect(calls).toBe(1);
+  });
+
+  it("keeps Apply available after a failed launch", async () => {
+    let calls = 0;
+    setup(async () => {
+      if (++calls === 1) throw new Error("Agent could not start");
+      return { thread: { ...specThread, currentMode: "go" }, chainName: null, chainRunId: null };
+    });
+    render(<App />);
+    await openProject();
+    fireEvent.click(await screen.findByRole("button", { name: "Apply proposal" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Apply proposal" })).toBeEnabled());
+    expect(screen.getByTestId("spec-progress").querySelector('[aria-current="step"]')).toHaveTextContent("Ready to apply");
+    expect(screen.getByText(/Agent could not start/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }));
+    await waitFor(() => expect(screen.getByTestId("spec-progress").querySelector('[aria-current="step"]')).toHaveTextContent("Implementing"));
+    expect(calls).toBe(2);
+  });
+
+  it("does not offer Apply when proposal status is unknown", async () => {
+    setup(async () => { throw new Error("should not apply"); }, null);
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("spec-progress");
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull();
+  });
+
+  it("discards a late ready status after selecting another change", async () => {
+    const other = { ...specThread, id: "t-spec-other", title: "Other proposal", openSpecChangeName: "other-change" };
+    let finishFirst: (ready: boolean) => void = () => {};
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_threads") return Promise.resolve([specThread, other]);
+      if (cmd === "change_status") {
+        return args?.threadId === specThread.id
+          ? new Promise((resolve) => { finishFirst = resolve; })
+          : Promise.resolve(false);
+      }
+      return defaultInvoke(cmd, args);
+    });
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("change_status", expect.objectContaining({ threadId: specThread.id })));
+    fireEvent.click(screen.getByTestId("rail-history"));
+    const row = within(await screen.findByTestId("thread-list")).getByText("Other proposal").closest("li")!;
+    fireEvent.keyDown(row, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("thread-title")).toHaveTextContent("Other proposal"));
+    await act(async () => finishFirst(true));
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull();
+  });
+
+  it("opens the existing chain run when Apply launches a chain", async () => {
+    setup(async () => ({
+      thread: { ...specThread, currentMode: "go" }, chainName: "build-chain", chainRunId: "run-1",
+    }));
+    render(<App />);
+    await openProject();
+    fireEvent.click(await screen.findByRole("button", { name: "Apply proposal" }));
+    await waitFor(() => expect(screen.getByTestId("spec-progress").querySelector('[aria-current="step"]')).toHaveTextContent("Implementing"));
+    expect(invokeMock).not.toHaveBeenCalledWith("run_chain", expect.anything());
   });
 });
 

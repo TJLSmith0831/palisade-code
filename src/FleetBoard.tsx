@@ -3,7 +3,6 @@ import {
   Button,
   Menu,
   Select,
-  SegmentedControl,
   Skeleton,
   Text,
   Textarea,
@@ -17,7 +16,7 @@ import { handleMentionMenuKey, MentionMenu, useMentionMenu, withMentionTarget } 
 import { AttentionPill, OverlapBadge, VerifyBadge } from "./fleetBadges";
 import { activityLabel, relativeTime } from "./SessionList";
 import { ArchivingSpinner, useIsArchiving } from "./archiving";
-import { MODE_SELECTOR_STYLES } from "./modeSelectorStyles";
+import { ModeSelector } from "./ModeSelector";
 import WorktreeModeBadge from "./WorktreeModeBadge";
 import { ComposerTray, DropHint, imagePasteHandler } from "./ComposerTray";
 import {
@@ -606,20 +605,11 @@ export default function FleetBoard({
             disabled={modelsLoading || models.length === 0}
             data-testid="fleet-model-select"
           />
-          <SegmentedControl
+          <ModeSelector
             value={mode}
-            onChange={(value) => setMode(value as "spec" | "go")}
-            data={[
-              { value: "spec", label: "Spec" },
-              { value: "go", label: "Go" },
-            ]}
-            aria-label="Mode"
-            data-testid="fleet-mode"
-            styles={MODE_SELECTOR_STYLES}
-            classNames={{
-              control: "mode-selector-control",
-              label: "mode-selector-label",
-            }}
+            onChange={setMode}
+            ariaLabel="Run mode"
+            testId="fleet-mode"
           />
           <WorktreeModeBadge
             isolated={isolated}

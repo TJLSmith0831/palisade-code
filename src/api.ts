@@ -448,16 +448,22 @@ export const propose = (
   bypass: boolean
 ) => invoke<void>("propose", { projectHash, threadId, model: null, bypass });
 
-/** UI-triggered one-shot grill-apply injection in spec-mode. */
+/** One-click proposal apply: starts Go execution and returns the launched path. */
+export type ApplyLaunch = {
+  thread: ThreadMeta;
+  chainName: string | null;
+  chainRunId: string | null;
+};
+
 export const applySkill = (
   projectHash: string,
   threadId: string,
   bypass: boolean
-) => invoke<void>("apply_skill", { projectHash, threadId, bypass });
+) => invoke<ApplyLaunch>("apply_skill", { projectHash, threadId, bypass });
 
 /** Whether a change's planning artifacts are all complete (openspec status). */
-export const changeStatus = (projectHash: string, changeName: string) =>
-  invoke<boolean | null>("change_status", { projectHash, changeName });
+export const changeStatus = (projectHash: string, threadId: string, changeName: string) =>
+  invoke<boolean | null>("change_status", { projectHash, threadId, changeName });
 /** Stop one session. With no id, stop `threadId`'s sessions — the Stop
  *  button's fallback before a turn has streamed anything to aim at. With
  *  neither, stop every live session. */
