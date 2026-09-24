@@ -6966,7 +6966,12 @@ button.ds-onboarding-status {
   white-space: nowrap;
 }
 
-.ds-spec-phase:hover {
+.ds-spec-phase:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ds-spec-phase:hover:not(:disabled) {
   background: color-mix(in oklab, var(--fg), transparent 94%);
 }
 

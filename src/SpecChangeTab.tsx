@@ -134,6 +134,39 @@ export default function SpecChangeTab({
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
+  // Bumped when an agent writes into this change, so artifacts that didn't
+  // exist when the tab opened (it opens as soon as the proposal lands) appear.
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const prefix = `openspec/changes/${specName}/`;
+    const changed = listen<{ projectHash: string; paths: string[] }>("fs-changed", ({ payload }) => {
+      if (payload.projectHash === projectHash && payload.paths.some((p) => p.startsWith(prefix))) {
+        setReload((n) => n + 1);
+      }
+    });
+    return () => {
+      changed.then((un) => un());
+    };
+  }, [projectHash, specName]);
+
+  // A build writes into the thread's worktree, which the project-root file
+  // watcher can't see: refresh (throttled) as the owning thread's tools finish.
+  useEffect(() => {
+    if (!threadId) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const events = listen<{ threadId: string; event: { kind: string } }>("executor-event", ({ payload }) => {
+      if (payload?.threadId !== threadId || payload.event.kind !== "toolResult" || timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        setReload((n) => n + 1);
+      }, 1500);
+    });
+    return () => {
+      clearTimeout(timer);
+      events.then((un) => un());
+    };
+  }, [threadId]);
+
   const loadArtifact = useCallback(
     async (
       relativePath: string,
@@ -158,7 +191,7 @@ export default function SpecChangeTab({
     loadArtifact(`openspec/changes/${specName}/proposal.md`, setProposal);
     loadArtifact(`openspec/changes/${specName}/design.md`, setDesign);
     loadArtifact(`openspec/changes/${specName}/tasks.md`, setTasks);
-  }, [projectHash, specName, loadArtifact]);
+  }, [projectHash, specName, loadArtifact, reload]);
 
   // Load structured spec deltas from `openspec show --json` (D11).
   useEffect(() => {
@@ -174,7 +207,7 @@ export default function SpecChangeTab({
         setSpecError(describeError(err, { loading: "this change's spec deltas" }));
         setSpecLoading(false);
       });
-  }, [projectHash, specName, threadId]);
+  }, [projectHash, specName, threadId, reload]);
 
   // Load verify commands + history (same as VerifyPane).
   useEffect(() => {
@@ -272,6 +305,12 @@ export default function SpecChangeTab({
     },
   ];
 
+  // A tab that locks (or a change that loses its file) can't stay selected.
+  const activeMissing = phases.find((p) => p.value === activeTab)?.state === "missing";
+  useEffect(() => {
+    if (activeMissing) setActiveTab("proposal");
+  }, [activeMissing]);
+
   return (
     <Stack gap={0} h="100%" style={{ overflow: "hidden" }}>
       <div className="ds-spec-phases" role="tablist" aria-label="Change artifacts">
@@ -285,6 +324,9 @@ export default function SpecChangeTab({
             data-testid="spec-inner-tab"
             data-state={phase.state}
             data-active={activeTab === phase.value || undefined}
+            // Nothing to show until the agent writes it; a locked tab can't
+            // be opened onto an error.
+            disabled={phase.state === "missing"}
             onClick={() => setActiveTab(phase.value)}
           >
             <span className="ds-spec-phase-dot" aria-hidden="true" />

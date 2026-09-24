@@ -2293,7 +2293,7 @@ async fn propose(
             &thread_id,
             "user",
             "spec",
-            "grill-propose",
+            "Write up the proposal",
             Some(&id),
         )?;
         send_to(&harness, &project_hash, &id, &prompt)
@@ -2548,6 +2548,13 @@ async fn draft_commit_message(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// `add-search-clear-button` → `Add search clear button`, for user-facing text.
+fn humanize_change(name: &str) -> String {
+    let spaced = name.replace('-', " ");
+    let mut chars = spaced.chars();
+    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+}
+
 /// Build the grill-apply prompt for a one-shot injection in go-mode.
 fn apply_skill_prompt(change: &str) -> String {
     grill_inject::inject_skill(&grill_inject::GrillSkill::Apply, &format!("grill-apply {change}"))
@@ -2601,7 +2608,7 @@ async fn apply_skill(
                 let prompt = apply_skill_prompt(&change);
                 store::append_message(
                     &palisade_home(), &project_hash, &thread_id, "user", "go",
-                    &format!("grill-apply {change}"), Some(&id),
+                    &format!("Build “{}”", humanize_change(&change)), Some(&id),
                 ).and_then(|_| send_to(&harness, &project_hash, &id, &prompt))?;
                 Ok(ApplyLaunch { thread, chain_name: None, chain_run_id: None })
             }
@@ -4912,6 +4919,11 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_change_name_reads_as_a_sentence_in_the_chat() {
+        assert_eq!(humanize_change("add-search-clear-button"), "Add search clear button");
+    }
+
     #[test]
     fn spec_tree_is_the_worktree_only_when_it_holds_the_change() {
         let root = PathBuf::from("/root");

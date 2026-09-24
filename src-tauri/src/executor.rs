@@ -382,11 +382,27 @@ pub fn openspec_show(
     serde_json::from_str(&body).ok()
 }
 
-/// Parse `isComplete` from `openspec status --change <name> --json` stdout.
+/// Whether a change is ready to apply, from `openspec status --change <name>
+/// --json` stdout. The CLI's own gate is `applyRequires` (e.g. just `tasks`):
+/// `isComplete` also demands optional artifacts like `design`, so a change that
+/// skips design on purpose would never be appliable. Falls back to `isComplete`
+/// when the CLI doesn't report `applyRequires`.
 /// Pure function for testability; `change_status` wraps it with the subprocess call.
 pub fn parse_change_status(body: &str) -> Option<bool> {
     let v: Value = serde_json::from_str(body).ok()?;
-    v.get("isComplete")?.as_bool()
+    let complete = v.get("isComplete")?.as_bool()?;
+    let (Some(required), Some(artifacts)) = (
+        v.get("applyRequires").and_then(Value::as_array),
+        v.get("artifacts").and_then(Value::as_array),
+    ) else {
+        return Some(complete);
+    };
+    Some(required.iter().filter_map(Value::as_str).all(|id| {
+        artifacts.iter().any(|a| {
+            a.get("id").and_then(Value::as_str) == Some(id)
+                && a.get("status").and_then(Value::as_str) == Some("done")
+        })
+    }))
 }
 
 /// Whether a change's planning artifacts are all complete, per `openspec status`.
@@ -959,6 +975,16 @@ mod tests {
     fn parse_change_status_reads_false() {
         let body = r#"{"isComplete": false, "changeName": "my-change"}"#;
         assert_eq!(parse_change_status(body), Some(false));
+    }
+
+    #[test]
+    fn a_change_that_skips_optional_design_is_ready_when_apply_requires_are_done() {
+        let body = r#"{"isComplete": false, "applyRequires": ["tasks"], "artifacts": [
+            {"id": "proposal", "status": "done"}, {"id": "design", "status": "ready"},
+            {"id": "tasks", "status": "done"}]}"#;
+        assert_eq!(parse_change_status(body), Some(true));
+        let unfinished = body.replace(r#"{"id": "tasks", "status": "done"}"#, r#"{"id": "tasks", "status": "blocked"}"#);
+        assert_eq!(parse_change_status(&unfinished), Some(false));
     }
 
     #[test]
