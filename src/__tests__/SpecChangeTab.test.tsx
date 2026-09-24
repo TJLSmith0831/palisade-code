@@ -131,6 +131,17 @@ describe("SpecChangeTab", () => {
     setupMocks();
   });
 
+  it("reads artifacts and deltas from the owning thread's tree", async () => {
+    renderTab({ threadId: "t-1" });
+    await waitFor(() => {
+      const calls = invokeMock.mock.calls;
+      const read = calls.find(([c]) => c === "read_file_content");
+      const show = calls.find(([c]) => c === "show_spec_change");
+      expect(read?.[1]).toMatchObject({ threadId: "t-1" });
+      expect(show?.[1]).toMatchObject({ threadId: "t-1" });
+    });
+  });
+
   it("renders inner tabs for Proposal, Design, Spec, Tasks, and Verify", () => {
     renderTab();
     const tabs = screen.getAllByTestId("spec-inner-tab");

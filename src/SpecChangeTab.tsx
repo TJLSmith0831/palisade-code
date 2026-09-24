@@ -30,6 +30,8 @@ import { describeError } from "./errors";
 type Props = {
   projectHash: string;
   specName: string;
+  /** Thread whose tree to read: its worktree once it has one, else the project root. */
+  threadId?: string;
   /** Pinned verify commands for this change, keyed by spec name. The first
    * pinned command becomes the Tasks tab's primary "Run verify" action (D9). */
   verifyPins?: string[];
@@ -109,6 +111,7 @@ function parseTasks(markdown: string): TaskItem[] {
 export default function SpecChangeTab({
   projectHash,
   specName,
+  threadId,
   verifyPins,
   onAddPin,
   onRemovePin,
@@ -137,13 +140,13 @@ export default function SpecChangeTab({
       setter: (s: ArtifactState) => void
     ): Promise<void> => {
       try {
-        const content = await api.readFileContent(projectHash, relativePath);
+        const content = await api.readFileContent(projectHash, relativePath, threadId);
         setter({ content, loading: false, error: null });
       } catch (err) {
         setter({ content: null, loading: false, error: describeError(err, { loading: "that file" }) });
       }
     },
-    [projectHash]
+    [projectHash, threadId]
   );
 
   // Load all artifacts on mount. Each loads independently so a missing
@@ -162,7 +165,7 @@ export default function SpecChangeTab({
     setSpecLoading(true);
     setSpecError(null);
     api
-      .showSpecChange(projectHash, specName)
+      .showSpecChange(projectHash, specName, threadId)
       .then((value) => {
         setDeltas(value);
         setSpecLoading(false);
@@ -171,7 +174,7 @@ export default function SpecChangeTab({
         setSpecError(describeError(err, { loading: "this change's spec deltas" }));
         setSpecLoading(false);
       });
-  }, [projectHash, specName]);
+  }, [projectHash, specName, threadId]);
 
   // Load verify commands + history (same as VerifyPane).
   useEffect(() => {
@@ -304,6 +307,7 @@ export default function SpecChangeTab({
             <SpecDeltasView
               projectHash={projectHash}
               specName={specName}
+              threadId={threadId}
               loading={specLoading}
               error={specError}
               deltas={deltas}
@@ -524,12 +528,14 @@ type SpecDelta = {
 function SpecDeltasView({
   projectHash,
   specName,
+  threadId,
   loading,
   error,
   deltas,
 }: {
   projectHash: string;
   specName: string;
+  threadId?: string;
   loading: boolean;
   error: string | null;
   deltas: unknown;
@@ -550,11 +556,12 @@ function SpecDeltasView({
         const localPath = `openspec/changes/${specName}/specs/${spec}/spec.md`;
         let content: string;
         try {
-          content = await api.readFileContent(projectHash, localPath);
+          content = await api.readFileContent(projectHash, localPath, threadId);
         } catch {
           content = await api.readFileContent(
             projectHash,
-            `openspec/specs/${spec}/spec.md`
+            `openspec/specs/${spec}/spec.md`,
+            threadId
           );
         }
         setSource({ content, loading: false, error: null });
@@ -562,7 +569,7 @@ function SpecDeltasView({
         setSource({ content: null, loading: false, error: describeError(err) });
       }
     },
-    [projectHash, specName]
+    [projectHash, specName, threadId]
   );
 
   useEffect(() => {

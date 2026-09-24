@@ -180,14 +180,21 @@ pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
         .ok_or_else(|| crate::PalisadeError::not_found(format!("unknown project: {hash}")))
 }
 
-/// Read a thread's spec from the same tree where its agent writes.
-fn spec_root(project_hash: &str, thread_id: &str) -> Res<PathBuf> {
-    let meta = thread_meta(project_hash, thread_id).ok_or("thread not found")?;
-    match meta.worktree_path {
-        Some(path) if Path::new(&path).is_dir() => Ok(PathBuf::from(path)),
-        Some(_) => Err("thread worktree is missing".into()),
-        None => project_root(project_hash),
-    }
+/// The tree a thread's OpenSpec files are read from. Spec sessions write to the
+/// project root; once `/go` builds, the thread's worktree holds the newer copy
+/// (ticked tasks). Use the worktree only when it actually has the thread's
+/// change, so a worktree that predates the change never hides it.
+pub(crate) fn spec_root(project_hash: &str, thread_id: Option<&str>) -> Res<PathBuf> {
+    let root = project_root(project_hash)?;
+    let meta = thread_id.and_then(|id| thread_meta(project_hash, id));
+    Ok(match meta.and_then(|m| Some((m.worktree_path?, m.open_spec_change_name?))) {
+        Some((tree, change)) => pick_spec_tree(root, PathBuf::from(tree), &change),
+        None => root,
+    })
+}
+
+fn pick_spec_tree(root: PathBuf, worktree: PathBuf, change: &str) -> PathBuf {
+    if worktree.join("openspec/changes").join(change).is_dir() { worktree } else { root }
 }
 
 /// A fresh Palisade process owns no chain workers. Sweep every persisted
@@ -755,7 +762,7 @@ impl Sink for AppSink {
                 }
                 let watch = harness.agent.pending_changes.lock_or_recover().remove(&envelope_ref.session_id);
                 if let Some(watch) = watch {
-                    let after = executor::openspec_change_dirs(&watch.project_root);
+                    let after = executor::openspec_proposed_dirs(&watch.project_root);
                     match executor::newly_added_change(&watch.before, &after) {
                         executor::ProposeOutcome::One(name) => {
                             let _ = store::set_open_spec_change(
@@ -1044,6 +1051,24 @@ fn thread_worktree(
     }
 }
 
+/// Copy a change's artifacts from the project root into a worktree that lacks
+/// them. Never overwrites: a worktree copy is the newer one.
+fn seed_change(project: &Path, worktree: &Path, change: &str) {
+    fn copy(src: &Path, dst: &Path) {
+        if src.is_dir() {
+            let _ = std::fs::create_dir_all(dst);
+            for entry in std::fs::read_dir(src).into_iter().flatten().flatten() {
+                copy(&entry.path(), &dst.join(entry.file_name()));
+            }
+        } else if !dst.exists() {
+            if let Some(parent) = dst.parent() { let _ = std::fs::create_dir_all(parent); }
+            let _ = std::fs::copy(src, dst);
+        }
+    }
+    let rel = Path::new("openspec/changes").join(change);
+    copy(&project.join(&rel), &worktree.join(&rel));
+}
+
 /// Copies opted-in ignored files before dependency installation, then runs the
 /// configured bootstrap away from the UI thread. No dependency directory is
 /// shared or linked between worktrees.
@@ -1143,7 +1168,21 @@ fn start_session_as(
     // Two threads in one project used to share this working tree, and all
     // Palisade could do was warn that "git is the arbiter". Each thread now
     // runs in its own worktree instead, so there is nothing to warn about.
-    let root = thread_worktree(app, &home, &project, project_hash, thread_id);
+    // Spec sessions write the proposal to the project root, where the spec
+    // viewer reads it; the worktree is created for the go session, which
+    // gets the proposal copied in (it is untracked, so a fresh worktree
+    // wouldn't have it).
+    let root = if mode == "spec" {
+        project.clone()
+    } else {
+        let root = thread_worktree(app, &home, &project, project_hash, thread_id);
+        if root != project {
+            if let Some(change) = thread_meta(project_hash, thread_id).and_then(|t| t.open_spec_change_name) {
+                seed_change(&project, &root, &change);
+            }
+        }
+        root
+    };
     let (settings, _) = settings::load(&project);
     let extra_env = settings::cargo_target_dir(&settings, &project, &home, project_hash)
         .map(|target| vec![("CARGO_TARGET_DIR".into(), target.to_string_lossy().into_owned())])
@@ -1742,7 +1781,7 @@ fn send_to<'a>(
                 .or_insert_with(|| executor::ChangeWatch {
                     project_hash: project_hash.to_string(),
                     thread_id: thread_id.clone(),
-                    before: executor::openspec_change_dirs(&root),
+                    before: executor::openspec_proposed_dirs(&root),
                     project_root: root.clone(),
                 });
         }
@@ -2543,7 +2582,7 @@ async fn apply_skill(
         let change = meta
             .open_spec_change_name
             .ok_or("no open spec change — apply requires a proposal")?;
-        let spec_tree = spec_root(&project_hash, &thread_id)?;
+        let spec_tree = spec_root(&project_hash, Some(&thread_id))?;
         if executor::openspec_change_status(&harness.workspace.openspec_cache, &spec_tree, &change) != Some(true) {
             return Err("Proposal is not complete yet — finish it before applying".into());
         }
@@ -2593,7 +2632,7 @@ async fn change_status(
 ) -> Res<Option<bool>> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        let root = spec_root(&project_hash, &thread_id)?;
+        let root = spec_root(&project_hash, Some(&thread_id))?;
         Ok(executor::openspec_change_status(&cache, &root, &change_name))
     })
     .await
@@ -4873,6 +4912,35 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec_tree_is_the_worktree_only_when_it_holds_the_change() {
+        let root = PathBuf::from("/root");
+        let tree = tempfile::tempdir().unwrap();
+        assert_eq!(pick_spec_tree(root.clone(), tree.path().into(), "c"), root);
+        std::fs::create_dir_all(tree.path().join("openspec/changes/c")).unwrap();
+        assert_eq!(pick_spec_tree(root, tree.path().into(), "c"), tree.path());
+    }
+
+    #[test]
+    fn seed_change_copies_a_proposal_into_a_worktree_without_overwriting() {
+        let project = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let src = project.path().join("openspec/changes/c");
+        std::fs::create_dir_all(src.join("specs/a")).unwrap();
+        std::fs::write(src.join("proposal.md"), "root").unwrap();
+        std::fs::write(src.join("tasks.md"), "- [ ] t").unwrap();
+        std::fs::write(src.join("specs/a/spec.md"), "s").unwrap();
+        let dst = tree.path().join("openspec/changes/c");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("tasks.md"), "- [x] t").unwrap();
+
+        seed_change(project.path(), tree.path(), "c");
+
+        assert_eq!(std::fs::read_to_string(dst.join("proposal.md")).unwrap(), "root");
+        assert_eq!(std::fs::read_to_string(dst.join("specs/a/spec.md")).unwrap(), "s");
+        assert_eq!(std::fs::read_to_string(dst.join("tasks.md")).unwrap(), "- [x] t");
+    }
+
     /// A thread already being named can't be claimed again until the first
     /// claim is dropped — the guard against a second turn double-titling.
     #[test]

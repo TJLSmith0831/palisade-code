@@ -174,6 +174,7 @@ const STARTER_PROMPTS = [
 ];
 
 import SpecPane from "./SpecPane";
+import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
 import FirstRunChecklist from "./FirstRunChecklist";
@@ -3093,6 +3094,16 @@ export default function App() {
   // re-select the first project on every render.
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+
+  // A proposal that lands on the thread you're looking at opens itself in the
+  // spec viewer. Keyed by thread so selecting an already-linked thread doesn't
+  // reopen its tab.
+  const linkedSpecRef = useRef<SpecLink>({ name: null });
+  useEffect(() => {
+    const next = { id: thread?.id, name: thread?.openSpecChangeName ?? null };
+    if (shouldOpenLinkedSpec(linkedSpecRef.current, next)) tabsRef.current.openSpec(next.name!);
+    linkedSpecRef.current = next;
+  }, [thread?.id, thread?.openSpecChangeName]);
   // Which project's editing sessions are currently cached.
   const currentProjectRef = useRef<string | null>(null);
   // The keyboard handler is registered once; these keep it pointed at the
@@ -6534,6 +6545,9 @@ export default function App() {
         <SpecChangeTab
           projectHash={project.hash}
           specName={specName}
+          // The thread that owns this change: once it builds, its worktree
+          // copy carries the ticked tasks.
+          threadId={threads.find((t) => t.openSpecChangeName === specName)?.id}
           verifyPins={verifyPins[specName]}
           onAddPin={(cmd) => addVerifyPin(specName, cmd)}
           onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}

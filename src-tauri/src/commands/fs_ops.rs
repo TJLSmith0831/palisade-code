@@ -348,7 +348,12 @@ pub async fn read_file_content(
         // Same contract as the `git_*` commands: `thread_id` names the tree
         // to read, so a view rendered from a thread's worktree reads that
         // worktree instead of the project root's copy of the same path.
-        let root = super::git_cmds::tree_root(&project_hash, thread_id.as_deref())?;
+        // OpenSpec files follow the spec-tree rule, not the plain worktree one.
+        let root = if relative_path.starts_with("openspec/") {
+            crate::spec_root(&project_hash, thread_id.as_deref())?
+        } else {
+            super::git_cmds::tree_root(&project_hash, thread_id.as_deref())?
+        };
         let resolved = resolve_existing_path(&root, &relative_path)?;
 
         let size = std::fs::metadata(&resolved)

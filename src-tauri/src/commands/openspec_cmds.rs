@@ -1,4 +1,4 @@
-use crate::commands::git_cmds::tree_root;
+use crate::spec_root;
 use crate::executor;
 use crate::executor::Harness;
 use crate::store;
@@ -13,8 +13,8 @@ use tauri::Manager;
 /// OPE-01: an agent's proposal lands in the thread's isolated git worktree,
 /// not the main project root — without `thread_id`, this always read the
 /// project root and reported "no changes" for a real, on-disk proposal.
-/// `tree_root` (shared with the git commands) resolves the worktree when one
-/// is recorded, falling back to the project root otherwise.
+/// `spec_root` resolves the worktree once it holds the thread's change,
+/// falling back to the project root (where spec sessions write) otherwise.
 #[tauri::command]
 pub async fn list_spec_changes(
     app: tauri::AppHandle,
@@ -23,7 +23,7 @@ pub async fn list_spec_changes(
 ) -> Res<Vec<executor::SpecChange>> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        Ok(executor::openspec_list(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
+        Ok(executor::openspec_list(&cache, &spec_root(&project_hash, thread_id.as_deref())?))
     })
     .await
     .map_err(crate::PalisadeError::from)?
@@ -38,7 +38,7 @@ pub async fn show_spec_change(
 ) -> Res<Option<serde_json::Value>> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        Ok(executor::openspec_show(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name))
+        Ok(executor::openspec_show(&cache, &spec_root(&project_hash, thread_id.as_deref())?, &name))
     })
     .await
     .map_err(crate::PalisadeError::from)?
@@ -54,7 +54,7 @@ pub async fn validate_spec_changes(
 ) -> Res<Option<bool>> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        Ok(executor::openspec_validate(&cache, &tree_root(&project_hash, thread_id.as_deref())?))
+        Ok(executor::openspec_validate(&cache, &spec_root(&project_hash, thread_id.as_deref())?))
     })
     .await
     .map_err(crate::PalisadeError::from)?
@@ -69,7 +69,7 @@ pub async fn archive_spec_change(
 ) -> Res<String> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        executor::openspec_archive(&cache, &tree_root(&project_hash, thread_id.as_deref())?, &name)
+        executor::openspec_archive(&cache, &spec_root(&project_hash, thread_id.as_deref())?, &name)
     })
     .await
     .map_err(crate::PalisadeError::from)?

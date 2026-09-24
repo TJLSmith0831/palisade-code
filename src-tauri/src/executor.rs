@@ -446,6 +446,16 @@ pub fn openspec_change_dirs(project_root: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Change directories that already hold a `proposal.md`. A directory alone
+/// means the agent has only scaffolded the change; linking it then sent users
+/// to a viewer with nothing to show.
+pub fn openspec_proposed_dirs(project_root: &Path) -> Vec<String> {
+    openspec_change_dirs(project_root)
+        .into_iter()
+        .filter(|name| project_root.join("openspec/changes").join(name).join("proposal.md").is_file())
+        .collect()
+}
+
 /// What a Spec turn produced. Ambiguity is surfaced, never dropped:
 /// returning `None` for "two appeared" is how the durable spec link used to go
 /// missing silently (D12).
@@ -1097,6 +1107,22 @@ mod tests {
 
         assert!(parse_openspec_list("not json").is_none());
         assert!(parse_openspec_list(r#"{"other":[]}"#).is_none());
+    }
+
+    #[test]
+    fn a_scaffolded_change_without_a_proposal_is_not_proposed() {
+        let repo = tempfile::tempdir().unwrap();
+        let changes = repo.path().join("openspec/changes");
+        fs::create_dir_all(changes.join("scaffold-only")).unwrap();
+        fs::create_dir_all(changes.join("written")).unwrap();
+        fs::write(changes.join("written/proposal.md"), "# p").unwrap();
+
+        assert_eq!(openspec_proposed_dirs(repo.path()), vec!["written".to_string()]);
+        // The link fires when the proposal lands, not when the directory does.
+        let before = openspec_proposed_dirs(repo.path());
+        fs::write(changes.join("scaffold-only/proposal.md"), "# p").unwrap();
+        let after = openspec_proposed_dirs(repo.path());
+        assert_eq!(newly_added_change(&before, &after), ProposeOutcome::One("scaffold-only".into()));
     }
 
     #[test]
