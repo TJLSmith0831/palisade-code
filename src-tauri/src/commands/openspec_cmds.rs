@@ -69,7 +69,9 @@ pub async fn archive_spec_change(
 ) -> Res<String> {
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
-        executor::openspec_archive(&cache, &spec_root(&project_hash, thread_id.as_deref())?, &name)
+        let root = crate::project_root(&project_hash)?;
+        let tree = spec_root(&project_hash, thread_id.as_deref())?;
+        archive_via_root(&cache, &root, &tree, &name)
     })
     .await
     .map_err(crate::PalisadeError::from)?
@@ -88,4 +90,79 @@ pub async fn set_spec_change(
     })
     .await
     .map_err(crate::PalisadeError::from)?
+}
+
+/// Archive `name` in the project root, which is the source of truth for
+/// OpenSpec. A build's worktree (`tree`) holds the newer copy (ticked tasks):
+/// pull it into the root first, archive there, then drop the worktree's copy
+/// so a later commit and merge can't bring the archived change back to life.
+pub(crate) fn archive_via_root(
+    cache: &crate::openspec_cache::OpenSpecCache,
+    root: &std::path::Path,
+    tree: &std::path::Path,
+    name: &str,
+) -> Res<String> {
+    if tree != root {
+        crate::copy_change(tree, root, name, true);
+    }
+    let archived = executor::openspec_archive(cache, root, name)?;
+    if tree != root {
+        let _ = std::fs::remove_dir_all(tree.join("openspec/changes").join(name));
+    }
+    Ok(archived)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::openspec_cache::{OpenSpecAdapter, OpenSpecCache, OpenSpecError, OpenSpecResult};
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// Records the tasks.md the root holds at the moment the CLI is asked to archive.
+    struct Recording(Mutex<Option<String>>);
+    impl OpenSpecAdapter for Recording {
+        fn list(&self, _: &Path) -> OpenSpecResult { Err(OpenSpecError::NotInstalled) }
+        fn show(&self, _: &Path, _: &str) -> OpenSpecResult { Err(OpenSpecError::NotInstalled) }
+        fn status(&self, _: &Path, _: &str) -> OpenSpecResult { Err(OpenSpecError::NotInstalled) }
+        fn validate(&self, _: &Path) -> OpenSpecResult { Err(OpenSpecError::NotInstalled) }
+        fn archive(&self, root: &Path, name: &str) -> OpenSpecResult {
+            let tasks = root.join("openspec/changes").join(name).join("tasks.md");
+            *self.0.lock().unwrap() = std::fs::read_to_string(tasks).ok();
+            Ok("archived".into())
+        }
+    }
+
+    #[test]
+    fn archiving_a_built_change_archives_the_worktrees_progress_and_leaves_no_live_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        for (base, tasks) in [(root.path(), "- [ ] t"), (tree.path(), "- [x] t")] {
+            let dir = base.join("openspec/changes/c");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("tasks.md"), tasks).unwrap();
+        }
+        let adapter = Arc::new(Recording(Mutex::new(None)));
+        let cache = OpenSpecCache::new(adapter.clone());
+
+        archive_via_root(&cache, root.path(), tree.path(), "c").unwrap();
+
+        assert_eq!(adapter.0.lock().unwrap().as_deref(), Some("- [x] t"), "the CLI must see the worktree's ticks");
+        assert!(!tree.path().join("openspec/changes/c").exists(), "the worktree copy must not survive to be merged back");
+    }
+
+    #[test]
+    fn archiving_without_a_worktree_copy_leaves_the_root_alone_but_for_the_cli() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("openspec/changes/c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tasks.md"), "- [ ] t").unwrap();
+        let adapter = Arc::new(Recording(Mutex::new(None)));
+        let cache = OpenSpecCache::new(adapter.clone());
+
+        archive_via_root(&cache, root.path(), root.path(), "c").unwrap();
+
+        assert_eq!(adapter.0.lock().unwrap().as_deref(), Some("- [ ] t"));
+        assert!(dir.exists(), "same tree: nothing to remove; the CLI owns the move");
+    }
 }

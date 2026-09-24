@@ -1051,22 +1051,28 @@ fn thread_worktree(
     }
 }
 
-/// Copy a change's artifacts from the project root into a worktree that lacks
-/// them. Never overwrites: a worktree copy is the newer one.
-fn seed_change(project: &Path, worktree: &Path, change: &str) {
-    fn copy(src: &Path, dst: &Path) {
+/// Copy one change's artifacts between the project root and a worktree.
+/// `overwrite` off keeps whatever the destination already has.
+pub(crate) fn copy_change(from: &Path, to: &Path, change: &str, overwrite: bool) {
+    fn copy(src: &Path, dst: &Path, overwrite: bool) {
         if src.is_dir() {
             let _ = std::fs::create_dir_all(dst);
             for entry in std::fs::read_dir(src).into_iter().flatten().flatten() {
-                copy(&entry.path(), &dst.join(entry.file_name()));
+                copy(&entry.path(), &dst.join(entry.file_name()), overwrite);
             }
-        } else if !dst.exists() {
+        } else if overwrite || !dst.exists() {
             if let Some(parent) = dst.parent() { let _ = std::fs::create_dir_all(parent); }
             let _ = std::fs::copy(src, dst);
         }
     }
     let rel = Path::new("openspec/changes").join(change);
-    copy(&project.join(&rel), &worktree.join(&rel));
+    copy(&from.join(&rel), &to.join(&rel), overwrite);
+}
+
+/// A go session starts with the proposal it will build: never overwrites, so a
+/// worktree copy that already has progress is kept.
+fn seed_change(project: &Path, worktree: &Path, change: &str) {
+    copy_change(project, worktree, change, false);
 }
 
 /// Copies opted-in ignored files before dependency installation, then runs the
@@ -4912,6 +4918,19 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pulling_a_change_from_a_worktree_overwrites_the_roots_stale_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        for (base, tasks) in [(root.path(), "- [ ] t"), (tree.path(), "- [x] t")] {
+            let dir = base.join("openspec/changes/c");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("tasks.md"), tasks).unwrap();
+        }
+        copy_change(tree.path(), root.path(), "c", true);
+        assert_eq!(std::fs::read_to_string(root.path().join("openspec/changes/c/tasks.md")).unwrap(), "- [x] t");
+    }
+
 
     #[test]
     fn spec_tree_is_the_worktree_only_when_it_holds_the_change() {
