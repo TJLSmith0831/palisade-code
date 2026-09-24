@@ -174,6 +174,7 @@ const STARTER_PROMPTS = [
 ];
 
 import SpecPane from "./SpecPane";
+import { displaySkillCommand } from "./skillLabel";
 import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
@@ -841,7 +842,7 @@ export const ChatSurface = memo(
                 ))}
               </div>
             )}
-            {text && <MDEditor.Markdown source={displayMentions(text)} className="content" />}
+            {text && <MDEditor.Markdown source={displaySkillCommand(displayMentions(text))} className="content" />}
             {item.attachments && item.attachments.length > 0 && (
               <div className="ds-message-attachments">
                 {item.attachments.map((path) => (
