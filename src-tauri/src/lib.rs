@@ -2542,13 +2542,15 @@ async fn apply_skill(
                 }
             }
         } else {
-            let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go", None, bypass)?;
             let thread = store::set_thread_mode(&palisade_home(), &project_hash, &thread_id, "go")?;
-            let prompt = apply_skill_prompt(&change);
-            let result = store::append_message(
-                &palisade_home(), &project_hash, &thread_id, "user", "go",
-                &format!("grill-apply {change}"), Some(&id),
-            ).and_then(|_| send_to(&harness, &project_hash, &id, &prompt));
+            let result = (|| {
+                let id = ensure_session(&app, &harness, &project_hash, &thread_id, "go", None, bypass)?;
+                let prompt = apply_skill_prompt(&change);
+                store::append_message(
+                    &palisade_home(), &project_hash, &thread_id, "user", "go",
+                    &format!("grill-apply {change}"), Some(&id),
+                ).and_then(|_| send_to(&harness, &project_hash, &id, &prompt))
+            })();
             match result {
                 Ok(()) => Ok(ApplyLaunch { thread, chain_name: None, chain_run_id: None }),
                 Err(error) => {
