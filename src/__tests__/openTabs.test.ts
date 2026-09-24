@@ -149,52 +149,52 @@ describe("useOpenTabs", () => {
       const view = withTabs("README.md");
       expect(
         view.result.current.tabs.find((t) => tabKey(t) === "README.md")
-          ?.mdPreview
+          ?.mdSource
       ).toBe(false);
-      expect(view.result.current.activeMdPreview).toBe(false);
+      expect(view.result.current.activeMdSource).toBe(false);
     });
 
     it("defaults to false for a non-markdown tab", () => {
       const view = withTabs("src/foo.ts");
       expect(
         view.result.current.tabs.find((t) => tabKey(t) === "src/foo.ts")
-          ?.mdPreview
+          ?.mdSource
       ).toBe(false);
-      expect(view.result.current.activeMdPreview).toBe(false);
+      expect(view.result.current.activeMdSource).toBe(false);
     });
 
     it("flips preview on for a tab and reports it as active", () => {
       const view = withTabs("README.md");
-      act(() => view.result.current.setMdPreview("README.md", true));
+      act(() => view.result.current.setMdSource("README.md", true));
       expect(
         view.result.current.tabs.find((t) => tabKey(t) === "README.md")
-          ?.mdPreview
+          ?.mdSource
       ).toBe(true);
-      expect(view.result.current.activeMdPreview).toBe(true);
+      expect(view.result.current.activeMdSource).toBe(true);
     });
 
     it("ignores preview reports for a file that isn't open", () => {
       const view = withTabs("README.md");
-      act(() => view.result.current.setMdPreview("gone.md", true));
-      expect(view.result.current.activeMdPreview).toBe(false);
+      act(() => view.result.current.setMdSource("gone.md", true));
+      expect(view.result.current.activeMdSource).toBe(false);
     });
 
     it("preserves preview state across a rename", () => {
       const view = withTabs("old.md");
-      act(() => view.result.current.setMdPreview("old.md", true));
+      act(() => view.result.current.setMdSource("old.md", true));
       act(() => view.result.current.rename("old.md", "new.md"));
       expect(
-        view.result.current.tabs.find((t) => tabKey(t) === "new.md")?.mdPreview
+        view.result.current.tabs.find((t) => tabKey(t) === "new.md")?.mdSource
       ).toBe(true);
-      expect(view.result.current.activeMdPreview).toBe(true);
+      expect(view.result.current.activeMdSource).toBe(true);
     });
 
     it("re-defaults to false when a .md tab is reopened after closeAll", () => {
       const view = withTabs("README.md");
-      act(() => view.result.current.setMdPreview("README.md", true));
+      act(() => view.result.current.setMdSource("README.md", true));
       act(() => view.result.current.closeAll());
       act(() => view.result.current.open("README.md"));
-      expect(view.result.current.activeMdPreview).toBe(false);
+      expect(view.result.current.activeMdSource).toBe(false);
     });
   });
 

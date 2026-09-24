@@ -7,20 +7,17 @@ export type FileTab = {
    * active tab is mounted, so a pane-owned flag would be lost the moment you
    * switched away from a file you'd edited. */
   dirty: boolean;
-  /** Whether the tab is showing the Markdown preview pane alongside the
-   * WYSIWYG editor. Only meaningful for `.md`/`.markdown` files (which always
-   * open in the RTE), but kept on every tab so it survives switching away
-   * and back without resetting the view. */
-  mdPreview: boolean;
+  /** True when this Markdown file shows exact source instead of Visual mode. */
+  mdSource: boolean;
 };
 
 export type SpecTab = {
   type: "spec";
   /** The OpenSpec change name, e.g. `vibe-spec-tabs`. */
   specName: string;
-  /** Spec tabs are read-only (D4) — never dirty, no markdown preview. */
+  /** Spec tabs are read-only (D4) — never dirty, no Markdown source mode. */
   dirty: false;
-  mdPreview: false;
+  mdSource: false;
 };
 
 export type TableTab = {
@@ -32,7 +29,7 @@ export type TableTab = {
   schema: string | null;
   table: string;
   dirty: false;
-  mdPreview: false;
+  mdSource: false;
 };
 
 export type QueryTab = {
@@ -41,7 +38,7 @@ export type QueryTab = {
   /** One query tab per connection, so its name is the connection's. */
   connectionName: string;
   dirty: false;
-  mdPreview: false;
+  mdSource: false;
 };
 
 export type ChainTab = {
@@ -49,7 +46,7 @@ export type ChainTab = {
   /** The saved chain's name, or null for one being built from scratch. */
   chainName: string | null;
   dirty: false;
-  mdPreview: false;
+  mdSource: false;
 };
 
 export type PreviewTab = {
@@ -57,7 +54,7 @@ export type PreviewTab = {
   /** The URL loaded in the iframe, or null before anything is navigated to. */
   url: string | null;
   dirty: false;
-  mdPreview: false;
+  mdSource: false;
 };
 
 export type OpenTab =
@@ -97,9 +94,8 @@ export const tabKey = (tab: OpenTab): string => {
 /** How many closed tabs Cmd+Shift+T can walk back through. */
 const REOPEN_DEPTH = 10;
 
-/** Whether `path` is a Markdown file the RTE/preview applies to. Shared
- * by `TabBar` (button visibility), `FileEditorPane` (rendering guard), and
- * `open` (default RTE state) so there's one definition of "markdown". */
+/** Whether `path` uses Visual/Markdown modes. Shared by the tab bar,
+ * editor, and tab state so there is one definition of "markdown". */
 export const isMarkdownPath = (path: string | null): boolean => {
   if (!path) return false;
   const lower = path.toLowerCase();
@@ -129,7 +125,7 @@ function isAtOrUnder(path: string, ancestor: string): boolean {
  * Spec tabs (D1) are first-class peers of file tabs: they share the same
  * list, the same selection/closing/cycling semantics, and the same
  * `activePath` key. A spec tab's key is `spec:<name>`; a file tab's key is
- * its path. File-only operations (`setDirty`, `setMdPreview`, `rename`,
+ * its path. File-only operations (`setDirty`, `setMdSource`, `rename`,
  * `dropPath`) are no-ops on spec tabs.
  */
 export function useOpenTabs() {
@@ -144,7 +140,7 @@ export function useOpenTabs() {
         ? current
         : [
             ...current,
-            { type: "file" as const, path, dirty: false, mdPreview: false },
+            { type: "file" as const, path, dirty: false, mdSource: false },
           ]
     );
     setActivePath(path);
@@ -164,7 +160,7 @@ export function useOpenTabs() {
   /** Open an OpenSpec change as a read-only spec tab (D1/D3). */
   const openSpec = useCallback(
     (specName: string) =>
-      openTab({ type: "spec", specName, dirty: false, mdPreview: false }),
+      openTab({ type: "spec", specName, dirty: false, mdSource: false }),
     [openTab]
   );
 
@@ -183,7 +179,7 @@ export function useOpenTabs() {
         schema,
         table,
         dirty: false,
-        mdPreview: false,
+        mdSource: false,
       }),
     [openTab]
   );
@@ -192,7 +188,7 @@ export function useOpenTabs() {
    * they're built (DESIGN.md's side-panel rule). */
   const openChain = useCallback(
     (chainName: string | null) =>
-      openTab({ type: "chain", chainName, dirty: false, mdPreview: false }),
+      openTab({ type: "chain", chainName, dirty: false, mdSource: false }),
     [openTab]
   );
 
@@ -204,7 +200,7 @@ export function useOpenTabs() {
         connectionId,
         connectionName,
         dirty: false,
-        mdPreview: false,
+        mdSource: false,
       }),
     [openTab]
   );
@@ -223,7 +219,7 @@ export function useOpenTabs() {
             type: "preview" as const,
             url: url ?? null,
             dirty: false as const,
-            mdPreview: false as const,
+            mdSource: false as const,
           },
         ];
       if (url === undefined || existing.url === url) return current;
@@ -307,8 +303,8 @@ export function useOpenTabs() {
       )
     );
     setActivePath((active) =>
-      active === tabKey({ type: "chain", chainName: from, dirty: false, mdPreview: false })
-        ? tabKey({ type: "chain", chainName: to, dirty: false, mdPreview: false })
+      active === tabKey({ type: "chain", chainName: from, dirty: false, mdSource: false })
+        ? tabKey({ type: "chain", chainName: to, dirty: false, mdSource: false })
         : active
     );
   }, []);
@@ -323,16 +319,16 @@ export function useOpenTabs() {
     });
   }, []);
 
-  /** Toggles the Markdown preview pane for a tab. No-op for a path that isn't
+  /** Selects Markdown source mode for a tab. No-op for a path that isn't
    * open, so callers don't have to guard against a stale toggle firing after
    * a tab closes. */
-  const setMdPreview = useCallback((path: string, mdPreview: boolean) => {
+  const setMdSource = useCallback((path: string, mdSource: boolean) => {
     setTabs((current) => {
       const tab = current.find((t) => tabKey(t) === path);
-      if (!tab || tab.type !== "file" || tab.mdPreview === mdPreview)
+      if (!tab || tab.type !== "file" || tab.mdSource === mdSource)
         return current;
       return current.map((t) =>
-        t.type === "file" && tabKey(t) === path ? { ...t, mdPreview } : t
+        t.type === "file" && tabKey(t) === path ? { ...t, mdSource } : t
       );
     });
   }, []);
@@ -378,7 +374,7 @@ export function useOpenTabs() {
     activePath,
     activeTab,
     activeIsDirty: activeTab?.dirty ?? false,
-    activeMdPreview: activeTab?.mdPreview ?? false,
+    activeMdSource: activeTab?.mdSource ?? false,
     anyDirty: tabs.some((tab) => tab.dirty),
     open,
     openSpec,
@@ -391,7 +387,7 @@ export function useOpenTabs() {
     rename,
     renameChain,
     setDirty,
-    setMdPreview,
+    setMdSource,
     closeAll,
     reopenLast,
     cycle,

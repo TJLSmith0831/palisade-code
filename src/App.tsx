@@ -3119,13 +3119,13 @@ export default function App() {
     tabs.activeTab?.type === "file" &&
     !(tabs.activePath?.toLowerCase().endsWith(".ipynb") &&
       !unopenableNotebooks.has(tabs.activePath));
-  // Cmd+Shift+V or the IconMarkdown button flips the active Markdown tab
-  // between its CodeMirror source and the WYSIWYG editor. No-op for non-md.
-  const toggleMdPreview = useCallback(() => {
+  // Cmd+Shift+V or the mode button flips the active Markdown tab
+  // between formatted Visual and exact Markdown source. No-op for non-md.
+  const toggleMdSource = useCallback(() => {
     if (selectedFile && isMarkdownPath(selectedFile)) {
-      tabs.setMdPreview(selectedFile, !tabs.activeMdPreview);
+      tabs.setMdSource(selectedFile, !tabs.activeMdSource);
     }
-  }, [selectedFile, tabs.activeMdPreview, tabs.setMdPreview]);
+  }, [selectedFile, tabs.activeMdSource, tabs.setMdSource]);
   // Set when the filesystem watcher reports an open file changed underneath
   // us; the editor pane decides whether that's a silent reload or a prompt.
   const [externalChange, setExternalChange] = useState<{
@@ -6639,8 +6639,8 @@ export default function App() {
         breakpoints={editorBreakpoints}
         onToggleBreakpoint={toggleBreakpoint}
         debugLine={editorDebugLine}
-        mdPreview={tabs.activeMdPreview}
-        onToggleMdPreview={toggleMdPreview}
+        mdSource={tabs.activeMdSource}
+        onToggleMdSource={toggleMdSource}
       />
     );
   };
@@ -7286,8 +7286,8 @@ export default function App() {
                     onClose={closeTab}
                     diffOpen={shell.diffOpen}
                     onToggleDiff={() => shell.setDiffOpen((open) => !open)}
-                    activeMdPreview={tabs.activeMdPreview}
-                    onToggleMdPreview={toggleMdPreview}
+                    activeMdSource={tabs.activeMdSource}
+                    onToggleMdSource={toggleMdSource}
                     onNewFile={newFileAtRoot}
                     onNewPreview={() => {
                       shell.setDiffOpen(false);
