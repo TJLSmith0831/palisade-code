@@ -547,6 +547,18 @@ describe("Top chrome (merged-design v2)", () => {
     expect(mockWindow.toggleMaximize).toHaveBeenCalledTimes(1);
   });
 
+  it("does not drag the window on mousedown inside a modal portaled from the top chrome (#75)", async () => {
+    mockWindow.startDragging.mockClear();
+    render(<App />);
+    await openProject();
+    fireEvent.click(screen.getByTestId("open-feedback"));
+    fireEvent.mouseDown(await screen.findByLabelText("What happened?"), {
+      button: 0,
+      detail: 1,
+    });
+    expect(mockWindow.startDragging).not.toHaveBeenCalled();
+  });
+
   it("does not drag/maximize when mousedown originates on an excluded chrome button", async () => {
     mockWindow.startDragging.mockClear();
     render(<App />);
