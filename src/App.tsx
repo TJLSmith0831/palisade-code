@@ -174,7 +174,8 @@ const STARTER_PROMPTS = [
 ];
 
 import SpecPane from "./SpecPane";
-import { displaySkillCommand } from "./skillLabel";
+import { buildTarget, displaySkillCommand } from "./skillLabel";
+import { BuildLaunch, armBuildLaunch } from "./BuildLaunch";
 import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
@@ -842,7 +843,9 @@ export const ChatSurface = memo(
                 ))}
               </div>
             )}
-            {text && <MDEditor.Markdown source={displaySkillCommand(displayMentions(text))} className="content" />}
+            {text && buildTarget(text) !== null
+              ? <BuildLaunch target={buildTarget(text)!} />
+              : text && <MDEditor.Markdown source={displaySkillCommand(displayMentions(text))} className="content" />}
             {item.attachments && item.attachments.length > 0 && (
               <div className="ds-message-attachments">
                 {item.attachments.map((path) => (
@@ -5365,6 +5368,7 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
+      armBuildLaunch();
       const launch = await api.applySkill(project.hash, thread.id, prefs.bypass);
       setThread(launch.thread);
       if (launch.chainName && launch.chainRunId) {

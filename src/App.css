@@ -2052,6 +2052,58 @@ input[type="checkbox"] {
   border-color: color-mix(in oklab, var(--accent), var(--border) 82%);
 }
 
+/* Build turn: a launch row. One authored moment — a light sweep across the row
+   when the turn is sent (data-play; never on a remount), easing out fast — and the bolt settling from a brighter
+   charge. Static and fully readable when motion is reduced. */
+.ds-launch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  background-image: linear-gradient(
+    100deg,
+    transparent 35%,
+    color-mix(in oklab, var(--accent), transparent 78%) 50%,
+    transparent 65%
+  );
+  background-size: 300% 100%;
+  background-position: 100% 0;
+}
+
+.ds-launch[data-play] {
+  animation: ds-launch-sweep 1100ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+.ds-launch-bolt {
+  display: inline-flex;
+  padding: 5px;
+  border-radius: 6px;
+  color: var(--accent-on);
+  background: var(--accent);
+  box-shadow: 0 2px 8px color-mix(in oklab, var(--accent), transparent 65%);
+}
+
+.ds-launch[data-play] .ds-launch-bolt {
+  animation: ds-launch-charge 900ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+@keyframes ds-launch-sweep {
+  from { background-position: 0% 0; }
+  to { background-position: 100% 0; }
+}
+
+@keyframes ds-launch-charge {
+  from { box-shadow: 0 2px 20px var(--accent); transform: scale(1.18); }
+  to { box-shadow: 0 2px 8px color-mix(in oklab, var(--accent), transparent 65%); transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-launch[data-play],
+  .ds-launch[data-play] .ds-launch-bolt {
+    animation: none;
+  }
+}
+
 .message.tool {
   align-self: center;
   background: none;

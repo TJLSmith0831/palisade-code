@@ -12,3 +12,13 @@ describe("displaySkillCommand", () => {
     expect(displaySkillCommand("fix it")).toBe("fix it");
   });
 });
+
+import { buildTarget } from "../skillLabel";
+describe("buildTarget", () => {
+  it("names the change for a Build turn and ignores everything else", () => {
+    expect(buildTarget("grill-apply add-search-clear-button")).toBe("Add search clear button");
+    expect(buildTarget("grill-apply")).toBe("");
+    expect(buildTarget("grill-propose")).toBeNull();
+    expect(buildTarget("hello")).toBeNull();
+  });
+});
