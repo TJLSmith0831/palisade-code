@@ -2473,6 +2473,56 @@ describe("Keyboard navigation (accessibility)", () => {
       expect(screen.queryByTestId("load-earlier")).toBeNull();
     });
 
+    it("does not offer earlier messages in an empty new Go thread", async () => {
+      serve(() => Promise.resolve(page(1000, 1200)));
+      render(<App />);
+      await openProject();
+      expect(await screen.findByTestId("load-earlier")).toBeDefined();
+
+      fireEvent.click(screen.getByTestId("rail-history"));
+      fireEvent.click(await screen.findByTestId("new-thread"));
+      fireEvent.click(await screen.findByTestId("pick-go"));
+
+      expect(await screen.findByTestId("composer-input")).toBeDefined();
+      expect(screen.queryByTestId("load-earlier")).toBeNull();
+    });
+
+    it("hides crash acknowledgement after the thread leaves needs attention", async () => {
+      invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "list_threads") return Promise.resolve([twoThreads[0]]);
+        if (cmd === "read_thread")
+          return Promise.resolve([
+            { ...said(1, "prompt failed: provider stopped"), role: "system" },
+          ]);
+        if (cmd === "fleet_overview")
+          return Promise.resolve([
+            {
+              kind: "thread",
+              threadId: "t1",
+              title: "Thread A",
+              projectId: "proj-1",
+              projectName: "palisade-code",
+              mode: "go",
+              status: "idle",
+              diff: { added: 0, removed: 0, files: 0 },
+              filesTouched: [],
+              overlap: [],
+              verify: { state: "not_run" },
+              merge: "no_worktree",
+              updatedAt: "2026-08-06T00:00:00Z",
+            },
+          ]);
+        return defaultInvoke(cmd, args);
+      });
+      render(<App />);
+      await openProject();
+      fireEvent.click(screen.getByTestId("rail-history"));
+      await clickThread("t1");
+
+      expect(await screen.findByTestId("crash-banner")).toBeDefined();
+      expect(screen.queryByTestId("crash-banner-acknowledge")).toBeNull();
+    });
+
     it("a burst of streamed events all land, and none outlive their turn's done", async () => {
       serve(() => Promise.resolve([said(1, "opening history")]));
       render(<App />);

@@ -4288,6 +4288,7 @@ export default function App() {
     // …and the messages that were on screen with it, or the new thread's
     // empty composer renders under the old thread's transcript.
     setMessages([]);
+    setHasEarlier(false);
     setNewThreadPicker(true);
   };
 
@@ -6403,18 +6404,21 @@ export default function App() {
         return changed ? next : previous;
       });
     },
-    onAcknowledgeCrash: async (sessionId: string | null) => {
-      if (!project || !thread) return;
-      try {
-        const updated = await api.acknowledgeThreadCrash(project.hash, thread.id, sessionId);
-        setThread(updated);
-        setThreads((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-        await fleet.refresh();
-      } catch (err) {
-        banner(describeError(err), "error");
-        throw err;
-      }
-    },
+    onAcknowledgeCrash:
+      threadFleetRow?.attention === "crashed"
+        ? async (sessionId: string | null) => {
+            if (!project || !thread) return;
+            try {
+              const updated = await api.acknowledgeThreadCrash(project.hash, thread.id, sessionId);
+              setThread(updated);
+              setThreads((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+              await fleet.refresh();
+            } catch (err) {
+              banner(describeError(err), "error");
+              throw err;
+            }
+          }
+        : undefined,
     busy,
     worktree: thread ? worktrees.get(thread.id) : undefined,
     verify: threadFleetRow?.verify,
