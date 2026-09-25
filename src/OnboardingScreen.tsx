@@ -19,6 +19,7 @@ import palisadeWordmark from "../assets/palisade-wordmark-darkmode-no-bg.png";
 import { relativeTime } from "./SessionList";
 import type { ModelState, Preflight, Project } from "./api";
 import { isAuthError } from "./errors";
+import { AddAgentMenuSection } from "./AddAgentMenu";
 
 // Amendment 9's project-first first-run screen (shape brief, 2026-08-24):
 // project creation is the primary action, not the composer. Replaces
@@ -46,6 +47,8 @@ export default function OnboardingScreen({
   onPickExecutor,
   onPickModel,
   onProbeAgent,
+  onAddAgent,
+  addingAgentId = null,
   onOpenProject,
   onCloneRepository,
   onComposerSend,
@@ -73,6 +76,11 @@ export default function OnboardingScreen({
    *  to route it (no such caller today), in which case the dropdown reports
    *  status only, with no retry action. */
   onProbeAgent?: (agentId: string) => void;
+  /** Enables a registry agent from `flight.addable` (see `AddAgentMenu`). */
+  onAddAgent?: (agentId: string) => void;
+  /** The addable agent currently being enabled, if any — disables its row
+   *  so a double-click can't fire `onAddAgent` twice. */
+  addingAgentId?: string | null;
   onOpenProject: () => void;
   onCloneRepository: () => void;
   /** Opens a project folder, then creates a go-mode thread and sends this
@@ -297,6 +305,47 @@ export default function OnboardingScreen({
                 <div className="ds-onboarding-status-footnote">
                   Checking an agent runs it briefly — only done on request.
                 </div>
+                {onAddAgent && (
+                  <AddAgentMenuSection
+                    addable={flight?.addable ?? []}
+                    onAdd={onAddAgent}
+                    addingId={addingAgentId}
+                    testIdPrefix="onboarding-add-agent"
+                  />
+                )}
+              </Menu.Dropdown>
+            </Menu>
+          ) : flight && (flight.addable?.length ?? 0) > 0 && onAddAgent ? (
+            // No agent ready yet, but at least one could be added — a
+            // choice to make, not a dead end, so this gets its own dropdown
+            // rather than the flat "no agent found" line below.
+            <Menu
+              opened={statusMenuOpen}
+              onChange={setStatusMenuOpen}
+              withinPortal
+              position="bottom-start"
+            >
+              <Menu.Target>
+                <button
+                  type="button"
+                  className="ds-onboarding-status bad"
+                  data-testid="onboarding-status"
+                >
+                  <span className="ds-onboarding-status-dot" />
+                  Choose your coding agent
+                  <IconChevronDown size={12} />
+                </button>
+              </Menu.Target>
+              <Menu.Dropdown
+                className="ds-model-menu ds-onboarding-status-menu"
+                data-testid="onboarding-status-menu"
+              >
+                <AddAgentMenuSection
+                  addable={flight.addable}
+                  onAdd={onAddAgent}
+                  addingId={addingAgentId}
+                  testIdPrefix="onboarding-add-agent"
+                />
               </Menu.Dropdown>
             </Menu>
           ) : (

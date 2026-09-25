@@ -849,6 +849,22 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
 }
 
+/// Adds a registry agent (from `Preflight.addable`) to the user's enabled
+/// set and makes it the new default, then returns a freshly recomputed
+/// preflight so the caller sees it move into `agents` immediately. Its
+/// package is not fetched here — that happens on the agent's first real
+/// launch, same as any npx/uvx invocation.
+#[tauri::command]
+async fn enable_agent(app: tauri::AppHandle, agent_id: String) -> Res<Preflight> {
+    tokio::task::spawn_blocking(move || {
+        acp_registry::enable_agent(&palisade_home(), &agent_id)?;
+        let harness: tauri::State<'_, Harness> = app.state();
+        Ok(preflight_for_harness(&harness, true))
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// Plan usage per installed agent. Blocking work (Keychain read, HTTP,
 /// rollout-log scan) runs off the UI thread; every provider fails soft.
 /// `force` bypasses the 60s per-agent cache — the manual refresh button and
@@ -4862,6 +4878,7 @@ pub fn run() {
             append_message,
             read_thread,
             preflight,
+            enable_agent,
             send_message,
             save_attachment,
             read_attachment,
@@ -5501,6 +5518,7 @@ mod tests {
         Preflight {
             selected: agents.first().map(|a| a.id.clone()),
             agents,
+            addable: vec![],
             openspec: true,
             ready: true,
             registry_reachable: true,

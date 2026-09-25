@@ -50,8 +50,7 @@ Palisade is in **public beta**. It is the tool we build Palisade with, every day
 
 The app is signed and notarized. It updates itself; each update is checked against the project's signing key before it is installed.
 
-<!-- install-agents: coordinator -->
-You also need at least one ACP coding agent installed and logged in, for example [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex). With none installed Palisade opens in chat-only mode and tells you what it is missing.
+You also need a coding agent. Palisade reads the [ACP registry](https://agentclientprotocol.com/) and lists every agent that is ready on your Mac. Agents that ship through `npx` or `uvx`, including [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://github.com/openai/codex), appear under **Add an agent** in the agent picker: one click adds one, and its adapter downloads the first time you use it. Sign in with that agent's own CLI if it asks; Palisade shows you how.
 
 Spec mode needs [Node.js](https://nodejs.org) (for `npx`). You don't have to install OpenSpec yourself: if `openspec` isn't on your PATH, Palisade runs a pinned version (`npx -y @fission-ai/openspec@1.13.1`), and the first Spec turn in a project without an `openspec/` folder creates one with `openspec init --tools none`. If `openspec` is on your PATH, Palisade uses that copy instead.
 

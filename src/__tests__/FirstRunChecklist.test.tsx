@@ -6,6 +6,7 @@ import type { Preflight } from "../api";
 
 const flight = (over: Partial<Preflight> = {}): Preflight => ({
   agents: [],
+  addable: [],
   selected: null,
   openspec: true,
   ready: false,
@@ -15,10 +16,20 @@ const flight = (over: Partial<Preflight> = {}): Preflight => ({
   ...over,
 });
 
-const renderIt = (f: Preflight, onRecheck = vi.fn(), checking = false) => {
+const renderIt = (
+  f: Preflight,
+  onRecheck = vi.fn(),
+  checking = false,
+  onAddAgent?: (agentId: string) => void
+) => {
   render(
     <MantineProvider>
-      <FirstRunChecklist flight={f} onRecheck={onRecheck} checking={checking} />
+      <FirstRunChecklist
+        flight={f}
+        onRecheck={onRecheck}
+        checking={checking}
+        onAddAgent={onAddAgent}
+      />
     </MantineProvider>
   );
   return onRecheck;
@@ -70,5 +81,30 @@ describe("FirstRunChecklist", () => {
       "`openspec` not on PATH — change-linked /go will not work.",
     ] }));
     expect(screen.getByText(/openspec/)).toBeInTheDocument();
+  });
+
+  it("prompts to choose an agent instead of the install steps when one can be added", () => {
+    const onAddAgent = vi.fn();
+    renderIt(
+      flight({
+        addable: [
+          { id: "claude-acp", name: "Claude Agent", description: "Anthropic's Claude.", version: null },
+        ],
+      }),
+      vi.fn(),
+      false,
+      onAddAgent
+    );
+    expect(screen.getByText(/choose your coding agent/i)).toBeInTheDocument();
+    // The generic install-from-registry steps are replaced, not appended.
+    expect(screen.queryByRole("link", { name: /registry/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("first-run-add-agent-opt-claude-acp"));
+    expect(onAddAgent).toHaveBeenCalledWith("claude-acp");
+  });
+
+  it("falls back to the install steps when nothing is addable either", () => {
+    renderIt(flight(), vi.fn(), false, vi.fn());
+    expect(screen.getByText(/palisade needs a coding agent/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /registry/i })).toBeInTheDocument();
   });
 });
