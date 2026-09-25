@@ -4767,6 +4767,20 @@ async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::Compl
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// True if `main.rs` was re-invoked to babysit a sidecar rather than run the
+/// real app — see `pidguard::spawn_supervised`. Exposed because `pidguard`
+/// itself is a private module and `main.rs` needs to check this before Tauri
+/// starts anything.
+pub fn pidguard_supervisor_requested() -> bool {
+    pidguard::is_supervisor_invocation()
+}
+
+/// Runs this process as a sidecar supervisor and never returns. Only valid
+/// to call when `pidguard_supervisor_requested()` is true.
+pub fn run_pidguard_supervisor() -> ! {
+    pidguard::run_supervisor()
+}
+
 // ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
