@@ -72,6 +72,8 @@ const MODEL_FILE_NAME: &str = "Qwen2.5-Coder-0.5B-Q5_K_M.gguf";
 /// Which entry of the role-keyed model manifest this build wants. Palisade
 /// ships one model today; the manifest is keyed so adding a second is a new
 /// key rather than a format change that strands every installed beta.
+/// Read only by `download_model` (release builds only, see `ModelManifest`).
+#[cfg_attr(debug_assertions, allow(dead_code))]
 const MODEL_ROLE: &str = "fim";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,11 +228,6 @@ impl CompletionServer {
 
     pub fn port(&self) -> u16 {
         *self.port.lock_or_recover()
-    }
-
-    /// Calls `GET /health` and returns once the endpoint responds 200 OK.
-    pub fn health(&self) -> Res<()> {
-        wait_for_health(self.port(), Duration::from_secs(30))
     }
 
     pub fn terminate(&self) {
@@ -827,8 +824,12 @@ pub fn resolve_sidecar_paths(app: &AppHandle) -> Res<(PathBuf, PathBuf)> {
 ///
 /// Served as `models.json` so a new model ships by editing one JSON file —
 /// no rebuild, no notarization, no reinstall.
+///
+/// Every field is read by `download_model`, which only compiles in release
+/// builds (`#[cfg(not(debug_assertions))]`) — a dev build never reaches it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(debug_assertions, allow(dead_code))]
 pub struct ModelManifest {
     pub filename: String,
     pub sha256: String,
@@ -843,6 +844,8 @@ pub struct ModelManifest {
 
 /// Where the update Worker serves `models.json`. The Worker holds the
 /// Hugging Face credentials; the app never does.
+/// Read only by `download_model` (release builds only, see `ModelManifest`).
+#[cfg_attr(debug_assertions, allow(dead_code))]
 const MODEL_MANIFEST_URL: Option<&str> =
     Some("https://palisade-updates.tjlsmith0831.workers.dev/models.json");
 

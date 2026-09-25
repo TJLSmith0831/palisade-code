@@ -20,23 +20,7 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    /// Parse from an ACP tool kind string.
-    pub fn from_str(kind: &str) -> Self {
-        match kind {
-            "read" => ToolKind::Read,
-            "search" => ToolKind::Search,
-            "think" => ToolKind::Think,
-            "fetch" => ToolKind::Fetch,
-            "edit" => ToolKind::Edit,
-            "delete" => ToolKind::Delete,
-            "move" => ToolKind::Move,
-            "execute" => ToolKind::Execute,
-            _ => ToolKind::Other,
-        }
-    }
-
-    /// The inverse of `from_str` — the label an approval prompt shows the
-    /// user for this kind.
+    /// The label an approval prompt shows the user for this kind.
     pub fn as_str(&self) -> &'static str {
         match self {
             ToolKind::Read => "read",
@@ -407,25 +391,4 @@ mod tests {
         assert!(!is_openspec_path("openspec-backup/file.md"));
     }
 
-    // --------------------------------------------------------- ToolKind parsing
-
-    /// ToolKind::from_str parses known kinds correctly.
-    #[test]
-    fn tool_kind_from_str_parses_known_kinds() {
-        assert_eq!(ToolKind::from_str("read"), ToolKind::Read);
-        assert_eq!(ToolKind::from_str("search"), ToolKind::Search);
-        assert_eq!(ToolKind::from_str("think"), ToolKind::Think);
-        assert_eq!(ToolKind::from_str("fetch"), ToolKind::Fetch);
-        assert_eq!(ToolKind::from_str("edit"), ToolKind::Edit);
-        assert_eq!(ToolKind::from_str("delete"), ToolKind::Delete);
-        assert_eq!(ToolKind::from_str("move"), ToolKind::Move);
-        assert_eq!(ToolKind::from_str("execute"), ToolKind::Execute);
-    }
-
-    /// Unknown tool kinds map to Other.
-    #[test]
-    fn unknown_tool_kind_maps_to_other() {
-        assert_eq!(ToolKind::from_str("unknown_thing"), ToolKind::Other);
-        assert_eq!(ToolKind::from_str(""), ToolKind::Other);
-    }
 }

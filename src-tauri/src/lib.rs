@@ -1328,7 +1328,6 @@ fn start_session_as(
         mode: mode.to_string(),
         bypass,
         model,
-        palisade_home: home.clone(),
         extra_env,
     };
 
@@ -1656,7 +1655,6 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
             mode: "spec".into(),
             bypass: false,
             model: None,
-            palisade_home: palisade_home(),
             extra_env: vec![],
         };
         let asked = format!(
@@ -2678,7 +2676,6 @@ async fn draft_commit_message(
             mode: "spec".into(),
             bypass: false,
             model,
-            palisade_home: palisade_home(),
             extra_env: vec![],
         };
         acp_client::agent_oneshot(

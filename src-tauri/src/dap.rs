@@ -170,17 +170,6 @@ impl DapConnection {
         }
     }
 
-    /// Fire-and-forget: used only where DAP itself defines no response.
-    pub fn notify(&self, command: &str, arguments: Value) -> Res<()> {
-        let seq = self.seq.fetch_add(1, Ordering::SeqCst);
-        self.write(&json!({
-            "seq": seq,
-            "type": "request",
-            "command": command,
-            "arguments": arguments,
-        }))
-    }
-
     fn write(&self, envelope: &Value) -> Res<()> {
         let body = serde_json::to_string(envelope).map_err(|err| crate::PalisadeError::from(format!("encode: {err}")))?;
         let mut writer = self.writer.lock_or_recover();
@@ -308,6 +297,7 @@ impl Breakpoint {
 
     /// Where this breakpoint really is: what the adapter bound, or where the
     /// user put it while nothing has said otherwise.
+    #[cfg(test)]
     pub fn effective_line(&self) -> u32 {
         self.actual_line.unwrap_or(self.line)
     }
@@ -395,6 +385,11 @@ pub type BoundFile = (String, Vec<Breakpoint>);
 /// program is let go: breakpoints sent earlier are silently dropped by many
 /// adapters, and breakpoints sent later are missed because execution has
 /// already run past them. Ordering is the whole point of this function.
+///
+/// Production goes through `DebugSession::configure`, which passes the
+/// adapter's real `supportsConfigurationDoneRequest` capability instead of
+/// this fixed `true` — this convenience wrapper is used only by tests.
+#[cfg(test)]
 pub fn configure(connection: &DapConnection, files: Vec<BoundFile>) -> Res<Vec<BoundFile>> {
     configure_with(connection, files, true)
 }
@@ -696,7 +691,6 @@ pub struct StoppedState {
 /// One running debug session: an adapter process plus its connection.
 pub struct DebugSession {
     pub id: String,
-    pub project_hash: String,
     pub project_root: std::path::PathBuf,
     pub language: String,
     connection: Arc<DapConnection>,
@@ -717,7 +711,6 @@ impl DebugSession {
     /// calls `configure`. That order is DAP's, not ours.
     pub fn start(
         id: String,
-        project_hash: String,
         project_root: std::path::PathBuf,
         language: String,
         adapter: &AdapterInfo,
@@ -757,7 +750,6 @@ impl DebugSession {
         let connection = DapConnection::new(stdout, stdin, on_event);
         let session = Arc::new(DebugSession {
             id,
-            project_hash,
             project_root,
             language,
             connection,

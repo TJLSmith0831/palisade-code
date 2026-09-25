@@ -1,14 +1,13 @@
 //! Pure-Rust read-only git access (D12).
 //!
-//! This module exposes a [`GitRepo`] trait so callers can switch between a real
-//! backend and an in-memory test backend. The initial real backend still shells
-//! out to the `git` binary for complex diff/status output because gix's API for
+//! This module exposes a [`GitRepo`] trait so callers can switch backends. The
+//! initial real backend still shells out to the `git` binary for complex
+//! diff/status output because gix's API for
 //! generating porcelain-style status codes and unified diffs requires more
 //! iteration than a single compile-check-free pass can safely deliver; the `gix`
 //! dependency is already wired and a [`GixRepo`] stub is provided for the next
 //! pass to fill in.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -136,9 +135,6 @@ pub trait GitRepo: Send + Sync + 'static {
     /// Unified diff of staged changes.
     fn staged_diff(&self, root: &Path) -> Res<String>;
 
-    /// Batched read: status plus both diffs in one call.
-    fn snapshot(&self, root: &Path) -> Res<Snapshot>;
-
     /// Local and remote branches.
     fn list_branches(&self, root: &Path) -> Res<Vec<BranchInfo>>;
 
@@ -173,14 +169,6 @@ pub(crate) fn parse_remote_branches(raw: &str) -> Vec<BranchInfo> {
         .filter(|line| !line.ends_with("/HEAD"))
         .map(|name| BranchInfo { name: name.to_string(), is_current: false, is_remote: true })
         .collect()
-}
-
-/// The result of a batched git read query.
-#[derive(Debug, Clone, Default)]
-pub struct Snapshot {
-    pub status: Vec<FileStatus>,
-    pub working_diff: String,
-    pub staged_diff: String,
 }
 
 /// Real implementation backed by the `git` binary. This is intentionally a
@@ -254,14 +242,6 @@ impl GitRepo for ShellGitRepo {
         run_git_res(root, &["diff", "--cached"])
     }
 
-    fn snapshot(&self, root: &Path) -> Res<Snapshot> {
-        Ok(Snapshot {
-            status: self.status(root)?,
-            working_diff: self.working_tree_diff(root)?,
-            staged_diff: self.staged_diff(root)?,
-        })
-    }
-
     fn list_branches(&self, root: &Path) -> Res<Vec<BranchInfo>> {
         let local = run_git_res(root, &["branch", "--format=%(refname:short)\t%(HEAD)"])?;
         let remote = run_git_res(root, &["branch", "-r", "--format=%(refname:short)"])?;
@@ -289,94 +269,10 @@ impl GitRepo for ShellGitRepo {
     }
 }
 
-/// In-memory git backend for tests. Pre-load the answers you need; no
-/// subprocess is spawned.
-pub struct InMemoryGitRepo {
-    pub is_git_repo: bool,
-    pub rev_parse_head: Option<String>,
-    pub porcelain_snapshot: Vec<String>,
-    pub changed_between: HashMap<(String, String), Vec<String>>,
-    pub status: Vec<FileStatus>,
-    pub working_diff: String,
-    pub staged_diff: String,
-    pub snapshot: Option<Snapshot>,
-    pub branches: Vec<BranchInfo>,
-    pub current_branch_name: String,
-    pub ahead_behind: Option<Option<(u32, u32)>>,
-}
-
-impl Default for InMemoryGitRepo {
-    fn default() -> Self {
-        Self {
-            is_git_repo: false,
-            rev_parse_head: None,
-            porcelain_snapshot: vec![],
-            changed_between: HashMap::new(),
-            status: vec![],
-            working_diff: String::new(),
-            staged_diff: String::new(),
-            snapshot: None,
-            branches: vec![],
-            current_branch_name: "HEAD".into(),
-            ahead_behind: None,
-        }
-    }
-}
-
-impl GitRepo for InMemoryGitRepo {
-    fn is_git_repo(&self, _root: &Path) -> bool {
-        self.is_git_repo
-    }
-
-    fn rev_parse_head(&self, _root: &Path) -> Option<String> {
-        self.rev_parse_head.clone()
-    }
-
-    fn porcelain_snapshot(&self, _root: &Path) -> Vec<String> {
-        let mut paths = self.porcelain_snapshot.clone();
-        paths.sort();
-        paths
-    }
-
-    fn changed_between(&self, _root: &Path, before: &str, after: &str) -> Res<Vec<String>> {
-        Ok(self.changed_between.get(&(before.to_string(), after.to_string())).cloned().unwrap_or_default())
-    }
-
-    fn status(&self, _root: &Path) -> Res<Vec<FileStatus>> {
-        Ok(self.status.clone())
-    }
-
-    fn working_tree_diff(&self, _root: &Path) -> Res<String> {
-        Ok(self.working_diff.clone())
-    }
-
-    fn diff_from(&self, _root: &Path, _rev: &str) -> Res<String> {
-        Ok(self.working_diff.clone())
-    }
-
-    fn staged_diff(&self, _root: &Path) -> Res<String> {
-        Ok(self.staged_diff.clone())
-    }
-
-    fn snapshot(&self, _root: &Path) -> Res<Snapshot> {
-        Ok(self.snapshot.clone().unwrap_or_default())
-    }
-
-    fn list_branches(&self, _root: &Path) -> Res<Vec<BranchInfo>> {
-        Ok(self.branches.clone())
-    }
-
-    fn current_branch_name(&self, _root: &Path) -> Res<String> {
-        Ok(self.current_branch_name.clone())
-    }
-
-    fn ahead_behind(&self, _root: &Path) -> Res<Option<(u32, u32)>> {
-        Ok(self.ahead_behind.unwrap_or(None))
-    }
-}
-
 /// Placeholder for a pure-gix implementation. Filling this in is the next step
-/// once the crate can be compiled and tested iteratively.
+/// once the crate can be compiled and tested iteratively. Not yet constructed
+/// anywhere (`shared_git_repo` still returns `ShellGitRepo`).
+#[allow(dead_code)]
 pub struct GixRepo;
 
 impl GitRepo for GixRepo {
@@ -410,10 +306,6 @@ impl GitRepo for GixRepo {
 
     fn staged_diff(&self, _root: &Path) -> Res<String> {
         todo!("gix staged_diff")
-    }
-
-    fn snapshot(&self, _root: &Path) -> Res<Snapshot> {
-        todo!("gix snapshot")
     }
 
     fn list_branches(&self, _root: &Path) -> Res<Vec<BranchInfo>> {

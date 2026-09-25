@@ -177,15 +177,6 @@ pub fn resolve_executor(
 mod tests {
     use super::*;
 
-    fn mock_find<'a>(installed: &'a [&str]) -> impl Fn(&str) -> Option<PathBuf> + 'a {
-        move |cmd: &str| {
-            installed
-                .iter()
-                .find(|&&name| name == cmd)
-                .map(|_| PathBuf::from(format!("/usr/bin/{cmd}")))
-        }
-    }
-
     fn test_flight(agent_ids: &[&str]) -> Preflight {
         let agents: Vec<AgentStatus> = agent_ids
             .iter()

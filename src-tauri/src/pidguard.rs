@@ -143,6 +143,10 @@ const SUPERVISE_ARGS_ENV: &str = "__PALISADE_PIDGUARD_ARGS";
 /// relayed straight through to `program`'s own stdin unchanged (the notebook
 /// driver's real command protocol rides this unmodified); a program like
 /// `llama-server` that ignores its stdin just never receives anything.
+/// Used by `completion.rs`/`notebook.rs` in real (`#[cfg(not(test))]`)
+/// builds only — the test binary compiles their `#[cfg(test)]` direct-spawn
+/// double instead, so this looks unused from a `cargo test` build.
+#[cfg_attr(test, allow(dead_code))]
 pub fn spawn_supervised(program: &Path, args: &[String]) -> io::Result<Child> {
     let exe = std::env::current_exe()?;
     spawn_supervised_via(&exe, &[], program, args)

@@ -112,6 +112,9 @@ pub struct AcpNodeRunner {
     iterations: Mutex<HashMap<String, u32>>,
     /// The run's shared, pause-aware wall clock (D12) — a human turn pauses
     /// it for the same clock the scheduler's own timeout check consults.
+    /// Stored for symmetry with `AcpGateEvaluator`, which shares this same
+    /// `Arc` and does pause it; this runner doesn't pause it itself yet.
+    #[allow(dead_code)]
     budget: Arc<Budget>,
 }
 
