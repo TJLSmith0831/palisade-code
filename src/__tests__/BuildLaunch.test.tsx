@@ -3,10 +3,10 @@ import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
 import { BuildLaunch, armBuildLaunch } from "../BuildLaunch";
 
-const row = () =>
+const row = (target = "Add search clear button") =>
   render(
     <MantineProvider>
-      <BuildLaunch target="Add search clear button" />
+      <BuildLaunch target={target} />
     </MantineProvider>
   );
 
@@ -17,7 +17,7 @@ describe("BuildLaunch", () => {
   });
 
   it("plays once for a row mounted right after a send, and not on a later remount", () => {
-    armBuildLaunch();
+    armBuildLaunch("add-search-clear-button");
     const first = row();
     expect(screen.getByTestId("build-launch")).toHaveAttribute("data-play");
     first.unmount();
@@ -31,5 +31,11 @@ describe("BuildLaunch", () => {
     } finally {
       Date.now = realNow;
     }
+  });
+
+  it("does not play on another change's Build row mounted right after a send", () => {
+    armBuildLaunch("add-search-clear-button");
+    row("Dark mode toggle");
+    expect(screen.getByTestId("build-launch")).not.toHaveAttribute("data-play");
   });
 });

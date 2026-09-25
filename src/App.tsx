@@ -5368,7 +5368,7 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
-      armBuildLaunch();
+      armBuildLaunch(thread.openSpecChangeName);
       const launch = await api.applySkill(project.hash, thread.id, prefs.bypass);
       setThread(launch.thread);
       if (launch.chainName && launch.chainRunId) {

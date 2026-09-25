@@ -1147,6 +1147,23 @@ fn built_change(project_hash: &str, thread_id: &str) -> Option<(PathBuf, String)
     tree.join(change_dir(&change)).is_dir().then_some((tree, change))
 }
 
+/// Sync a built change before a turn so its agent reads the current copy: a
+/// spec turn pulls the build's progress into the root; a build turn pulls
+/// spec revisions into its worktree and gets a note to re-read the change
+/// when anything was revised (`revised`: a spec turn already synced one in).
+fn sync_before_turn(mode: &str, project: &Path, tree: &Path, change: &str, revised: bool) -> std::io::Result<Option<String>> {
+    if mode == "spec" {
+        sync_change(tree, project, change)?;
+        return Ok(None);
+    }
+    let synced = sync_change(project, tree, change)?;
+    Ok((synced > 0 || revised).then(|| format!(
+        "The proposal for `{change}` was revised in spec mode since your last turn. \
+         Re-read openspec/changes/{change}/ (proposal, design, specs, tasks) before continuing; \
+         any new unticked task is part of this build."
+    )))
+}
+
 /// `fresh` tasks with every task `built` has ticked ticked again, matched by text.
 fn merge_ticks(fresh: &str, built: &str) -> String {
     let ticked: std::collections::HashSet<&str> = built
@@ -1872,24 +1889,12 @@ fn send_to<'a>(
     };
     // Two copies of a built change: hand each agent the current one.
     if let Some((tree, change)) = built_change(project_hash, &thread_id) {
-        let project = project_root(project_hash)?;
-        if mode == "spec" {
-            if let Err(err) = sync_change(&tree, &project, &change) {
-                eprintln!("[palisade] could not sync {change} into the project root: {err}");
-            }
-        } else {
-            // Cleared only once the prompt is out, so a failed send still
-            // tells the next build turn.
-            let revised = harness.agent.revised_changes.lock_or_recover().contains(&thread_id);
-            match sync_change(&project, &tree, &change) {
-                Ok(n) if n > 0 || revised => prompt.context.push(format!(
-                    "The proposal for `{change}` was revised in spec mode since your last turn. \
-                     Re-read openspec/changes/{change}/ (proposal, design, specs, tasks) before continuing; \
-                     any new unticked task is part of this build."
-                )),
-                Ok(_) => {}
-                Err(err) => eprintln!("[palisade] could not sync {change} into the worktree: {err}"),
-            }
+        // Cleared only once the prompt is out, so a failed send still tells
+        // the next build turn.
+        let revised = harness.agent.revised_changes.lock_or_recover().contains(&thread_id);
+        match sync_before_turn(&mode, &project_root(project_hash)?, &tree, &change, revised) {
+            Ok(note) => prompt.context.extend(note),
+            Err(err) => eprintln!("[palisade] could not sync {change} before a {mode} turn: {err}"),
         }
     }
     if mode == "spec" {
@@ -5082,6 +5087,48 @@ mod tests {
 
         assert_eq!(sync_change(tree.path(), root.path(), "c").unwrap(), 2, "a spec turn starts with the build's copy");
         assert_eq!(sync_change(root.path(), tree.path(), "c").unwrap(), 0, "an untouched copy is not a revision");
+    }
+
+    /// The whole spec/go loop on disk, through the same calls send_to and the
+    /// turn-end hook make: build, revise mid-build, crash a spec turn.
+    #[test]
+    fn a_mid_build_revision_reaches_the_build_and_the_build_is_told_once() {
+        use std::time::{Duration, SystemTime};
+        let project = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let (p, t) = (project.path(), tree.path());
+        let at = |secs: u64| SystemTime::now() - Duration::from_secs(600 - secs);
+        let write = |base: &Path, f: &str, body: &str, when: SystemTime| {
+            let path = base.join("openspec/changes/c").join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, body).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+        };
+        let read = |base: &Path, f: &str| std::fs::read_to_string(base.join("openspec/changes/c").join(f)).unwrap();
+
+        // Spec proposes; /go seeds the worktree; the first build turn has nothing to re-read.
+        write(p, "proposal.md", "v1", at(0));
+        write(p, "tasks.md", "- [ ] a\n", at(0));
+        sync_change(p, t, "c").unwrap();
+        assert_eq!(sync_before_turn("go", p, t, "c", false).unwrap(), None);
+
+        // The build ticks a task; the next spec turn starts from that.
+        write(t, "tasks.md", "- [x] a\n", at(10));
+        assert_eq!(sync_before_turn("spec", p, t, "c", false).unwrap(), None);
+        assert_eq!(read(p, "tasks.md"), "- [x] a\n", "the spec agent sees the tick");
+
+        // The spec turn adds a task; its end syncs it into the worktree (Flow 1).
+        write(p, "tasks.md", "- [x] a\n- [ ] escape\n", at(20));
+        let revised = sync_change(p, t, "c").unwrap() > 0;
+        assert!(revised);
+        assert_eq!(read(t, "tasks.md"), "- [x] a\n- [ ] escape\n");
+        assert!(sync_before_turn("go", p, t, "c", revised).unwrap().is_some(), "the build is told once");
+        assert_eq!(sync_before_turn("go", p, t, "c", false).unwrap(), None, "and not again");
+
+        // A spec turn that crashes skips its end sync; the next build turn still gets it (Flow 3).
+        write(p, "proposal.md", "v2", at(30));
+        assert!(sync_before_turn("go", p, t, "c", false).unwrap().is_some());
+        assert_eq!(read(t, "proposal.md"), "v2");
     }
 
     #[test]
