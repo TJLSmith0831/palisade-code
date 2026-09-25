@@ -131,6 +131,53 @@ describe("SpecChangeTab", () => {
     setupMocks();
   });
 
+  it("reads artifacts and deltas from the owning thread's tree", async () => {
+    renderTab({ threadId: "t-1" });
+    await waitFor(() => {
+      const calls = invokeMock.mock.calls;
+      const read = calls.find(([c]) => c === "read_file_content");
+      const show = calls.find(([c]) => c === "show_spec_change");
+      expect(read?.[1]).toMatchObject({ threadId: "t-1" });
+      expect(show?.[1]).toMatchObject({ threadId: "t-1" });
+    });
+  });
+
+  it("re-reads artifacts when an agent writes into this change", async () => {
+    renderTab();
+    const reads = () => invokeMock.mock.calls.filter(([c]) => c === "read_file_content").length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    const handler = (listenMock.mock.calls as unknown as [string, (e: unknown) => void][])
+      .find(([name]) => name === "fs-changed")![1];
+    handler({ payload: { projectHash: "proj-1", paths: ["openspec/changes/other/tasks.md"] } });
+    handler({ payload: { projectHash: "proj-1", paths: ["openspec/changes/vibe-spec-tabs/tasks.md"] } });
+    await waitFor(() => expect(reads()).toBe(before * 2));
+  });
+
+  it("refreshes while the owning thread's tools finish, since a build writes outside the watched root", async () => {
+    renderTab({ threadId: "t-1" });
+    const reads = () => invokeMock.mock.calls.filter(([c]) => c === "read_file_content").length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    const handler = (listenMock.mock.calls as unknown as [string, (e: unknown) => void][])
+      .find(([name]) => name === "executor-event")![1];
+    handler({ payload: { threadId: "other", event: { kind: "toolResult" } } });
+    handler({ payload: { threadId: "t-1", event: { kind: "text" } } });
+    handler({ payload: { threadId: "t-1", event: { kind: "toolResult" } } });
+    await waitFor(() => expect(reads()).toBe(before * 2), { timeout: 3000 });
+  });
+
+  it("refreshes when the owning thread's turn ends, which is when a spec revision is synced in", async () => {
+    renderTab({ threadId: "t-1" });
+    const reads = () => invokeMock.mock.calls.filter(([c]) => c === "read_file_content").length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    const handler = (listenMock.mock.calls as unknown as [string, (e: unknown) => void][])
+      .find(([name]) => name === "executor-event")![1];
+    handler({ payload: { threadId: "t-1", event: { kind: "done" } } });
+    await waitFor(() => expect(reads()).toBe(before * 2), { timeout: 3000 });
+  });
+
   it("renders inner tabs for Proposal, Design, Spec, Tasks, and Verify", () => {
     renderTab();
     const tabs = screen.getAllByTestId("spec-inner-tab");
@@ -359,12 +406,11 @@ describe("SpecChangeTab", () => {
     });
   });
 
-  it("shows a fallback when showSpecChange returns null", async () => {
+  it("locks the Spec tab until the change has spec deltas", async () => {
     setupMocks({ showSpecChange: null });
     renderTab();
-    fireEvent.click(screen.getByText("Spec"));
-    await waitFor(() => {
-      expect(screen.getByText(/No spec deltas available/)).toBeInTheDocument();
-    });
+    const tab = screen.getByRole("tab", { name: /Spec/ });
+    await waitFor(() => expect(tab).toBeDisabled());
+    expect(screen.getByRole("tab", { name: /Proposal/ })).not.toBeDisabled();
   });
 });

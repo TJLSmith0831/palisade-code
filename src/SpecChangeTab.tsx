@@ -30,6 +30,8 @@ import { describeError } from "./errors";
 type Props = {
   projectHash: string;
   specName: string;
+  /** Thread whose tree to read: its worktree once it has one, else the project root. */
+  threadId?: string;
   /** Pinned verify commands for this change, keyed by spec name. The first
    * pinned command becomes the Tasks tab's primary "Run verify" action (D9). */
   verifyPins?: string[];
@@ -109,6 +111,7 @@ function parseTasks(markdown: string): TaskItem[] {
 export default function SpecChangeTab({
   projectHash,
   specName,
+  threadId,
   verifyPins,
   onAddPin,
   onRemovePin,
@@ -131,19 +134,53 @@ export default function SpecChangeTab({
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
+  // Bumped when an agent writes into this change, so artifacts that didn't
+  // exist when the tab opened (it opens as soon as the proposal lands) appear.
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const prefix = `openspec/changes/${specName}/`;
+    const changed = listen<{ projectHash: string; paths: string[] }>("fs-changed", ({ payload }) => {
+      if (payload.projectHash === projectHash && payload.paths.some((p) => p.startsWith(prefix))) {
+        setReload((n) => n + 1);
+      }
+    });
+    return () => {
+      changed.then((un) => un());
+    };
+  }, [projectHash, specName]);
+
+  // A build writes into the thread's worktree, which the project-root file
+  // watcher can't see: refresh (throttled) as the owning thread's tools and
+  // turns finish. A turn's end also covers a spec revision synced into it.
+  useEffect(() => {
+    if (!threadId) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const events = listen<{ threadId: string; event: { kind: string } }>("executor-event", ({ payload }) => {
+      if (payload?.threadId !== threadId || (payload.event.kind !== "toolResult" && payload.event.kind !== "done") || timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        setReload((n) => n + 1);
+      }, 1500);
+    });
+    return () => {
+      clearTimeout(timer);
+      events.then((un) => un());
+    };
+  }, [threadId]);
+
   const loadArtifact = useCallback(
     async (
       relativePath: string,
       setter: (s: ArtifactState) => void
     ): Promise<void> => {
       try {
-        const content = await api.readFileContent(projectHash, relativePath);
+        const content = await api.readFileContent(projectHash, relativePath, threadId);
         setter({ content, loading: false, error: null });
       } catch (err) {
         setter({ content: null, loading: false, error: describeError(err, { loading: "that file" }) });
       }
     },
-    [projectHash]
+    [projectHash, threadId]
   );
 
   // Load all artifacts on mount. Each loads independently so a missing
@@ -155,14 +192,14 @@ export default function SpecChangeTab({
     loadArtifact(`openspec/changes/${specName}/proposal.md`, setProposal);
     loadArtifact(`openspec/changes/${specName}/design.md`, setDesign);
     loadArtifact(`openspec/changes/${specName}/tasks.md`, setTasks);
-  }, [projectHash, specName, loadArtifact]);
+  }, [projectHash, specName, loadArtifact, reload]);
 
   // Load structured spec deltas from `openspec show --json` (D11).
   useEffect(() => {
     setSpecLoading(true);
     setSpecError(null);
     api
-      .showSpecChange(projectHash, specName)
+      .showSpecChange(projectHash, specName, threadId)
       .then((value) => {
         setDeltas(value);
         setSpecLoading(false);
@@ -171,7 +208,7 @@ export default function SpecChangeTab({
         setSpecError(describeError(err, { loading: "this change's spec deltas" }));
         setSpecLoading(false);
       });
-  }, [projectHash, specName]);
+  }, [projectHash, specName, threadId, reload]);
 
   // Load verify commands + history (same as VerifyPane).
   useEffect(() => {
@@ -269,6 +306,12 @@ export default function SpecChangeTab({
     },
   ];
 
+  // A tab that locks (or a change that loses its file) can't stay selected.
+  const activeMissing = phases.find((p) => p.value === activeTab)?.state === "missing";
+  useEffect(() => {
+    if (activeMissing) setActiveTab("proposal");
+  }, [activeMissing]);
+
   return (
     <Stack gap={0} h="100%" style={{ overflow: "hidden" }}>
       <div className="ds-spec-phases" role="tablist" aria-label="Change artifacts">
@@ -282,6 +325,9 @@ export default function SpecChangeTab({
             data-testid="spec-inner-tab"
             data-state={phase.state}
             data-active={activeTab === phase.value || undefined}
+            // Nothing to show until the agent writes it; a locked tab can't
+            // be opened onto an error.
+            disabled={phase.state === "missing"}
             onClick={() => setActiveTab(phase.value)}
           >
             <span className="ds-spec-phase-dot" aria-hidden="true" />
@@ -304,6 +350,7 @@ export default function SpecChangeTab({
             <SpecDeltasView
               projectHash={projectHash}
               specName={specName}
+              threadId={threadId}
               loading={specLoading}
               error={specError}
               deltas={deltas}
@@ -524,12 +571,14 @@ type SpecDelta = {
 function SpecDeltasView({
   projectHash,
   specName,
+  threadId,
   loading,
   error,
   deltas,
 }: {
   projectHash: string;
   specName: string;
+  threadId?: string;
   loading: boolean;
   error: string | null;
   deltas: unknown;
@@ -550,11 +599,12 @@ function SpecDeltasView({
         const localPath = `openspec/changes/${specName}/specs/${spec}/spec.md`;
         let content: string;
         try {
-          content = await api.readFileContent(projectHash, localPath);
+          content = await api.readFileContent(projectHash, localPath, threadId);
         } catch {
           content = await api.readFileContent(
             projectHash,
-            `openspec/specs/${spec}/spec.md`
+            `openspec/specs/${spec}/spec.md`,
+            threadId
           );
         }
         setSource({ content, loading: false, error: null });
@@ -562,7 +612,7 @@ function SpecDeltasView({
         setSource({ content: null, loading: false, error: describeError(err) });
       }
     },
-    [projectHash, specName]
+    [projectHash, specName, threadId]
   );
 
   useEffect(() => {

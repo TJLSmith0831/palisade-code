@@ -174,6 +174,10 @@ const STARTER_PROMPTS = [
 ];
 
 import SpecPane from "./SpecPane";
+import { buildTarget, displaySkillCommand } from "./skillLabel";
+import { BuildLaunch, armBuildLaunch } from "./BuildLaunch";
+import { mergeRefreshed } from "./messageMerge";
+import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
 import FirstRunChecklist from "./FirstRunChecklist";
@@ -840,7 +844,9 @@ export const ChatSurface = memo(
                 ))}
               </div>
             )}
-            {text && <MDEditor.Markdown source={displayMentions(text)} className="content" />}
+            {text && buildTarget(text) !== null
+              ? <BuildLaunch target={buildTarget(text)!} />
+              : text && <MDEditor.Markdown source={displaySkillCommand(displayMentions(text))} className="content" />}
             {item.attachments && item.attachments.length > 0 && (
               <div className="ds-message-attachments">
                 {item.attachments.map((path) => (
@@ -3093,6 +3099,16 @@ export default function App() {
   // re-select the first project on every render.
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+
+  // A proposal that lands on the thread you're looking at opens itself in the
+  // spec viewer. Keyed by thread so selecting an already-linked thread doesn't
+  // reopen its tab.
+  const linkedSpecRef = useRef<SpecLink>({ name: null });
+  useEffect(() => {
+    const next = { id: thread?.id, name: thread?.openSpecChangeName ?? null };
+    if (shouldOpenLinkedSpec(linkedSpecRef.current, next)) tabsRef.current.openSpec(next.name!);
+    linkedSpecRef.current = next;
+  }, [thread?.id, thread?.openSpecChangeName]);
   // Which project's editing sessions are currently cached.
   const currentProjectRef = useRef<string | null>(null);
   // The keyboard handler is registered once; these keep it pointed at the
@@ -4643,9 +4659,8 @@ export default function App() {
     setThreads(found);
     setThread(updated);
     // Everything from `history` on is fresh; keep any older page that landed
-    // while this read was out (an optimistic bubble is superseded by its real row).
-    const newest = history[0]?.seq ?? Number.POSITIVE_INFINITY;
-    setMessages((prev) => [...prev.filter((m) => m.seq !== OPTIMISTIC_SEQ && m.seq < newest), ...history]);
+    // while this read was out. An optimistic bubble stays until its real row lands.
+    setMessages((prev) => mergeRefreshed(prev, history, OPTIMISTIC_SEQ));
     clearLiveFor(thread.id);
     // Fetch change status when the thread has an open spec change.
     if (updated.openSpecChangeName) {
@@ -5353,6 +5368,7 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
+      armBuildLaunch();
       const launch = await api.applySkill(project.hash, thread.id, prefs.bypass);
       setThread(launch.thread);
       if (launch.chainName && launch.chainRunId) {
@@ -6537,6 +6553,14 @@ export default function App() {
         <SpecChangeTab
           projectHash={project.hash}
           specName={specName}
+          // The thread that owns this change (the one on screen first, when
+          // two share a name): once it builds, its worktree copy carries the
+          // ticked tasks.
+          threadId={
+            thread?.openSpecChangeName === specName
+              ? thread.id
+              : threads.find((t) => t.openSpecChangeName === specName)?.id
+          }
           verifyPins={verifyPins[specName]}
           onAddPin={(cmd) => addVerifyPin(specName, cmd)}
           onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}

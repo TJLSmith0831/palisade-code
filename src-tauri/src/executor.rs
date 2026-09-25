@@ -382,11 +382,27 @@ pub fn openspec_show(
     serde_json::from_str(&body).ok()
 }
 
-/// Parse `isComplete` from `openspec status --change <name> --json` stdout.
+/// Whether a change is ready to apply, from `openspec status --change <name>
+/// --json` stdout. The CLI's own gate is `applyRequires` (e.g. just `tasks`):
+/// `isComplete` also demands optional artifacts like `design`, so a change that
+/// skips design on purpose would never be appliable. Falls back to `isComplete`
+/// when the CLI doesn't report `applyRequires`.
 /// Pure function for testability; `change_status` wraps it with the subprocess call.
 pub fn parse_change_status(body: &str) -> Option<bool> {
     let v: Value = serde_json::from_str(body).ok()?;
-    v.get("isComplete")?.as_bool()
+    let complete = v.get("isComplete")?.as_bool()?;
+    let (Some(required), Some(artifacts)) = (
+        v.get("applyRequires").and_then(Value::as_array),
+        v.get("artifacts").and_then(Value::as_array),
+    ) else {
+        return Some(complete);
+    };
+    Some(required.iter().filter_map(Value::as_str).all(|id| {
+        artifacts.iter().any(|a| {
+            a.get("id").and_then(Value::as_str) == Some(id)
+                && a.get("status").and_then(Value::as_str) == Some("done")
+        })
+    }))
 }
 
 /// Whether a change's planning artifacts are all complete, per `openspec status`.
@@ -444,6 +460,16 @@ pub fn openspec_change_dirs(project_root: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Change directories that already hold a `proposal.md`. A directory alone
+/// means the agent has only scaffolded the change; linking it then sent users
+/// to a viewer with nothing to show.
+pub fn openspec_proposed_dirs(project_root: &Path) -> Vec<String> {
+    openspec_change_dirs(project_root)
+        .into_iter()
+        .filter(|name| project_root.join("openspec/changes").join(name).join("proposal.md").is_file())
+        .collect()
 }
 
 /// What a Spec turn produced. Ambiguity is surfaced, never dropped:
@@ -526,6 +552,9 @@ pub struct AgentState {
     /// automatically" message a blocked turn is given.
     pub pending_auth_turns: Mutex<HashMap<String, Vec<PendingAuthTurn>>>,
     pub pending_changes: Mutex<HashMap<String, ChangeWatch>>,
+    /// Threads whose built change a spec turn revised since their last build
+    /// turn; the next build turn is told to re-read the proposal.
+    pub revised_changes: Mutex<std::collections::HashSet<String>>,
     /// The last slash commands each session's agent advertised, keyed by
     /// session id. Agents send the list only at session start, so a reloaded
     /// webview reads it back from here instead of waiting for a new session.
@@ -683,7 +712,7 @@ mod harness_shape_tests {
             .iter()
             .map(|n| counts[*n])
             .sum();
-        assert_eq!(grouped, 20, "a field was dropped or added without a home");
+        assert_eq!(grouped, 21, "a field was dropped or added without a home");
     }
 
     /// The field comments are why this codebase is auditable; a refactor that
@@ -952,6 +981,16 @@ mod tests {
     }
 
     #[test]
+    fn a_change_that_skips_optional_design_is_ready_when_apply_requires_are_done() {
+        let body = r#"{"isComplete": false, "applyRequires": ["tasks"], "artifacts": [
+            {"id": "proposal", "status": "done"}, {"id": "design", "status": "ready"},
+            {"id": "tasks", "status": "done"}]}"#;
+        assert_eq!(parse_change_status(body), Some(true));
+        let unfinished = body.replace(r#"{"id": "tasks", "status": "done"}"#, r#"{"id": "tasks", "status": "blocked"}"#);
+        assert_eq!(parse_change_status(&unfinished), Some(false));
+    }
+
+    #[test]
     fn parse_change_status_returns_none_for_invalid_json() {
         assert_eq!(parse_change_status("not json"), None);
     }
@@ -1097,6 +1136,22 @@ mod tests {
 
         assert!(parse_openspec_list("not json").is_none());
         assert!(parse_openspec_list(r#"{"other":[]}"#).is_none());
+    }
+
+    #[test]
+    fn a_scaffolded_change_without_a_proposal_is_not_proposed() {
+        let repo = tempfile::tempdir().unwrap();
+        let changes = repo.path().join("openspec/changes");
+        fs::create_dir_all(changes.join("scaffold-only")).unwrap();
+        fs::create_dir_all(changes.join("written")).unwrap();
+        fs::write(changes.join("written/proposal.md"), "# p").unwrap();
+
+        assert_eq!(openspec_proposed_dirs(repo.path()), vec!["written".to_string()]);
+        // The link fires when the proposal lands, not when the directory does.
+        let before = openspec_proposed_dirs(repo.path());
+        fs::write(changes.join("scaffold-only/proposal.md"), "# p").unwrap();
+        let after = openspec_proposed_dirs(repo.path());
+        assert_eq!(newly_added_change(&before, &after), ProposeOutcome::One("scaffold-only".into()));
     }
 
     #[test]
