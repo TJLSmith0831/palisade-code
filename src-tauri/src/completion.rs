@@ -511,6 +511,18 @@ fn title_request_body(request: &str) -> serde_json::Value {
 /// `None` when nothing usable came back — the caller keeps its own fallback
 /// rather than showing the user a stray fragment.
 pub fn clean_title(raw: &str) -> Option<String> {
+    let cleaned = strip_title(raw)?;
+    // A model that echoed the instruction back, or produced a sentence, has
+    // not produced a title.
+    if cleaned.chars().count() > 60 || cleaned.split_whitespace().count() > 10 {
+        return None;
+    }
+    Some(cleaned)
+}
+
+/// The first line without the quotes, label and trailing period a small model
+/// wraps a title in, capitalised. No length judgement: that is the caller's.
+fn strip_title(raw: &str) -> Option<String> {
     let line = raw.lines().find(|l| !l.trim().is_empty())?;
     let cleaned = line
         .trim()
@@ -519,45 +531,59 @@ pub fn clean_title(raw: &str) -> Option<String> {
         .trim_matches(['"', '\'', '`', '*'])
         .trim_end_matches(['.', '…'])
         .trim();
-    // A model that echoed the instruction back, or produced a sentence, has
-    // not produced a title.
-    if cleaned.is_empty() || cleaned.chars().count() > 60 || cleaned.split_whitespace().count() > 10
-    {
-        return None;
-    }
     let mut chars = cleaned.chars();
     let first = chars.next()?;
     Some(first.to_uppercase().collect::<String>() + chars.as_str())
 }
 
+/// Words a title can do without; the small model adds them even when asked
+/// for four words.
+fn is_filler(word: &str) -> bool {
+    matches!(word.to_ascii_lowercase().as_str(),
+        "a" | "an" | "the" | "to" | "for" | "of" | "in" | "on" | "with" | "and" | "or" | "&" | "-")
+}
+
+/// A thread title's word budget. The prompt asks for 3-4; two on-topic words
+/// still beat the truncated first line that stands in without one.
+const MIN_TITLE_WORDS: usize = 2;
+const MAX_TITLE_WORDS: usize = 4;
+/// Shorter words ("ok", "is") match too much to show a title is on topic.
+const MIN_TOPIC_WORD_CHARS: usize = 3;
+
 fn clean_thread_title(raw: &str, request: &str) -> Option<String> {
-    let title = clean_title(raw)?;
+    // Not `clean_title`: its sentence cap would throw away an over-long title
+    // whose first four words are a good one — trim first, judge after.
+    let title = strip_title(raw)?;
     if matches!(
         title.split_whitespace().next()?.to_ascii_lowercase().as_str(),
         "i" | "i'm" | "we" | "you"
     ) {
         return None;
     }
-    // The small model often adds articles even when asked for four words.
-    // Keep its chosen topic words; never cut the user's request to make a title.
+    // Keep the model's chosen topic words; never cut the user's request to
+    // make a title.
     let words: Vec<&str> = title
         .split_whitespace()
-        .filter(|word| {
-            !matches!(word.to_ascii_lowercase().as_str(),
-                "a" | "an" | "the" | "to" | "for" | "of" | "in" | "on" | "with" | "and" | "or" | "&" | "-")
-        })
-        .take(4)
+        .filter(|word| !is_filler(word))
+        .take(MAX_TITLE_WORDS)
+        .map(|word| word.trim_matches(['"', ',', ';', ':']))
         .collect();
+    (words.len() >= MIN_TITLE_WORDS && is_about(&words, request)).then(|| words.join(" "))
+}
+
+/// Whether a title names something in the request rather than a stock phrase.
+/// An inflection counts ("Fixing" for "fix"); a bare prefix does not, or the
+/// stock "Clear concise description" would pass for "clearer".
+fn is_about(words: &[&str], request: &str) -> bool {
     let request = request.to_lowercase();
-    (words.len() >= 3
-        && words.iter().any(|word| {
-            let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-').to_lowercase();
-            word.chars().count() >= 3
-                && request
-                    .split(|c: char| !c.is_alphanumeric() && c != '-')
-                    .any(|term| term == word)
-        }))
-    .then(|| words.join(" "))
+    let terms: Vec<&str> = request
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|term| term.chars().count() >= MIN_TOPIC_WORD_CHARS)
+        .collect();
+    words.iter().any(|word| {
+        let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-').to_lowercase();
+        word.chars().count() >= MIN_TOPIC_WORD_CHARS && terms.iter().any(|term| word.starts_with(term))
+    })
 }
 
 impl Default for CompletionServer {
@@ -1577,8 +1603,39 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         assert_eq!(clean_title("Fix login redirect\nRequest: something else"), Some("Fix login redirect".into()));
     }
 
+    /// Real answers from the bundled model that used to be thrown away, so the
+    /// thread fell back to its truncated first line.
     #[test]
-    fn thread_titles_have_three_or_four_words() {
+    fn thread_titles_keep_a_short_or_over_long_model_answer() {
+        let export = "Add an Export CSV button that downloads exactly the signals currently shown. Add a test, then commit.";
+        assert_eq!(clean_thread_title(" Download Signals", export), Some("Download Signals".into()), "two on-topic words are a title");
+        assert_eq!(
+            clean_thread_title(
+                " \"Create Complete OpenSpec Proposal for Adding Testing Paragraph in Readme\"",
+                "Create a complete OpenSpec proposal for a tiny fixture-only documentation change"
+            ),
+            Some("Create Complete OpenSpec Proposal".into()),
+            "an over-long answer is cut to four words, not rejected"
+        );
+        assert_eq!(
+            clean_thread_title(" Stale Screenshots, and Subagent Dev Server", "the screenshots are stale; use a subagent dev server"),
+            Some("Stale Screenshots Subagent Dev".into()),
+            "a comma is not part of a title word"
+        );
+        assert_eq!(
+            clean_thread_title(
+                " \"Fixing Scroll Back Issues with Project Switches\"",
+                "the terminal panel seems to lose its scrollback; could you fix it"
+            ),
+            Some("Fixing Scroll Back Issues".into()),
+            "an inflection of a request word is on topic"
+        );
+        assert_eq!(clean_thread_title(" Bye\" Task", "Bye"), Some("Bye Task".into()), "a stray quote mid-title is dropped");
+        assert_eq!(clean_thread_title(" \"Hi!\"", "Hi! Reply in one short sentence."), None, "one word is not a title");
+    }
+
+    #[test]
+    fn thread_titles_have_two_to_four_words() {
         assert_eq!(clean_thread_title("Git Push Error Message", "clarify failed git push error"), Some("Git Push Error Message".into()));
         assert_eq!(clean_thread_title("Fix login redirect", "fix login"), Some("Fix login redirect".into()));
         assert_eq!(clean_thread_title("Clarify Git Push Error Message", "failed git push error"), Some("Clarify Git Push Error".into()));
@@ -1586,7 +1643,8 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         assert_eq!(clean_thread_title("Clearer Empty-State Line", "suggest a clearer empty-state line for a thread list"), Some("Clearer Empty-State Line".into()));
         assert_eq!(clean_thread_title("Clear concise description", "suggest a clearer empty-state line for a thread list"), None);
         assert_eq!(clean_thread_title("I am able to view", "confirm you can view this project"), None);
-        assert_eq!(clean_thread_title("Git push", "git push"), None);
+        assert_eq!(clean_thread_title("Git push", "git push"), Some("Git push".into()));
+        assert_eq!(clean_thread_title("Push", "git push"), None);
         assert!(build_title_prompt("fix git push").contains("3-4 word"));
     }
 
