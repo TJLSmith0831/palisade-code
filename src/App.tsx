@@ -4461,12 +4461,11 @@ export default function App() {
   }, [liveBySession, thread?.id]);
 
   const onStop = useCallback(() => {
-    // Stop the live session for this thread. When we can't identify the
-    // specific one (e.g. events haven't started streaming yet), fall back to
-    // this thread's sessions — never every session in the app, which used to
-    // cancel a concurrently running turn in an unrelated thread.
-    void api.stopExecutor(liveSessionId ?? undefined, thread?.id);
-  }, [liveSessionId, thread?.id]);
+    // The backend ends this thread's busy session, not whichever live one
+    // comes first: a thread can run a spec and a go session at once. Never
+    // without a thread — that would stop every session in the app.
+    if (thread?.id) void api.stopExecutor(undefined, thread.id);
+  }, [thread?.id]);
 
   // A thread's live buffer is pruned to its live-only events once history is
   // re-read from disk: everything else (toolCall, toolResult, text, ...) was

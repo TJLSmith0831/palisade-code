@@ -2765,11 +2765,34 @@ async fn change_status(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
-/// Stop one session by id. With no id, stop the named thread's sessions —
-/// the Stop button's fallback for a turn whose events haven't started
-/// streaming yet, so it has no session id to aim at. Without `thread_id`
-/// too, this stops everything, which is only ever what app teardown wants:
-/// one thread's Stop must not cancel another thread's live session.
+/// Which sessions a stop ends, as `(id, thread id)`. A named session is
+/// exact. A thread's Stop ends its busy sessions: a thread can hold an idle
+/// spec session beside a running go session, and ending the idle one only
+/// throws away its sign-in state. With none busy yet (a turn still spawning)
+/// it ends all of the thread's sessions, so Stop never does nothing. With
+/// neither, everything, which is only ever what app teardown wants: one
+/// thread's Stop must not cancel another thread's live session.
+fn stop_targets(
+    sessions: &[(String, String, bool)],
+    session_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Vec<(String, String)> {
+    let pick = |busy_only: bool| -> Vec<(String, String)> {
+        sessions
+            .iter()
+            .filter(|(id, thread, busy)| match (session_id, thread_id) {
+                (Some(wanted), _) => id == wanted,
+                (None, Some(wanted)) => thread == wanted && (*busy || !busy_only),
+                (None, None) => true,
+            })
+            .map(|(id, thread, _)| (id.clone(), thread.clone()))
+            .collect()
+    };
+    let busy = pick(true);
+    if busy.is_empty() { pick(false) } else { busy }
+}
+
+/// Stop one session by id, or a thread's busy session (see `stop_targets`).
 #[tauri::command]
 async fn stop_executor(
     app: tauri::AppHandle,
@@ -2778,18 +2801,13 @@ async fn stop_executor(
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        let targets: Vec<(String, String)> = harness
+        let sessions: Vec<(String, String, bool)> = harness
             .agent.acp_sessions
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .values()
-            .filter(|s| session_id.as_ref().is_none_or(|wanted| *wanted == s.id))
-            .filter(|s| {
-                session_id.is_some()
-                    || thread_id.as_ref().is_none_or(|wanted| *wanted == s.thread_id)
-            })
-            .map(|s| (s.id.clone(), s.thread_id.clone()))
+            .map(|s| (s.id.clone(), s.thread_id.clone(), s.is_busy()))
             .collect();
+        let targets = stop_targets(&sessions, session_id.as_deref(), thread_id.as_deref());
         for (id, thread_id) in targets {
             // Emit a Crashed event so the frontend's event listener clears
             // the busy state. Without this, the UI stays stuck on "busy"
@@ -5036,6 +5054,18 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thread_stop_ends_the_busy_session_and_spares_the_idle_one() {
+        use super::stop_targets;
+        let s = |id: &str, thread: &str, busy: bool| (id.to_string(), thread.to_string(), busy);
+        let sessions = [s("spec", "t1", false), s("go", "t1", true), s("other", "t2", true)];
+        let ids = |v: Vec<(String, String)>| v.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        assert_eq!(ids(stop_targets(&sessions, None, Some("t1"))), ["go"], "the idle spec session survives");
+        assert_eq!(ids(stop_targets(&sessions[..1], None, Some("t1"))), ["spec"], "nothing busy yet: stop the thread's sessions");
+        assert_eq!(ids(stop_targets(&sessions, Some("spec"), Some("t1"))), ["spec"], "a named session is exact");
+        assert_eq!(stop_targets(&sessions, None, None).len(), 3, "teardown stops everything");
+    }
+
     #[test]
     fn merge_ticks_keeps_the_builds_ticks_on_a_revised_task_list() {
         let fresh = "- [ ] a\n- [ ] b\n- [ ] escape clears\n";
