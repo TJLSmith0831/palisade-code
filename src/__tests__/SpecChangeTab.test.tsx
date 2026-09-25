@@ -167,6 +167,17 @@ describe("SpecChangeTab", () => {
     await waitFor(() => expect(reads()).toBe(before * 2), { timeout: 3000 });
   });
 
+  it("refreshes when the owning thread's turn ends, which is when a spec revision is synced in", async () => {
+    renderTab({ threadId: "t-1" });
+    const reads = () => invokeMock.mock.calls.filter(([c]) => c === "read_file_content").length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    const handler = (listenMock.mock.calls as unknown as [string, (e: unknown) => void][])
+      .find(([name]) => name === "executor-event")![1];
+    handler({ payload: { threadId: "t-1", event: { kind: "done" } } });
+    await waitFor(() => expect(reads()).toBe(before * 2), { timeout: 3000 });
+  });
+
   it("renders inner tabs for Proposal, Design, Spec, Tasks, and Verify", () => {
     renderTab();
     const tabs = screen.getAllByTestId("spec-inner-tab");

@@ -70,8 +70,18 @@ pub async fn archive_spec_change(
     let cache = app.state::<Harness>().workspace.openspec_cache.clone();
     tokio::task::spawn_blocking(move || {
         let root = crate::project_root(&project_hash)?;
-        let tree = spec_root(&project_hash, thread_id.as_deref())?;
-        archive_via_root(&cache, &root, &tree, &name)
+        // The Specs panel passes the thread on screen, which need not be the
+        // one that built this change: pull from every thread linked to it.
+        let mut trees = vec![spec_root(&project_hash, thread_id.as_deref())?];
+        for t in store::list_threads(&store::palisade_home(), &project_hash)? {
+            if t.open_spec_change_name.as_deref() == Some(name.as_str()) {
+                trees.extend(t.worktree_path.map(std::path::PathBuf::from));
+            }
+        }
+        trees.retain(|t| *t != root);
+        trees.sort();
+        trees.dedup();
+        archive_via_root(&cache, &root, &trees, &name)
     })
     .await
     .map_err(crate::PalisadeError::from)?
@@ -93,24 +103,24 @@ pub async fn set_spec_change(
 }
 
 /// Archive `name` in the project root, which is the source of truth for
-/// OpenSpec. A build's worktree (`tree`) holds the newer copy (ticked tasks):
-/// pull it into the root first, archive there, then drop the worktree's copy
-/// so a later commit and merge can't bring the archived change back to life.
+/// OpenSpec. A build's worktree holds the newer copy (ticked tasks): pull
+/// each one into the root first, archive there, then drop the worktree
+/// copies so a later commit and merge can't bring the archived change back.
 pub(crate) fn archive_via_root(
     cache: &crate::openspec_cache::OpenSpecCache,
     root: &std::path::Path,
-    tree: &std::path::Path,
+    trees: &[std::path::PathBuf],
     name: &str,
 ) -> Res<String> {
-    if tree != root {
+    for tree in trees {
         // A failed pull must stop here: removing the worktree copy below
         // would otherwise throw away the only record of its ticked tasks.
-        crate::copy_change(tree, root, name, true)
+        crate::sync_change(tree, root, name)
             .map_err(|err| crate::PalisadeError::from(format!("could not copy {name} into the project root: {err}")))?;
     }
     let archived = executor::openspec_archive(cache, root, name)?;
-    if tree != root {
-        let _ = std::fs::remove_dir_all(tree.join("openspec/changes").join(name));
+    for tree in trees {
+        let _ = std::fs::remove_dir_all(tree.join(crate::change_dir(name)));
     }
     Ok(archived)
 }
@@ -148,7 +158,7 @@ mod tests {
         let adapter = Arc::new(Recording(Mutex::new(None)));
         let cache = OpenSpecCache::new(adapter.clone());
 
-        archive_via_root(&cache, root.path(), tree.path(), "c").unwrap();
+        archive_via_root(&cache, root.path(), &[tree.path().into()], "c").unwrap();
 
         assert_eq!(adapter.0.lock().unwrap().as_deref(), Some("- [x] t"), "the CLI must see the worktree's ticks");
         assert!(!tree.path().join("openspec/changes/c").exists(), "the worktree copy must not survive to be merged back");
@@ -167,7 +177,7 @@ mod tests {
         let adapter = Arc::new(Recording(Mutex::new(None)));
         let cache = OpenSpecCache::new(adapter.clone());
 
-        assert!(archive_via_root(&cache, root.path(), tree.path(), "c").is_err());
+        assert!(archive_via_root(&cache, root.path(), &[tree.path().into()], "c").is_err());
         assert!(dir.join("tasks.md").exists(), "the ticked copy must survive a failed pull");
     }
 
@@ -180,7 +190,7 @@ mod tests {
         let adapter = Arc::new(Recording(Mutex::new(None)));
         let cache = OpenSpecCache::new(adapter.clone());
 
-        archive_via_root(&cache, root.path(), root.path(), "c").unwrap();
+        archive_via_root(&cache, root.path(), &[], "c").unwrap();
 
         assert_eq!(adapter.0.lock().unwrap().as_deref(), Some("- [ ] t"));
         assert!(dir.exists(), "same tree: nothing to remove; the CLI owns the move");

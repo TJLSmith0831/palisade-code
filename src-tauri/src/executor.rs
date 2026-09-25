@@ -552,6 +552,9 @@ pub struct AgentState {
     /// automatically" message a blocked turn is given.
     pub pending_auth_turns: Mutex<HashMap<String, Vec<PendingAuthTurn>>>,
     pub pending_changes: Mutex<HashMap<String, ChangeWatch>>,
+    /// Threads whose built change a spec turn revised since their last build
+    /// turn; the next build turn is told to re-read the proposal.
+    pub revised_changes: Mutex<std::collections::HashSet<String>>,
     /// The last slash commands each session's agent advertised, keyed by
     /// session id. Agents send the list only at session start, so a reloaded
     /// webview reads it back from here instead of waiting for a new session.
@@ -709,7 +712,7 @@ mod harness_shape_tests {
             .iter()
             .map(|n| counts[*n])
             .sum();
-        assert_eq!(grouped, 20, "a field was dropped or added without a home");
+        assert_eq!(grouped, 21, "a field was dropped or added without a home");
     }
 
     /// The field comments are why this codebase is auditable; a refactor that

@@ -197,7 +197,7 @@ pub(crate) fn spec_root(project_hash: &str, thread_id: Option<&str>) -> Res<Path
 }
 
 fn pick_spec_tree(root: PathBuf, worktree: PathBuf, change: &str) -> PathBuf {
-    if worktree.join("openspec/changes").join(change).is_dir() { worktree } else { root }
+    if worktree.join(change_dir(change)).is_dir() { worktree } else { root }
 }
 
 /// A fresh Palisade process owns no chain workers. Sweep every persisted
@@ -790,6 +790,32 @@ impl Sink for AppSink {
                         }
                     }
                 }
+                // A spec turn on a thread that is already built: bring the
+                // revision into the worktree the viewer and the build read,
+                // and tell both the user and the build's next turn.
+                let spec_tree = harness.agent.acp_sessions.lock_or_recover()
+                    .get(&envelope_ref.session_id)
+                    .filter(|s| s.mode == "spec")
+                    .map(|s| s.project_root.clone());
+                if let (Some(spec_tree), Some((tree, change))) = (spec_tree, built_change(&self.project_hash, &thread_id)) {
+                    match sync_change(&spec_tree, &tree, &change) {
+                        Ok(0) => {}
+                        Ok(_) => {
+                            harness.agent.revised_changes.lock_or_recover().insert(thread_id.clone());
+                            let _ = store::append_message(
+                                &palisade_home(),
+                                &self.project_hash,
+                                &thread_id,
+                                "system",
+                                "spec",
+                                "Proposal updated. The build picks up the change on its next turn.",
+                                None,
+                            );
+                            let _ = self.app.emit("thread-updated", &thread_id);
+                        }
+                        Err(err) => eprintln!("[palisade] could not carry spec revision of {change} into worktree: {err}"),
+                    }
+                }
             }
             _ => {}
         }
@@ -1054,35 +1080,87 @@ fn thread_worktree(
     }
 }
 
-/// Copy one change's artifacts between the project root and a worktree.
-/// `overwrite` off keeps whatever the destination already has.
-/// A missing source change is not an error; a failed copy is.
-pub(crate) fn copy_change(from: &Path, to: &Path, change: &str, overwrite: bool) -> std::io::Result<()> {
-    fn copy(src: &Path, dst: &Path, overwrite: bool) -> std::io::Result<()> {
-        if src.is_dir() {
-            std::fs::create_dir_all(dst)?;
-            for entry in std::fs::read_dir(src)? {
-                let entry = entry?;
-                copy(&entry.path(), &dst.join(entry.file_name()), overwrite)?;
-            }
-        } else if overwrite || !dst.exists() {
-            std::fs::copy(src, dst)?;
+/// Bring one change's artifacts from `from` into `to`, file by file, where
+/// `from` holds the newer copy; `tasks.md` keeps the ticks `to` already had.
+/// The project root and a thread's worktree each hold a copy (spec turns
+/// write the root, the build writes its worktree), so this runs wherever
+/// one side is about to be read: before a spec turn (worktree → root), after
+/// one and before each build turn (root → worktree), and on archive.
+/// Returns how many files changed. A missing source change is not an error.
+// ponytail: newest-mtime wins per file; a file both sides rewrote between
+// syncs keeps one side (tasks.md keeps ticks, not the other side's new lines).
+pub(crate) fn sync_change(from: &Path, to: &Path, change: &str) -> std::io::Result<usize> {
+    fn newer(src: &Path, dst: &Path) -> bool {
+        let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        match (modified(src), modified(dst)) {
+            (Some(s), Some(d)) => s > d,
+            (Some(_), None) => true,
+            _ => false,
         }
-        Ok(())
     }
-    let rel = Path::new("openspec/changes").join(change);
-    if !from.join(&rel).is_dir() {
-        return Ok(());
+    fn walk(src: &Path, dst: &Path) -> std::io::Result<usize> {
+        std::fs::create_dir_all(dst)?;
+        let mut changed = 0;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let (from, to) = (entry.path(), dst.join(entry.file_name()));
+            if from.is_dir() {
+                changed += walk(&from, &to)?;
+            } else if newer(&from, &to) {
+                match (entry.file_name() == "tasks.md", std::fs::read_to_string(&from), std::fs::read_to_string(&to)) {
+                    // Both sides get the merge, so neither reads stale ticks.
+                    (true, Ok(fresh), Ok(built)) => {
+                        let merged = merge_ticks(&fresh, &built);
+                        let at = entry.metadata()?.modified()?;
+                        std::fs::write(&to, &merged)?;
+                        if merged != fresh {
+                            std::fs::write(&from, &merged)?;
+                            std::fs::File::options().write(true).open(&from)?.set_modified(at)?;
+                        }
+                    }
+                    _ => { std::fs::copy(&from, &to)?; }
+                }
+                // Carry the source's time over, or the copy looks newer and
+                // the next sync the other way bounces it straight back.
+                std::fs::File::options().write(true).open(&to)?.set_modified(entry.metadata()?.modified()?)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
     }
-    copy(&from.join(&rel), &to.join(&rel), overwrite)
+    let rel = change_dir(change);
+    let src = from.join(&rel);
+    if src.is_dir() { walk(&src, &to.join(&rel)) } else { Ok(0) }
 }
 
-/// A go session starts with the proposal it will build: never overwrites, so a
-/// worktree copy that already has progress is kept.
-fn seed_change(project: &Path, worktree: &Path, change: &str) {
-    if let Err(err) = copy_change(project, worktree, change, false) {
-        eprintln!("[palisade] could not seed change {change} into worktree: {err}");
-    }
+pub(crate) fn change_dir(change: &str) -> PathBuf {
+    Path::new("openspec/changes").join(change)
+}
+
+/// The thread's worktree and linked change, when the worktree holds that
+/// change — i.e. the thread has been built and there are two copies to keep
+/// in step.
+fn built_change(project_hash: &str, thread_id: &str) -> Option<(PathBuf, String)> {
+    let meta = thread_meta(project_hash, thread_id)?;
+    let tree = PathBuf::from(meta.worktree_path?);
+    let change = meta.open_spec_change_name?;
+    tree.join(change_dir(&change)).is_dir().then_some((tree, change))
+}
+
+/// `fresh` tasks with every task `built` has ticked ticked again, matched by text.
+fn merge_ticks(fresh: &str, built: &str) -> String {
+    let ticked: std::collections::HashSet<&str> = built
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("- [x]").or_else(|| l.trim_start().strip_prefix("- [X]")))
+        .map(str::trim)
+        .collect();
+    fresh
+        .split_inclusive('\n')
+        .map(|line| match line.trim_start().strip_prefix("- [ ]") {
+            Some(rest) if ticked.contains(rest.trim()) => line.replacen("- [ ]", "- [x]", 1),
+            _ => line.to_string(),
+        })
+        .collect()
 }
 
 /// Copies opted-in ignored files before dependency installation, then runs the
@@ -1194,7 +1272,9 @@ fn start_session_as(
         let root = thread_worktree(app, &home, &project, project_hash, thread_id);
         if root != project {
             if let Some(change) = thread_meta(project_hash, thread_id).and_then(|t| t.open_spec_change_name) {
-                seed_change(&project, &root, &change);
+                if let Err(err) = sync_change(&project, &root, &change) {
+                    eprintln!("[palisade] could not seed change {change} into worktree: {err}");
+                }
             }
         }
         root
@@ -1790,6 +1870,28 @@ fn send_to<'a>(
         let session = sessions.get(session_id).ok_or("executor session is not running")?;
         (session.mode.clone(), session.thread_id.clone(), session.project_root.clone())
     };
+    // Two copies of a built change: hand each agent the current one.
+    if let Some((tree, change)) = built_change(project_hash, &thread_id) {
+        let project = project_root(project_hash)?;
+        if mode == "spec" {
+            if let Err(err) = sync_change(&tree, &project, &change) {
+                eprintln!("[palisade] could not sync {change} into the project root: {err}");
+            }
+        } else {
+            // Cleared only once the prompt is out, so a failed send still
+            // tells the next build turn.
+            let revised = harness.agent.revised_changes.lock_or_recover().contains(&thread_id);
+            match sync_change(&project, &tree, &change) {
+                Ok(n) if n > 0 || revised => prompt.context.push(format!(
+                    "The proposal for `{change}` was revised in spec mode since your last turn. \
+                     Re-read openspec/changes/{change}/ (proposal, design, specs, tasks) before continuing; \
+                     any new unticked task is part of this build."
+                )),
+                Ok(_) => {}
+                Err(err) => eprintln!("[palisade] could not sync {change} into the worktree: {err}"),
+            }
+        }
+    }
     if mode == "spec" {
         if thread_meta(project_hash, &thread_id).is_some_and(|meta| meta.open_spec_change_name.is_none()) {
             harness.agent.pending_changes.lock_or_recover()
@@ -1814,6 +1916,9 @@ fn send_to<'a>(
         }
     }
     harness.clear_pending_prefix(session_id);
+    if mode != "spec" {
+        harness.agent.revised_changes.lock_or_recover().remove(&thread_id);
+    }
     Ok(())
 }
 
@@ -4929,18 +5034,55 @@ fn detect_and_strip_ready_to_propose(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn pulling_a_change_from_a_worktree_overwrites_the_roots_stale_copy() {
-        let root = tempfile::tempdir().unwrap();
-        let tree = tempfile::tempdir().unwrap();
-        for (base, tasks) in [(root.path(), "- [ ] t"), (tree.path(), "- [x] t")] {
-            let dir = base.join("openspec/changes/c");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("tasks.md"), tasks).unwrap();
-        }
-        copy_change(tree.path(), root.path(), "c", true).unwrap();
-        assert_eq!(std::fs::read_to_string(root.path().join("openspec/changes/c/tasks.md")).unwrap(), "- [x] t");
+    fn merge_ticks_keeps_the_builds_ticks_on_a_revised_task_list() {
+        let fresh = "- [ ] a\n- [ ] b\n- [ ] escape clears\n";
+        let built = "- [x] a\n- [ ] b\n";
+        assert_eq!(merge_ticks(fresh, built), "- [x] a\n- [ ] b\n- [ ] escape clears\n");
     }
 
+    #[test]
+    fn a_spec_revision_reaches_the_worktree_without_clobbering_newer_build_writes() {
+        use std::time::{Duration, SystemTime};
+        let root = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let (src, dst) = (root.path().join("openspec/changes/c"), tree.path().join("openspec/changes/c"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(60);
+        let write = |p: std::path::PathBuf, body: &str, at: SystemTime| {
+            std::fs::write(&p, body).unwrap();
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(at).unwrap();
+        };
+        // The build ticked a task and logged a decision; the spec turn then
+        // added a task and revised the proposal.
+        write(dst.join("tasks.md"), "- [x] a\n", old);
+        write(dst.join("proposal.md"), "v1", old);
+        write(dst.join("design.md"), "build's decision", SystemTime::now());
+        write(src.join("design.md"), "stale", old);
+        write(src.join("tasks.md"), "- [ ] a\n- [ ] escape\n", SystemTime::now());
+        write(src.join("proposal.md"), "v2", SystemTime::now());
+
+        assert_eq!(sync_change(root.path(), tree.path(), "c").unwrap(), 2);
+
+        let read = |f: &str| std::fs::read_to_string(dst.join(f)).unwrap();
+        assert_eq!(read("tasks.md"), "- [x] a\n- [ ] escape\n", "new task arrives, tick survives");
+        assert_eq!(read("proposal.md"), "v2");
+        assert_eq!(read("design.md"), "build's decision", "a newer build write is not overwritten");
+        assert_eq!(std::fs::read_to_string(src.join("tasks.md")).unwrap(), "- [x] a\n- [ ] escape\n", "the spec side sees the ticks too");
+    }
+
+    #[test]
+    fn a_synced_change_does_not_bounce_back_as_a_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let dir = tree.path().join("openspec/changes/c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tasks.md"), "- [x] a\n").unwrap();
+        std::fs::write(dir.join("proposal.md"), "p").unwrap();
+
+        assert_eq!(sync_change(tree.path(), root.path(), "c").unwrap(), 2, "a spec turn starts with the build's copy");
+        assert_eq!(sync_change(root.path(), tree.path(), "c").unwrap(), 0, "an untouched copy is not a revision");
+    }
 
     #[test]
     fn spec_tree_is_the_worktree_only_when_it_holds_the_change() {
@@ -4952,7 +5094,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_change_copies_a_proposal_into_a_worktree_without_overwriting() {
+    fn seeding_a_worktree_copies_the_proposal_but_keeps_newer_build_progress() {
         let project = tempfile::tempdir().unwrap();
         let tree = tempfile::tempdir().unwrap();
         let src = project.path().join("openspec/changes/c");
@@ -4964,7 +5106,7 @@ mod tests {
         std::fs::create_dir_all(&dst).unwrap();
         std::fs::write(dst.join("tasks.md"), "- [x] t").unwrap();
 
-        seed_change(project.path(), tree.path(), "c");
+        sync_change(project.path(), tree.path(), "c").unwrap();
 
         assert_eq!(std::fs::read_to_string(dst.join("proposal.md")).unwrap(), "root");
         assert_eq!(std::fs::read_to_string(dst.join("specs/a/spec.md")).unwrap(), "s");

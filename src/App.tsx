@@ -6550,9 +6550,14 @@ export default function App() {
         <SpecChangeTab
           projectHash={project.hash}
           specName={specName}
-          // The thread that owns this change: once it builds, its worktree
-          // copy carries the ticked tasks.
-          threadId={threads.find((t) => t.openSpecChangeName === specName)?.id}
+          // The thread that owns this change (the one on screen first, when
+          // two share a name): once it builds, its worktree copy carries the
+          // ticked tasks.
+          threadId={
+            thread?.openSpecChangeName === specName
+              ? thread.id
+              : threads.find((t) => t.openSpecChangeName === specName)?.id
+          }
           verifyPins={verifyPins[specName]}
           onAddPin={(cmd) => addVerifyPin(specName, cmd)}
           onRemovePin={(cmd) => removeVerifyPin(specName, cmd)}

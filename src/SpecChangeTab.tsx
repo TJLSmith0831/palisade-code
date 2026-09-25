@@ -150,12 +150,13 @@ export default function SpecChangeTab({
   }, [projectHash, specName]);
 
   // A build writes into the thread's worktree, which the project-root file
-  // watcher can't see: refresh (throttled) as the owning thread's tools finish.
+  // watcher can't see: refresh (throttled) as the owning thread's tools and
+  // turns finish. A turn's end also covers a spec revision synced into it.
   useEffect(() => {
     if (!threadId) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const events = listen<{ threadId: string; event: { kind: string } }>("executor-event", ({ payload }) => {
-      if (payload?.threadId !== threadId || payload.event.kind !== "toolResult" || timer) return;
+      if (payload?.threadId !== threadId || (payload.event.kind !== "toolResult" && payload.event.kind !== "done") || timer) return;
       timer = setTimeout(() => {
         timer = undefined;
         setReload((n) => n + 1);
