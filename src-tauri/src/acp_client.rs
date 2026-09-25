@@ -510,11 +510,14 @@ impl AcpSession {
 
     /// Resolve a pending permission request from outside the bridge thread
     /// (the `answer_permission_prompt` Tauri command). A missing id is a
-    /// no-op success — already resolved, or the session is gone.
-    pub fn answer_permission_prompt(&self, request_id: &str, answer: PermissionAnswer) {
-        if let Some(tx) = self.pending_permissions.lock_or_recover().remove(request_id) {
-            let _ = tx.send(answer);
-        }
+    /// no-op — already resolved, or the session is gone; the return says
+    /// whether this session held it.
+    pub fn answer_permission_prompt(&self, request_id: &str, answer: PermissionAnswer) -> bool {
+        let Some(tx) = self.pending_permissions.lock_or_recover().remove(request_id) else {
+            return false;
+        };
+        let _ = tx.send(answer);
+        true
     }
 
     /// Terminate this session: tell the bridge to shut down, which closes the
@@ -688,6 +691,21 @@ fn emit(sink: &Arc<dyn Sink>, session_id: &str, thread_id: &str, event: Executor
         thread_id: thread_id.to_string(),
         event,
     });
+}
+
+/// Resolve `request_id` in `session_id`, or in whichever session holds it.
+/// Request ids are ULIDs, unique across sessions, and the chat merges every
+/// live session on a thread: a thread running a spec and a go session at once
+/// can name the sibling of the session that asked, which used to drop the
+/// answer and leave that turn waiting forever.
+pub fn answer_in_any(
+    sessions: &HashMap<String, AcpSession>,
+    session_id: &str,
+    request_id: &str,
+    answer: PermissionAnswer,
+) -> bool {
+    sessions.get(session_id).is_some_and(|s| s.answer_permission_prompt(request_id, answer))
+        || sessions.values().any(|s| s.answer_permission_prompt(request_id, answer))
 }
 
 /// The user's answer to a pending `Prompt`-tier permission request (D7b,
@@ -2542,6 +2560,21 @@ mod tests {
 
         // Already-resolved id: a second call is a harmless no-op.
         session.answer_permission_prompt("req-1", PermissionAnswer::Deny);
+    }
+
+    /// An answer sent under a sibling session's id still reaches the session
+    /// that asked.
+    #[tokio::test]
+    async fn answer_in_any_finds_the_session_that_asked() {
+        let (asker, _a) = stub_session(false);
+        let (sibling, _b) = stub_session(false);
+        let (tx, rx) = oneshot::channel();
+        asker.pending_permissions.lock_or_recover().insert("req-1".into(), tx);
+        let sessions = HashMap::from([("go".to_string(), asker), ("spec".to_string(), sibling)]);
+
+        assert!(answer_in_any(&sessions, "spec", "req-1", PermissionAnswer::Allow));
+        assert_eq!(rx.await, Ok(PermissionAnswer::Allow));
+        assert!(!answer_in_any(&sessions, "spec", "req-1", PermissionAnswer::Deny), "already answered");
     }
 
     /// RED→GREEN: `needs_attention` is true exactly while a permission

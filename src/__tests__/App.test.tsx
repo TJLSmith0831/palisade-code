@@ -5351,9 +5351,9 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     expect(stopBtn).toBeDefined();
     fireEvent.click(stopBtn);
     await waitFor(() =>
-      // No session id yet (no events streamed), so the stop falls back to
-      // this thread — never to every session in the app, which would cancel
-      // another thread's live turn.
+      // Stop names the thread, and the backend ends its busy session —
+      // never every session in the app, which would cancel another thread's
+      // live turn.
       expect(invokeMock).toHaveBeenCalledWith("stop_executor", {
         sessionId: null,
         threadId: "t1",
