@@ -2834,9 +2834,7 @@ async fn answer_permission_prompt(
         .ok_or_else(|| format!("unknown permission decision: {decision}"))?;
     tokio::task::spawn_blocking(move || {
         let harness: tauri::State<'_, Harness> = app.state();
-        if let Some(session) = harness.agent.acp_sessions.lock_or_recover().get(&session_id) {
-            session.answer_permission_prompt(&request_id, answer);
-        }
+        acp_client::answer_in_any(&harness.agent.acp_sessions.lock_or_recover(), &session_id, &request_id, answer);
         Ok(())
     })
     .await
