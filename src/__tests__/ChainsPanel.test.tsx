@@ -40,6 +40,8 @@ beforeEach(() => {
   apiMock.listChains.mockReset();
   apiMock.deleteChain.mockClear();
   apiMock.saveChain.mockClear();
+  apiMock.listModels.mockReset();
+  apiMock.listModels.mockResolvedValue({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] });
 });
 
 describe("ChainsPanel", () => {
@@ -192,6 +194,61 @@ describe("ChainsPanel", () => {
       )
     );
     expect(onOpen).toHaveBeenCalledWith("Example - draft then review");
+  });
+
+  it("never dead-ends: shows an inline warning naming the agent by display name when none offers a model", async () => {
+    apiMock.listChains.mockResolvedValue([]);
+    apiMock.listModels.mockResolvedValue({ models: [] });
+    const onOpen = vi.fn();
+
+    render(
+      <MantineProvider>
+        <ChainsPanel
+          projectHash="proj-1"
+          onOpen={onOpen}
+          agents={[{ id: "devin", name: "Devin" }]}
+        />
+      </MantineProvider>
+    );
+
+    fireEvent.click(await screen.findByTestId("chains-panel-open-example"));
+
+    const warning = await screen.findByTestId("chains-panel-example-blocked");
+    expect(warning.textContent).toContain("Devin");
+    expect(warning.textContent).not.toContain("devin offers no models");
+    // The empty-state explanation and the button both stay on screen — no
+    // bare error replaces them.
+    expect(screen.getByText(/No playbooks yet/)).toBeInTheDocument();
+    expect(screen.getByTestId("chains-panel-open-example")).toBeInTheDocument();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("tries every installed agent before giving up, so one signed-out agent doesn't block the others", async () => {
+    apiMock.listChains.mockResolvedValue([]);
+    apiMock.listModels.mockImplementation((_project: string, agentId: string) =>
+      agentId === "devin"
+        ? Promise.resolve({ models: [] })
+        : Promise.resolve({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] })
+    );
+    const onOpen = vi.fn();
+
+    render(
+      <MantineProvider>
+        <ChainsPanel
+          projectHash="proj-1"
+          onOpen={onOpen}
+          agents={[
+            { id: "devin", name: "Devin" },
+            { id: "claude-code", name: "Claude Code" },
+          ]}
+        />
+      </MantineProvider>
+    );
+
+    fireEvent.click(await screen.findByTestId("chains-panel-open-example"));
+
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith("Example - draft then review"));
+    expect(screen.queryByTestId("chains-panel-example-blocked")).toBeNull();
   });
 
   it("does not re-save the example if it's already there", async () => {

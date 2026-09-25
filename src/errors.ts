@@ -113,3 +113,12 @@ export function isAuthError(message: string): boolean {
     message
   );
 }
+
+/** The agent's own display name out of an auth-shaped crash, read off the
+ *  "{name} needs to be signed in" prefix `acp_client::auth_help` always
+ *  writes — never the lowercase agent id, which reads as a bug report
+ *  rather than a sign-in prompt. Falls back to a generic noun when the
+ *  message doesn't carry that shape (e.g. an older persisted crash). */
+export function agentNameFromAuthMessage(message: string): string {
+  return message.match(/([A-Z][\w .-]*?) needs to be signed in/)?.[1] ?? "This agent";
+}

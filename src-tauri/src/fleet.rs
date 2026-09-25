@@ -42,6 +42,10 @@ pub enum FleetAttention {
     Permission,
     /// A playbook run is suspended at a human approval gate.
     Gate,
+    /// The agent needs the user to sign in before any turn can proceed —
+    /// `ThreadMeta::auth_blocked`, set from a structured `AuthRequired`
+    /// failure, not guessed from an agent's prose.
+    AuthRequired,
     VerifyFailed,
     MergeConflict,
     Crashed,
@@ -215,6 +219,9 @@ pub struct StatusInput {
     pub merge_conflict: bool,
     /// The thread's last session ended `crashed`.
     pub crashed: bool,
+    /// `ThreadMeta::auth_blocked` is set: a turn failed because the agent
+    /// needs the user to sign in, and no later turn has since succeeded.
+    pub auth_blocked: bool,
 }
 
 /// Has the user looked at this thread since the agent last spoke?
@@ -236,9 +243,9 @@ pub fn viewed_since_turn(last_viewed_at: Option<&str>, turn_ended_at: Option<&st
 /// Map observed session/worktree state onto the dot and its reason.
 ///
 /// The order is the precedence: a paused agent outranks a running one, a
-/// running one outranks any problem, a problem (failed verify, conflict,
-/// crash) outranks a turn merely waiting to be read, and only a thread with
-/// none of those is idle.
+/// running one outranks any problem, a problem (needing sign-in, failed
+/// verify, conflict, crash) outranks a turn merely waiting to be read, and
+/// only a thread with none of those is idle.
 pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention>) {
     if input.awaiting_permission {
         return (FleetStatus::Attention, Some(FleetAttention::Permission));
@@ -246,7 +253,9 @@ pub fn derive_status(input: &StatusInput) -> (FleetStatus, Option<FleetAttention
     if input.busy {
         return (FleetStatus::Running, None);
     }
-    let attention = if input.verify_failed {
+    let attention = if input.auth_blocked {
+        Some(FleetAttention::AuthRequired)
+    } else if input.verify_failed {
         Some(FleetAttention::VerifyFailed)
     } else if input.merge_conflict {
         Some(FleetAttention::MergeConflict)
@@ -691,6 +700,18 @@ mod tests {
         assert_eq!(
             derive_status(&input),
             (FleetStatus::Attention, Some(FleetAttention::VerifyFailed))
+        );
+    }
+
+    /// A turn that failed for want of sign-in must land in Needs attention,
+    /// not Unreviewed — the user has nothing to "review", they have a
+    /// sign-in to do before anything else in the thread can move.
+    #[test]
+    fn a_thread_needing_sign_in_is_attention() {
+        let input = StatusInput { turn_ended: true, auth_blocked: true, ..StatusInput::default() };
+        assert_eq!(
+            derive_status(&input),
+            (FleetStatus::Attention, Some(FleetAttention::AuthRequired))
         );
     }
 

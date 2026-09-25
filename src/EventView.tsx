@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useMemo, useState, type ReactNode } from "react";
-import { Alert, Badge, Box, Button, Code, Group, Paper, Stack } from "@mantine/core";
+import { Alert, Badge, Box, Button, Code, Group, Paper, Spoiler, Stack } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import {
   IconChevronDown,
@@ -16,7 +16,7 @@ import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
 import { ExploreHandoff } from "./BuildLaunch";
-import { isAuthError } from "./errors";
+import { agentNameFromAuthMessage, isAuthError } from "./errors";
 
 /** The "Code Change Diff" tab shows only applied patches; "Console Chat" shows everything. */
 export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
@@ -800,6 +800,10 @@ export const EventList = memo(function EventList({
                   }
                 }
               }
+              // Neutral by design: nothing here has evidence of a prior
+              // successful sign-in, so the copy never claims a login
+              // "expired" — it just says what to do and what happens next.
+              const agentName = agentNameFromAuthMessage(item.text);
               return (
                 <Alert
                   key={index}
@@ -813,63 +817,80 @@ export const EventList = memo(function EventList({
                       className="ds-crash-banner-auth-summary"
                       data-testid="crash-banner-auth-summary"
                     >
-                      {logins.length > 0
-                        ? managedAuthRecovery
-                          ? "This agent needs you to sign in. Choose a method below and Palisade will resume your message once."
-                          : "This agent's login expired or failed to refresh. Sign in below — Palisade runs the agent's own login in a terminal here — then retry."
-                        : "This agent's login expired or failed to refresh. Palisade can't complete an interactive login on its own — sign back in outside Palisade, then retry."}
+                      {managedAuthRecovery
+                        ? `${agentName} needs you to sign in. Choose a method below — Palisade will resume your message once you do.`
+                        : logins.length > 0
+                          ? `Sign in to ${agentName} to continue. Palisade opens its login in a terminal here.`
+                          : `Sign in to ${agentName} outside Palisade to continue, then retry here.`}
                     </div>
                   )}
                   {transient && <div data-testid="crash-banner-transient-summary">The provider is temporarily unavailable. Your message was kept; retry when it is ready.</div>}
-                  <div className="ds-crash-banner-detail">{item.text}</div>
-                  {authIssue &&
-                    onAgentLogin &&
-                    logins.map((login) => (
-                      <button
-                        key={login.methodId}
-                        type="button"
-                        className="ds-crash-banner-retry"
-                        onClick={() => onAgentLogin(login)}
-                        data-testid="crash-banner-signin"
+                  {authIssue ? (
+                    <Spoiler
+                      maxHeight={0}
+                      showLabel="Details"
+                      hideLabel="Hide details"
+                      className="ds-crash-banner-detail-spoiler"
+                      data-testid="crash-banner-detail-spoiler"
+                    >
+                      <div className="ds-crash-banner-detail">{item.text}</div>
+                    </Spoiler>
+                  ) : (
+                    <div className="ds-crash-banner-detail">{item.text}</div>
+                  )}
+                  <Group gap="xs" mt="sm">
+                    {authIssue &&
+                      onAgentLogin &&
+                      logins.map((login) => (
+                        <Button
+                          key={login.methodId}
+                          size="compact-xs"
+                          variant="filled"
+                          color="brand"
+                          onClick={() => onAgentLogin(login)}
+                          data-testid="crash-banner-signin"
+                        >
+                          Sign in with {login.label}
+                        </Button>
+                      ))}
+                    {retryMessage != null && (
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        color="neutral"
+                        leftSection={<IconRefresh size={12} />}
+                        onClick={() => onRetry?.(retryMessage!)}
+                        data-testid="crash-banner-retry"
                       >
-                        Sign in with {login.label}
-                      </button>
-                    ))}
-                  {retryMessage != null && (
-                    <button
-                      type="button"
-                      className="ds-crash-banner-retry"
-                      onClick={() => onRetry?.(retryMessage!)}
-                      data-testid="crash-banner-retry"
-                    >
-                      <IconRefresh size={12} />
-                      Retry
-                    </button>
-                  )}
-                  {onAcknowledgeCrash && index === latestCrashIndex && (
-                    <button
-                      type="button"
-                      className="ds-crash-banner-retry"
-                      disabled={
-                        acknowledgingSessionId === (item.sessionId ?? `legacy-${index}`) ||
-                        acknowledgedSessionIds.has(item.sessionId ?? `legacy-${index}`)
-                      }
-                      onClick={() => {
-                        const sessionId = item.sessionId ?? null;
-                        const key = sessionId ?? `legacy-${index}`;
-                        setAcknowledgingSessionId(key);
-                        void onAcknowledgeCrash(sessionId)
-                          .then(() => setAcknowledgedSessionIds((seen) => new Set(seen).add(key)))
-                          .catch(() => {})
-                          .finally(() => setAcknowledgingSessionId(null));
-                      }}
-                      data-testid="crash-banner-acknowledge"
-                    >
-                      {acknowledgedSessionIds.has(item.sessionId ?? `legacy-${index}`)
-                        ? "Acknowledged"
-                        : "Acknowledge"}
-                    </button>
-                  )}
+                        Retry
+                      </Button>
+                    )}
+                    {onAcknowledgeCrash && index === latestCrashIndex && (
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        color="neutral"
+                        disabled={
+                          acknowledgingSessionId === (item.sessionId ?? `legacy-${index}`) ||
+                          acknowledgedSessionIds.has(item.sessionId ?? `legacy-${index}`)
+                        }
+                        onClick={() => {
+                          const sessionId = item.sessionId ?? null;
+                          const key = sessionId ?? `legacy-${index}`;
+                          setAcknowledgingSessionId(key);
+                          void onAcknowledgeCrash(sessionId)
+                            .then(() => setAcknowledgedSessionIds((seen) => new Set(seen).add(key)))
+                            .catch(() => {})
+                            .finally(() => setAcknowledgingSessionId(null));
+                        }}
+                        data-testid="crash-banner-acknowledge"
+                      >
+                        {acknowledgedSessionIds.has(item.sessionId ?? `legacy-${index}`)
+                          ? "Acknowledged"
+                          : "Acknowledge"}
+                      </Button>
+                    )}
+                  </Group>
                 </Alert>
               );
             }

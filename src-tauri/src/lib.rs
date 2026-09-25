@@ -3159,6 +3159,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                         s.outcome.as_deref() == Some("crashed")
                             && thread.acknowledged_crash_session_id.as_deref() != Some(&s.id)
                     }),
+                    auth_blocked: thread.auth_blocked.is_some(),
                 });
                 rows.push(fleet::FleetRow {
                     kind: fleet::FleetKind::Thread,

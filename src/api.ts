@@ -607,6 +607,8 @@ export type FleetAttention =
   | "permission"
   /** A playbook run is suspended at a human approval gate. */
   | "gate"
+  /** The agent needs the user to sign in before any turn can proceed. */
+  | "auth_required"
   | "verify_failed"
   | "merge_conflict"
   | "crashed";

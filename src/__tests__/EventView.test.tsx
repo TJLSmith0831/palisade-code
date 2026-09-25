@@ -450,13 +450,26 @@ describe("EventList crash banner", () => {
       <EventList items={items} executor={null} onRetry={() => {}} />
     );
     expect(screen.getByTestId("crash-banner-auth-summary")).toHaveTextContent(
-      /login expired or failed to refresh/i
+      /sign in to this agent/i
     );
     expect(screen.getByTestId("crash-banner")).toHaveTextContent(
       "authentication_failed"
     );
     expect(screen.getByTestId("crash-banner-retry")).toHaveTextContent(
       "Retry"
+    );
+  });
+
+  it("collapses the raw error behind a Details affordance instead of pasting it into the main body", () => {
+    renderWithMantine(
+      <EventList items={items} executor={null} onRetry={() => {}} />
+    );
+    // The plain-language summary never contains the CLI's raw error text.
+    expect(screen.getByTestId("crash-banner-auth-summary").textContent).not.toContain(
+      "authentication_failed"
+    );
+    expect(screen.getByTestId("crash-banner-detail-spoiler")).toHaveTextContent(
+      "authentication_failed"
     );
   });
 
@@ -805,7 +818,7 @@ describe("sign-in buttons follow the agent that actually failed", () => {
     );
     expect(screen.queryAllByTestId("crash-banner-signin")).toHaveLength(0);
     expect(screen.getByTestId("crash-banner-auth-summary").textContent).toMatch(
-      /can't complete an interactive login on its own/i
+      /sign in to some other agent outside palisade/i
     );
   });
 
