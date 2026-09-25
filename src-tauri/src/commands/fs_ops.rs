@@ -338,6 +338,17 @@ pub(crate) fn looks_binary(path: &Path) -> bool {
     }
 }
 
+/// The tree a thread's file lives in. OpenSpec files follow the spec-tree
+/// rule, not the plain worktree one; reads and writes share this so an edit
+/// lands in the file that was shown.
+fn file_root(project_hash: &str, thread_id: Option<&str>, relative_path: &str) -> Res<std::path::PathBuf> {
+    if relative_path.starts_with("openspec/") {
+        crate::spec_root(project_hash, thread_id)
+    } else {
+        super::git_cmds::tree_root(project_hash, thread_id)
+    }
+}
+
 #[tauri::command]
 pub async fn read_file_content(
     project_hash: String,
@@ -349,11 +360,7 @@ pub async fn read_file_content(
         // to read, so a view rendered from a thread's worktree reads that
         // worktree instead of the project root's copy of the same path.
         // OpenSpec files follow the spec-tree rule, not the plain worktree one.
-        let root = if relative_path.starts_with("openspec/") {
-            crate::spec_root(&project_hash, thread_id.as_deref())?
-        } else {
-            super::git_cmds::tree_root(&project_hash, thread_id.as_deref())?
-        };
+        let root = file_root(&project_hash, thread_id.as_deref(), &relative_path)?;
         let resolved = resolve_existing_path(&root, &relative_path)?;
 
         let size = std::fs::metadata(&resolved)
@@ -444,7 +451,7 @@ pub async fn write_file_content(
         // Writes follow reads: an edit made in a view of a thread's worktree
         // has to land in that worktree, or it silently edits a different file
         // than the one on screen.
-        let root = super::git_cmds::tree_root(&project_hash, thread_id.as_deref())?;
+        let root = file_root(&project_hash, thread_id.as_deref(), &relative_path)?;
         let resolved = resolve_creatable_path(&root, &relative_path)?;
 
         check_not_stale(&resolved, expected_previous.as_deref(), &relative_path)?;

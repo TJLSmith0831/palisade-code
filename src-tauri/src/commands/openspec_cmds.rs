@@ -103,7 +103,10 @@ pub(crate) fn archive_via_root(
     name: &str,
 ) -> Res<String> {
     if tree != root {
-        crate::copy_change(tree, root, name, true);
+        // A failed pull must stop here: removing the worktree copy below
+        // would otherwise throw away the only record of its ticked tasks.
+        crate::copy_change(tree, root, name, true)
+            .map_err(|err| crate::PalisadeError::from(format!("could not copy {name} into the project root: {err}")))?;
     }
     let archived = executor::openspec_archive(cache, root, name)?;
     if tree != root {
@@ -149,6 +152,23 @@ mod tests {
 
         assert_eq!(adapter.0.lock().unwrap().as_deref(), Some("- [x] t"), "the CLI must see the worktree's ticks");
         assert!(!tree.path().join("openspec/changes/c").exists(), "the worktree copy must not survive to be merged back");
+    }
+
+    #[test]
+    fn a_failed_pull_keeps_the_worktree_copy_and_does_not_archive() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("openspec/changes")).unwrap();
+        // A file where the change directory should go makes the copy fail.
+        std::fs::write(root.path().join("openspec/changes/c"), "").unwrap();
+        let dir = tree.path().join("openspec/changes/c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tasks.md"), "- [x] t").unwrap();
+        let adapter = Arc::new(Recording(Mutex::new(None)));
+        let cache = OpenSpecCache::new(adapter.clone());
+
+        assert!(archive_via_root(&cache, root.path(), tree.path(), "c").is_err());
+        assert!(dir.join("tasks.md").exists(), "the ticked copy must survive a failed pull");
     }
 
     #[test]

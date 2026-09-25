@@ -187,9 +187,12 @@ pub(crate) fn project_root(hash: &str) -> Res<PathBuf> {
 pub(crate) fn spec_root(project_hash: &str, thread_id: Option<&str>) -> Res<PathBuf> {
     let root = project_root(project_hash)?;
     let meta = thread_id.and_then(|id| thread_meta(project_hash, id));
-    Ok(match meta.and_then(|m| Some((m.worktree_path?, m.open_spec_change_name?))) {
-        Some((tree, change)) => pick_spec_tree(root, PathBuf::from(tree), &change),
-        None => root,
+    Ok(match meta.map(|m| (m.worktree_path, m.open_spec_change_name)) {
+        Some((Some(tree), Some(change))) => pick_spec_tree(root, PathBuf::from(tree), &change),
+        // No linked change: nothing was written to the root for this thread,
+        // so its worktree (where a go-only thread's agent works) is the tree.
+        Some((Some(tree), None)) if Path::new(&tree).is_dir() => PathBuf::from(tree),
+        _ => root,
     })
 }
 
@@ -1053,26 +1056,33 @@ fn thread_worktree(
 
 /// Copy one change's artifacts between the project root and a worktree.
 /// `overwrite` off keeps whatever the destination already has.
-pub(crate) fn copy_change(from: &Path, to: &Path, change: &str, overwrite: bool) {
-    fn copy(src: &Path, dst: &Path, overwrite: bool) {
+/// A missing source change is not an error; a failed copy is.
+pub(crate) fn copy_change(from: &Path, to: &Path, change: &str, overwrite: bool) -> std::io::Result<()> {
+    fn copy(src: &Path, dst: &Path, overwrite: bool) -> std::io::Result<()> {
         if src.is_dir() {
-            let _ = std::fs::create_dir_all(dst);
-            for entry in std::fs::read_dir(src).into_iter().flatten().flatten() {
-                copy(&entry.path(), &dst.join(entry.file_name()), overwrite);
+            std::fs::create_dir_all(dst)?;
+            for entry in std::fs::read_dir(src)? {
+                let entry = entry?;
+                copy(&entry.path(), &dst.join(entry.file_name()), overwrite)?;
             }
         } else if overwrite || !dst.exists() {
-            if let Some(parent) = dst.parent() { let _ = std::fs::create_dir_all(parent); }
-            let _ = std::fs::copy(src, dst);
+            std::fs::copy(src, dst)?;
         }
+        Ok(())
     }
     let rel = Path::new("openspec/changes").join(change);
-    copy(&from.join(&rel), &to.join(&rel), overwrite);
+    if !from.join(&rel).is_dir() {
+        return Ok(());
+    }
+    copy(&from.join(&rel), &to.join(&rel), overwrite)
 }
 
 /// A go session starts with the proposal it will build: never overwrites, so a
 /// worktree copy that already has progress is kept.
 fn seed_change(project: &Path, worktree: &Path, change: &str) {
-    copy_change(project, worktree, change, false);
+    if let Err(err) = copy_change(project, worktree, change, false) {
+        eprintln!("[palisade] could not seed change {change} into worktree: {err}");
+    }
 }
 
 /// Copies opted-in ignored files before dependency installation, then runs the
@@ -4927,7 +4937,7 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("tasks.md"), tasks).unwrap();
         }
-        copy_change(tree.path(), root.path(), "c", true);
+        copy_change(tree.path(), root.path(), "c", true).unwrap();
         assert_eq!(std::fs::read_to_string(root.path().join("openspec/changes/c/tasks.md")).unwrap(), "- [x] t");
     }
 
