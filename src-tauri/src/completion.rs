@@ -549,6 +549,9 @@ const MIN_TITLE_WORDS: usize = 2;
 const MAX_TITLE_WORDS: usize = 4;
 /// Shorter words ("ok", "is") match too much to show a title is on topic.
 const MIN_TOPIC_WORD_CHARS: usize = 3;
+/// The longest ending an inflection adds ("fix" → "fixing"); longer, and the
+/// request word is only a prefix ("for" → "formatting").
+const MAX_INFLECTION_CHARS: usize = 3;
 
 fn clean_thread_title(raw: &str, request: &str) -> Option<String> {
     // Not `clean_title`: its sentence cap would throw away an over-long title
@@ -564,25 +567,29 @@ fn clean_thread_title(raw: &str, request: &str) -> Option<String> {
     // make a title.
     let words: Vec<&str> = title
         .split_whitespace()
-        .filter(|word| !is_filler(word))
-        .take(MAX_TITLE_WORDS)
         .map(|word| word.trim_matches(['"', ',', ';', ':']))
+        .filter(|word| !word.is_empty() && !is_filler(word))
+        .take(MAX_TITLE_WORDS)
         .collect();
     (words.len() >= MIN_TITLE_WORDS && is_about(&words, request)).then(|| words.join(" "))
 }
 
 /// Whether a title names something in the request rather than a stock phrase.
 /// An inflection counts ("Fixing" for "fix"); a bare prefix does not, or the
-/// stock "Clear concise description" would pass for "clearer".
+/// stock "Clear concise description" would pass for "clearer". Filler in the
+/// request vouches for nothing: "the" is not what "Theme Settings" is about.
 fn is_about(words: &[&str], request: &str) -> bool {
     let request = request.to_lowercase();
     let terms: Vec<&str> = request
         .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .filter(|term| term.chars().count() >= MIN_TOPIC_WORD_CHARS)
+        .filter(|term| term.chars().count() >= MIN_TOPIC_WORD_CHARS && !is_filler(term))
         .collect();
     words.iter().any(|word| {
         let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-').to_lowercase();
-        word.chars().count() >= MIN_TOPIC_WORD_CHARS && terms.iter().any(|term| word.starts_with(term))
+        word.chars().count() >= MIN_TOPIC_WORD_CHARS
+            && terms.iter().any(|term| {
+                word.strip_prefix(term).is_some_and(|rest| rest.chars().count() <= MAX_INFLECTION_CHARS)
+            })
     })
 }
 
@@ -1632,6 +1639,9 @@ with http.server.HTTPServer(("127.0.0.1", args.port), Handler) as s:
         );
         assert_eq!(clean_thread_title(" Bye\" Task", "Bye"), Some("Bye Task".into()), "a stray quote mid-title is dropped");
         assert_eq!(clean_thread_title(" \"Hi!\"", "Hi! Reply in one short sentence."), None, "one word is not a title");
+        assert_eq!(clean_thread_title("Fix \" Login", "fix the login"), Some("Fix Login".into()), "a lone quote is not a word");
+        assert_eq!(clean_thread_title("Theme Settings Panel", "fix the bug"), None, "request filler vouches for nothing");
+        assert_eq!(clean_thread_title("Formatting Error Handling", "look for bugs"), None, "a short term is a prefix, not an inflection");
     }
 
     #[test]
