@@ -5814,6 +5814,9 @@ export default function App() {
   // per https://v2.tauri.app/learn/window-customization).
   const onTitlebarMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0) return;
+    // React bubbles events out of portals (modals/menus rendered from the
+    // titlebar), so a click inside one would otherwise drag the window.
+    if (!event.currentTarget.contains(event.target as Node)) return;
     if (
       (event.target as HTMLElement).closest("[data-tauri-drag-region-exclude]")
     )
