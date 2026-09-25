@@ -59,7 +59,7 @@ function RenderedMarkdown({ source, projectHash, filePath }: { source: string; p
     }
     return () => { active = false; };
   }, [source, projectHash, filePath]);
-  return <MDEditor.Markdown source={source} rehypePlugins={[[rehypeSanitize, markdownPreviewSchema]]} urlTransform={(url) => {
+  return <MDEditor.Markdown className="ds-prose" source={source} rehypePlugins={[[rehypeSanitize, markdownPreviewSchema]]} urlTransform={(url) => {
     if (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^(?:https?:|mailto:|tel:)/i.test(url)) return "";
     const imagePath = projectImagePath(url, filePath);
     return imagePath && /\.(?:png|jpe?g|gif|webp|svg|avif)(?:#.*)?$/i.test(url) ? images[url] ?? "" : url;
@@ -179,10 +179,19 @@ export function markdownVisual(editSource: EditSource, projectHash: string, file
   });
   return [decorations, EditorView.lineWrapping, EditorView.theme({
     "&": { background: "var(--editor-bg)" },
-    ".cm-scroller": { fontFamily: "var(--font-sans, system-ui)", lineHeight: "1.7" },
-    ".cm-content": { width: "100%", minWidth: "0", maxWidth: "760px", boxSizing: "border-box", margin: "0 auto", padding: "24px 16px 80px", fontSize: "16px" },
+    // Size and leading come from App.css, shared with `.ds-prose`.
+    ".cm-scroller": { fontFamily: "var(--font-sans, system-ui)" },
+    ".cm-content": { width: "100%", minWidth: "0", maxWidth: "var(--prose-measure)", boxSizing: "border-box", margin: "0 auto", padding: "24px 16px 80px" },
     ".cm-gutters": { display: "none" },
   })];
+}
+
+type TreeNode = { name: string; parent: TreeNode | null };
+
+function listDepth(node: TreeNode) {
+  let depth = 0;
+  for (let parent = node.parent; parent; parent = parent.parent) if (parent.name === "BulletList" || parent.name === "OrderedList") depth++;
+  return depth;
 }
 
 function build(state: EditorState, editSource: EditSource, projectHash: string, filePath: string): DecorationSet {
@@ -191,6 +200,7 @@ function build(state: EditorState, editSource: EditSource, projectHash: string, 
   const tree = markdownLanguage.parser.parse(source);
   const cursor = tree.cursor();
   let skipTo = -1;
+  const fenceLines = new Set<number>();
   const replace = (from: number, to: number, widget?: WidgetType, block = false) => {
     if (to > from) ranges.push(Decoration.replace({ widget, block }).range(from, to));
   };
@@ -221,18 +231,37 @@ function build(state: EditorState, editSource: EditSource, projectHash: string, 
     else if (name === "FencedCode") {
       const first = state.doc.lineAt(from);
       const last = state.doc.lineAt(Math.max(from, to - 1));
-      for (let n = first.number; n <= last.number; n++) ranges.push(Decoration.line({ class: "ds-md-fence" }).range(state.doc.line(n).from));
+      for (let n = first.number; n <= last.number; n++) {
+        fenceLines.add(n);
+        const edge = n === first.number ? " ds-md-fence-start" : n === last.number ? " ds-md-fence-end" : "";
+        ranges.push(Decoration.line({ class: `ds-md-fence${edge}` }).range(state.doc.line(n).from));
+      }
     } else if (name === "TaskMarker") {
       const checked = source.slice(from, to).toLowerCase().includes("x");
       replace(from, to, new MarkerWidget("", checked, (view) => {
         view.dispatch({ changes: { from: from + 1, to: from + 2, insert: checked ? " " : "x" } });
       }));
     } else if (name === "ListMark") {
+      // Nesting depth drives the hanging indent, so the source's leading
+      // spaces are hidden rather than drawn as uneven proportional gaps.
+      const line = state.doc.lineAt(from);
+      ranges.push(Decoration.line({ class: "ds-md-list-item", attributes: { style: `--md-depth: ${listDepth(cursor.node)}` } }).range(line.from));
+      if (!source.slice(line.from, from).trim()) replace(line.from, from);
       const marker = /^\d/.test(source.slice(from, to)) ? source.slice(from, to) + " " : "• ";
       replace(from, Math.min(to + 1, source.length), /^\[[ xX]\]/.test(source.slice(to + 1, to + 4)) ? undefined : new MarkerWidget(marker));
     } else if (["HeaderMark", "EmphasisMark", "StrikethroughMark", "CodeMark", "QuoteMark", "LinkMark", "URL"].includes(name)) {
       replace(from, name === "HeaderMark" || name === "QuoteMark" ? Math.min(to + 1, source.length) : to);
     } else if (name === "CodeInfo") replace(from, to);
   } while (cursor.next());
-  return Decoration.set(ranges, true);
+  return Decoration.set([...ranges, ...gapLines(state, fenceLines)], true);
+}
+
+/** A blank line between blocks is a paragraph break; inside a fence it's code. */
+function gapLines(state: EditorState, fenceLines: Set<number>) {
+  const gaps: ReturnType<Decoration["range"]>[] = [];
+  for (let n = 1; n <= state.doc.lines; n++) {
+    const line = state.doc.line(n);
+    if (!line.text.trim() && !fenceLines.has(n)) gaps.push(Decoration.line({ class: "ds-md-gap" }).range(line.from));
+  }
+  return gaps;
 }

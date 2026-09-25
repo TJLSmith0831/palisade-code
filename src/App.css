@@ -28,6 +28,9 @@
   --surface: var(--shell-accent-dark-override, oklch(22% 0.006 250));
   --surface-warm: var(--shell-accent-dark-override, oklch(26% 0.008 250));
   --editor-bg: var(--shell-accent-dark-override, oklch(20% 0.005 250));
+  --prose-code-bg: color-mix(in oklab, var(--fg), transparent 91%);
+  /* Reading measure for documents: the spec viewer and the visual editor. */
+  --prose-measure: 760px;
   --active-row: oklch(24% 0.02 var(--accent-hue, 145));
   --fg: oklch(96% 0.003 250);
   --muted: oklch(66% 0.012 250);
@@ -1577,7 +1580,7 @@ input[type="checkbox"] {
  * instead of re-implementing its stylesheet.
  */
 .ds-editor-body.ds-md-visual .wmde-markdown-var,
-.ds-editor-body.ds-md-visual .wmde-markdown {
+.wmde-markdown.ds-prose {
   --color-canvas-default: var(--editor-bg);
   --color-canvas-subtle: var(--surface-warm);
   --color-fg-default: var(--fg);
@@ -1599,28 +1602,46 @@ input[type="checkbox"] {
   --color-prettylights-syntax-variable: var(--code-text);
 }
 
+/* Heading sizes and code chips are shared with `.ds-prose` (see there), so a
+ * file reads the same in the editor and the spec viewer. The `.ds-editor-body`
+ * prefix outranks CodeMirror's own theme rules (`.ͼN .cm-line`), which load
+ * after this sheet. Lines take padding, never margin: CodeMirror measures them. */
 .ds-md-visual .cm-line { padding-block: 2px; }
-.ds-md-visual .cm-activeLine { background: transparent; }
-.ds-md-visual .ds-md-heading { font-weight: 700; line-height: 1.3; padding-top: 12px; }
+.ds-editor-body.ds-md-visual .cm-activeLine { background: transparent; }
 .ds-md-visual .ds-md-heading span { text-decoration: none; color: var(--fg); }
-.ds-md-visual .ds-md-h1 { font-size: 21px; }
-.ds-md-visual .ds-md-h2 { font-size: 21px; }
-.ds-md-visual .ds-md-h3 { font-size: 16px; }
-.ds-md-visual .ds-md-h4,
-.ds-md-visual .ds-md-h5,
-.ds-md-visual .ds-md-h6 { font-size: 16px; }
+.ds-editor-body.ds-md-visual .ds-md-h1 { padding-top: 0.4em; }
+.ds-editor-body.ds-md-visual .ds-md-h2 { padding-top: 0.9em; }
+.ds-editor-body.ds-md-visual .ds-md-h3 { padding-top: 0.7em; }
+.ds-editor-body.ds-md-visual :is(.ds-md-h4, .ds-md-h5, .ds-md-h6) { padding-top: 0.6em; }
+/* A blank source line is a paragraph break, not a full empty line. */
+.ds-editor-body.ds-md-visual .ds-md-gap { line-height: 0.9; }
+/* Hanging indent: wrapped lines align with the item's text, not its marker. */
+.ds-editor-body.ds-md-visual .ds-md-list-item {
+  padding-inline-start: calc(var(--md-depth, 1) * 1.5em);
+  text-indent: -1.5em;
+}
 .ds-md-visual .ds-md-strong { font-weight: 700; }
 .ds-md-visual .ds-md-emphasis { font-style: italic; }
 .ds-md-visual .ds-md-strike { text-decoration: line-through; }
 .ds-md-visual .ds-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-.ds-md-visual .ds-md-code,
-.ds-md-visual .ds-md-fence { font-family: var(--mono); background: var(--surface-warm); }
-.ds-md-visual .ds-md-code { padding: 1px 3px; border-radius: 4px; }
-.ds-md-visual .ds-md-quote { border-left: 2px solid var(--muted); padding-left: 12px; color: var(--muted); }
-.ds-md-visual .ds-md-list-marker { color: var(--muted); display: inline-block; min-width: 20px; }
-.ds-md-visual .cm-line input[type="checkbox"] { margin-inline-end: 8px; accent-color: var(--accent); }
+.ds-editor-body.ds-md-visual .ds-md-fence {
+  padding-inline: 14px;
+  background: var(--surface-warm);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+/* The fence rows hold only hidden ``` markers: keep them as thin padding. */
+.ds-editor-body.ds-md-visual .ds-md-fence-start { line-height: 0.9; border-radius: 8px 8px 0 0; }
+.ds-editor-body.ds-md-visual .ds-md-fence-end { line-height: 0.9; border-radius: 0 0 8px 8px; }
+/* CodeMirror brackets each hidden Markdown mark with zero-width <img>
+ * buffers, and an in-flow image is a line-break opportunity: a period after a
+ * link wrapped onto its own line. Out of flow they no longer break the line
+ * but stay in the DOM, where CodeMirror needs them for caret placement. */
+.ds-md-visual .cm-widgetBuffer { position: absolute; }
+.ds-md-visual .ds-md-quote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--muted); }
+.ds-md-visual .ds-md-list-marker { color: var(--muted); display: inline-block; min-width: 1.5em; text-indent: 0; }
+.ds-md-visual .cm-line input[type="checkbox"] { width: 1em; margin: 0 0.5em 0 0; vertical-align: -0.1em; accent-color: var(--accent); }
 .ds-md-visual .ds-md-widget { margin: 12px 0; max-width: 100%; }
-.ds-md-visual .ds-md-widget .wmde-markdown { font-size: 16px; line-height: 1.65; }
 .ds-md-visual .ds-md-widget img { max-width: 100%; height: auto; outline: 1px solid var(--image-outline); }
 .ds-md-visual .ds-md-rendered-block > button {
   display: inline-flex; align-items: center; gap: 5px; margin-top: 6px;
@@ -2674,7 +2695,7 @@ input[type="checkbox"] {
 }
 
 .wmde-markdown {
-  background: var(--surface-warm);
+  background: transparent;
   color: var(--fg);
   font-family:
     system-ui,
@@ -2711,9 +2732,75 @@ input[type="checkbox"] {
   color: var(--accent);
 }
 
+/* Document-grade Markdown (spec artifacts, rendered editor blocks): no
+ * frame, a reading measure on the DESIGN.md ramp (Subhead body, Display
+ * headings, Mono code), neutral code chips. `.ds-prose`
+ * paired with `.wmde-markdown` outranks the vendor's GitHub stylesheet and
+ * the chat-oriented rules above. */
+.wmde-markdown.ds-prose,
+.ds-editor-body.ds-md-visual .cm-content {
+  font-size: 16px;
+  line-height: 1.65;
+}
+.wmde-markdown.ds-prose > :first-child { margin-top: 0; }
+.wmde-markdown.ds-prose > :last-child { margin-bottom: 0; }
+.wmde-markdown.ds-prose :is(h1, h2, h3, h4, h5, h6),
+.ds-md-visual .ds-md-heading {
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.wmde-markdown.ds-prose :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.6em 0 0.5em;
+  padding: 0;
+  border: none;
+}
+.wmde-markdown.ds-prose h1,
+.ds-editor-body.ds-md-visual .ds-md-h1 { font-size: 21px; font-weight: 700; }
+.wmde-markdown.ds-prose h2,
+.ds-editor-body.ds-md-visual .ds-md-h2 { font-size: 21px; }
+.wmde-markdown.ds-prose :is(h3, h4, h5, h6),
+.ds-editor-body.ds-md-visual :is(.ds-md-h3, .ds-md-h4, .ds-md-h5, .ds-md-h6) { font-size: 16px; }
+.wmde-markdown.ds-prose :is(h4, h5, h6),
+.ds-editor-body.ds-md-visual :is(.ds-md-h4, .ds-md-h5, .ds-md-h6) { font-weight: 600; }
+.wmde-markdown.ds-prose .anchor { display: none; }
+.wmde-markdown.ds-prose p,
+.wmde-markdown.ds-prose ul,
+.wmde-markdown.ds-prose ol,
+.wmde-markdown.ds-prose blockquote,
+.wmde-markdown.ds-prose pre,
+.wmde-markdown.ds-prose table { margin: 0 0 0.9em; }
+.wmde-markdown.ds-prose ul,
+.wmde-markdown.ds-prose ol { padding-left: 1.5em; }
+.wmde-markdown.ds-prose li + li { margin-top: 0.3em; }
+.wmde-markdown.ds-prose li::marker { color: var(--muted); }
+.wmde-markdown.ds-prose code,
+.ds-md-visual .ds-md-code {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--prose-code-bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.wmde-markdown.ds-prose pre {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-warm);
+}
+.wmde-markdown.ds-prose pre code { padding: 0; background: none; }
+.wmde-markdown.ds-prose a { text-decoration: underline; text-underline-offset: 2px; }
+.wmde-markdown.ds-prose blockquote { padding: 0 1em; border-left: 3px solid var(--border); color: var(--muted); }
+.wmde-markdown.ds-prose hr { height: 0; margin: 1.6em 0; border: none; border-top: 1px solid var(--border); background: none; }
+.wmde-markdown.ds-prose table { border-collapse: collapse; }
+.wmde-markdown.ds-prose th,
+.wmde-markdown.ds-prose td { padding: 6px 10px; border: 1px solid var(--border); }
+.wmde-markdown.ds-prose th { background: var(--surface-warm); }
+.wmde-markdown.ds-prose tr { background: none; border: none; }
+
 .message .content.wmde-markdown,
 .ds-assistant-response .content.wmde-markdown {
-  background: transparent;
   padding: 0;
   white-space: normal;
 }
@@ -2779,7 +2866,6 @@ input[type="checkbox"] {
    same Markdown semantics as an assistant turn rather than expose source
    punctuation such as `**bold**`. */
 .reasoning-content.wmde-markdown {
-  background: transparent;
   color: var(--muted);
   padding: 0;
   white-space: normal;
@@ -3013,12 +3099,9 @@ input[type="checkbox"] {
   padding: 10px 0;
 }
 
+/* Palette supplies the list's frame and reset; this only sets its height. */
 .file-palette-results {
   max-height: 320px;
-  overflow-y: auto;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  padding-top: 4px;
 }
 
 .file-palette-results li {
@@ -7071,6 +7154,25 @@ button.ds-onboarding-status {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* Artifacts read as a document: one centered measure, like a VS Code or
+ * Obsidian preview, instead of text stretched edge to edge. */
+.ds-spec-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px clamp(16px, 4vw, 40px) 64px;
+}
+.ds-spec-body > * {
+  max-width: var(--prose-measure);
+  margin-inline: auto;
+}
+.wmde-markdown.ds-prose.ds-spec-scenario {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.wmde-markdown.ds-prose.ds-spec-scenario li + li { margin-top: 0.15em; }
 
 .ds-spec-tasks-summary {
   display: flex;

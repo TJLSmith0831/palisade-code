@@ -338,7 +338,7 @@ export default function SpecChangeTab({
           </UnstyledButton>
         ))}
       </div>
-      <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }} p="sm">
+      <Box className="ds-spec-body">
           {/* ---------- Proposal ---------- */}
           {activeTab === "proposal" && <ArtifactView state={proposal} />}
 
@@ -431,7 +431,7 @@ export default function SpecChangeTab({
                   }}
                   pt="md"
                 >
-                  <MDEditor.Markdown source={tasks.content} />
+                  <MDEditor.Markdown className="ds-prose" source={tasks.content} />
                 </Box>
               )}
             </Stack>
@@ -556,7 +556,7 @@ function ArtifactView({ state }: { state: ArtifactState }) {
         No content.
       </Text>
     );
-  return <MDEditor.Markdown source={state.content} />;
+  return <MDEditor.Markdown className="ds-prose" source={state.content} />;
 }
 
 /** Renders the structured spec deltas from `openspec show --json` as
@@ -691,14 +691,11 @@ function SpecDeltasView({
               )}
             </Group>
             {delta.requirement.scenarios.map((scenario, j) => (
-              <Text
+              <MDEditor.Markdown
                 key={j}
-                size="xs"
-                c="dimmed"
-                style={{ whiteSpace: "pre-wrap" }}
-              >
-                {scenario.rawText}
-              </Text>
+                className="ds-prose ds-spec-scenario"
+                source={scenario.rawText}
+              />
             ))}
             {expanded && (
               <Box
