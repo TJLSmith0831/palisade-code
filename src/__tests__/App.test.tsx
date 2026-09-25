@@ -6272,6 +6272,26 @@ describe("Mode toggle (#17)", () => {
     fireEvent.click(screen.getByTestId("spec-type-feature"));
     expect(screen.getByTestId("other-spec-input")).toHaveValue("");
   });
+  /** The stepper moved only once the agent wrote the change folder. */
+  it("/propose moves the stepper to Proposing before the backend answers", async () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    const invoke = trackedInvoke(calls, { currentMode: "spec" });
+    invokeMock.mockImplementation((cmd, args) =>
+      // Never answers: the stepper must move on the click alone.
+      cmd === "propose" ? (calls.push([cmd, args ?? {}]), new Promise(() => {})) : invoke(cmd, args)
+    );
+    const { unmount } = render(<App />);
+    await openProject();
+    await waitFor(() => expect(screen.getByTestId("spec-progress")).toHaveTextContent("Exploring"));
+
+    fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "/propose" } });
+    fireEvent.click(screen.getByTestId("composer-send"));
+
+    await waitFor(() => expect(calls.some(([cmd]) => cmd === "propose")).toBe(true));
+    expect(screen.getByTestId("spec-progress")).toHaveTextContent("Spec progress: Proposing");
+    expect(screen.getByTestId("propose-handoff")).toBeDefined();
+    unmount();
+  });
 });
 
 
