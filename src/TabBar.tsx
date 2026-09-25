@@ -226,10 +226,13 @@ export default function TabBar({
       </Tabs>
 
       {/* Outside the scrolling tab list, with the other right-hand controls:
-          inline after the last tab it clipped off in a narrow pane. */}
+          inline after the last tab it clipped off in a narrow pane. All three
+          controls share the 22px compact height: the strip aligns to its
+          bottom edge, so a taller one sits visibly off the others' center. */}
       {onGoToFile && (
         <Tooltip label="Go to file (⌘P)" withinPortal>
           <ActionIcon
+            size="sm"
             variant="subtle"
             aria-label="Go to file"
             data-testid="go-to-file"
@@ -267,6 +270,7 @@ export default function TabBar({
         withinPortal
       >
         <ActionIcon
+          size="sm"
           variant={diffOpen ? "filled" : "subtle"}
           aria-label={diffOpen ? "Back to editor" : "Review changes"}
           aria-pressed={diffOpen}

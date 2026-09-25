@@ -211,11 +211,13 @@ describe("SpecChangeTab", () => {
     expect(state("Tasks").textContent).not.toMatch(/done|complete/i);
   });
 
-  it("shows the proposal markdown on the Proposal tab", async () => {
+  it("renders the proposal as a document, not framed source", async () => {
     renderTab();
     await waitFor(() => {
       expect(screen.getByText("This is a proposal.")).toBeInTheDocument();
     });
+    // `.ds-prose` carries the document styling; `## Why` is a real heading.
+    expect(screen.getByRole("heading", { name: "Why" }).closest(".ds-prose")).not.toBeNull();
   });
 
   it("switches to the Design tab and shows design markdown", async () => {
@@ -339,6 +341,8 @@ describe("SpecChangeTab", () => {
         screen.getByText("The system SHALL render a Specs section.")
       ).toBeInTheDocument();
     });
+    // Scenario Markdown renders as a list, not literal `- WHEN` source.
+    expect(screen.getByText("WHEN the Vibe shell renders").tagName).toBe("LI");
   });
 
   it("expands a delta and shows its source spec markdown on title click", async () => {

@@ -264,12 +264,6 @@ export default function FilePalette({
       autoFocus
       status={status}
       emptyState={emptyState}
-      footer={
-        <span className="hint">
-          ↑↓ to navigate · Enter to open{canCreate ? " or create" : ""} · Esc
-          to cancel
-        </span>
-      }
     />
   );
 }

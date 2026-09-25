@@ -301,7 +301,7 @@ export default function Palette<T>({
       {results.length > 0 ? (
         <div
           style={{
-            margin: "0 8px 10px",
+            margin: "0 16px 10px",
             overflow: "hidden",
             border: "1px solid var(--border)",
             borderRadius: 6,
@@ -312,19 +312,14 @@ export default function Palette<T>({
             data-testid={resultsTestId}
             role="listbox"
             className={resultsClassName}
-            style={
-              resultsClassName
-                ? undefined
-                : {
-                    display: "flex",
-                    flexDirection: "column",
-                    maxHeight: 386,
-                    margin: 0,
-                    padding: 4,
-                    overflowY: "auto",
-                    listStyle: "none",
-                  }
-            }
+            // The reset always applies; a consumer's class only sets the height.
+            style={{
+              maxHeight: resultsClassName ? undefined : 386,
+              margin: 0,
+              padding: 4,
+              overflowY: "auto",
+              listStyle: "none",
+            }}
           >
             {results}
           </ul>
