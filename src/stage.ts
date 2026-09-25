@@ -6,6 +6,9 @@
  * change, and whether that change's planning artifacts are complete.
  */
 
+import type { Message } from "./api";
+import { isProposeCommand } from "./skillLabel";
+
 export type SpecStage =
   | "exploring" // spec-mode, no change and no Propose sent — grill-explore auto-fired
   | "proposing" // spec-mode, change exists, artifacts not complete
@@ -34,4 +37,17 @@ export function deriveStage(
   if (!hasChange) return proposeSent ? "proposing" : "exploring";
   if (changeComplete === true) return "ready_to_apply";
   return "proposing";
+}
+
+/** Whether Propose was sent since the thread last started exploring. An
+ * older Propose belongs to an earlier idea: after that change is unlinked, a
+ * fresh Explore must read as exploring again. */
+export function proposeSentSinceExplore(messages: Message[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") continue;
+    if (isProposeCommand(m.content)) return true;
+    if (m.explores != null) return false;
+  }
+  return false;
 }

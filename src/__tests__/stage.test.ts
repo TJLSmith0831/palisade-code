@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { deriveStage } from "../stage";
+import { deriveStage, proposeSentSinceExplore } from "../stage";
+import type { Message } from "../api";
 
 describe("deriveStage", () => {
   it("returns 'exploring' for spec-mode with no change", () => {
@@ -29,5 +30,24 @@ describe("deriveStage", () => {
 
   it("returns 'chat' for unknown modes", () => {
     expect(deriveStage("chat", false, null)).toBe("chat");
+  });
+});
+
+describe("proposeSentSinceExplore", () => {
+  const user = (content: string, explores?: string) =>
+    ({ seq: 0, ts: "", role: "user", mode: "spec", content, explores }) as Message;
+
+  it("is true once Propose follows the Explore turn", () => {
+    expect(proposeSentSinceExplore([user("Add search", "Feature"), user("grill-propose")])).toBe(true);
+  });
+
+  it("is false before Propose is sent", () => {
+    expect(proposeSentSinceExplore([user("Add search", "Feature")])).toBe(false);
+  });
+
+  it("ignores a Propose from before the latest Explore", () => {
+    expect(
+      proposeSentSinceExplore([user("Add search", "Feature"), user("grill-propose"), user("Dark mode", "Feature")])
+    ).toBe(false);
   });
 });

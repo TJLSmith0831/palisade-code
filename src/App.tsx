@@ -133,7 +133,7 @@ import ChainsPanel, { CHAINS_CHANGED_EVENT, announceChainsChanged } from "./Chai
 import { CHAIN_EXECUTOR_PREFIX } from "./api";
 import ChainCanvas from "./ChainCanvas";
 import ChainRunCard, { type ChainRunCardView } from "./ChainRunCard";
-import { deriveStage, type SpecStage } from "./stage";
+import { deriveStage, proposeSentSinceExplore, type SpecStage } from "./stage";
 import { RenameIcon, DeleteIcon } from "./icons";
 import {
   EventList,
@@ -5233,9 +5233,7 @@ export default function App() {
   // Spec-mode stage derivation (amended D19): explore → propose → apply.
   // Sending Propose is entering that stage — the change folder only appears
   // once the agent writes it, which left the stepper on Exploring meanwhile.
-  const proposeSent = messages.some(
-    (m) => m.role === "user" && isProposeCommand(m.content)
-  );
+  const proposeSent = proposeSentSinceExplore(messages);
   const stage = thread
     ? deriveStage(
         thread.currentMode,

@@ -852,27 +852,24 @@ export const EventList = memo(function EventList({
                 <AssistantResponse key={index} text={item.text} />
               );
             }
-            {
-            const bubble = (
-              <div key={index} className={`message ${item.role}`}>
-                {item.role === "user" && renderUserMessage ? (
-                  renderUserMessage(item)
-                ) : (
-                  <MDEditor.Markdown source={item.text} className="content" />
-                )}
-              </div>
-            );
             // The turn that started exploring is the user's own words, so it
             // keeps its bubble; the stage marker sits above it.
-            return item.role === "user" && item.explores != null ? (
+            return (
               <Fragment key={index}>
-                <div className="message user">
-                  <ExploreHandoff target={item.explores} />
+                {item.role === "user" && item.explores != null && (
+                  <div className="message user">
+                    <ExploreHandoff target={item.explores} />
+                  </div>
+                )}
+                <div className={`message ${item.role}`}>
+                  {item.role === "user" && renderUserMessage ? (
+                    renderUserMessage(item)
+                  ) : (
+                    <MDEditor.Markdown source={item.text} className="content" />
+                  )}
                 </div>
-                {bubble}
               </Fragment>
-            ) : bubble;
-            }
+            );
           case "text":
             return (
               <AssistantResponse key={index} text={item.text} />
