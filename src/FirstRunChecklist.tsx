@@ -1,5 +1,5 @@
 import { Alert, Anchor, Button, Group, List, Stack, Text } from "@mantine/core";
-import { IconRefresh, IconRobot } from "@tabler/icons-react";
+import { IconAlertTriangle, IconRefresh, IconRobot } from "@tabler/icons-react";
 import type { Preflight } from "./api";
 import { AddAgentButtonList } from "./AddAgentMenu";
 
@@ -99,9 +99,10 @@ export default function FirstRunChecklist({
           </Button>
         </Group>
         {rest.map((warning) => (
-          <Text size="xs" key={warning}>
-            ⚠ {warning}
-          </Text>
+          <Group gap={4} wrap="nowrap" key={warning}>
+            <IconAlertTriangle size={12} style={{ flexShrink: 0 }} />
+            <Text size="xs">{warning}</Text>
+          </Group>
         ))}
       </Stack>
     </Alert>

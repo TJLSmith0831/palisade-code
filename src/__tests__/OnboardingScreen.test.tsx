@@ -53,10 +53,10 @@ const base = {
 // action; the composer (with its executor/model pickers) is secondary and
 // collapsed until asked for.
 describe("OnboardingScreen project-first layout", () => {
-  it("leads with New Project as the primary tile", () => {
+  it("leads with Open Project as the primary tile", () => {
     render(<OnboardingScreen {...base} />);
     const tile = screen.getByTestId("add-project");
-    expect(tile).toHaveTextContent("New Project");
+    expect(tile).toHaveTextContent("Open Project");
     expect(tile.className).toContain("primary");
   });
 

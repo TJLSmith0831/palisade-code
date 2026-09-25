@@ -100,6 +100,14 @@ export function mergeDeltas(events: ExecutorEvent[]): ExecutorEvent[] {
   return merged;
 }
 
+/** Matches the plain-text marker `set_thread_mode`/`transition_thread_mode`
+ *  append to the session log on every mode change (store.rs). */
+const MODE_SWITCH_MARKER = /^Switched to (?:spec|go) mode$/;
+
+function isModeSwitchMarker(message: Message): boolean {
+  return message.role === "tool" && MODE_SWITCH_MARKER.test(message.content);
+}
+
 /**
  * Structured events are persisted as JSON under `role: "tool"`, so a reloaded
  * thread renders the same diffs and tool blocks a live one does. Anything that
@@ -108,7 +116,16 @@ export function mergeDeltas(events: ExecutorEvent[]): ExecutorEvent[] {
 export function itemsFromMessages(messages: Message[]): Item[] {
   const items: Item[] = [];
   let openSession: string | null = null;
-  for (const message of messages) {
+  messages.forEach((message, index) => {
+    // A brand-new thread's *first* message is the mode it started in — the
+    // create-thread flow calls set_thread_mode("go") before the user ever
+    // types, which appends this same marker. That's not a switch the user
+    // made, so it shouldn't read as one. Only show the line when the mode
+    // actually changes partway through an existing thread.
+    if (index === 0 && isModeSwitchMarker(message)) {
+      openSession = message.sessionId ?? openSession;
+      return;
+    }
     // A session's turns are contiguous in a thread, but a second concurrent
     // session can interleave — so anchor on *change*, not on first sight, and
     // let a resumed session anchor again at the point it resumes.
@@ -117,7 +134,7 @@ export function itemsFromMessages(messages: Message[]): Item[] {
     }
     openSession = message.sessionId ?? openSession;
     items.push(itemFromMessage(message));
-  }
+  });
   return items;
 }
 
@@ -807,7 +824,12 @@ export const EventList = memo(function EventList({
               return (
                 <Alert
                   key={index}
-                  color={transient ? "brand" : "danger"}
+                  // A sign-in prompt is actionable, not a failure — the
+                  // onboarding status dropdown already colors the same
+                  // "needs reauth" condition with `--warn`; this banner used
+                  // `--danger` for it, so the identical state read as broken
+                  // in one surface and merely due for attention in the other.
+                  color={transient ? "brand" : authIssue ? "warn" : "danger"}
                   variant="light"
                   data-testid="crash-banner"
                   className={authIssue ? "ds-crash-banner-auth" : undefined}

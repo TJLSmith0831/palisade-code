@@ -374,7 +374,7 @@ export default function OnboardingScreen({
             <span className="ds-onboarding-card-icon">
               <IconFolder size={19} />
             </span>
-            <span className="ds-onboarding-card-title">New Project</span>
+            <span className="ds-onboarding-card-title">Open Project</span>
             <span className="ds-onboarding-card-body">
               Point Palisade at a local folder. Every thread you start here
               runs in its own isolated worktree.

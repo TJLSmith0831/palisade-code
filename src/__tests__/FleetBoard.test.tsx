@@ -262,7 +262,7 @@ describe("FleetBoard", () => {
     expect(onNewRun).toHaveBeenCalledWith({
       prompt: "ship it",
       agentId: "a1",
-      mode: "spec",
+      mode: "go",
       isolated: true,
       attachments: [],
       skills: [],
@@ -455,7 +455,7 @@ describe("FleetBoard", () => {
       prompt: "ship it",
       agentId: "a1",
       model: "m1",
-      mode: "spec",
+      mode: "go",
       isolated: true,
       attachments: [],
       skills: [],
@@ -552,12 +552,12 @@ describe("FleetBoard", () => {
 
   it("colors the Spec/Go control like the main composer's, active segment filled", () => {
     render(<FleetBoard {...props()} />);
-    const specActive = document.querySelector(".mode-selector-control[data-active]");
-    expect(specActive).toHaveTextContent("Spec");
-
-    fireEvent.click(screen.getByText("Go"));
     const goActive = document.querySelector(".mode-selector-control[data-active]");
     expect(goActive).toHaveTextContent("Go");
+
+    fireEvent.click(screen.getByText("Spec"));
+    const specActive = document.querySelector(".mode-selector-control[data-active]");
+    expect(specActive).toHaveTextContent("Spec");
   });
 });
 

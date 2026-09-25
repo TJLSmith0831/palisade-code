@@ -689,6 +689,47 @@ describe("EventList agent sign-in", () => {
  * `Message.sessionId` on the floor, leaving the rendered list with no session
  * identity to scroll to.
  */
+/**
+ * #17b: create-thread flow calls set_thread_mode("go") before the user's
+ * first turn, appending the same "Switched to go mode" marker a real,
+ * mid-thread mode change does. Rendered as message #1, it read as "the user
+ * switched modes" on a thread where nobody did.
+ */
+describe("mode-switch marker (#17b)", () => {
+  const modeSwitch = (seq: number, mode: "go" | "spec"): Message => ({
+    seq,
+    ts: `2026-09-10T00:00:0${seq}Z`,
+    role: "tool",
+    mode,
+    content: `Switched to ${mode} mode`,
+    sessionId: null,
+  });
+  const userMsg = (seq: number, text: string): Message => ({
+    seq,
+    ts: `2026-09-10T00:00:0${seq}Z`,
+    role: "user",
+    mode: "go",
+    content: text,
+    sessionId: null,
+  });
+
+  it("drops the marker when it is a thread's very first message", () => {
+    const items = itemsFromMessages([modeSwitch(1, "go"), userMsg(2, "ship it")]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "plain", role: "user" });
+  });
+
+  it("keeps the marker when the mode changes mid-thread", () => {
+    const items = itemsFromMessages([
+      userMsg(1, "start planning"),
+      modeSwitch(2, "go"),
+      userMsg(3, "now build it"),
+    ]);
+    expect(items).toHaveLength(3);
+    expect(items[1]).toMatchObject({ kind: "plain", role: "tool", text: "Switched to go mode" });
+  });
+});
+
 describe("session anchors", () => {
   const msg = (seq: number, sessionId: string | null, text: string): Message => ({
     seq,

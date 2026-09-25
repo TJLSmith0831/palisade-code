@@ -3916,14 +3916,14 @@ export default function App() {
     });
   };
 
-  // The onboarding composer's send: unlike the plain New Project tile, a
+  // The onboarding composer's send: unlike the plain Open Project tile, a
   // typed request has somewhere to go once a folder is picked — open the
   // project, create a fresh go-mode thread (reusing onSend's first-send
   // shape below, but against the just-picked project's hash directly rather
   // than closured `project`/`thread` state, which wouldn't be fresh yet),
   // carry the framing-menu's executor/model pick onto it, send the message,
   // and land in Vibe so the run is visible immediately instead of the empty
-  // shell the New Project path leaves you on.
+  // shell the Open Project path leaves you on.
   const onOnboardingComposerSend = async (text: string) => {
     try {
       const picked = await open({ directory: true, title: "Add a project" });
@@ -7186,7 +7186,10 @@ export default function App() {
             data-testid="preflight-warnings"
           >
             {flight.warnings.map((warning) => (
-              <div key={warning}>⚠ {warning}</div>
+              <Group key={warning} gap={4} wrap="nowrap">
+                <IconAlertTriangle size={12} style={{ flexShrink: 0 }} />
+                <span>{warning}</span>
+              </Group>
             ))}
           </Alert>
         ) : null}

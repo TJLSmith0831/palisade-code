@@ -436,7 +436,10 @@ export default function FleetBoard({
   const [modelId, setModelId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [mode, setMode] = useState<"spec" | "go">("spec");
+  // D19/D20 (App.tsx new-thread picker) and PRODUCT.md's "Go permits
+  // implementation" both treat Go as the default execution mode — match it
+  // here so the Fleet composer doesn't disagree with every other entry point.
+  const [mode, setMode] = useState<"spec" | "go">("go");
   const [isolated, setIsolated] = useState(true);
 
   // Same `list_models` probe the main composer's model picker and the
