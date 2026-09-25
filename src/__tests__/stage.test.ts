@@ -6,6 +6,10 @@ describe("deriveStage", () => {
     expect(deriveStage("spec", false, null)).toBe("exploring");
   });
 
+  it("returns 'proposing' as soon as Propose is sent, before the change exists", () => {
+    expect(deriveStage("spec", false, null, true)).toBe("proposing");
+  });
+
   it("returns 'proposing' for spec-mode with a change, status not complete", () => {
     expect(deriveStage("spec", true, false)).toBe("proposing");
   });

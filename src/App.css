@@ -2097,9 +2097,75 @@ input[type="checkbox"] {
   to { box-shadow: 0 2px 8px color-mix(in oklab, var(--accent), transparent 65%); transform: scale(1); }
 }
 
+/* A handoff turn is Palisade advancing the spec flow, not something the user
+   typed, so it drops the user-bubble chrome and sits in the log as a stage
+   marker. */
+.message.user:has(> .ds-launch) {
+  width: auto;
+  padding: 2px 10px 2px 2px;
+  background-color: transparent;
+  border-color: transparent;
+}
+
+/* Propose turn: writing, not launching. The line is inked on left to right
+   (a clip-path reveal on the already-laid-out text) while the pen dips once. */
+.ds-handoff-ink {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.ds-handoff-propose[data-play] {
+  animation: none;
+}
+
+.ds-handoff-propose[data-play] .ds-handoff-ink {
+  animation: ds-handoff-ink 900ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+.ds-handoff-propose[data-play] .ds-launch-bolt {
+  animation: ds-handoff-dip 700ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+@keyframes ds-handoff-ink {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+@keyframes ds-handoff-dip {
+  from { transform: rotate(-18deg) translateY(-2px); box-shadow: 0 2px 20px var(--accent); }
+  to { transform: none; box-shadow: 0 2px 8px color-mix(in oklab, var(--accent), transparent 65%); }
+}
+
+/* Explore turn: looking around before anything is written. The compass swings
+   past north and settles, once, with the same charge the other tiles carry;
+   no sweep, since nothing has been launched yet. */
+.ds-handoff-explore {
+  min-width: 0;
+}
+
+.ds-handoff-explore[data-play] {
+  animation: none;
+}
+
+.ds-handoff-explore[data-play] .ds-launch-bolt {
+  animation: ds-launch-charge 900ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+.ds-handoff-explore[data-play] .ds-launch-bolt svg {
+  animation: ds-handoff-swing 1000ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+@keyframes ds-handoff-swing {
+  0% { transform: rotate(-150deg); }
+  55% { transform: rotate(16deg); }
+  100% { transform: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ds-launch[data-play],
-  .ds-launch[data-play] .ds-launch-bolt {
+  .ds-launch[data-play] .ds-launch-bolt,
+  .ds-handoff-propose[data-play] .ds-handoff-ink,
+  .ds-handoff-explore[data-play] .ds-launch-bolt svg {
     animation: none;
   }
 }

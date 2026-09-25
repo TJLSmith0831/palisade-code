@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
-import { BuildLaunch, armBuildLaunch } from "../BuildLaunch";
+import { BuildLaunch, ExploreHandoff, ProposeHandoff, armBuildLaunch, armExploreHandoff, armProposeHandoff } from "../BuildLaunch";
 
 const row = (target = "Add search clear button") =>
   render(
@@ -37,5 +37,25 @@ describe("BuildLaunch", () => {
     armBuildLaunch("add-search-clear-button");
     row("Dark mode toggle");
     expect(screen.getByTestId("build-launch")).not.toHaveAttribute("data-play");
+  });
+
+  it("plays the Propose row only after a Propose send, and a Build send never arms it", () => {
+    armBuildLaunch("");
+    const quiet = render(<MantineProvider><ProposeHandoff /></MantineProvider>);
+    expect(screen.getByTestId("propose-handoff")).not.toHaveAttribute("data-play");
+    quiet.unmount();
+    armProposeHandoff();
+    render(<MantineProvider><ProposeHandoff /></MantineProvider>);
+    expect(screen.getByTestId("propose-handoff")).toHaveAttribute("data-play");
+  });
+
+  it("plays the Explore row only after an Explore send, not after a Propose send", () => {
+    armProposeHandoff();
+    const quiet = render(<MantineProvider><ExploreHandoff target="Feature" /></MantineProvider>);
+    expect(screen.getByTestId("explore-handoff")).not.toHaveAttribute("data-play");
+    quiet.unmount();
+    armExploreHandoff();
+    render(<MantineProvider><ExploreHandoff target="Feature" /></MantineProvider>);
+    expect(screen.getByTestId("explore-handoff")).toHaveAttribute("data-play");
   });
 });

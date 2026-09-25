@@ -1178,6 +1178,11 @@ pub struct Message {
     /// How they reach the agent is `acp_client::Prompt`'s business.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
+    /// Set on the user turn that started exploring: the spec type it framed
+    /// (Feature, Bugfix, or the user's own). The chat draws the Explore stage
+    /// marker above it; the turn itself stays the user's own words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explores: Option<String>,
 }
 
 impl Message {
@@ -1193,6 +1198,7 @@ impl Message {
             failure_class: None,
             attachments: Vec::new(),
             skills: Vec::new(),
+            explores: None,
         }
     }
 }
@@ -2559,6 +2565,7 @@ mod tests {
             failure_class: None,
             attachments: Vec::new(),
             skills: Vec::new(),
+            explores: None,
         };
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{}", serde_json::to_string(&smuggled).unwrap()).unwrap();

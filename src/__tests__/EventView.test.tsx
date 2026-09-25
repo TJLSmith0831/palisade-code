@@ -812,3 +812,19 @@ describe("sign-in buttons follow the agent that actually failed", () => {
     ]);
   });
 });
+
+describe("Explore stage marker", () => {
+  it("sits above the turn that started exploring, which keeps the user's own words", () => {
+    const items = itemsFromMessages([
+      { seq: 1, ts: "", role: "user", mode: "spec", content: "Add a clear button", explores: "Feature" },
+      { seq: 2, ts: "", role: "user", mode: "spec", content: "And make it round" },
+    ] as Message[]);
+    renderWithMantine(<EventList items={items} executor={null} />);
+    const markers = screen.getAllByTestId("explore-handoff");
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toHaveTextContent("Explore");
+    expect(markers[0]).toHaveTextContent("Feature");
+    const bubble = screen.getByText("Add a clear button");
+    expect(markers[0].compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

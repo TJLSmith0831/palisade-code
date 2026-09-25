@@ -2196,6 +2196,7 @@ async fn spec_mode(
                     store::Message {
                         session_id: Some(id.clone()),
                         skills: skills.clone(),
+                        explores: Some(spec_type.trim().to_string()),
                         ..store::Message::row("user", "spec", request.unwrap_or(&spec_type))
                     },
                 )?;

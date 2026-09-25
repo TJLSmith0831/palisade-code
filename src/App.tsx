@@ -174,8 +174,8 @@ const STARTER_PROMPTS = [
 ];
 
 import SpecPane from "./SpecPane";
-import { buildTarget, displaySkillCommand } from "./skillLabel";
-import { BuildLaunch, armBuildLaunch } from "./BuildLaunch";
+import { buildTarget, displaySkillCommand, isProposeCommand } from "./skillLabel";
+import { BuildLaunch, ProposeHandoff, armBuildLaunch, armExploreHandoff, armProposeHandoff } from "./BuildLaunch";
 import { mergeRefreshed } from "./messageMerge";
 import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
@@ -844,7 +844,9 @@ export const ChatSurface = memo(
                 ))}
               </div>
             )}
-            {text && buildTarget(text) !== null
+            {text && isProposeCommand(text)
+              ? <ProposeHandoff />
+              : text && buildTarget(text) !== null
               ? <BuildLaunch target={buildTarget(text)!} />
               : text && <MDEditor.Markdown source={displaySkillCommand(displayMentions(text))} className="content" />}
             {item.attachments && item.attachments.length > 0 && (
@@ -4376,7 +4378,9 @@ export default function App() {
       const updated = threads.find((t) => t.id === created.id) ?? created;
       await selectThread(project.hash, updated);
       setThreads(threads);
-      // The echo is what the user typed, not which card they pressed.
+      // The echo is what the user typed, not which card they pressed; the
+      // card is the Explore marker above it.
+      armExploreHandoff();
       setMessages([
         {
           seq: OPTIMISTIC_SEQ,
@@ -4385,6 +4389,7 @@ export default function App() {
           mode: "spec",
           content: description,
           skills,
+          explores: specType,
         },
       ]);
       // Fire specMode without awaiting — don't block the UI. The busy state
@@ -5226,11 +5231,17 @@ export default function App() {
   }, []);
 
   // Spec-mode stage derivation (amended D19): explore → propose → apply.
+  // Sending Propose is entering that stage — the change folder only appears
+  // once the agent writes it, which left the stepper on Exploring meanwhile.
+  const proposeSent = messages.some(
+    (m) => m.role === "user" && isProposeCommand(m.content)
+  );
   const stage = thread
     ? deriveStage(
         thread.currentMode,
         !!thread.openSpecChangeName,
-        changeComplete
+        changeComplete,
+        proposeSent
       )
     : "chat";
 
@@ -5332,12 +5343,28 @@ export default function App() {
     setComposerSpecTypePicker(false);
     setBusy(true);
     const prefs = resolvePrefs(project.hash, thread.id);
+    // Echo now, as the new-thread path does, so the Explore marker plays as
+    // the phase changes rather than whenever the agent has started.
+    armExploreHandoff();
+    setMessages((prev) => [
+      ...prev,
+      {
+        seq: OPTIMISTIC_SEQ,
+        ts: new Date().toISOString(),
+        role: "user",
+        mode: "spec",
+        content: description,
+        skills,
+        explores: specType,
+      },
+    ]);
     // Fire specMode without awaiting — busy stays true until the agent's
     // turn ends (ExecutorEvent::Done clears it).
     api
       .specMode(project.hash, thread.id, specType, description, prefs.bypass, true, skills)
       .then(() => refresh())
       .catch((err) => {
+        setMessages((prev) => prev.filter((m) => m.seq !== OPTIMISTIC_SEQ));
         setBusy(false);
         fail(err);
       });
@@ -5354,9 +5381,17 @@ export default function App() {
     try {
       setBusy(true);
       const prefs = resolvePrefs(project.hash, thread.id);
+      // Echo the stored label now: the stepper and the Propose marker move
+      // with the click, not once the agent's session is up.
+      armProposeHandoff();
+      setMessages((prev) => [
+        ...prev,
+        { seq: OPTIMISTIC_SEQ, ts: new Date().toISOString(), role: "user", mode: "spec", content: "grill-propose" },
+      ]);
       await api.propose(project.hash, thread.id, prefs.bypass);
       await refresh();
     } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.seq !== OPTIMISTIC_SEQ));
       setBusy(false);
       fail(err);
     }
