@@ -300,6 +300,17 @@ describe("ToolBlock pending-approval UI (tool-approval-prompt)", () => {
     expect(screen.getByTestId("tool-status-running")).toBeDefined();
   });
 
+  it("renders a prompt for a request whose tool call was never announced (e.g. a subagent's)", () => {
+    const waitCall: Item = { kind: "toolCall", id: "wait-1", name: "wait", command: "" };
+    const orphan: Item = { ...permissionRequestItem, toolCallId: "subagent-call" };
+    renderWithMantine(<EventList items={[waitCall, orphan]} executor={null} />);
+    expect(screen.getByTestId("permission-prompt")).toBeDefined();
+    expect(screen.getByTestId("tool-block-command")).toHaveTextContent("cargo build");
+    expect(screen.getByTestId("activity-summary")).toHaveTextContent("Permission needed");
+    fireEvent.click(screen.getByTestId("permission-deny"));
+    expect(screen.queryByTestId("permission-prompt")).toBeNull();
+  });
+
   it("a tool call with no matching permissionRequest renders its ordinary status, not a prompt", () => {
     renderWithMantine(
       <EventList items={[toolCallItem]} executor={null} />

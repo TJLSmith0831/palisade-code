@@ -510,12 +510,16 @@ function ActivityGroup({
   results,
   liveOutput,
   pending,
+  orphans,
   onAnswer,
 }: {
   items: ActivityEvent[];
   results: Map<string, Extract<ExecutorEvent, { kind: "toolResult" }>>;
   liveOutput: Map<string, string>;
   pending: Map<string, Extract<ExecutorEvent, { kind: "permissionRequest" }>>;
+  /** Ids of pending requests whose tool call is not in the transcript, which
+   *  therefore get a block of their own. */
+  orphans: Set<string>;
   onAnswer: (requestId: string, decision: "allow" | "deny" | "allow_session") => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -524,7 +528,7 @@ function ActivityGroup({
   );
   const edits = actions.filter((item) => item.kind === "fileEdit").length;
   const needsPermission = items.some(
-    (item) => item.kind === "toolCall" && pending.has(item.id)
+    (item) => (item.kind === "toolCall" && pending.has(item.id)) || (item.kind === "permissionRequest" && orphans.has(item.id))
   );
   const isRunning = items.some(
     (item) => item.kind === "toolCall" && !results.has(item.id) && !pending.has(item.id)
@@ -569,9 +573,22 @@ function ActivityGroup({
                 return <FileEditBlock key={`${item.id}-${index}`} event={item} />;
               case "reasoning":
                 return <ReasoningBlock key={index} event={item} />;
+              case "permissionRequest":
+                return orphans.has(item.id) ? (
+                  <ToolBlock
+                    key={`${item.id}-${index}`}
+                    event={{
+                      kind: "toolCall",
+                      id: item.toolCallId,
+                      name: item.toolKind,
+                      command: item.command ?? item.paths.join("\n"),
+                    }}
+                    pending={item}
+                    onAnswer={onAnswer}
+                  />
+                ) : null;
               case "toolOutputDelta":
               case "toolResult":
-              case "permissionRequest":
                 return null;
             }
           })}
@@ -681,6 +698,14 @@ export const EventList = memo(function EventList({
     }
     return map;
   }, [items, answered]);
+  // A request for a tool call the transcript never announced (e.g. a Codex
+  // subagent's approval surfaced through its parent) has no block to draw on.
+  const orphans = useMemo(() => {
+    const announced = new Set(items.flatMap((item) => (item.kind === "toolCall" ? [item.id] : [])));
+    return new Set(
+      [...pending.values()].filter((req) => !announced.has(req.toolCallId)).map((req) => req.id)
+    );
+  }, [items, pending]);
   const onAnswer = useCallback(
     (requestId: string, decision: "allow" | "deny" | "allow_session") => {
       setAnswered((prev) => new Set(prev).add(requestId));
@@ -701,6 +726,7 @@ export const EventList = memo(function EventList({
               results={results}
               liveOutput={liveOutput}
               pending={pending}
+              orphans={orphans}
               onAnswer={onAnswer}
             />
           );
