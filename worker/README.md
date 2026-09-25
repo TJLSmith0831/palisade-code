@@ -1,7 +1,7 @@
 # palisade-updates
 
-Serves updates, the model, and tester feedback for the private `palisade-code`
-repo. The app holds no credentials; this Worker does.
+Serves updates, the model, and tester feedback for the `palisade-code` app.
+The app holds no credentials; this Worker does.
 
 ## One-time setup
 
