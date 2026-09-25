@@ -67,6 +67,8 @@ export type Message = {
   attachments?: string[];
   /** Skills picked into the tray for a user turn, apart from `content`. */
   skills?: string[];
+  /** On the turn that started exploring: the spec type it framed. */
+  explores?: string | null;
 };
 
 /** Open an independent native window, initialized to this project. */

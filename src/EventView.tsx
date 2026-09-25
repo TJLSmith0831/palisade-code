@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Alert, Badge, Box, Button, Code, Group, Paper, Stack } from "@mantine/core";
 import MDEditor from "@uiw/react-md-editor";
 import {
@@ -15,6 +15,7 @@ import type { AgentLogin, ExecutorEvent, Message, Preflight } from "./api";
 import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
+import { ExploreHandoff } from "./BuildLaunch";
 import { isAuthError } from "./errors";
 
 /** The "Code Change Diff" tab shows only applied patches; "Console Chat" shows everything. */
@@ -26,7 +27,7 @@ export function filterForTab(items: Item[], tab: "chat" | "diff"): Item[] {
 
 /** One thing the chat pane can draw: a plain turn, or a structured event. */
 export type Item =
-  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; sessionId?: string | null; failureClass?: Message["failureClass"]; attachments?: string[]; skills?: string[] }
+  | { kind: "plain"; role: Message["role"]; mode: string; text: string; seq?: number; sessionId?: string | null; failureClass?: Message["failureClass"]; attachments?: string[]; skills?: string[]; explores?: string | null }
   /** A zero-height marker at the first turn of a session, so a chain node can
    *  scroll the transcript to what it actually did. Lives on `Item` and not on
    *  `ExecutorEvent`, which D13 caps at nine variants. */
@@ -140,6 +141,7 @@ function itemFromMessage(message: Message): Item {
       failureClass: message.failureClass,
       attachments: message.attachments,
       skills: message.skills,
+      explores: message.explores,
     };
   })(message);
 }
@@ -850,14 +852,23 @@ export const EventList = memo(function EventList({
                 <AssistantResponse key={index} text={item.text} />
               );
             }
+            // The turn that started exploring is the user's own words, so it
+            // keeps its bubble; the stage marker sits above it.
             return (
-              <div key={index} className={`message ${item.role}`}>
-                {item.role === "user" && renderUserMessage ? (
-                  renderUserMessage(item)
-                ) : (
-                  <MDEditor.Markdown source={item.text} className="content" />
+              <Fragment key={index}>
+                {item.role === "user" && item.explores != null && (
+                  <div className="message user">
+                    <ExploreHandoff target={item.explores} />
+                  </div>
                 )}
-              </div>
+                <div className={`message ${item.role}`}>
+                  {item.role === "user" && renderUserMessage ? (
+                    renderUserMessage(item)
+                  ) : (
+                    <MDEditor.Markdown source={item.text} className="content" />
+                  )}
+                </div>
+              </Fragment>
             );
           case "text":
             return (

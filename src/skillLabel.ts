@@ -19,3 +19,8 @@ export function displaySkillCommand(text: string): string {
   const target = buildTarget(text);
   return target === null ? text : target ? `Build **${target}**` : "Build the proposal";
 }
+
+/** `grill-propose` is the literal command a Propose turn stores. */
+export function isProposeCommand(text: string): boolean {
+  return COMMAND.exec(text)?.[1] === "propose";
+}
