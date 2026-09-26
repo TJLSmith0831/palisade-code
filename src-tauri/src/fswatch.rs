@@ -85,20 +85,8 @@ impl FsWatcher {
         let handler_writes = Arc::clone(&self_writes);
         let handler = move |result: DebounceEventResult| match result {
             Ok(events) => {
-                let mut changed: Vec<String> = Vec::new();
-                for event in events {
-                    for path in &event.paths {
-                        let Some(relative) = relative_if_interesting(&handler_root, path) else {
-                            continue;
-                        };
-                        if was_self_write(&handler_writes, path) {
-                            continue;
-                        }
-                        if !changed.contains(&relative) {
-                            changed.push(relative);
-                        }
-                    }
-                }
+                let paths = events.iter().flat_map(|event| event.paths.iter());
+                let changed = changed_paths(&handler_root, &handler_writes, paths);
                 if !changed.is_empty() {
                     on_change(changed);
                 }
@@ -165,6 +153,35 @@ fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
     Some(relative.to_string_lossy().to_string())
 }
 
+/// The project-relative paths in one debounced batch that the UI should hear
+/// about. One save can arrive as several events for the same path (FSEvents
+/// splits its flags), so a path matched as our own write is suppressed for the
+/// rest of the batch rather than only for its first event.
+fn changed_paths<'a>(
+    root: &Path,
+    writes: &SelfWrites,
+    paths: impl Iterator<Item = &'a PathBuf>,
+) -> Vec<String> {
+    let mut changed: Vec<String> = Vec::new();
+    let mut ours: Vec<&Path> = Vec::new();
+    for path in paths {
+        let Some(relative) = relative_if_interesting(root, path) else {
+            continue;
+        };
+        if ours.contains(&path.as_path()) {
+            continue;
+        }
+        if was_self_write(writes, path) {
+            ours.push(path);
+            continue;
+        }
+        if !changed.contains(&relative) {
+            changed.push(relative);
+        }
+    }
+    changed
+}
+
 /// Whether `path` was written by Palisade within the suppression window. The
 /// entry is consumed on match so a genuine external write to the same path a
 /// moment later still reports.
@@ -209,6 +226,12 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(5)).ok()
     }
 
+    /// Discards batches until none has arrived for longer than a debounce
+    /// window, so a test starts from a watcher with nothing in flight.
+    fn drain_until_quiet(rx: &mpsc::Receiver<Vec<String>>) {
+        while rx.recv_timeout(DEBOUNCE * 2).is_ok() {}
+    }
+
     fn watcher_on(root: &Path) -> (FsWatcher, mpsc::Receiver<Vec<String>>) {
         let (tx, rx) = mpsc::channel();
         let watcher = FsWatcher::spawn(root.to_path_buf(), move |paths| { let _ = tx.send(paths); }, |_| {});
@@ -236,6 +259,11 @@ mod tests {
         let file = dir.path().join("notes.txt");
         std::fs::write(&file, "before").unwrap();
         let (watcher, rx) = watcher_on(dir.path());
+        // The setup write above is a genuine external change, and on a loaded
+        // runner FSEvents can deliver it after the watch arms. Let it land
+        // first, or it consumes the self-write entry and the save below
+        // reports (CI run 36217787132).
+        drain_until_quiet(&rx);
 
         watcher.note_self_write(&file);
         std::fs::write(&file, "after").unwrap();
@@ -281,6 +309,22 @@ mod tests {
             .recv_timeout(Duration::from_secs(30))
             .expect("a second, external write should report");
         assert!(changed.contains(&"notes.txt".to_string()), "got {changed:?}");
+    }
+
+    #[test]
+    fn one_save_split_into_several_events_is_suppressed_whole() {
+        // Deterministic seam for the batch filter: FSEvents may report one
+        // save as a create and a modify for the same path in one batch.
+        let root = PathBuf::from("/p");
+        let file = root.join("notes.txt");
+        let writes: SelfWrites = Arc::new(Mutex::new(HashMap::new()));
+        writes.lock_or_recover().insert(file.clone(), Instant::now());
+
+        let batch = [file.clone(), file.clone(), root.join("other.txt")];
+        assert_eq!(changed_paths(&root, &writes, batch.iter()), vec!["other.txt".to_string()]);
+
+        // Still one-shot across batches: the next write to it is external.
+        assert_eq!(changed_paths(&root, &writes, [file].iter()), vec!["notes.txt".to_string()]);
     }
 
     #[test]
