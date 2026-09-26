@@ -171,7 +171,7 @@ jobs:
           codesign --verify --deep --strict "$app"
           # A universal app is only universal if both the shell and the
           # sidecar carry both slices.
-          lipo -info "$app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          lipo -info "$app/Contents/MacOS/palisade-code" | grep -q 'x86_64 arm64\|arm64 x86_64'
           lipo -info "$app/Contents/MacOS/llama-server" | grep -q 'x86_64 arm64\|arm64 x86_64'
           mkdir -p release-assets
           cp "$updater" "$updater.sig" release-assets/
@@ -202,7 +202,7 @@ jobs:
           trap 'hdiutil detach "$mountpoint" -quiet || true; rmdir "$mountpoint" || true' EXIT
           codesign --verify --deep --strict "$mountpoint/Palisade.app"
           spctl -a -vvv -t install "$mountpoint/Palisade.app"
-          lipo -info "$mountpoint/Palisade.app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          lipo -info "$mountpoint/Palisade.app/Contents/MacOS/palisade-code" | grep -q 'x86_64 arm64\|arm64 x86_64'
 
       - name: Publish the tester prerelease
         env:

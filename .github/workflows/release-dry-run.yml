@@ -72,7 +72,7 @@ jobs:
           updater="$(find "$bundle/macos" -type f -name '*.app.tar.gz' -print -quit)"
           [[ -n "$updater" && -f "$updater.sig" ]] || { echo "Missing updater archive or signature" >&2; exit 1; }
           codesign --verify --deep --strict "$app"
-          lipo -info "$app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          lipo -info "$app/Contents/MacOS/palisade-code" | grep -q 'x86_64 arm64\|arm64 x86_64'
           lipo -info "$app/Contents/MacOS/llama-server" | grep -q 'x86_64 arm64\|arm64 x86_64'
 
       - name: Build the installer DMG (ad-hoc signed)
@@ -88,7 +88,7 @@ jobs:
           hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mountpoint"
           trap 'hdiutil detach "$mountpoint" -quiet || true' EXIT
           codesign --verify --deep --strict "$mountpoint/Palisade.app"
-          lipo -info "$mountpoint/Palisade.app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          lipo -info "$mountpoint/Palisade.app/Contents/MacOS/palisade-code" | grep -q 'x86_64 arm64\|arm64 x86_64'
           ls "$mountpoint/Palisade.app/Contents/Resources/resources/models/"
 
       - name: Worker tests
