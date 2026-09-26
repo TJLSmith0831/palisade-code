@@ -127,16 +127,21 @@ jobs:
           git -C vendor/llama.cpp fetch --depth=1 origin "$LLAMA_CPP_REVISION"
           git -C vendor/llama.cpp checkout --detach FETCH_HEAD
 
+          # Static and TLS-free: only the llama-server binary ships, so shared libs
+          # would be missing at runtime, and the runner's Homebrew OpenSSL is
+          # arm64-only (breaks the x86_64 link). The sidecar serves localhost.
           cmake -S vendor/llama.cpp -B vendor/llama.cpp/build-arm64 \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DGGML_METAL=ON -DLLAMA_BUILD_SERVER=ON
+            -DGGML_METAL=ON -DLLAMA_BUILD_SERVER=ON \
+            -DBUILD_SHARED_LIBS=OFF -DLLAMA_OPENSSL=OFF
           cmake --build vendor/llama.cpp/build-arm64 --target llama-server --parallel 3
 
           cmake -S vendor/llama.cpp -B vendor/llama.cpp/build-x86_64 \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DGGML_METAL=OFF -DGGML_NATIVE=OFF \
             -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
-            -DLLAMA_BUILD_SERVER=ON
+            -DLLAMA_BUILD_SERVER=ON \
+            -DBUILD_SHARED_LIBS=OFF -DLLAMA_OPENSSL=OFF
           cmake --build vendor/llama.cpp/build-x86_64 --target llama-server --parallel 3
 
           install -m 755 vendor/llama.cpp/build-arm64/bin/llama-server \
