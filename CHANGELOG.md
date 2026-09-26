@@ -5,6 +5,8 @@ All notable changes to Palisade Code are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-25
+
 ### Added
 
 - Permission prompts now surface for tool calls an agent makes without announcing them first.
@@ -23,7 +25,8 @@ All notable changes to Palisade Code are documented here. The format follows
 - Text selection in the feedback modal no longer gets hijacked by the titlebar drag handler.
 - Plain Spec turns now carry the grill skill; runs started from Fleet open their chat.
 
-[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/TJLSmith0831/palisade-code/compare/v0.3.0...v0.4.0
 
 ## [0.3.0] - 2026-09-22
 
