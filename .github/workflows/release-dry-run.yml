@@ -1,0 +1,95 @@
+name: Release dry run
+
+# Runs the tester release's build steps on any PR that could break them, with
+# throwaway credentials in place of the real ones. Signing with the Developer
+# ID, notarization, the private model download and publishing still only run
+# on a real tag (tester-release.yml), behind the testers environment.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/tester-release.yml
+      - .github/workflows/release-dry-run.yml
+      - scripts/build-sidecar.sh
+      - src-tauri/tauri*.conf.json
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/entitlements.plist
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the bundled llama.cpp sidecar (universal)
+        run: scripts/build-sidecar.sh
+
+      # Stands in for the private model: the installer build only needs the
+      # resource directory to hold a file.
+      - name: Placeholder installer model
+        run: mkdir -p src-tauri/resources/models && echo placeholder > src-tauri/resources/models/placeholder.gguf
+
+      # Ad-hoc signing ("-") and a throwaway updater key exercise the same
+      # bundler paths as the real identity and key.
+      - name: Build updater artifacts (ad-hoc signed)
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          pnpm tauri signer generate --ci -p "" -w "$RUNNER_TEMP/dry-run.key"
+          export TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/dry-run.key")"
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+          pnpm tauri build --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
+          bundle="src-tauri/target/universal-apple-darwin/release/bundle"
+          app="$bundle/macos/Palisade.app"
+          updater="$(find "$bundle/macos" -type f -name '*.app.tar.gz' -print -quit)"
+          [[ -n "$updater" && -f "$updater.sig" ]] || { echo "Missing updater archive or signature" >&2; exit 1; }
+          codesign --verify --deep --strict "$app"
+          lipo -info "$app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          lipo -info "$app/Contents/MacOS/llama-server" | grep -q 'x86_64 arm64\|arm64 x86_64'
+
+      - name: Build the installer DMG (ad-hoc signed)
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          pnpm tauri build --target universal-apple-darwin --config src-tauri/tauri.installer-release.conf.json
+          dmg="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          [[ -n "$dmg" ]] || { echo "Missing installer DMG" >&2; exit 1; }
+          mountpoint="$RUNNER_TEMP/palisade-dmg"
+          mkdir "$mountpoint"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint" -quiet || true' EXIT
+          codesign --verify --deep --strict "$mountpoint/Palisade.app"
+          lipo -info "$mountpoint/Palisade.app/Contents/MacOS/Palisade" | grep -q 'x86_64 arm64\|arm64 x86_64'
+          ls "$mountpoint/Palisade.app/Contents/Resources/resources/models/"
+
+      - name: Worker tests
+        run: node worker/test.mjs
