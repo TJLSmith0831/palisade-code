@@ -119,7 +119,7 @@ jobs:
       # and the bundler resolves the universal one.
       - name: Build the bundled llama.cpp sidecar (universal)
         env:
-          LLAMA_CPP_REVISION: 308f61c
+          LLAMA_CPP_REVISION: 308f61c31f083251ce8150f10b9ef97679b500b5 # a shallow fetch needs the full SHA
         run: |
           set -euo pipefail
           git init vendor/llama.cpp
