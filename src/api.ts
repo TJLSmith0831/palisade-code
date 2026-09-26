@@ -177,10 +177,24 @@ export type AgentStatus = {
   cmd: string;
 };
 
+/** A registry agent that could be added with one click: its runtime
+ *  (npx/uvx) is on PATH but the package isn't cached and it isn't enabled
+ *  yet. Not counted as installed — `enableAgent` moves it into `agents`. */
+export type AddableAgent = {
+  id: string;
+  name: string;
+  description: string | null;
+  version: string | null;
+};
+
 export type Preflight = {
-  /** One entry per discovered ACP agent available on PATH. */
+  /** One entry per registry agent that's usable now: ready, or explicitly
+   *  enabled via `enableAgent`. */
   agents: AgentStatus[];
-  /** The id of the first available agent. */
+  /** Registry agents that could be added with one click (see `AddableAgent`). */
+  addable: AddableAgent[];
+  /** The id of the default agent: most recently enabled, else the first
+   *  ready agent, else the first available one. */
   selected: string | null;
   openspec: boolean;
   ready: boolean;
@@ -268,6 +282,13 @@ export const agentCommands = (threadId: string) =>
 
 export const preflight = (refresh = false) =>
   invoke<Preflight>("preflight", { refresh });
+
+/** Enables an addable registry agent (moves it from `Preflight.addable` into
+ *  `agents` and makes it the new default) and returns the recomputed
+ *  preflight. The agent's package is not fetched here — only on its first
+ *  real launch. */
+export const enableAgent = (agentId: string) =>
+  invoke<Preflight>("enable_agent", { agentId });
 
 /** One plan-usage window an agent reports. `usedPercent` is 0–100. */
 export type AgentUsageWindow = {
@@ -607,6 +628,8 @@ export type FleetAttention =
   | "permission"
   /** A playbook run is suspended at a human approval gate. */
   | "gate"
+  /** The agent needs the user to sign in before any turn can proceed. */
+  | "auth_required"
   | "verify_failed"
   | "merge_conflict"
   | "crashed";

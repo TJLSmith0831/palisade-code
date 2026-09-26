@@ -239,7 +239,6 @@ pub async fn debug_start(
         let session_id = id.clone();
         let session = DebugSession::start(
             id.clone(),
-            project_hash.clone(),
             root.clone(),
             language.clone(),
             &adapter,

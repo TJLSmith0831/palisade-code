@@ -29,6 +29,12 @@ completion disabled; nothing else depends on them. Tests never execute the
 sidecar, but `tauri-build` insists the declared file exists, so an empty
 `src-tauri/llama-server-aarch64-apple-darwin` is enough to compile.
 
+A signed, notarized release installer is not something you can build here.
+The release workflow pulls the completion model from a private Hugging Face
+repo and needs Apple signing/notarization and updater-signing secrets that
+only the maintainer holds (see [docs/tester-releases.md](docs/tester-releases.md)).
+Build and run dev builds with `pnpm start`; the maintainer cuts releases.
+
 ## The merge gate
 
 Run these before opening a PR and say in the PR which ones you ran:

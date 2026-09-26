@@ -2233,23 +2233,8 @@ input[type="checkbox"] {
   font-size: 12px;
 }
 
-.ds-crash-banner-retry {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  border: 1px solid color-mix(in oklab, var(--danger), transparent 45%);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--danger);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.ds-crash-banner-retry:hover {
-  background: color-mix(in oklab, var(--danger), transparent 85%);
+.ds-crash-banner-detail-spoiler {
+  margin-top: 6px;
 }
 
 /* --- executor handoff --------------------------------------------------- */

@@ -13,6 +13,7 @@ const flight = {
     { id: "claude", name: "Claude Agent" },
     { id: "devin", name: "Devin" },
   ],
+  addable: [],
   selected: "claude",
   openspec: true,
   grillApply: true,
@@ -52,10 +53,10 @@ const base = {
 // action; the composer (with its executor/model pickers) is secondary and
 // collapsed until asked for.
 describe("OnboardingScreen project-first layout", () => {
-  it("leads with New Project as the primary tile", () => {
+  it("leads with Open Project as the primary tile", () => {
     render(<OnboardingScreen {...base} />);
     const tile = screen.getByTestId("add-project");
-    expect(tile).toHaveTextContent("New Project");
+    expect(tile).toHaveTextContent("Open Project");
     expect(tile.className).toContain("primary");
   });
 
@@ -226,6 +227,57 @@ describe("OnboardingScreen detection chip dropdown", () => {
     onProbeAgent.mockClear();
     fireEvent.click(await screen.findByTestId("onboarding-reauth-claude"));
     expect(onProbeAgent).toHaveBeenCalledWith("claude");
+  });
+});
+
+// Registry agents whose runtime is on PATH but whose package isn't cached
+// (and that the user hasn't enabled) are "addable", not "installed" — this
+// is what turns that distinction into a one-click action.
+describe("OnboardingScreen add-agent flow", () => {
+  const addable = [
+    { id: "codex-acp", name: "Codex", description: "OpenAI's Codex, via the official ACP adapter.", version: null },
+  ];
+
+  it("lists addable agents in the detected-agent dropdown and enables one on click", async () => {
+    const onAddAgent = vi.fn();
+    render(
+      <OnboardingScreen
+        {...base}
+        flight={{ ...flight, addable } as unknown as Preflight}
+        onAddAgent={onAddAgent}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+    const row = await screen.findByTestId("onboarding-add-agent-opt-codex-acp");
+    expect(row).toHaveTextContent("Codex");
+    expect(row).toHaveTextContent(/OpenAI's Codex/);
+    fireEvent.click(row);
+    expect(onAddAgent).toHaveBeenCalledWith("codex-acp");
+  });
+
+  it("does not show an add-agent section when nothing is addable", async () => {
+    const onAddAgent = vi.fn();
+    render(<OnboardingScreen {...base} onAddAgent={onAddAgent} />);
+    fireEvent.click(screen.getByTestId("onboarding-status"));
+    await screen.findByTestId("onboarding-status-menu");
+    expect(screen.queryByText(/add an agent/i)).not.toBeInTheDocument();
+  });
+
+  it("prompts 'Choose your coding agent' instead of the dead-end message when nothing is ready yet but something is addable", async () => {
+    const onAddAgent = vi.fn();
+    render(
+      <OnboardingScreen
+        {...base}
+        flight={{ ...flight, agents: [], selected: null, addable } as unknown as Preflight}
+        onAddAgent={onAddAgent}
+      />,
+    );
+    const status = screen.getByTestId("onboarding-status");
+    expect(status).toHaveTextContent(/Choose your coding agent/i);
+    fireEvent.click(status);
+    const row = await screen.findByTestId("onboarding-add-agent-opt-codex-acp");
+    fireEvent.click(row);
+    expect(onAddAgent).toHaveBeenCalledWith("codex-acp");
   });
 });
 

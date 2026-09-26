@@ -70,11 +70,6 @@ pub fn staged_diff(_bin: &Path, root: &Path) -> Res<String> {
     git_repo::shared_git_repo().staged_diff(root)
 }
 
-/// Batched read query: status + working diff + staged diff together.
-pub fn snapshot(_bin: &Path, root: &Path) -> Res<git_repo::Snapshot> {
-    git_repo::shared_git_repo().snapshot(root)
-}
-
 /// `patch` is a unified diff for one hunk (or a whole single-hunk file diff)
 /// — the frontend reconstructs it from a `StructuredPatch` via jsdiff's
 /// `formatPatch` before calling this.

@@ -849,6 +849,22 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?)
 }
 
+/// Adds a registry agent (from `Preflight.addable`) to the user's enabled
+/// set and makes it the new default, then returns a freshly recomputed
+/// preflight so the caller sees it move into `agents` immediately. Its
+/// package is not fetched here — that happens on the agent's first real
+/// launch, same as any npx/uvx invocation.
+#[tauri::command]
+async fn enable_agent(app: tauri::AppHandle, agent_id: String) -> Res<Preflight> {
+    tokio::task::spawn_blocking(move || {
+        acp_registry::enable_agent(&palisade_home(), &agent_id)?;
+        let harness: tauri::State<'_, Harness> = app.state();
+        Ok(preflight_for_harness(&harness, true))
+    })
+    .await
+    .map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// Plan usage per installed agent. Blocking work (Keychain read, HTTP,
 /// rollout-log scan) runs off the UI thread; every provider fails soft.
 /// `force` bypasses the 60s per-agent cache — the manual refresh button and
@@ -1312,7 +1328,6 @@ fn start_session_as(
         mode: mode.to_string(),
         bypass,
         model,
-        palisade_home: home.clone(),
         extra_env,
     };
 
@@ -1640,7 +1655,6 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
             mode: "spec".into(),
             bypass: false,
             model: None,
-            palisade_home: palisade_home(),
             extra_env: vec![],
         };
         let asked = format!(
@@ -2662,7 +2676,6 @@ async fn draft_commit_message(
             mode: "spec".into(),
             bypass: false,
             model,
-            palisade_home: palisade_home(),
             extra_env: vec![],
         };
         acp_client::agent_oneshot(
@@ -3159,6 +3172,7 @@ async fn fleet_overview(app: tauri::AppHandle) -> Res<Vec<fleet::FleetRow>> {
                         s.outcome.as_deref() == Some("crashed")
                             && thread.acknowledged_crash_session_id.as_deref() != Some(&s.id)
                     }),
+                    auth_blocked: thread.auth_blocked.is_some(),
                 });
                 rows.push(fleet::FleetRow {
                     kind: fleet::FleetKind::Thread,
@@ -4750,6 +4764,20 @@ async fn get_completion_settings(app: tauri::AppHandle) -> Res<completion::Compl
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+/// True if `main.rs` was re-invoked to babysit a sidecar rather than run the
+/// real app — see `pidguard::spawn_supervised`. Exposed because `pidguard`
+/// itself is a private module and `main.rs` needs to check this before Tauri
+/// starts anything.
+pub fn pidguard_supervisor_requested() -> bool {
+    pidguard::is_supervisor_invocation()
+}
+
+/// Runs this process as a sidecar supervisor and never returns. Only valid
+/// to call when `pidguard_supervisor_requested()` is true.
+pub fn run_pidguard_supervisor() -> ! {
+    pidguard::run_supervisor()
+}
+
 // ---------------------------------------------------------- spec reference/// `None` when `openspec` isn't installed — "we can't tell", which is a/// Set the thread's spec link by hand — how the user resolves the ambiguity
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -4861,6 +4889,7 @@ pub fn run() {
             append_message,
             read_thread,
             preflight,
+            enable_agent,
             send_message,
             save_attachment,
             read_attachment,
@@ -5500,6 +5529,7 @@ mod tests {
         Preflight {
             selected: agents.first().map(|a| a.id.clone()),
             agents,
+            addable: vec![],
             openspec: true,
             ready: true,
             registry_reachable: true,

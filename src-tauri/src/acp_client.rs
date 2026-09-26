@@ -326,6 +326,7 @@ pub(crate) fn logins_from(
 /// checked so this works for any compliant agent rather than one adapter's
 /// wording; the prose check is a fallback for agents that only say it in text
 /// (#19), not the contract.
+#[cfg(test)]
 pub(crate) fn is_auth_required(err: &acp::Error) -> bool {
     classify_acp_error(err) == FailureClass::AuthRequired
 }
@@ -474,16 +475,10 @@ pub struct AcpSession {
     pub agent_id: String,
     /// The agent's display name from the registry.
     pub agent_name: String,
-    /// The resolved binary path used to invoke the agent.
-    pub bin: PathBuf,
-    /// The command and args to invoke the agent in ACP mode.
-    pub cmd: String,
-    pub args: Vec<String>,
     pub project_hash: String,
     pub thread_id: String,
     pub project_root: PathBuf,
     pub mode: String,
-    pub palisade_home: PathBuf,
     /// The ACP session id, assigned by the agent during session/new.
     pub acp_session_id: Option<String>,
     /// What the agent reported about its model selector at session start.
@@ -561,7 +556,6 @@ pub struct AcpSpawn {
     /// Model value id to select right after session/new, if the thread has
     /// chosen one and the agent offers it.
     pub model: Option<String>,
-    pub palisade_home: PathBuf,
     pub extra_env: Vec<(String, String)>,
 }
 
@@ -1798,7 +1792,6 @@ pub fn probe_models(
         mode: "spec".into(),
         bypass: false,
         model: None,
-        palisade_home: PathBuf::new(),
         extra_env: vec![],
     };
     let agent = agent_config(&spawn);
@@ -1835,7 +1828,6 @@ pub fn authenticate_agent(
         mode: "spec".into(),
         bypass: false,
         model: None,
-        palisade_home: PathBuf::new(),
         extra_env: vec![],
     };
     let agent = agent_config(&spawn);
@@ -1932,14 +1924,10 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<St
 struct SessionIdentity {
     agent_id: String,
     agent_name: String,
-    bin: PathBuf,
-    cmd: String,
-    args: Vec<String>,
     project_hash: String,
     thread_id: String,
     project_root: PathBuf,
     mode: String,
-    palisade_home: PathBuf,
 }
 
 impl SessionIdentity {
@@ -1947,14 +1935,10 @@ impl SessionIdentity {
         Self {
             agent_id: spawn.agent_id.clone(),
             agent_name: spawn.agent_name.clone(),
-            bin: spawn.bin.clone(),
-            cmd: spawn.cmd.clone(),
-            args: spawn.args.clone(),
             project_hash: spawn.project_hash.clone(),
             thread_id: spawn.thread_id.clone(),
             project_root: spawn.project_root.clone(),
             mode: spawn.mode.clone(),
-            palisade_home: spawn.palisade_home.clone(),
         }
     }
 
@@ -1970,14 +1954,10 @@ impl SessionIdentity {
             id,
             agent_id: self.agent_id,
             agent_name: self.agent_name,
-            bin: self.bin,
-            cmd: self.cmd,
-            args: self.args,
             project_hash: self.project_hash,
             thread_id: self.thread_id,
             project_root: self.project_root,
             mode: self.mode,
-            palisade_home: self.palisade_home,
             acp_session_id: None,
             models,
             busy,
@@ -2033,14 +2013,10 @@ pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::Unboun
             id: "test-id".into(),
             agent_id: "devin".into(),
             agent_name: "Devin".into(),
-            bin: PathBuf::from("/usr/bin/devin"),
-            cmd: "devin".into(),
-            args: vec!["acp".into()],
             project_hash: "abc123".into(),
             thread_id: "thread-1".into(),
             project_root: PathBuf::from("/tmp/proj"),
             mode: "spec".into(),
-            palisade_home: PathBuf::from("/tmp/palisade"),
             acp_session_id: None,
             models: ModelState::default(),
             busy: Arc::new(AtomicBool::new(busy)),
@@ -3177,7 +3153,6 @@ mod tests {
             mode: "spec".into(),
             bypass: false,
             model,
-            palisade_home: PathBuf::from("/tmp/palisade"),
             extra_env: vec![],
         }
     }

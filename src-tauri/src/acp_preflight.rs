@@ -30,9 +30,17 @@ pub struct AgentStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preflight {
-    /// One entry per discovered ACP agent that is available on PATH.
+    /// One entry per registry agent that's usable now: ready, or explicitly
+    /// enabled by the user (`enable_agent`).
     pub agents: Vec<AgentStatus>,
-    /// The id of the first available agent (or first in the list).
+    /// Registry agents that could be added with one click: their runtime
+    /// (npx/uvx) is on PATH but the package isn't cached and the user hasn't
+    /// enabled them yet. Not counted in `agents`/`ready` — a client only
+    /// treats a package-manager-distributed agent as installed once the user
+    /// asks for it by name (see `acp_registry::resolve_addable`).
+    pub addable: Vec<acp_registry::AddableAgent>,
+    /// The id of the default agent to use (most recently enabled, else the
+    /// first ready agent, else the first available one).
     pub selected: Option<String>,
     pub openspec: bool,
     /// True when at least one agent is available.
@@ -56,9 +64,11 @@ impl Preflight {
 pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<PathBuf>) -> Preflight {
     let registry_agents = acp_registry::discover_agents(palisade_home);
     let home = crate::executor::home();
-    let available = acp_registry::resolve_available(&registry_agents, find_on_path, &|pkg| {
-        acp_registry::npx_package_cached(&home, pkg)
-    });
+    let package_cached = |pkg: &str| acp_registry::npx_package_cached(&home, pkg);
+    let enabled = acp_registry::read_enabled(palisade_home);
+    let enabled_set = enabled.as_set();
+    let available = acp_registry::resolve_available(&registry_agents, find_on_path, &package_cached, &enabled_set);
+    let addable = acp_registry::resolve_addable(&registry_agents, find_on_path, &package_cached, &enabled_set);
 
     let agents: Vec<AgentStatus> = available
         .iter()
@@ -72,7 +82,9 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
         })
         .collect();
 
-    let selected = agents.first().map(|a| a.id.clone());
+    // Most recently enabled agent wins, else the first ready agent, else the
+    // first available one — see `pick_default`. No agent name is special-cased.
+    let selected = acp_registry::pick_default(&available, enabled.last_enabled.as_deref());
     let is_empty = agents.is_empty();
 
     let openspec = crate::openspec_cache::openspec_command(find_on_path).is_some();
@@ -86,9 +98,16 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
             "The ACP registry could not be reached and no cached copy exists — chat-only mode, /go unavailable until it is."
                 .into(),
         );
-    } else if is_empty {
+    } else if is_empty && addable.is_empty() {
         warnings.push(
             "No ACP agents found on PATH — chat-only mode, /go unavailable.".into(),
+        );
+    } else if is_empty {
+        // At least one agent could be added (its runtime is on PATH, just
+        // not enabled yet) — a "choose your agent" prompt, not a chat-only
+        // warning; the frontend uses `addable` for that instead of prose.
+        warnings.push(
+            "No agent enabled yet — pick one from the agents you can add to start using /go.".into(),
         );
     }
     if !openspec {
@@ -100,6 +119,7 @@ pub fn preflight(palisade_home: &Path, find_on_path: &dyn Fn(&str) -> Option<Pat
     Preflight {
         selected,
         agents,
+        addable,
         openspec,
         ready: !is_empty && openspec,
         registry_reachable: !registry_agents.is_empty(),
@@ -157,15 +177,6 @@ pub fn resolve_executor(
 mod tests {
     use super::*;
 
-    fn mock_find<'a>(installed: &'a [&str]) -> impl Fn(&str) -> Option<PathBuf> + 'a {
-        move |cmd: &str| {
-            installed
-                .iter()
-                .find(|&&name| name == cmd)
-                .map(|_| PathBuf::from(format!("/usr/bin/{cmd}")))
-        }
-    }
-
     fn test_flight(agent_ids: &[&str]) -> Preflight {
         let agents: Vec<AgentStatus> = agent_ids
             .iter()
@@ -181,6 +192,7 @@ mod tests {
         Preflight {
             selected: agents.first().map(|a| a.id.clone()),
             agents,
+            addable: vec![],
             openspec: true,
             ready: true,
             registry_reachable: true,

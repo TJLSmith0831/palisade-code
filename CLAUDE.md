@@ -2,13 +2,13 @@
 
 Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through a spec-then-build cycle. Sessions are concurrent: a thread can hold more than one, and two threads can run at once. Rust + Tauri 2 backend, React 19 + TS frontend (Vite), pnpm.
 
-## Commands (verified 2026-09-11)
+## Commands (verified 2026-09-25)
 
 - `pnpm install` — frontend deps (standalone repo, not a workspace member)
-- `pnpm test` — all frontend tests (vitest, 83 files / 1,360 tests, ~31s)
+- `pnpm test` — all frontend tests (vitest, 92 files / 1,475 tests, ~65s)
 - `npx vitest run src/__tests__/errors.test.ts` — one frontend test file
 - `npx tsc --noEmit` — typecheck only; `pnpm build` = `tsc && vite build`
-- `cd src-tauri && cargo test` — all Rust tests (807: 806 pass, 1 ignored, ~8s after build)
+- `cd src-tauri && cargo test` — all Rust tests (860: 859 pass, 1 ignored, ~7s after build)
 - `cd src-tauri && cargo test git::` — one Rust module's tests
 - `pnpm start` (= `tauri dev`) — dev window; see run skill below before driving it
 

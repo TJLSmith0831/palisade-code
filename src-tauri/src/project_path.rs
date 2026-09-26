@@ -107,6 +107,7 @@ impl ProjectPath {
         Ok(Self { path: target })
     }
 
+    #[cfg(test)]
     pub fn as_path(&self) -> &Path {
         &self.path
     }
@@ -114,6 +115,7 @@ impl ProjectPath {
     /// Whether this resolved to the project root itself — which `delete_path`
     /// has to refuse, since an empty relative path resolves straight to it and
     /// the delete recurses.
+    #[cfg(test)]
     pub fn is_project_root(&self, root: &Path) -> bool {
         self.path == canonical_root(root)
     }

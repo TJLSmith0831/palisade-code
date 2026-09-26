@@ -174,9 +174,19 @@ pub struct AgentCommand {
 /// ACP session update kinds that we map to ExecutorEvent variants.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpUpdate {
-    /// A text message from the agent.
+    /// A text message from the agent. Unreached by `from_session_update`
+    /// today (only `TextDelta` streams out) — kept for API completeness,
+    /// exercised directly by tests.
+    #[allow(dead_code)]
     Text { text: String },
     /// Reasoning/thinking content from the agent.
+    ///
+    /// Unreached by `from_session_update` today (ACP only streams
+    /// reasoning as `ReasoningDelta`; the complete `Reasoning` event
+    /// is assembled by run_bridge's turn-completion flush, which
+    /// knows the real elapsed time). Kept for API completeness if an
+    /// agent ever sends a complete thought in one shot.
+    #[allow(dead_code)]
     Reasoning { text: String },
     /// A partial text delta (streaming).
     TextDelta { text: String },
@@ -188,9 +198,15 @@ pub enum AcpUpdate {
     ToolResult { id: String, output: String, is_error: bool },
     /// A live fragment of a running tool call's output.
     ToolOutputDelta { id: String, chunk: String },
-    /// The turn completed normally.
+    /// The turn completed normally. Production emits `ExecutorEvent::Done`
+    /// directly (see `run_bridge`) rather than through this variant — kept
+    /// for API completeness, exercised directly by tests.
+    #[allow(dead_code)]
     Done,
-    /// The turn crashed.
+    /// The turn crashed. Production emits `ExecutorEvent::turn_failed`
+    /// directly rather than through this variant — kept for API
+    /// completeness, exercised directly by tests.
+    #[allow(dead_code)]
     Crashed { message: String },
     /// Context usage update (goes to status channel, not ExecutorEvent).
     /// `cost` is the session's real billed figure so far, when the agent

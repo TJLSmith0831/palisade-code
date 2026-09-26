@@ -20,6 +20,8 @@ pub struct RegistryAgent {
     pub name: String,
     #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
     pub distribution: AgentDistribution,
 }
 
@@ -28,6 +30,9 @@ pub struct RegistryAgent {
 /// Registry agents use different distribution types:
 /// - `binary`: platform-specific binaries (Devin, OpenCode, Gemini)
 /// - `npx`: npm packages invoked via npx (Claude ACP adapter, Codex ACP adapter)
+/// - `uvx`: PyPI packages invoked via uvx (the registry's newer package-manager
+///   option; no entry uses it yet, but an untagged enum silently drops any
+///   manifest shape it can't parse, so a future one would just vanish)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AgentDistribution {
@@ -36,6 +41,9 @@ pub enum AgentDistribution {
     },
     Npx {
         npx: NpxDistribution,
+    },
+    Uvx {
+        uvx: UvxDistribution,
     },
 }
 
@@ -64,6 +72,11 @@ pub struct PlatformBinary {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NpxDistribution {
+    pub package: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UvxDistribution {
     pub package: String,
 }
 
@@ -97,6 +110,16 @@ impl AgentDistribution {
                 Some(cmd_basename(&platform_bin.cmd))
             }
             AgentDistribution::Npx { .. } => Some("npx"),
+            AgentDistribution::Uvx { .. } => Some("uvx"),
+        }
+    }
+
+    /// The npm/PyPI package this distribution fetches on launch, if any.
+    fn package(&self) -> Option<&str> {
+        match self {
+            AgentDistribution::Binary { .. } => None,
+            AgentDistribution::Npx { npx } => Some(&npx.package),
+            AgentDistribution::Uvx { uvx } => Some(&uvx.package),
         }
     }
 
@@ -115,6 +138,7 @@ impl AgentDistribution {
             AgentDistribution::Npx { npx } => {
                 ("npx".to_string(), vec!["-y".to_string(), npx.package.clone()])
             }
+            AgentDistribution::Uvx { uvx } => ("uvx".to_string(), vec![uvx.package.clone()]),
         }
     }
 }
@@ -170,7 +194,10 @@ fn platform_key() -> (&'static str, &'static str) {
     (arch, os)
 }
 
-/// A registry agent that was found on this machine's PATH.
+/// A registry agent that is usable right now: either `ready` (a binary
+/// already on PATH, or an npx/uvx package already cached — no fetch needed)
+/// or one the user explicitly enabled (see `EnabledAgents`), which still
+/// needs its package fetched on first launch.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableAgent {
@@ -180,6 +207,22 @@ pub struct AvailableAgent {
     pub cmd: String,
     pub args: Vec<String>,
     pub path: String,
+    /// True when the agent can start with no extra network fetch.
+    pub ready: bool,
+}
+
+/// A registry agent whose runtime (`npx`/`uvx`) is on PATH but whose package
+/// isn't cached yet, and the user hasn't already enabled it. Shown in an
+/// "Add an agent" picker rather than counted as installed — a client
+/// (Zed's ACP registry browser is the model here) only fetches a
+/// package-manager-distributed agent once the user asks for it by name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddableAgent {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
 }
 
 // ------------------------------------------------------------- fetch
@@ -304,25 +347,61 @@ fn fetch_manifest(url: &str) -> Res<RegistryAgent> {
 
 // ------------------------------------------------------------- PATH resolution
 
-/// Check which registry agents are actually installed on this machine.
-///
-/// "Installed" means the agent can start without downloading anything:
-/// binary distributions resolve their bare cmd on PATH; npx distributions
-/// need `npx` on PATH *and* their package already in the local npm caches
-/// (an npx shim that would download on first run is not "on this system").
+/// Whether one registry agent is ready, addable, or unusable, given PATH and
+/// package-cache probes. Pure and free of any per-user enabled-set state, so
+/// `resolve_available`/`resolve_addable` layer that on top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Readiness {
+    /// Launchable with no extra fetch: a binary on PATH, or an npx/uvx
+    /// package already cached.
+    Ready,
+    /// The runtime (`npx`/`uvx`) is on PATH but the package isn't cached —
+    /// launchable, but only after a first-run download.
+    Addable,
+    /// Nothing on PATH that this agent could run with.
+    Unavailable,
+}
+
+fn classify(
+    agent: &RegistryAgent,
+    find_on_path: &dyn Fn(&str) -> Option<PathBuf>,
+    package_cached: &dyn Fn(&str) -> bool,
+) -> Readiness {
+    let Some(path_cmd) = agent.distribution.path_cmd() else {
+        return Readiness::Unavailable;
+    };
+    if find_on_path(path_cmd).is_none() {
+        return Readiness::Unavailable;
+    }
+    match agent.distribution.package() {
+        None => Readiness::Ready,
+        Some(pkg) if package_cached(package_name(pkg)) => Readiness::Ready,
+        Some(_) => Readiness::Addable,
+    }
+}
+
+/// Registry agents usable right now: `Ready` ones (see `classify`), plus any
+/// the user has explicitly enabled (`enabled`) whose runtime is still on
+/// PATH. This is the pool the picker and auto-detect draw from — enabling an
+/// npx/uvx agent moves it here immediately, before its package is actually
+/// fetched, the same way choosing "Install" in another ACP client's registry
+/// browser (Zed's, notably) makes the agent selectable right away and defers
+/// the download to first launch.
 pub fn resolve_available(
     agents: &[RegistryAgent],
     find_on_path: &dyn Fn(&str) -> Option<PathBuf>,
     package_cached: &dyn Fn(&str) -> bool,
+    enabled: &std::collections::HashSet<String>,
 ) -> Vec<AvailableAgent> {
     agents
         .iter()
         .filter_map(|agent| {
-            if let AgentDistribution::Npx { npx } = &agent.distribution {
-                if !package_cached(package_name(&npx.package)) {
-                    return None;
-                }
-            }
+            let readiness = classify(agent, find_on_path, package_cached);
+            let ready = match readiness {
+                Readiness::Ready => true,
+                Readiness::Addable if enabled.contains(&agent.id) => false,
+                Readiness::Addable | Readiness::Unavailable => return None,
+            };
             let path_cmd = agent.distribution.path_cmd()?;
             let path = find_on_path(path_cmd)?;
             let (cmd, args) = agent.distribution.invocation();
@@ -333,9 +412,100 @@ pub fn resolve_available(
                 cmd,
                 args,
                 path: path.to_string_lossy().to_string(),
+                ready,
             })
         })
         .collect()
+}
+
+/// Registry agents that could be added with one click: npx/uvx runtime on
+/// PATH, package not cached yet, and not already enabled (an enabled one
+/// belongs in `resolve_available` instead, not offered again).
+pub fn resolve_addable(
+    agents: &[RegistryAgent],
+    find_on_path: &dyn Fn(&str) -> Option<PathBuf>,
+    package_cached: &dyn Fn(&str) -> bool,
+    enabled: &std::collections::HashSet<String>,
+) -> Vec<AddableAgent> {
+    agents
+        .iter()
+        .filter(|agent| !enabled.contains(&agent.id))
+        .filter(|agent| classify(agent, find_on_path, package_cached) == Readiness::Addable)
+        .map(|agent| AddableAgent {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            description: agent.description.clone(),
+            version: agent.version.clone(),
+        })
+        .collect()
+}
+
+/// Pick the default executor: the most recently enabled agent if it's still
+/// available, else the first `ready` agent in registry order, else the first
+/// available agent at all, else none. No agent name is ever special-cased —
+/// only the generic `ready` signal and the user's own enable action.
+pub fn pick_default(available: &[AvailableAgent], last_enabled: Option<&str>) -> Option<String> {
+    if let Some(id) = last_enabled {
+        if let Some(agent) = available.iter().find(|a| a.id == id) {
+            return Some(agent.id.clone());
+        }
+    }
+    available
+        .iter()
+        .find(|a| a.ready)
+        .or_else(|| available.first())
+        .map(|a| a.id.clone())
+}
+
+// ------------------------------------------------------------- enabled agents
+
+/// User-chosen registry agents that count as available even though their
+/// package isn't cached yet, plus which one was enabled most recently (used
+/// to pick the default executor). Persisted next to the registry cache
+/// itself under `~/.palisade-code/acp-registry/` — there is no pre-existing
+/// global app-settings file to extend; `.project-settings.json` is
+/// per-project and the wrong scope for "which agents has this user added".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnabledAgents {
+    pub ids: Vec<String>,
+    pub last_enabled: Option<String>,
+}
+
+impl EnabledAgents {
+    pub fn as_set(&self) -> std::collections::HashSet<String> {
+        self.ids.iter().cloned().collect()
+    }
+}
+
+fn enabled_agents_file(palisade_home: &Path) -> PathBuf {
+    palisade_home.join("acp-registry").join("enabled-agents.json")
+}
+
+/// Reads the persisted enabled-agent set. Missing or corrupt file reads as
+/// empty — never a launch blocker.
+pub fn read_enabled(palisade_home: &Path) -> EnabledAgents {
+    std::fs::read_to_string(enabled_agents_file(palisade_home))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Adds `agent_id` to the enabled set (idempotent) and marks it the most
+/// recently enabled, so it becomes the new default. Returns the updated set.
+pub fn enable_agent(palisade_home: &Path, agent_id: &str) -> Res<EnabledAgents> {
+    let mut enabled = read_enabled(palisade_home);
+    if !enabled.ids.iter().any(|id| id == agent_id) {
+        enabled.ids.push(agent_id.to_string());
+    }
+    enabled.last_enabled = Some(agent_id.to_string());
+    let file = enabled_agents_file(palisade_home);
+    let parent = file.parent().unwrap();
+    std::fs::create_dir_all(parent).map_err(|e| crate::PalisadeError::from(format!("create {}: {e}", parent.display())))?;
+    let json = serde_json::to_string_pretty(&enabled)
+        .map_err(|e| crate::PalisadeError::from(format!("serialize enabled agents: {e}")))?;
+    std::fs::write(&file, json).map_err(|e| crate::PalisadeError::from(format!("write {}: {e}", file.display())))?;
+    Ok(enabled)
 }
 
 /// True when an npm package is already present locally: unpacked in the npx
@@ -392,6 +562,7 @@ mod tests {
                 id: "devin".into(),
                 name: "Devin".into(),
                 version: Some("2.5.0".into()),
+                description: None,
                 distribution: AgentDistribution::Binary {
                     binary: PlatformMap {
                         darwin_aarch64: Some(PlatformBinary {
@@ -413,6 +584,7 @@ mod tests {
                 id: "claude-acp".into(),
                 name: "Claude Agent".into(),
                 version: Some("0.66.0".into()),
+                description: Some("Anthropic's Claude, via the official ACP adapter.".into()),
                 distribution: AgentDistribution::Npx {
                     npx: NpxDistribution {
                         package: "@agentclientprotocol/claude-agent-acp".into(),
@@ -423,6 +595,7 @@ mod tests {
                 id: "opencode".into(),
                 name: "OpenCode".into(),
                 version: None,
+                description: None,
                 distribution: AgentDistribution::Binary {
                     binary: PlatformMap {
                         darwin_aarch64: Some(PlatformBinary {
@@ -524,13 +697,22 @@ mod tests {
 
     // --------------------------------------------------------- 2.3: PATH
 
-    /// RED→GREEN 2.3: A registry entry whose cmd is on PATH is available;
-    /// one that isn't is excluded.
+    fn no_enabled() -> std::collections::HashSet<String> {
+        std::collections::HashSet::new()
+    }
+
+    fn enabled_set(ids: &[&str]) -> std::collections::HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// RED→GREEN 2.3: A registry entry whose cmd is on PATH and whose package
+    /// (if any) is cached is available; one that isn't is excluded.
     #[test]
     fn path_availability_filters_agents() {
         let agents = test_agents();
-        // devin binary is on PATH, npx is on PATH (for claude-acp), opencode is not.
-        let available = resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| true);
+        // devin binary is on PATH, npx is on PATH and its package cached
+        // (claude-acp), opencode is not on PATH at all.
+        let available = resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| true, &no_enabled());
 
         assert_eq!(available.len(), 2);
         assert_eq!(available[0].id, "devin");
@@ -546,7 +728,7 @@ mod tests {
     #[test]
     fn no_agents_on_path_returns_empty() {
         let agents = test_agents();
-        let available = resolve_available(&agents, &mock_find(&[]), &|_| true);
+        let available = resolve_available(&agents, &mock_find(&[]), &|_| true, &no_enabled());
         assert!(available.is_empty());
     }
 
@@ -570,14 +752,158 @@ mod tests {
         assert_eq!(archive_style.distribution.path_cmd(), Some("devin"));
     }
 
-    /// RED→GREEN 2.5: An npx agent counts as installed only when its package
-    /// is already cached locally — `npx` on PATH alone is not enough.
+    /// An npx agent whose package isn't cached, and that the user hasn't
+    /// enabled, is *not* counted as available — showing every npx-distributed
+    /// registry agent (dozens, most needing accounts a new user doesn't have)
+    /// as "installed" the moment `npx` is on PATH would be a false label.
+    /// It shows up in `resolve_addable` instead.
     #[test]
-    fn npx_agent_requires_cached_package() {
+    fn addable_npx_agent_is_excluded_from_available_until_enabled() {
         let agents = test_agents();
-        let available = resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| false);
+        let available = resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| false, &no_enabled());
         assert_eq!(available.len(), 1);
-        assert_eq!(available[0].id, "devin");
+        assert!(available.iter().all(|a| a.id != "claude-acp"));
+    }
+
+    /// Enabling an addable agent makes it available immediately (so it can
+    /// be selected), but not `ready` — its package still fetches on first
+    /// launch.
+    #[test]
+    fn enabled_npx_agent_is_available_but_not_ready() {
+        let agents = test_agents();
+        let available =
+            resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| false, &enabled_set(&["claude-acp"]));
+        let claude = available.iter().find(|a| a.id == "claude-acp").unwrap();
+        assert!(!claude.ready);
+    }
+
+    /// A cached npx package is `ready` even without being explicitly enabled.
+    #[test]
+    fn npx_agent_with_cached_package_is_ready() {
+        let agents = test_agents();
+        let available = resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| true, &no_enabled());
+        let claude = available.iter().find(|a| a.id == "claude-acp").unwrap();
+        assert!(claude.ready);
+    }
+
+    // --------------------------------------------------------- resolve_addable
+
+    /// An npx agent with its runtime on PATH but an uncached package, and not
+    /// already enabled, is addable.
+    #[test]
+    fn addable_lists_uncached_npx_agent() {
+        let agents = test_agents();
+        let addable = resolve_addable(&agents, &mock_find(&["devin", "npx"]), &|_| false, &no_enabled());
+        assert_eq!(addable.len(), 1);
+        assert_eq!(addable[0].id, "claude-acp");
+        assert_eq!(addable[0].description.as_deref(), Some("Anthropic's Claude, via the official ACP adapter."));
+    }
+
+    /// An already-enabled agent is not offered again in the addable list.
+    #[test]
+    fn addable_excludes_already_enabled_agents() {
+        let agents = test_agents();
+        let addable = resolve_addable(&agents, &mock_find(&["devin", "npx"]), &|_| false, &enabled_set(&["claude-acp"]));
+        assert!(addable.is_empty());
+    }
+
+    /// A ready agent (cached package, or binary already on PATH) is not
+    /// addable — there's nothing left to add.
+    #[test]
+    fn addable_excludes_ready_and_unavailable_agents() {
+        let agents = test_agents();
+        // devin is ready (binary on PATH); opencode is unavailable (not on
+        // PATH); claude-acp's package is cached here, so it's ready too.
+        let addable = resolve_addable(&agents, &mock_find(&["devin", "npx"]), &|_| true, &no_enabled());
+        assert!(addable.is_empty());
+    }
+
+    // --------------------------------------------------------- enabled agents
+
+    #[test]
+    fn enabling_an_agent_persists_it_and_marks_it_most_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let enabled = enable_agent(dir.path(), "claude-acp").unwrap();
+        assert_eq!(enabled.ids, vec!["claude-acp".to_string()]);
+        assert_eq!(enabled.last_enabled.as_deref(), Some("claude-acp"));
+
+        let reread = read_enabled(dir.path());
+        assert_eq!(reread, enabled);
+    }
+
+    #[test]
+    fn enabling_the_same_agent_twice_does_not_duplicate_it() {
+        let dir = tempfile::tempdir().unwrap();
+        enable_agent(dir.path(), "claude-acp").unwrap();
+        let enabled = enable_agent(dir.path(), "claude-acp").unwrap();
+        assert_eq!(enabled.ids, vec!["claude-acp".to_string()]);
+    }
+
+    #[test]
+    fn enabling_a_second_agent_updates_last_enabled_and_keeps_both() {
+        let dir = tempfile::tempdir().unwrap();
+        enable_agent(dir.path(), "claude-acp").unwrap();
+        let enabled = enable_agent(dir.path(), "codex-acp").unwrap();
+        assert_eq!(enabled.ids, vec!["claude-acp".to_string(), "codex-acp".to_string()]);
+        assert_eq!(enabled.last_enabled.as_deref(), Some("codex-acp"));
+    }
+
+    #[test]
+    fn read_enabled_defaults_to_empty_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_enabled(dir.path()), EnabledAgents::default());
+    }
+
+    // --------------------------------------------------------- pick_default
+
+    /// `pick_default` prefers the most recently enabled agent, even over a
+    /// ready one that comes first in registry order.
+    #[test]
+    fn pick_default_prefers_last_enabled_when_available() {
+        let agents = test_agents();
+        let available =
+            resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| false, &enabled_set(&["claude-acp"]));
+        assert_eq!(pick_default(&available, Some("claude-acp")), Some("claude-acp".into()));
+    }
+
+    /// A `last_enabled` id that isn't in the current available set (e.g. its
+    /// runtime vanished from PATH) is ignored, falling through to the normal
+    /// ready-first rule.
+    #[test]
+    fn pick_default_ignores_last_enabled_if_no_longer_available() {
+        let agents = test_agents();
+        let available = resolve_available(&agents, &mock_find(&["devin", "npx"]), &|_| true, &no_enabled());
+        assert_eq!(pick_default(&available, Some("nonexistent")), Some("devin".into()));
+    }
+
+    /// With no persisted last-enabled agent, prefers a ready agent over one
+    /// that still needs a first-launch fetch, even if the fetch-needing one
+    /// comes first in registry order.
+    #[test]
+    fn pick_default_prefers_ready_agent() {
+        let agents = test_agents();
+        // claude-acp (npx, enabled but not cached) is listed before devin in
+        // registry order for this case, but devin is fully resident.
+        let mut reordered = agents.clone();
+        reordered.swap(0, 1);
+        let available =
+            resolve_available(&reordered, &mock_find(&["devin", "npx"]), &|_| false, &enabled_set(&["claude-acp"]));
+        assert_eq!(pick_default(&available, None), Some("devin".into()));
+    }
+
+    /// With nothing ready, `pick_default` still returns the first available
+    /// agent rather than none — a fetch-on-launch agent beats chat-only.
+    #[test]
+    fn pick_default_falls_back_to_first_available_when_none_ready() {
+        let agents = test_agents();
+        let available =
+            resolve_available(&agents, &mock_find(&["npx"]), &|_| false, &enabled_set(&["claude-acp"]));
+        assert_eq!(pick_default(&available, None), Some("claude-acp".into()));
+    }
+
+    #[test]
+    fn pick_default_is_none_when_nothing_available() {
+        assert_eq!(pick_default(&[], None), None);
     }
 
     /// RED→GREEN 2.5: Package specs may pin a version (`@scope/name@1.2.3`);

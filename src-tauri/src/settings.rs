@@ -329,6 +329,10 @@ pub struct VerifyOutcome {
 /// formatter: `sh -c`, cwd = project root, stdout and stderr captured with the
 /// exit status. Palisade runs it and reports what happened — it never decides that
 /// a non-zero exit "doesn't count".
+///
+/// Production always calls `run_verify_with_env` directly, to pass a cargo
+/// target dir; this no-target convenience wrapper is used only by tests.
+#[cfg(test)]
 pub fn run_verify(settings: &ProjectSettings, project_root: &Path, name: &str) -> Res<VerifyOutcome> {
     run_verify_with_env(settings, project_root, name, None)
 }

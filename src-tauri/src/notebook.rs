@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command};
+#[cfg(test)]
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -96,15 +98,13 @@ impl NotebookKernel {
         crate::pidguard::reap_stale(&pid_path, &kernel_reap_token(driver_path));
         *self.pid_path.lock_or_recover() = Some(pid_path.clone());
 
-        let mut cmd = Command::new(python);
-        cmd.arg(driver_path);
+        let mut args: Vec<String> = vec![driver_path.display().to_string()];
         if let Some(name) = kernelspec_name {
-            cmd.arg("--kernelspec").arg(name);
+            args.push("--kernelspec".into());
+            args.push(name.to_string());
         }
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
+        let mut child = spawn_maybe_supervised(&python, &args)
             .map_err(|err| crate::PalisadeError::from(format!("failed to spawn notebook driver: {err}")))?;
         crate::pidguard::record(&pid_path, child.id());
 
@@ -227,7 +227,7 @@ impl NotebookKernel {
                         thread::sleep(Duration::from_millis(25));
                     }
                     Ok(None) | Err(_) => {
-                        let _ = child.kill();
+                        crate::pidguard::kill_group(child.id());
                         let _ = child.wait();
                         break;
                     }
@@ -274,6 +274,29 @@ pub(crate) fn kernel_pid_path(notebook_id: &str) -> PathBuf {
 /// would match every Python the user is running.
 pub(crate) fn kernel_reap_token(driver_path: &Path) -> String {
     driver_path.display().to_string()
+}
+
+/// Spawns `python` with `args` (the driver script plus flags). Production
+/// goes through `pidguard`'s supervisor so the driver — and the Jupyter
+/// kernel it owns — dies the instant this process does, by any means (see
+/// `pidguard`'s header). Tests spawn directly: they exercise kernel-resolution
+/// logic, not leak prevention, which `pidguard`'s own tests cover against the
+/// real mechanism in isolation; going through the supervisor here would
+/// re-exec the *test binary*, which has no idea what to do with that.
+#[cfg(not(test))]
+fn spawn_maybe_supervised(python: &Path, args: &[String]) -> std::io::Result<Child> {
+    crate::pidguard::spawn_supervised(python, args)
+}
+#[cfg(test)]
+fn spawn_maybe_supervised(python: &Path, args: &[String]) -> std::io::Result<Child> {
+    let mut cmd = Command::new(python);
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // `terminate`'s force-kill fallback uses `pidguard::kill_group`, which
+    // needs this child to be a process-group leader (see that fn's doc) —
+    // true for the real supervised path via `spawn_supervised`, so the test
+    // double needs it too or a stuck fake driver hangs `terminate` forever.
+    crate::pidguard::make_group_leader(&mut cmd);
+    cmd.spawn()
 }
 
 /// Every open notebook's kernel, keyed by notebook id (decisions.md D18:

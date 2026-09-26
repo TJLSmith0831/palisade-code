@@ -181,6 +181,7 @@ import { shouldOpenLinkedSpec, type SpecLink } from "./specLink";
 import McpPane from "./McpPane";
 import ConnectionsPanel from "./ConnectionsPanel";
 import FirstRunChecklist from "./FirstRunChecklist";
+import { AddAgentMenuSection } from "./AddAgentMenu";
 import { notifyTurnDone } from "./turnNotifications";
 // Lazy: the database surfaces pull in CodeMirror's SQL grammar and a grid
 // nobody loads until they open the panel.
@@ -288,6 +289,10 @@ type ChatSurfaceProps = {
   onPickModel: (modelId: string) => void;
   /** The model menu was opened — probe the provider if not yet cached. */
   onProbeModels: () => void;
+  /** Enables a registry agent from `flight.addable`, offered in both
+   *  provider pickers below the installed agents. */
+  onAddAgent?: (agentId: string) => void;
+  addingAgentId?: string | null;
   /** Slash commands the agent advertised for this thread (ACP
    *  `available_commands_update`) — skills, user commands and built-ins alike. */
   /** Agent-advertised commands plus this project's saved chains (D14). */
@@ -644,6 +649,8 @@ export const ChatSurface = memo(
     chains = [],
     onPickModel,
     onProbeModels,
+    onAddAgent,
+    addingAgentId = null,
     commands = [],
     draft,
     setDraft,
@@ -1141,6 +1148,17 @@ export const ChatSurface = memo(
               <span className="hint" data-testid="framing-no-executors-hint">
                 No ACP agents installed.
               </span>
+            )}
+            {onAddAgent && (
+              <AddAgentMenuSection
+                addable={flight?.addable ?? []}
+                onAdd={(id) => {
+                  onAddAgent(id);
+                  setPrefsMenuOpen(false);
+                }}
+                addingId={addingAgentId}
+                testIdPrefix="framing-add-agent"
+              />
             )}
           </Menu.Dropdown>
         </Menu>
@@ -2196,6 +2214,17 @@ export const ChatSurface = memo(
                   <span className="hint" data-testid="no-executors-hint">
                     No ACP agents installed.
                   </span>
+                )}
+                {onAddAgent && (
+                  <AddAgentMenuSection
+                    addable={flight?.addable ?? []}
+                    onAdd={(id) => {
+                      onAddAgent(id);
+                      setPrefsMenuOpen(false);
+                    }}
+                    addingId={addingAgentId}
+                    testIdPrefix="executor-add-agent"
+                  />
                 )}
                 {/* D5: a saved chain is one more thing this slot can
                     resolve to. Picking one makes /go run the chain instead of
@@ -3887,14 +3916,14 @@ export default function App() {
     });
   };
 
-  // The onboarding composer's send: unlike the plain New Project tile, a
+  // The onboarding composer's send: unlike the plain Open Project tile, a
   // typed request has somewhere to go once a folder is picked — open the
   // project, create a fresh go-mode thread (reusing onSend's first-send
   // shape below, but against the just-picked project's hash directly rather
   // than closured `project`/`thread` state, which wouldn't be fresh yet),
   // carry the framing-menu's executor/model pick onto it, send the message,
   // and land in Vibe so the run is visible immediately instead of the empty
-  // shell the New Project path leaves you on.
+  // shell the Open Project path leaves you on.
   const onOnboardingComposerSend = async (text: string) => {
     try {
       const picked = await open({ directory: true, title: "Add a project" });
@@ -5215,6 +5244,26 @@ export default function App() {
     setModelsByAgent(modelsRef.current);
   }, []);
 
+  // Enables an addable registry agent (`Preflight.addable`), moving it into
+  // `flight.agents` and making it the new default. Its package isn't
+  // fetched here — only on the agent's first real launch (npx/uvx do that
+  // on their own), so this call itself is just a filesystem write.
+  const [addingAgentId, setAddingAgentId] = useState<string | null>(null);
+  const onAddAgent = useCallback(
+    async (agentId: string) => {
+      setAddingAgentId(agentId);
+      try {
+        const updated = await api.enableAgent(agentId);
+        setFlight(updated);
+      } catch (err) {
+        fail(err);
+      } finally {
+        setAddingAgentId(null);
+      }
+    },
+    [setFlight]
+  );
+
   // D21: framing-menu executor/model callbacks — store locally before the
   // thread exists; persisted on the thread when it's created in onPickSpecType.
   const onPickFramingExecutor = useCallback(
@@ -6492,6 +6541,8 @@ export default function App() {
     onProbeModels: () => {
       if (activeExecutor) probeAgentModels(activeExecutor);
     },
+    onAddAgent,
+    addingAgentId,
     flightSelected: !!flight?.selected,
     flight,
     // Two sources, one menu: what the agent advertises, plus the project's
@@ -7124,6 +7175,8 @@ export default function App() {
                 .then(setFlight, fail)
                 .finally(() => setRechecking(false));
             }}
+            onAddAgent={onAddAgent}
+            addingAgentId={addingAgentId}
           />
         ) : flight && flight.warnings.length > 0 ? (
           <Alert
@@ -7133,7 +7186,10 @@ export default function App() {
             data-testid="preflight-warnings"
           >
             {flight.warnings.map((warning) => (
-              <div key={warning}>⚠ {warning}</div>
+              <Group key={warning} gap={4} wrap="nowrap">
+                <IconAlertTriangle size={12} style={{ flexShrink: 0 }} />
+                <span>{warning}</span>
+              </Group>
             ))}
           </Alert>
         ) : null}
@@ -7212,6 +7268,8 @@ export default function App() {
               onPickExecutor={onPickFramingExecutor}
               onPickModel={onPickFramingModel}
               onProbeAgent={probeAgentModels}
+              onAddAgent={onAddAgent}
+              addingAgentId={addingAgentId}
               onOpenProject={onAddProject}
               onCloneRepository={onCloneRepository}
               onComposerSend={onOnboardingComposerSend}

@@ -16,7 +16,10 @@ pub enum GrillSkill {
     Propose,
     /// Go-mode — apply/implement.
     Apply,
-    /// UI-triggered archive action.
+    /// UI-triggered archive action. Not wired to any command yet — kept for
+    /// the planned archive UI action; `content()`/`label()` already serve it
+    /// and tests exercise it directly.
+    #[allow(dead_code)]
     Archive,
 }
 

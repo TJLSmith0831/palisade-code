@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(test)]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -70,6 +72,8 @@ const MODEL_FILE_NAME: &str = "Qwen2.5-Coder-0.5B-Q5_K_M.gguf";
 /// Which entry of the role-keyed model manifest this build wants. Palisade
 /// ships one model today; the manifest is keyed so adding a second is a new
 /// key rather than a format change that strands every installed beta.
+/// Read only by `download_model` (release builds only, see `ModelManifest`).
+#[cfg_attr(debug_assertions, allow(dead_code))]
 const MODEL_ROLE: &str = "fim";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,11 +108,17 @@ pub struct CompletionTelemetry {
 }
 
 /// Manages the `llama-server` child process and its localhost HTTP port.
+///
+/// `child` is actually the pidguard supervisor's process, not `llama-server`
+/// itself — see `spawn_maybe_supervised` — but its stdout/stderr carry the
+/// real sidecar's output transparently, so everything downstream (the reader
+/// thread, `is_alive`) works unchanged.
 pub struct CompletionServer {
     child: Mutex<Option<Child>>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     stopping: Arc<AtomicBool>,
     port: Mutex<u16>,
+    pid_path: Mutex<Option<PathBuf>>,
 }
 
 impl CompletionServer {
@@ -118,6 +128,7 @@ impl CompletionServer {
             reader_handle: Mutex::new(None),
             stopping: Arc::new(AtomicBool::new(false)),
             port: Mutex::new(0),
+            pid_path: Mutex::new(None),
         }
     }
 
@@ -139,29 +150,31 @@ impl CompletionServer {
         // still holding a GPU-backed model 31 hours after its app had gone,
         // reparented to init with nothing left to reap it. The model path is
         // absolute and unique to this app, so it re-identifies the child
-        // safely even if the PID has since been reused.
-        let pid_path = sidecar_pid_path();
-        crate::pidguard::reap_stale(&pid_path, &sidecar_reap_token(model));
+        // safely even if the PID has since been reused. `spawn_maybe_supervised`
+        // below is the real fix (the sidecar dies the instant this process
+        // does, not just on the next launch) — this stays as belt-and-braces.
+        let token = sidecar_reap_token(model);
+        let pid_path = sidecar_pid_path(&token);
+        crate::pidguard::reap_stale(&pid_path, &token);
 
-        let mut cmd = Command::new(binary);
-        cmd.arg("--model")
-            .arg(model)
-            .arg("--ctx-size")
-            .arg(DEFAULT_CTX_SIZE.to_string())
-            .arg("--n-gpu-layers")
-            .arg(DEFAULT_N_GPU_LAYERS.to_string())
-            .arg("--host")
-            .arg("127.0.0.1")
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--no-ui")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let args: Vec<String> = vec![
+            "--model".into(),
+            model.display().to_string(),
+            "--ctx-size".into(),
+            DEFAULT_CTX_SIZE.to_string(),
+            "--n-gpu-layers".into(),
+            DEFAULT_N_GPU_LAYERS.to_string(),
+            "--host".into(),
+            "127.0.0.1".into(),
+            "--port".into(),
+            port.to_string(),
+            "--no-ui".into(),
+        ];
 
-        let mut child = cmd
-            .spawn()
+        let mut child = spawn_maybe_supervised(binary, &args)
             .map_err(|err| crate::PalisadeError::from(format!("failed to spawn completion sidecar: {err}")))?;
         crate::pidguard::record(&pid_path, child.id());
+        *self.pid_path.lock_or_recover() = Some(pid_path);
 
         let stopping = self.stopping.clone();
 
@@ -217,24 +230,38 @@ impl CompletionServer {
         *self.port.lock_or_recover()
     }
 
-    /// Calls `GET /health` and returns once the endpoint responds 200 OK.
-    pub fn health(&self) -> Res<()> {
-        wait_for_health(self.port(), Duration::from_secs(30))
-    }
-
     pub fn terminate(&self) {
         self.stopping.store(true, Ordering::SeqCst);
 
         if let Some(mut child) = self.child.lock_or_recover().take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            // Closing our end of the supervisor's stdin pipe is the same
+            // signal it reacts to if we die unexpectedly (see
+            // `pidguard::spawn_supervised`) — one code path for a clean stop
+            // and a crash. Give it a moment to relay that into killing
+            // llama-server and exiting; force-kill the whole group as a
+            // fallback if it doesn't.
+            drop(child.stdin.take());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+                    Ok(None) | Err(_) => {
+                        crate::pidguard::kill_group(child.id());
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
         }
 
         if let Some(handle) = self.reader_handle.lock_or_recover().take() {
             let _ = handle.join();
         }
 
-        crate::pidguard::clear(&sidecar_pid_path());
+        if let Some(path) = self.pid_path.lock_or_recover().take() {
+            crate::pidguard::clear(&path);
+        }
         self.stopping.store(false, Ordering::SeqCst);
     }
 
@@ -797,8 +824,12 @@ pub fn resolve_sidecar_paths(app: &AppHandle) -> Res<(PathBuf, PathBuf)> {
 ///
 /// Served as `models.json` so a new model ships by editing one JSON file —
 /// no rebuild, no notarization, no reinstall.
+///
+/// Every field is read by `download_model`, which only compiles in release
+/// builds (`#[cfg(not(debug_assertions))]`) — a dev build never reaches it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(debug_assertions, allow(dead_code))]
 pub struct ModelManifest {
     pub filename: String,
     pub sha256: String,
@@ -813,6 +844,8 @@ pub struct ModelManifest {
 
 /// Where the update Worker serves `models.json`. The Worker holds the
 /// Hugging Face credentials; the app never does.
+/// Read only by `download_model` (release builds only, see `ModelManifest`).
+#[cfg_attr(debug_assertions, allow(dead_code))]
 const MODEL_MANIFEST_URL: Option<&str> =
     Some("https://palisade-updates.tjlsmith0831.workers.dev/models.json");
 
@@ -1080,14 +1113,12 @@ fn sidecar_binary_name_with_target() -> String {
 }
 
 /// Where the sidecar's PID is recorded between runs. App-global rather than
-/// per-project, because there is one model server for the whole app.
-///
-/// ponytail: assumes one Palisade instance, like every other pidguard user.
-/// Two instances would each reap the other's sidecar on spawn. Fixing that
-/// means keying the file by instance, which is only worth doing if running
-/// two copies at once becomes a supported thing.
-pub(crate) fn sidecar_pid_path() -> PathBuf {
-    crate::store::palisade_home().join(".completion-sidecar.pid")
+/// per-project, because there is one model server for the whole app — but
+/// keyed by `token` (see `pidguard::instance_key`) so two builds/worktrees,
+/// each with their own absolute model path, never clobber each other's
+/// record and reap a sibling's still-live sidecar.
+pub(crate) fn sidecar_pid_path(token: &str) -> PathBuf {
+    crate::store::palisade_home().join(format!(".completion-sidecar-{}.pid", crate::pidguard::instance_key(token)))
 }
 
 /// What has to appear in a process's command line before it is recognised as
@@ -1095,6 +1126,29 @@ pub(crate) fn sidecar_pid_path() -> PathBuf {
 /// any llama.cpp server the user happens to be running.
 pub(crate) fn sidecar_reap_token(model: &Path) -> String {
     model.display().to_string()
+}
+
+/// Spawns `binary` with `args`. Production goes through `pidguard`'s
+/// supervisor so the sidecar dies the instant this process does, by any
+/// means (see `pidguard`'s header). Tests spawn directly — they exercise FIM
+/// completion behavior against a fake sidecar script, not leak prevention,
+/// which `pidguard`'s own tests cover against the real mechanism in
+/// isolation; going through the supervisor here would re-exec the *test
+/// binary*, which has no idea what to do with that.
+#[cfg(not(test))]
+fn spawn_maybe_supervised(binary: &Path, args: &[String]) -> std::io::Result<Child> {
+    crate::pidguard::spawn_supervised(binary, args)
+}
+#[cfg(test)]
+fn spawn_maybe_supervised(binary: &Path, args: &[String]) -> std::io::Result<Child> {
+    let mut cmd = Command::new(binary);
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // `terminate`'s force-kill fallback uses `pidguard::kill_group`, which
+    // needs this child to be a process-group leader (see that fn's doc) —
+    // true for the real supervised path via `spawn_supervised`, so the test
+    // double needs it too or a stuck fake sidecar hangs `terminate` forever.
+    crate::pidguard::make_group_leader(&mut cmd);
+    cmd.spawn()
 }
 
 /// Ports already handed out but not yet bound by the child that asked for

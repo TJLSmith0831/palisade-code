@@ -283,6 +283,30 @@ describe("executor switch during a live session (Amendment 5)", () => {
   });
 });
 
+describe("add-agent section in the provider picker", () => {
+  const addableFlight: Preflight = {
+    ...flight,
+    addable: [
+      { id: "gemini-acp", name: "Gemini", description: "Google's Gemini, via its ACP adapter.", version: null },
+    ],
+  };
+
+  it("offers addable agents below the installed ones and enables one on click", async () => {
+    const onAddAgent = vi.fn();
+    renderSurface({ flight: addableFlight, onAddAgent, prefsMenuOpen: true });
+    const row = await screen.findByTestId("executor-add-agent-opt-gemini-acp");
+    expect(row).toHaveTextContent("Gemini");
+    fireEvent.click(row);
+    expect(onAddAgent).toHaveBeenCalledWith("gemini-acp");
+  });
+
+  it("shows nothing extra when there is nothing addable", async () => {
+    renderSurface({ flight, onAddAgent: vi.fn(), prefsMenuOpen: true });
+    await screen.findByTestId("executor-menu");
+    expect(screen.queryByText(/add an agent/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("model selection", () => {
   it("does not submit the draft when a model is picked", async () => {
     const { onSend, props } = renderSurface({

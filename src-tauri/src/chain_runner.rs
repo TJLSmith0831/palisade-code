@@ -184,7 +184,6 @@ pub enum Outcome {
 /// One in-flight run. Deliberately not persisted (D15).
 #[derive(Debug)]
 pub struct ChainRun {
-    pub id: String,
     pub chain: Chain,
     pub seed: String,
     /// Role → how many times it has produced output. Drives the loop cap.
@@ -195,11 +194,10 @@ pub struct ChainRun {
 }
 
 impl ChainRun {
-    pub fn new(id: impl Into<String>, chain: Chain, seed: impl Into<String>) -> Self {
+    pub fn new(_id: impl Into<String>, chain: Chain, seed: impl Into<String>) -> Self {
         let timeout = Duration::from_secs(chain.timeout_seconds);
         let node_states = chain.nodes.keys().map(|role| (role.clone(), NodeState::Queued)).collect();
         Self {
-            id: id.into(),
             chain,
             seed: seed.into(),
             iterations: HashMap::new(),

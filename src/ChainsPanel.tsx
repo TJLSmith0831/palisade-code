@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ActionIcon,
+  Alert,
   Button,
   Group,
   Menu,
@@ -91,9 +92,23 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
   const [error, setError] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [exampleBusy, setExampleBusy] = useState(false);
+  /** Set when no installed agent currently offers a model to bind the worked
+   *  example to (e.g. none is signed in) — the display name of the agent the
+   *  button tried last, so the panel can say who to sign in rather than
+   *  dead-ending on a raw error. Cleared whenever the agent list changes, so
+   *  signing in and coming back doesn't leave a stale warning on screen. */
+  const [exampleBlocked, setExampleBlocked] = useState<string | null>(null);
   /** The playbook whose Delete is waiting on a second click. Deleting is the
    *  one action here with no undo, so it is the one that asks. */
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  // The agent bound to the last blocked attempt is stale the moment the
+  // installed-agent list changes (a sign-in completed, an agent was added) —
+  // and gone for good when the panel itself unmounts.
+  useEffect(() => {
+    setExampleBlocked(null);
+    return () => setExampleBlocked(null);
+  }, [agents]);
 
   useEffect(() => {
     if (!projectHash) {
@@ -148,11 +163,29 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
   const openExample = async () => {
     if (!projectHash) return;
     setExampleBusy(true);
+    setExampleBlocked(null);
+    const candidates = agents && agents.length > 0 ? agents : [{ id: "claude-code", name: "Claude Code" }];
     try {
-      const agentId = agents?.[0]?.id ?? "claude-code";
-      const { models } = await api.listModels(projectHash, agentId);
-      if (!models[0]) throw new Error(`${agentId} offers no models to bind the worked example to.`);
-      const example = workedExampleChain(agentId, models[0].id);
+      // Try every installed agent, not just the first — an agent with no
+      // models (typically: not signed in) shouldn't dead-end the example
+      // when another installed agent can bind it instead.
+      let bound: { agentId: string; modelId: string } | null = null;
+      for (const candidate of candidates) {
+        try {
+          const { models } = await api.listModels(projectHash, candidate.id);
+          if (models[0]) {
+            bound = { agentId: candidate.id, modelId: models[0].id };
+            break;
+          }
+        } catch {
+          // This agent can't answer right now; move on to the next one.
+        }
+      }
+      if (!bound) {
+        setExampleBlocked(candidates[0].name);
+        return;
+      }
+      const example = workedExampleChain(bound.agentId, bound.modelId);
       if (!chains.some((c) => c.name === example.name)) {
         await api.saveChain(projectHash, example);
         announceChainsChanged();
@@ -195,11 +228,24 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
           <div className="ds-chains-empty" data-testid="chains-panel-empty">
             <Text size="xs" c="dimmed" p="xs">
               No playbooks yet. Build one on the canvas — nodes bound to
-              installed agents, connected by edges — then run it with{" "}
-              <code>|=</code> from any thread, from a thread's model picker,
-              or from here. A saved run's history stays reachable from
-              wherever it was invoked.
+              installed agents, connected by edges — then run it by typing{" "}
+              <code>|=</code> in any thread's composer, from a thread's model
+              picker, or from here. A saved run's history stays reachable
+              from wherever it was invoked.
             </Text>
+            {exampleBlocked && (
+              <Alert
+                color="warn"
+                variant="light"
+                mx="xs"
+                mb="xs"
+                data-testid="chains-panel-example-blocked"
+              >
+                {exampleBlocked} has no models available right now, so the
+                worked example can't bind to it. Sign in to {exampleBlocked},
+                or install and select another agent, then try again.
+              </Alert>
+            )}
             <Button
               size="xs"
               variant="default"

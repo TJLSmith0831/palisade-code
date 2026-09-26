@@ -33,6 +33,7 @@ pub enum Backend {
 
 /// Reads the driver off the URL scheme — the one thing `sqlx::Any` decides at
 /// runtime, so Palisade has to agree with it before saving a connection.
+#[cfg(test)]
 pub fn backend_of(url: &str) -> Res<Backend> {
     let scheme = url.split("://").next().unwrap_or("").trim().to_lowercase();
     match scheme.as_str() {
@@ -379,10 +380,6 @@ pub mod vault {
         store().lock_or_recover().0.insert(hash.to_string());
     }
 
-    pub fn set_available(hash: &str) {
-        store().lock_or_recover().0.remove(hash);
-    }
-
     pub fn has(hash: &str, id: &str) -> bool {
         store().lock_or_recover().1.contains_key(&format!("{hash}:{id}"))
     }
@@ -480,7 +477,7 @@ fn read_stored(home: &Path, hash: &str) -> Res<Vec<StoredConnection>> {
 pub fn list_connections(home: &Path, hash: &str) -> Res<(Vec<DbConnection>, Option<String>)> {
     let stored = read_stored(home, hash)?;
     let mut out = Vec::with_capacity(stored.len());
-    let mut warning = None;
+    let warning = None;
 
     for rec in &stored {
         let details = match rec.details() {
@@ -811,6 +808,7 @@ pub fn append_audit(home: &Path, hash: &str, entry: &AuditEntry) -> Res<()> {
 /// Every recorded entry for a project, oldest first. Unparseable lines are
 /// skipped rather than failing the read — a torn tail must not hide the
 /// history before it.
+#[cfg(test)]
 pub fn read_audit(home: &Path, hash: &str) -> Res<Vec<AuditEntry>> {
     match std::fs::read_to_string(audit_path(home, hash)) {
         Ok(body) => Ok(body

@@ -215,6 +215,7 @@ impl OpenSpecAdapter for RealOpenSpecAdapter {
 /// In-memory adapter for tests. Pre-load the answers you expect the cache to
 /// return; no subprocess is ever spawned. Anything not pre-loaded answers
 /// `NotInstalled` — the "there was nothing to ask" case.
+#[cfg(test)]
 pub struct InMemoryOpenSpecAdapter {
     pub list: OpenSpecResult,
     pub show: HashMap<String, OpenSpecResult>,
@@ -223,6 +224,7 @@ pub struct InMemoryOpenSpecAdapter {
     pub archive: HashMap<String, OpenSpecResult>,
 }
 
+#[cfg(test)]
 impl Default for InMemoryOpenSpecAdapter {
     fn default() -> Self {
         Self {
@@ -235,6 +237,7 @@ impl Default for InMemoryOpenSpecAdapter {
     }
 }
 
+#[cfg(test)]
 impl OpenSpecAdapter for InMemoryOpenSpecAdapter {
     fn list(&self, project_root: &Path) -> OpenSpecResult {
         let _ = project_root;
