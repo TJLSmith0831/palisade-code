@@ -11,6 +11,7 @@ const OVERLAYS = [
   '[role="dialog"]',
   '[role="menu"]',
   '[role="listbox"]',
+  '[role="tooltip"]',
 ].join(",");
 
 type Box = { x: number; y: number; width: number; height: number };

@@ -30,6 +30,13 @@ describe("overlayCovers", () => {
     el.remove();
   });
 
+  it("is true for a tooltip over the pane", () => {
+    const el = overlay("", { left: 780, top: 90, width: 160, height: 32 });
+    el.setAttribute("role", "tooltip");
+    expect(overlayCovers(preview)).toBe(true);
+    el.remove();
+  });
+
   it("ignores an overlay that sits beside the pane", () => {
     const el = overlay("mantine-Popover-dropdown", { left: 20, top: 90, width: 200, height: 300 });
     expect(overlayCovers(preview)).toBe(false);
