@@ -27,9 +27,11 @@ function useAgentSearch(addable: AddableAgent[]) {
 const ADD_AGENT_FOOTNOTE =
   "Adding fetches the agent the first time you use it — you may still need to sign in with its own CLI.";
 
-/** Renders inside an open `<Menu.Dropdown>` — a label, an optional search
- *  box (only once there's enough to search), and the addable agents
- *  themselves. Nothing renders when `addable` is empty. */
+/** Renders inside an open `<Menu.Dropdown>`: an "Add an agent" row that
+ *  expands to an optional search box (only once there's enough to search) and
+ *  the addable agents, so a long registry doesn't dominate the picker. The
+ *  dropdown unmounts when its menu closes, so the next open starts collapsed.
+ *  Nothing renders when `addable` is empty. */
 export function AddAgentMenuSection({
   addable,
   onAdd,
@@ -44,49 +46,61 @@ export function AddAgentMenuSection({
   testIdPrefix?: string;
 }) {
   const { query, setQuery, filtered } = useAgentSearch(addable);
+  const [expanded, setExpanded] = useState(false);
   if (addable.length === 0) return null;
   return (
     <>
       <Menu.Divider />
-      <Menu.Label>Add an agent</Menu.Label>
-      {addable.length > 4 && (
-        <TextInput
-          placeholder="Search agents…"
-          value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-          size="xs"
-          style={{ margin: "0 8px 8px" }}
-          data-testid={`${testIdPrefix}-search`}
-        />
+      <Menu.Item
+        closeMenuOnClick={false}
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        data-testid={`${testIdPrefix}-toggle`}
+      >
+        {expanded ? "Hide agents" : "Add an agent"}
+      </Menu.Item>
+      {expanded && (
+        <>
+          {addable.length > 4 && (
+            <TextInput
+              placeholder="Search agents…"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              size="xs"
+              style={{ margin: "0 8px 8px" }}
+              data-testid={`${testIdPrefix}-search`}
+            />
+          )}
+          <Box style={{ maxHeight: 240, overflowY: "auto" }}>
+            {filtered.map((a) => (
+              <Menu.Item
+                key={a.id}
+                className="ds-model-opt"
+                data-testid={`${testIdPrefix}-opt-${a.id}`}
+                disabled={addingId === a.id}
+                onClick={() => onAdd(a.id)}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  <span>{a.name}{addingId === a.id ? " · Adding…" : ""}</span>
+                  {a.description && (
+                    <span className="hint" style={{ fontSize: 11 }}>
+                      {a.description}
+                    </span>
+                  )}
+                </div>
+              </Menu.Item>
+            ))}
+            {filtered.length === 0 && (
+              <span className="hint" data-testid={`${testIdPrefix}-no-matches`}>
+                No agents match.
+              </span>
+            )}
+          </Box>
+          <div className="hint" style={{ padding: "4px 8px", fontSize: 11 }}>
+            {ADD_AGENT_FOOTNOTE}
+          </div>
+        </>
       )}
-      <Box style={{ maxHeight: 220, overflowY: "auto" }}>
-        {filtered.map((a) => (
-          <Menu.Item
-            key={a.id}
-            className="ds-model-opt"
-            data-testid={`${testIdPrefix}-opt-${a.id}`}
-            disabled={addingId === a.id}
-            onClick={() => onAdd(a.id)}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-              <span>{a.name}{addingId === a.id ? " · Adding…" : ""}</span>
-              {a.description && (
-                <span className="hint" style={{ fontSize: 11 }}>
-                  {a.description}
-                </span>
-              )}
-            </div>
-          </Menu.Item>
-        ))}
-        {filtered.length === 0 && (
-          <span className="hint" data-testid={`${testIdPrefix}-no-matches`}>
-            No agents match.
-          </span>
-        )}
-      </Box>
-      <div className="hint" style={{ padding: "4px 8px", fontSize: 11 }}>
-        {ADD_AGENT_FOOTNOTE}
-      </div>
     </>
   );
 }

@@ -248,6 +248,8 @@ describe("OnboardingScreen add-agent flow", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("onboarding-status"));
+    expect(screen.queryByTestId("onboarding-add-agent-opt-codex-acp")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("onboarding-add-agent-toggle"));
     const row = await screen.findByTestId("onboarding-add-agent-opt-codex-acp");
     expect(row).toHaveTextContent("Codex");
     expect(row).toHaveTextContent(/OpenAI's Codex/);
@@ -275,6 +277,7 @@ describe("OnboardingScreen add-agent flow", () => {
     const status = screen.getByTestId("onboarding-status");
     expect(status).toHaveTextContent(/Choose your coding agent/i);
     fireEvent.click(status);
+    fireEvent.click(await screen.findByTestId("onboarding-add-agent-toggle"));
     const row = await screen.findByTestId("onboarding-add-agent-opt-codex-acp");
     fireEvent.click(row);
     expect(onAddAgent).toHaveBeenCalledWith("codex-acp");
