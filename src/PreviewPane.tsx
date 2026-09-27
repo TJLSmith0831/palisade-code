@@ -11,7 +11,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import { overlayCovers } from "./nativeOverlay";
+import { overlayCovers, punchHole } from "./nativeOverlay";
 
 type Props = {
   /** The project this preview belongs to: each has its own browser and its
@@ -56,9 +56,6 @@ const sameBounds = (a: api.PreviewBounds, b: api.PreviewBounds) =>
  * load, logins and popups work, and the page keeps its own history. The
  * webview outlives this component: switching away hides it, coming back shows
  * the same page. Closing the tab ends it (`App` calls `previewClose`).
- *
- * Tooltips open upward: a tooltip below the toolbar would land on the native
- * view, which draws above all HTML.
  */
 export default function PreviewPane({ projectHash, url, onNavigate }: Props) {
   const [draft, setDraft] = useState(url ?? "");
@@ -127,28 +124,46 @@ export default function PreviewPane({ projectHash, url, onNavigate }: Props) {
 
   // Follow the placeholder. A layout change elsewhere (a sidebar toggling)
   // moves it without resizing it, which a ResizeObserver never reports, so
-  // compare its rect once per frame instead. The same loop steps the native
-  // view aside while an overlay (palette, menu, dialog) is over it.
+  // compare its rect once per frame instead. The app's webview is see-through
+  // over the placeholder (`punchHole`), so the native view shows whether it
+  // sits in front (taking clicks) or behind (while a tooltip, menu or dialog
+  // overlaps it, so that overlay draws on top) — the same loop flips which.
   // ponytail: per-frame rect check, upgrade if profiling ever shows it.
   useEffect(() => {
     let last: api.PreviewBounds | null = null;
+    let lastTheme = "";
     let covered = false;
+    let unpunch = () => {};
     let frame = requestAnimationFrame(function tick() {
       const next = measure();
       if (next && url && !blocked.current) {
+        // A theme or accent-hue switch changes the colours the hole is cut from.
+        const root = document.documentElement;
+        const theme = `${root.dataset.theme}|${root.style.cssText}|${matchMedia?.("(prefers-color-scheme: dark)").matches}`;
+        if (!last || !sameBounds(last, next) || theme !== lastTheme) {
+          last = next;
+          lastTheme = theme;
+          unpunch();
+          unpunch = hostRef.current ? punchHole(hostRef.current, next) : () => {};
+          void api.previewBounds(projectHash, next).catch(() => {});
+        }
         const nowCovered = overlayCovers(next);
         if (nowCovered !== covered) {
           covered = nowCovered;
-          last = covered ? last : next;
-          void (covered ? api.previewHide(projectHash) : api.previewBounds(projectHash, next)).catch(() => {});
-        } else if (!covered && (!last || !sameBounds(last, next))) {
-          last = next;
-          void api.previewBounds(projectHash, next).catch(() => {});
+          void api.previewLayer(projectHash, !covered).catch(() => {});
         }
+      } else if (last) {
+        last = null;
+        covered = false;
+        unpunch();
+        unpunch = () => {};
       }
       frame = requestAnimationFrame(tick);
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      unpunch();
+    };
   }, [projectHash, url]);
 
   // Leaving the tab hides the view; the page stays alive behind it.
