@@ -1263,6 +1263,10 @@ export const previewBounds = (projectHash: string, bounds: PreviewBounds) =>
   invoke<void>("preview_bounds", { projectHash, bounds });
 /** Hides the view but keeps its page alive. */
 export const previewHide = (projectHash: string) => invoke<void>("preview_hide", { projectHash });
+/** `front`: the preview takes input; otherwise the app draws over it (an
+ * overlay is open on top of it). */
+export const previewLayer = (projectHash: string, front: boolean) =>
+  invoke<void>("preview_layer", { projectHash, front });
 /** Destroys the view and its page; the next open starts a fresh one. */
 export const previewClose = (projectHash: string) => invoke<void>("preview_close", { projectHash });
 export const previewReload = (projectHash: string) => invoke<void>("preview_reload", { projectHash });

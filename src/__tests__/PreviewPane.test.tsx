@@ -23,6 +23,7 @@ const preview = vi.hoisted(() => ({
   previewOpen: vi.fn((_url: string, _bounds: unknown) => Promise.resolve()),
   previewBounds: vi.fn(() => Promise.resolve()),
   previewHide: vi.fn(() => Promise.resolve()),
+  previewLayer: vi.fn((_hash: string, _front: boolean) => Promise.resolve()),
   previewReload: vi.fn(() => Promise.resolve()),
   previewHistory: vi.fn(() => Promise.resolve()),
 }));
@@ -172,24 +173,38 @@ describe("PreviewPane", () => {
     PANE.left = 800;
   });
 
-  it("steps aside while an overlay is open over it, and comes back when it closes", () => {
+  it("moves behind the app while an overlay is open over it, and back in front when it closes", () => {
     render(<PreviewPane projectHash="proj" url="http://localhost:5173/" onNavigate={() => {}} />);
     frame();
-    preview.previewHide.mockClear();
-    preview.previewBounds.mockClear();
 
     const modal = document.createElement("div");
     modal.className = "mantine-Modal-root";
     document.body.appendChild(modal);
     frame();
-    expect(preview.previewHide, "a native view draws above a dialog").toHaveBeenCalledTimes(1);
-
     frame();
-    expect(preview.previewHide, "hidden once, not on every frame").toHaveBeenCalledTimes(1);
+    expect(preview.previewLayer.mock.calls, "sent behind once, not every frame").toEqual([["proj", false]]);
+    expect(preview.previewHide, "the page stays visible under the overlay").not.toHaveBeenCalled();
 
     modal.remove();
     frame();
-    expect(preview.previewBounds, "shown again at its bounds").toHaveBeenCalledWith("proj", { x: 800, y: 100, width: 300, height: 700 });
+    expect(preview.previewLayer).toHaveBeenLastCalledWith("proj", true);
+  });
+
+  it("leaves the app see-through over the placeholder while the page shows, and restores it after", () => {
+    const shell = document.createElement("div");
+    shell.style.backgroundColor = "rgb(250, 250, 250)";
+    document.body.appendChild(shell);
+    const { unmount } = rtlRender(<PreviewPane projectHash="proj" url="http://localhost:5173/" onNavigate={() => {}} />, {
+      wrapper: MantineProvider,
+      container: shell.appendChild(document.createElement("div")),
+    });
+    frame();
+    expect(shell.style.getPropertyValue("background-color")).toBe("transparent");
+    expect(shell.style.getPropertyValue("background-size")).toBe("100% 100px, 100% 0px, 800px 700px, 0px 700px");
+
+    unmount();
+    expect(shell.style.getPropertyValue("background-image")).toBe("");
+    shell.remove();
   });
 
   describe("when nothing is answering", () => {

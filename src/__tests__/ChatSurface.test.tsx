@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import "../App.css";
 import { ChatSurface } from "../App";
@@ -294,10 +294,29 @@ describe("add-agent section in the provider picker", () => {
   it("offers addable agents below the installed ones and enables one on click", async () => {
     const onAddAgent = vi.fn();
     renderSurface({ flight: addableFlight, onAddAgent, prefsMenuOpen: true });
+    expect(screen.queryByTestId("executor-add-agent-opt-gemini-acp")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("executor-add-agent-toggle"));
     const row = await screen.findByTestId("executor-add-agent-opt-gemini-acp");
     expect(row).toHaveTextContent("Gemini");
     fireEvent.click(row);
     expect(onAddAgent).toHaveBeenCalledWith("gemini-acp");
+  });
+
+  it("collapses the registry again when the picker closes", async () => {
+    const { props, rerender } = renderSurface({ flight: addableFlight, onAddAgent: vi.fn(), prefsMenuOpen: true });
+    fireEvent.click(await screen.findByTestId("executor-add-agent-toggle"));
+    await screen.findByTestId("executor-add-agent-opt-gemini-acp");
+
+    rerender(<ChatSurface {...props} prefsMenuOpen={false} />);
+    // The dropdown unmounts once its close transition ends — that is what resets it.
+    await waitFor(() => expect(screen.queryByTestId("executor-add-agent-toggle")).not.toBeInTheDocument());
+    rerender(<ChatSurface {...props} prefsMenuOpen />);
+
+    await screen.findByTestId("executor-add-agent-toggle");
+    expect(
+      screen.queryByTestId("executor-add-agent-opt-gemini-acp"),
+      "reopening the picker starts with the registry collapsed",
+    ).not.toBeInTheDocument();
   });
 
   it("shows nothing extra when there is nothing addable", async () => {

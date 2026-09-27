@@ -4954,6 +4954,7 @@ pub fn run() {
             commands::preview_cmds::preview_probe,
             commands::preview_cmds::preview_bounds,
             commands::preview_cmds::preview_hide,
+            commands::preview_cmds::preview_layer,
             commands::preview_cmds::preview_close,
             commands::preview_cmds::preview_reload,
             commands::preview_cmds::preview_history,

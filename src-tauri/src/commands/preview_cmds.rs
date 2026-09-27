@@ -194,18 +194,102 @@ pub async fn preview_open(
             );
         });
 
-    window
+    let child = window
         .add_child(
             builder,
             LogicalPosition::new(bounds.x, bounds.y),
             LogicalSize::new(bounds.width, bounds.height),
         )
-        .map(|_| ())
-        .map_err(|err| crate::PalisadeError::from(format!("open preview: {err}")))
+        .map_err(|err| crate::PalisadeError::from(format!("open preview: {err}")))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        clear_host_background(&window)?;
+        layer(&window, &child, true)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = child;
+
+    Ok(())
 }
 
-/// Follows the placeholder as it moves or resizes, and shows the view if an
-/// overlay had hidden it.
+/// Puts the preview in front of the window's own webview (`front`, so it takes
+/// clicks and scrolls) or behind it (while a tooltip, menu or dialog overlaps
+/// it, so that overlay draws on top). The host webview paints no background of
+/// its own (`clear_host_background`) and `PreviewPane` leaves its area
+/// transparent, so the page shows through either way — flipping the order
+/// changes nothing on screen but who draws on top.
+#[tauri::command]
+pub async fn preview_layer(window: tauri::Window, app: tauri::AppHandle, project_hash: String, front: bool) -> Res<()> {
+    match app.get_webview(&label_for(&window, &project_hash)) {
+        #[cfg(target_os = "macos")]
+        Some(child) => layer(&window, &child, front),
+        #[cfg(not(target_os = "macos"))]
+        Some(_) => {
+            let _ = front;
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Stops the window's own webview painting a background, so the preview shows
+/// through wherever the HTML is transparent while it sits behind.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn clear_host_background(window: &tauri::Window) -> Res<()> {
+    use cocoa::base::{id, nil, NO};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let Some(host) = window.get_webview(window.label()) else {
+        return Ok(());
+    };
+    host.with_webview(|webview| unsafe {
+        let no: id = msg_send![class!(NSNumber), numberWithBool: NO];
+        let key = NSString::alloc(nil).init_str("drawsBackground");
+        let _: () = msg_send![webview.inner() as id, setValue: no forKey: key];
+        let _: () = msg_send![key, release];
+    })
+    .map_err(|err| crate::PalisadeError::from(err.to_string()))
+}
+
+/// ponytail: macOS only, the one supported target; Windows/Linux keep the
+/// preview always on top (overlays land under it) until one of them ships.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn layer(window: &tauri::Window, child: &tauri::Webview, front: bool) -> Res<()> {
+    use cocoa::appkit::{NSView, NSWindowOrderingMode};
+    use cocoa::base::id;
+    use objc::{msg_send, sel, sel_impl};
+    use std::sync::mpsc::channel;
+
+    let Some(host) = window.get_webview(window.label()) else {
+        return Ok(());
+    };
+    let (tx, rx) = channel();
+    child
+        .with_webview(move |webview| {
+            let _ = tx.send(webview.inner() as usize);
+        })
+        .map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+    let child_view = rx.recv().map_err(|err| crate::PalisadeError::from(err.to_string()))?;
+
+    // AppKit calls belong on the main thread, which is where this runs.
+    host.with_webview(move |webview| unsafe {
+        let host_view = webview.inner() as id;
+        let child_view = child_view as id;
+        let superview: id = child_view.superview();
+        if !superview.is_null() {
+            let order = if front { NSWindowOrderingMode::NSWindowAbove } else { NSWindowOrderingMode::NSWindowBelow };
+            let _: () = msg_send![superview, addSubview: child_view positioned: order relativeTo: host_view];
+        }
+    })
+    .map_err(|err| crate::PalisadeError::from(err.to_string()))
+}
+
+/// Follows the placeholder as it moves or resizes, and shows the view if the
+/// tab had hidden it.
 #[tauri::command]
 pub fn preview_bounds(window: tauri::Window, app: tauri::AppHandle, project_hash: String, bounds: Bounds) -> Res<()> {
     match app.get_webview(&label_for(&window, &project_hash)) {
@@ -217,9 +301,8 @@ pub fn preview_bounds(window: tauri::Window, app: tauri::AppHandle, project_hash
     }
 }
 
-/// Hides the view without discarding the page. A native view draws above every
-/// HTML overlay, so the frontend hides it whenever something has to sit over
-/// its area, and whenever the Preview tab is not the one showing.
+/// Hides the view without discarding the page — used when the Preview tab
+/// isn't the one showing.
 #[tauri::command]
 pub fn preview_hide(window: tauri::Window, app: tauri::AppHandle, project_hash: String) -> Res<()> {
     match app.get_webview(&label_for(&window, &project_hash)) {
