@@ -29,12 +29,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
-ulid = "1"
+sha2 = "0.11"
+ulid = "3"
 chrono = "0.4"
-dirs = "6"
+dirs = "7"
 # Debug-only: lets the Tauri MCP drive the real app for end-to-end checks.
-tauri-plugin-mcp-bridge = "0.12"
+tauri-plugin-mcp-bridge = "0.13"
 portable-pty = "0.9.0"
 base64 = "0.23.1"
 toml_edit = "0.25.13"
@@ -42,12 +42,12 @@ regex = "1.13.1"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 agent-client-protocol = { version = "2", features = ["unstable_auth_methods"] }
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 tokio = { version = "1", features = ["rt", "macros", "io-util"] }
-gix = "0.86"
+gix = "0.88"
 # Database viewer/editor: `any` picks the concrete driver per connection URL at
 # runtime, so one binary speaks both Postgres and SQLite.
-sqlx = { version = "0.8", default-features = false, features = [
+sqlx = { version = "0.9", default-features = false, features = [
   "runtime-tokio",
   "tls-rustls",
   "any",
@@ -62,7 +62,7 @@ tauri-plugin-notification = "2"
 # store is an opt-in feature — so each target names its own. Linux compiles
 # none and falls back to the 0600 file path (design.md D15).
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
+cocoa = "0.27"
 objc = "0.2.7"
 keyring = { version = "3", features = ["apple-native"] }
 
