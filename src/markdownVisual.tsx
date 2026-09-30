@@ -60,9 +60,10 @@ function RenderedMarkdown({ source, projectHash, filePath }: { source: string; p
     return () => { active = false; };
   }, [source, projectHash, filePath]);
   return <MDEditor.Markdown className="ds-prose" source={source} rehypePlugins={[[rehypeSanitize, markdownPreviewSchema]]} urlTransform={(url) => {
-    if (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^(?:https?:|mailto:|tel:)/i.test(url)) return "";
+    // undefined drops the attribute; an empty src makes React warn and the browser refetch the page.
+    if (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^(?:https?:|mailto:|tel:)/i.test(url)) return undefined;
     const imagePath = projectImagePath(url, filePath);
-    return imagePath && /\.(?:png|jpe?g|gif|webp|svg|avif)(?:#.*)?$/i.test(url) ? images[url] ?? "" : url;
+    return imagePath && /\.(?:png|jpe?g|gif|webp|svg|avif)(?:#.*)?$/i.test(url) ? images[url] : url;
   }} />;
 }
 

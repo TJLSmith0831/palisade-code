@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { act } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+import { invoke } from "@tauri-apps/api/core";
 
 import { markdownVisual } from "../markdownVisual";
 
@@ -38,6 +41,23 @@ describe("markdownVisual", () => {
       "ds-md-fence",
       "ds-md-fence ds-md-fence-end",
     ]);
+    view.destroy();
+  });
+
+  it("leaves a local image without src while it loads, then shows its data URL", async () => {
+    let resolve!: (base64: string) => void;
+    vi.mocked(invoke).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    let view!: EditorView;
+    await act(async () => { view = lines("![logo](docs/logo.png)").view; });
+    const img = () => view.dom.querySelector(".ds-md-widget img");
+    expect(img()).not.toBeNull();
+    expect(img()!.hasAttribute("src")).toBe(false);
+    await act(async () => { resolve("AAAA"); });
+    expect(img()!.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+    expect(errors.mock.calls.some((call) => String(call[0]).includes("empty string"))).toBe(false);
+    errors.mockRestore();
     view.destroy();
   });
 });
