@@ -223,6 +223,7 @@ import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
 import SessionList from "./SessionList";
 import { VerifyBadge } from "./fleetBadges";
+import { ContextDonut } from "./ContextDonut";
 import { ModeSelector } from "./ModeSelector";
 import { SpecProgress } from "./SpecProgress";
 import SearchPanel from "./SearchPanel";
@@ -1045,8 +1046,9 @@ export const ChatSurface = memo(
     useEffect(() => {
       if (!modelMenuOpen) setModelQuery("");
     }, [modelMenuOpen]);
+    const [effectiveSession, setEffectiveSession] = useState<api.SessionContext | null>(null);
     const currentModelId =
-      thread?.model ?? framingModel ?? modelState?.current ?? null;
+      effectiveSession?.model ?? thread?.model ?? framingModel ?? modelState?.current ?? null;
     const modelLabel =
       // A known bad flag (from a persisted `authBlocked`, since the live
       // probe can't have finished yet if it's loading) outranks "…" — an
@@ -2358,6 +2360,7 @@ export const ChatSurface = memo(
             </Menu>
             )}
             <div className="ds-composer-actions">
+              <ContextDonut threadId={thread?.id} mode={thread?.currentMode ?? "go"} onSession={setEffectiveSession} />
               <ModeSelector
                 testId="mode-selector"
                 value={thread?.currentMode ?? "go"}
@@ -4605,10 +4608,34 @@ export default function App() {
   // as an `@path` mention the agent can open with its own tools.
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "drop") {
+      const payload = event.payload;
+      document.querySelectorAll(".native-drop-target").forEach((element) => element.classList.remove("native-drop-target"));
+      const point = "position" in payload ? payload.position : null;
+      const element = point ? document.elementFromPoint(point.x / window.devicePixelRatio, point.y / window.devicePixelRatio) : null;
+      const treeBody = element?.closest(".ds-tree-body");
+      const folder = element?.closest<HTMLElement>(".ds-tree-row.folder");
+      if (payload.type !== "drop" && payload.type !== "leave" && treeBody) (folder ?? treeBody).classList.add("native-drop-target");
+      if (payload.type === "drop") {
         setDragActive(false);
         if (!current.current.project) return;
-        const paths = event.payload.paths;
+        const paths = payload.paths;
+        if (treeBody) {
+          const hash = current.current.project.hash;
+          const dir = folder?.dataset.path ?? "";
+          void api.importPaths(hash, paths, dir).then((results) => {
+            for (const result of results) {
+              if (result.path) invalidateFileTree(result.path);
+            }
+            const errors = results.filter((r) => r.error).map((r) => `${r.source}: ${r.error}`);
+            if (errors.length) fail(errors.join("\n"));
+          }, fail);
+          return;
+        }
+        if (element?.closest(".ds-editor-col")) {
+          paths.forEach((path) => selectFile(path));
+          return;
+        }
+        if (!element?.closest(".composer") && activePanelRef.current !== "fleet") return;
         const images = imagePathsFrom(paths);
         if (images.length) void attachImages(images.map((path) => ({ path })));
         const others = paths.filter((p) => !images.includes(p));
@@ -4625,7 +4652,7 @@ export default function App() {
     return () => {
       unlisten.then((un) => un());
     };
-  }, [attachImages]);
+  }, [attachImages, selectFile, invalidateFileTree]);
 
   // Each thread's own worktree and what has changed in it, keyed by thread —
   // this is what the sidebar's diff stat and branch line read.

@@ -1833,3 +1833,16 @@ export type Diagnostics = {
 
 export const collectDiagnostics = () =>
   invoke<Diagnostics>("collect_diagnostics");
+
+export type ImportResult = { source: string; path: string | null; error: string | null };
+export const importPaths = (projectHash: string, sources: string[], relativePath: string) =>
+  invoke<ImportResult[]>("import_paths", { projectHash, sources, relativePath });
+
+export type SessionContext = {
+  sessionId: string; threadId: string; mode: Mode; busy: boolean; canCompact: boolean; model?: string | null;
+  status: { used: number | null; size: number | null; updatedAt: string | null; pending: boolean;
+    compaction: string | null; error: string | null };
+};
+export const sessionContexts = () => invoke<SessionContext[]>("session_contexts");
+export const compactSession = (sessionId: string) => invoke<void>("compact_session", { sessionId });
+export const readExternalFile = (path: string, binary = false) => invoke<string>("read_external_file", { path, binary });

@@ -55,32 +55,26 @@ pub fn build_handoff_transcript(
     // Reserve some budget for the new message and overhead.
     let available = token_budget.saturating_sub(1024);
 
-    let mut included: Vec<&TranscriptTurn> = Vec::new();
+    let mut included: Vec<TranscriptTurn> = Vec::new();
     let mut used = 0usize;
-
-    // Most-recent-first: iterate from the end.
+    let mut omitted = false;
     for turn in turns.iter().rev() {
-        let turn_text = format!(
-            "{}: {}",
-            match turn.role.as_str() {
-                "user" => "User",
-                "assistant" => "Assistant",
-                _ => &turn.role,
-            },
-            turn.content
-        );
-        let turn_tokens = estimate_tokens(&turn_text);
-        if used + turn_tokens > available {
+        let cost = estimate_tokens(&format!("{}: {}", turn.role, turn.content));
+        if used + cost > available {
+            omitted = true;
+            if included.is_empty() && available > 16 {
+                included.push(TranscriptTurn { role: turn.role.clone(),
+                    content: turn.content.chars().take((available - 16) * 4).collect() });
+            }
             break;
         }
-        used += turn_tokens;
-        included.push(turn);
+        used += cost;
+        included.push(turn.clone());
     }
-
-    // Reverse back to chronological order, then convert to owned.
     included.reverse();
-    let owned: Vec<TranscriptTurn> = included.into_iter().cloned().collect();
-    format_transcript(&owned)
+    let transcript = format_transcript(&included);
+    if omitted { format!("[Some earlier context or oversized content omitted.]\n{transcript}") }
+    else { transcript }
 }
 
 // ------------------------------------------------------------------ tests
@@ -88,6 +82,15 @@ pub fn build_handoff_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_latest_turn_keeps_an_excerpt_and_marks_omissions() {
+        let turns = vec![TranscriptTurn { role: "user".into(), content: "a".repeat(10000) }];
+        let result = build_handoff_transcript(&turns, 1100);
+        assert!(result.contains("User:"));
+        assert!(result.contains("omitted"));
+        assert!(result.len() < 1000);
+    }
 
     fn make_turns() -> Vec<TranscriptTurn> {
         vec![

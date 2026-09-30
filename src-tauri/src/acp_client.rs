@@ -182,6 +182,7 @@ pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
     meta.insert("terminal-auth".into(), serde_json::Value::Bool(true));
     v1::ClientCapabilities::new()
         .auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
+        .session(v1::ClientSessionCapabilities::new().compaction(v1::CompactionCapabilities::new()))
 }
 
 /// The advertised method `authenticate` may actually be called with.
@@ -240,7 +241,6 @@ pub fn logins_for(agent_id: &str) -> Vec<AgentLogin> {
 fn login_label(method: &v1::AuthMethod) -> String {
     match method {
         v1::AuthMethod::Agent(agent) => agent.name.clone(),
-        v1::AuthMethod::EnvVar(env) => env.name.clone(),
         v1::AuthMethod::Terminal(terminal) => terminal.name.clone(),
         _ => method.id().to_string(),
     }
@@ -483,6 +483,7 @@ pub struct AcpSession {
     pub acp_session_id: Option<String>,
     /// What the agent reported about its model selector at session start.
     pub models: ModelState,
+    pub restored: bool,
     pub busy: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
     /// Commands for the bridge thread; dropping it ends the connection.
@@ -557,6 +558,7 @@ pub struct AcpSpawn {
     /// chosen one and the agent offers it.
     pub model: Option<String>,
     pub extra_env: Vec<(String, String)>,
+    pub restore: Option<String>,
 }
 
 // ------------------------------------------------------------- bridge
@@ -564,6 +566,7 @@ pub struct AcpSpawn {
 /// Commands the sync side sends to the bridge thread.
 pub(crate) enum BridgeCommand {
     Prompt(Prompt),
+    SetModel(String, mpsc::Sender<Res<ModelState>>),
     Shutdown,
 }
 
@@ -1240,6 +1243,8 @@ async fn run_bridge(
     // path for an agent whose login the protocol drives (#19).
     auth_only: Option<String>,
 ) -> Res<()> {
+    let replaying = Arc::new(AtomicBool::new(false));
+    let notif_replaying = replaying.clone();
     let notif_sink = sink.clone();
     let notif_session = palisade_session_id.clone();
     let notif_thread = spawn.thread_id.clone();
@@ -1299,6 +1304,12 @@ async fn run_bridge(
         .name("palisade-code")
         .on_receive_notification(
             async move |notification: v1::SessionNotification, cx| {
+                if matches!(&notification.update, v1::SessionUpdate::UsageUpdate(_) | v1::SessionUpdate::CompactionUpdate(_) | v1::SessionUpdate::CompactionSummaryChunk(_)) {
+                    if let Ok(update) = serde_json::to_value(&notification.update) {
+                        notif_sink.emit_context(&notif_session, &notif_thread, update);
+                    }
+                }
+                if notif_replaying.load(Ordering::SeqCst) { return Ok(()); }
                 // Spec-mode enforcement at the notification layer: some agents
                 // (OpenCode) auto-approve workspace writes and never send
                 // `session/request_permission` for in-project edits. When a
@@ -1497,7 +1508,23 @@ async fn run_bridge(
                 v1::NewSessionRequest::new(spawn.project_root.clone())
                     .mcp_servers(mcp_servers.clone())
             };
-            let mut started = cx.send_request(new_request()).block_task().await;
+            let restored = if let Some(id) = spawn.restore.as_deref() {
+                let id = v1::SessionId::new(id);
+                replaying.store(true, Ordering::SeqCst);
+                let capabilities = &init_response.agent_capabilities;
+                let response = if capabilities.session_capabilities.resume.is_some() {
+                    cx.send_request(v1::ResumeSessionRequest::new(id.clone(), spawn.project_root.clone()).mcp_servers(mcp_servers.clone()))
+                        .block_task().await.map(|r| (r.config_options, r.modes)).ok()
+                } else if capabilities.load_session {
+                    cx.send_request(v1::LoadSessionRequest::new(id.clone(), spawn.project_root.clone()).mcp_servers(mcp_servers.clone()))
+                        .block_task().await.map(|r| (r.config_options, r.modes)).ok()
+                } else { None };
+                replaying.store(false, Ordering::SeqCst);
+                response.map(|(options, modes)| v1::NewSessionResponse::new(id).config_options(options).modes(modes))
+            } else { None };
+            let mut started = if let Some(session) = restored { Ok(session) }
+                else { cx.send_request(new_request()).block_task().await };
+
             for delay in SESSION_NEW_RETRY_DELAYS {
                 match &started {
                     Err(e) if is_transient_server_error(e) => {
@@ -1558,7 +1585,7 @@ async fn run_bridge(
 
             let ready = ready_tx.send(Ok(ReadyReport {
                 acp_session_id: session_id.to_string(),
-                models,
+                models: models.clone(),
             }));
             if !probe_only {
                 sink.emit_image_support(&palisade_session_id, &spawn.thread_id, images_supported);
@@ -1642,6 +1669,15 @@ async fn run_bridge(
                                     emit(&sink, &palisade_session_id, &spawn.thread_id,
                                         ExecutorEvent::agent_died(None, format!("prompt send failed: {e}")));
                                 }
+                            }
+                            Some(BridgeCommand::SetModel(want, reply)) => {
+                                let result = if let Some(config_id) = models.config_id.as_ref() {
+                                    cx.send_request(v1::SetSessionConfigOptionRequest::new(session_id.clone(), config_id.clone(), v1::SessionConfigOptionValue::ValueId { value: want.into() }))
+                                        .block_task().await.map(|r| extract_models(&r.config_options))
+                                        .map_err(|e| crate::PalisadeError::from(e.to_string()))
+                                } else { Err("Agent has no model selector".into()) };
+                                if let Ok(updated) = &result { models = updated.clone(); }
+                                let _ = reply.send(result);
                             }
                             Some(BridgeCommand::Shutdown) | None => return Ok(()),
                         }
@@ -1760,9 +1796,11 @@ fn start_with_transport(
 pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Res<AcpSession> {
     let agent = agent_config(&spawn);
     let identity = SessionIdentity::from(&spawn);
+    let restore_id = spawn.restore.clone();
     let (id, models, cmd_tx, busy, acp_session_id, pending_permissions) =
         start_with_transport(agent, spawn, sink, false, None)?;
     let mut session = identity.into_session(id, models, cmd_tx, busy, pending_permissions);
+    session.restored = restore_id.as_deref() == Some(acp_session_id.as_str());
     session.acp_session_id = Some(acp_session_id);
     Ok(session)
 }
@@ -1793,6 +1831,7 @@ pub fn probe_models(
         bypass: false,
         model: None,
         extra_env: vec![],
+        restore: None,
     };
     let agent = agent_config(&spawn);
     let (_id, models, _cmd_tx, _busy, _acp_id, _pending) =
@@ -1829,6 +1868,7 @@ pub fn authenticate_agent(
         bypass: false,
         model: None,
         extra_env: vec![],
+        restore: None,
     };
     let agent = agent_config(&spawn);
     start_with_transport(agent, spawn, Arc::new(NullSink), false, Some(method_id))?;
@@ -1960,6 +2000,7 @@ impl SessionIdentity {
             mode: self.mode,
             acp_session_id: None,
             models,
+            restored: false,
             busy,
             stopping: Arc::new(AtomicBool::new(false)),
             cmd_tx: Some(cmd_tx),
@@ -1988,6 +2029,21 @@ pub fn send_acp_prompt(session: &AcpSession, prefix: Option<&str>, mut prompt: P
     prompt.context = context;
     tx.send(BridgeCommand::Prompt(prompt))
         .map_err(|_| crate::PalisadeError::from("agent connection is closed"))
+}
+
+pub fn change_model(session: &mut AcpSession, wanted: Option<&str>) -> Res<()> {
+    let wanted = wanted.unwrap_or(AGENT_DEFAULT_MODEL_ID);
+    if session.models.current.as_deref() == Some(wanted) { return Ok(()); }
+    if session.is_busy() { return Ok(()); } // Stored preference applies before the next turn.
+    if wanted == AGENT_DEFAULT_MODEL_ID && session.models.config_id.is_none() { return Ok(()); }
+    if !session.models.models.iter().any(|model| model.id == wanted) {
+        return Err(format!("Model {wanted} is not offered by this agent").into());
+    }
+    let (tx, rx) = mpsc::channel();
+    session.cmd_tx.as_ref().ok_or("Session is shut down")?
+        .send(BridgeCommand::SetModel(wanted.into(), tx)).map_err(|_| "Agent connection is closed")?;
+    session.models = rx.recv_timeout(STARTUP_TIMEOUT).map_err(|e| e.to_string())??;
+    Ok(())
 }
 
 fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
@@ -2019,6 +2075,7 @@ pub(crate) fn stub_session(busy: bool) -> (AcpSession, tokio::sync::mpsc::Unboun
             mode: "spec".into(),
             acp_session_id: None,
             models: ModelState::default(),
+            restored: false,
             busy: Arc::new(AtomicBool::new(busy)),
             stopping: Arc::new(AtomicBool::new(false)),
             cmd_tx: Some(cmd_tx),
@@ -2907,7 +2964,7 @@ mod tests {
                     .on_receive_request(
                         async |req: v1::InitializeRequest, responder, _cx| {
                             let mut response = v1::InitializeResponse::new(req.protocol_version)
-                                .agent_capabilities(v1::AgentCapabilities::new());
+                                .agent_capabilities(v1::AgentCapabilities::new().load_session(true));
                             if advertise_protocol_login {
                                 response = response.auth_methods(vec![v1::AuthMethod::Agent(
                                     v1::AuthMethodAgent::new(
@@ -2936,6 +2993,14 @@ mod tests {
                                 v1::NewSessionResponse::new("acp-sess-1")
                                     .config_options(vec![model_option()]),
                             )
+                        },
+                        acp::on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async |req: v1::LoadSessionRequest, responder, cx| {
+                            cx.send_notification(v1::SessionNotification::new(req.session_id.clone(),
+                                v1::SessionUpdate::AgentMessageChunk(v1::ContentChunk::new(v1::ContentBlock::Text(v1::TextContent::new("historical reply"))))))?;
+                            responder.respond(v1::LoadSessionResponse::new().config_options(vec![model_option()]))
                         },
                         acp::on_receive_request!(),
                     )
@@ -3154,6 +3219,7 @@ mod tests {
             bypass: false,
             model,
             extra_env: vec![],
+        restore: None,
         }
     }
 
@@ -3358,6 +3424,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn live_model_change_keeps_session_and_updates_acknowledged_model() {
+        let (transport, fake, _agent) = fake_agent_pair();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let spawn = test_spawn(Some("model-a".into()));
+        let identity = SessionIdentity::from(&spawn);
+        let (id, models, commands, busy, acp_id, pending) = start_with_transport(transport, spawn, Arc::new(ChannelSink(tx)), false, None).unwrap();
+        let mut session = identity.into_session(id, models, commands, busy, pending);
+        change_model(&mut session, Some("model-b")).unwrap();
+        assert_eq!(session.models.current.as_deref(), Some("model-b"));
+        assert_eq!(acp_id, "acp-sess-1");
+        assert_eq!(fake.set_config_requests.lock_or_recover().last().unwrap().1, "model-b");
+        session.busy.store(true, Ordering::SeqCst);
+        change_model(&mut session, Some("model-a")).unwrap();
+        assert_eq!(session.models.current.as_deref(), Some("model-b"), "busy session changes are deferred");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restored_session_uses_provider_id_and_does_not_reemit_history() {
+        let (transport, _fake, _agent) = fake_agent_pair();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut spawn = test_spawn(Some("model-a".into()));
+        spawn.restore = Some("previous-session".into());
+        let (_, _, _, _, acp_id, _) = start_with_transport(transport, spawn, Arc::new(ChannelSink(tx)), false, None).unwrap();
+        assert_eq!(acp_id, "previous-session");
+        assert!(rx.try_recv().is_err(), "replayed assistant messages must not be persisted twice");
     }
 
     /// RED→GREEN: a thread-chosen model is applied via set_config_option
