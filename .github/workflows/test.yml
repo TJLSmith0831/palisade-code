@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No `packageManager` field in package.json, so the version is pinned
       # here instead — action-setup errors out without one.
