@@ -158,6 +158,8 @@ use acp_preflight::Preflight;
 use executor::{Envelope, ExecutorEvent, Harness, Sink};
 use serde::Serialize;
 use store::{palisade_home, Message, Project};
+#[cfg(feature = "readiness-test")]
+mod readiness_test;
 use crate::locks::MutexExt;
 pub(crate) use error::PalisadeError;
 pub(crate) use store::{Res, ThreadMeta};

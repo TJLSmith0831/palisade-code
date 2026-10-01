@@ -37,6 +37,9 @@ use crate::locks::MutexExt;
 /// PATH lookup without spawning a shell (E6). Stdlib rather than the `which`
 /// crate — same behavior in ~15 lines, one fewer dependency.
 pub fn find_on_path(bin: &str) -> Option<PathBuf> {
+    #[cfg(feature = "readiness-test")]
+    return lookup(crate::readiness_test::root().join("bin").as_os_str(), bin);
+    #[cfg(not(feature = "readiness-test"))]
     lookup(&std::env::var_os("PATH")?, bin).or_else(|| lookup(login_shell_path()?, bin))
 }
 

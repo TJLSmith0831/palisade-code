@@ -993,6 +993,12 @@ fn select_model(manifest_json: &str, role: &str) -> Res<ModelManifest> {
 /// install.
 #[cfg(not(debug_assertions))]
 fn installed_model_dir(app: &AppHandle) -> Res<PathBuf> {
+    #[cfg(feature = "readiness-test")]
+    {
+        let _ = app;
+        return Ok(crate::readiness_test::root().join("models"));
+    }
+    #[cfg(not(feature = "readiness-test"))]
     app.path()
         .app_data_dir()
         .map(|dir| dir.join("models"))

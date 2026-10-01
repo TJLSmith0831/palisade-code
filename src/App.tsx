@@ -4611,7 +4611,9 @@ export default function App() {
       const payload = event.payload;
       document.querySelectorAll(".native-drop-target").forEach((element) => element.classList.remove("native-drop-target"));
       const point = "position" in payload ? payload.position : null;
-      const element = point ? document.elementFromPoint(point.x / window.devicePixelRatio, point.y / window.devicePixelRatio) : null;
+      // WKWebView reports AppKit logical points; other backends use physical pixels.
+      const scale = navigator.platform.startsWith("Mac") ? 1 : window.devicePixelRatio;
+      const element = point ? document.elementFromPoint(point.x / scale, point.y / scale) : null;
       const treeBody = element?.closest(".ds-tree-body");
       const folder = element?.closest<HTMLElement>(".ds-tree-row.folder");
       if (payload.type !== "drop" && payload.type !== "leave" && treeBody) (folder ?? treeBody).classList.add("native-drop-target");
