@@ -1513,6 +1513,8 @@ input[type="checkbox"] {
 
 .ds-editor-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   align-items: center;
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
@@ -1523,7 +1525,15 @@ input[type="checkbox"] {
 .ds-editor-path {
   color: var(--muted);
   font-family: var(--mono);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
+
+.ds-editor-toolbar > .ds-editor-path { flex: 1 1 120px; }
+.ds-media-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 100%; margin-left: auto; }
+.ds-editor-toolbar button { flex-shrink: 0; }
 
 .ds-editor-spacer {
   flex: 1;
@@ -7822,4 +7832,13 @@ button.ds-onboarding-status {
     order: 2;
     margin-left: auto;
   }
+}
+
+.ds-context-donut { flex: 0 0 28px; width: 28px; height: 28px; min-width: 28px; min-height: 28px; border-radius: var(--mantine-radius-sm); }
+.ds-context-donut:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds-tree-row.native-drop-target, .ds-tree-body.native-drop-target { outline: 1px solid var(--accent); outline-offset: -1px; background: color-mix(in oklab, var(--accent), transparent 90%); }
+@container composer (max-width: 320px) {
+  .ds-composer-controls { grid-template-columns: minmax(96px, 1fr) 28px 36px; }
+  .ds-composer-actions .ds-mode-selector, .ds-composer-actions > :last-child { grid-column: 3; }
+  .ds-context-donut { grid-column: 2; grid-row: 2; }
 }

@@ -40,6 +40,19 @@ describe("FileTree", () => {
     invokeMock.mockClear();
   });
 
+  it("keeps expanded children visible while a refresh is pending", async () => {
+    const props = { projectHash: "good", projectName: "p", onSelectFile: vi.fn(), activePath: null };
+    const view = render(<FileTree {...props} refreshToken={0} />);
+    fireEvent.click(await screen.findByText("src"));
+    await screen.findByText("index.ts");
+    let finish!: (entries: unknown[]) => void;
+    invokeMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    view.rerender(<FileTree {...props} refreshToken={1} />);
+    expect(screen.getByText("index.ts")).toBeDefined();
+    finish([{ name: "src", is_dir: true, path: "src" }]);
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeDefined());
+  });
+
   it("clears a stale error from the previous project when the project switches", async () => {
     const { rerender } = render(
       <FileTree projectHash="bad" projectName="broken-project" onSelectFile={vi.fn()} activePath={null} />,

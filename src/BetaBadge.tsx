@@ -134,6 +134,22 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
     setError(null);
   }, []);
 
+  // Portaled controls can receive interactions above the modal overlay.
+  // Dismiss feedback when the interaction belongs to another surface too.
+  useEffect(() => {
+    if (!open) return;
+    const dismissOutside = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && !target.closest('[data-testid="feedback-modal"], [data-testid="open-feedback"]')) close();
+    };
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("click", dismissOutside, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside, true);
+      document.removeEventListener("click", dismissOutside, true);
+    };
+  }, [open, close]);
+
   return (
     <>
       <Group gap="xs" data-tauri-drag-region-exclude data-testid="beta-controls">

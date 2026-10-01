@@ -491,7 +491,7 @@ export default function FileEditorPane({
   const save = useCallback(
     (options?: { overwrite?: boolean }) => {
       const view = viewRef.current;
-      if (!path || !view || saving) return;
+      if (!path || path.startsWith("/") || !view || saving) return;
       const after = view.state.doc.toString();
       setSaving(true);
       setError(null);
@@ -561,6 +561,8 @@ export default function FileEditorPane({
 
   const buildExtensions = useCallback(
     (forPath: string) => [
+      EditorState.readOnly.of(forPath.startsWith("/")),
+      EditorView.editable.of(!forPath.startsWith("/")),
       lineNumbers(),
       highlightActiveLine(),
       highlightActiveLineGutter(),
@@ -649,8 +651,7 @@ export default function FileEditorPane({
     // top of the file on every save. Only rebuild when disk actually differs
     // from what's on screen; that also skips no-op writes from anyone else.
     let cancelled = false;
-    api
-      .readFileContent(projectHash, path)
+    (path.startsWith("/") ? api.readExternalFile(path) : api.readFileContent(projectHash, path))
       .then((text) => {
         if (cancelled) return;
         // Nothing of the user's to lose, so take the new version silently —
@@ -679,8 +680,7 @@ export default function FileEditorPane({
 
     const mediaKind = mediaKindFor(path);
     if (mediaKind) {
-      api
-        .readFileBase64(projectHash, path)
+      (path.startsWith("/") ? api.readExternalFile(path, true) : api.readFileBase64(projectHash, path))
         .then((base64) =>
           setMediaSrc(`data:${mimeTypeFor(path)};base64,${base64}`)
         )
@@ -698,8 +698,7 @@ export default function FileEditorPane({
     }
 
     let cancelled = false;
-    api
-      .readFileContent(projectHash, path)
+    (path.startsWith("/") ? api.readExternalFile(path) : api.readFileContent(projectHash, path))
       .then((text) => {
         if (cancelled) return;
         // Restored cursor is clamped: the file may have changed on disk
@@ -799,7 +798,7 @@ export default function FileEditorPane({
   }, []);
   const language = path ? languageForPath(path) : null;
   useEffect(() => {
-    if (!path || !language || !projectRoot) {
+    if (!path || path.startsWith("/") || !language || !projectRoot) {
       setLspStatus(null);
       return;
     }
@@ -1026,10 +1025,9 @@ export default function FileEditorPane({
     return (
       <div className="ds-media-preview" data-testid="file-editor-media">
         <div className="ds-editor-toolbar">
-          <span className="ds-editor-path">{path}</span>
+          <span className="ds-editor-path" title={path}>{path}</span>
           {mediaKind === "image" && (
-            <>
-              <span className="ds-editor-spacer" />
+            <div className="ds-media-controls" role="group" aria-label="Image zoom">
               <ActionIcon
                 variant="subtle"
                 className="ds-icon-btn"
@@ -1063,7 +1061,7 @@ export default function FileEditorPane({
               >
                 Reset
               </Button>
-            </>
+            </div>
           )}
         </div>
         <div

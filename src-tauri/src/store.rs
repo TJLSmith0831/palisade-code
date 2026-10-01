@@ -855,6 +855,8 @@ pub struct SessionRecord {
     /// means nothing to Codex, so it is only ever reused by the same agent.
     #[serde(default)]
     pub provider_handle: Option<String>,
+    #[serde(default)]
+    pub working_directory: Option<String>,
     pub started_at: String,
     #[serde(default)]
     pub ended_at: Option<String>,
@@ -911,6 +913,7 @@ pub fn open_session(
         agent_id: agent_id.to_string(),
         mode: mode.to_string(),
         provider_handle: provider_handle.map(str::to_string),
+        working_directory: None,
         started_at: now(),
         ended_at: None,
         outcome: None,
@@ -920,6 +923,36 @@ pub fn open_session(
     };
     append_session(home, &record)?;
     Ok(record)
+}
+
+pub fn save_context(home: &Path, session_id: &str, status: &crate::context_status::ContextStatus) -> Res<()> {
+    write_json(&home.join("contexts").join(format!("{session_id}.json")), status)
+}
+
+pub fn load_context(home: &Path, session_id: &str) -> Option<crate::context_status::ContextStatus> {
+    serde_json::from_slice(&fs::read(home.join("contexts").join(format!("{session_id}.json"))).ok()?).ok()
+}
+
+pub fn save_handoff(home: &Path, hash: &str, thread: &str, mode: &str, prefix: &str) -> Res<()> {
+    write_json(&threads_dir(home, hash).join(format!("{thread}.{mode}.handoff.json")), &prefix)
+}
+
+pub fn clear_handoff(home: &Path, hash: &str, thread: &str, mode: &str) -> Res<()> {
+    let path = threads_dir(home, hash).join(format!("{thread}.{mode}.handoff.json"));
+    match fs::remove_file(path) { Ok(()) => Ok(()), Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()), Err(error) => Err(e("clear handoff", error)) }
+}
+
+pub fn load_handoff(home: &Path, hash: &str, thread: &str, mode: &str) -> Res<Option<String>> {
+    match fs::read(threads_dir(home, hash).join(format!("{thread}.{mode}.handoff.json"))) {
+        Ok(prefix) => serde_json::from_slice(&prefix).map(Some).map_err(|error| e("parse handoff", error)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(e("read handoff", error)),
+    }
+}
+
+pub fn record_session_directory(home: &Path, record: &mut SessionRecord, root: &Path) -> Res<()> {
+    record.working_directory = Some(root.to_string_lossy().into_owned());
+    append_session(home, record)
 }
 
 /// Record a session ending. Appends an amended copy rather than rewriting the
@@ -1002,6 +1035,7 @@ fn legacy_session(home: &Path, hash: &str, thread_id: &str) -> Option<SessionRec
         agent_id: "claude".into(),
         mode: meta.get("currentMode").and_then(|v| v.as_str()).unwrap_or("spec").to_string(),
         provider_handle: Some(handle),
+        working_directory: None,
         started_at: stamp.clone(),
         ended_at: Some(stamp),
         outcome: Some("interrupted".into()),
@@ -1571,6 +1605,17 @@ fn log_corrupt_line(home: &Path, thread_id: &str, offset: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undelivered_handoff_survives_restart_until_explicitly_cleared() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(load_handoff(home.path(), "p", "t", "go").unwrap(), None);
+        save_handoff(home.path(), "p", "t", "go", "conversation and tool outcomes").unwrap();
+        assert_eq!(load_handoff(home.path(), "p", "t", "go").unwrap().as_deref(), Some("conversation and tool outcomes"));
+        assert_eq!(load_handoff(home.path(), "p", "t", "spec").unwrap(), None, "concurrent modes have separate handoffs");
+        clear_handoff(home.path(), "p", "t", "go").unwrap();
+        assert_eq!(load_handoff(home.path(), "p", "t", "go").unwrap(), None);
+    }
 
     // --------------------------------------------------------- breakpoints
 

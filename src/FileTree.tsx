@@ -18,8 +18,8 @@ type Props = {
   onSelectFile: (path: string) => void;
   activePath: string | null;
   /** Bump to force a full re-fetch after an out-of-band change (the file
-   * palette's create/rename/delete) — collapses expanded dirs, same as a
-   * project switch. Operations the tree performs on itself refresh just the
+   * palette's create/rename/delete) while preserving loaded directories.
+   * Operations the tree performs on itself refresh just the
    * affected directory instead, without touching this. */
   refreshToken?: number;
   /** Directories to re-expand on mount, from the saved session. */
@@ -115,39 +115,66 @@ export default function FileTree({
     treeRef.current.setExpandedState(next);
   }, []);
 
-  // Restored once per project, not on every refresh — a token bump means
-  // the tree collapsed for an unrelated reason and re-expanding then would
-  // fight the user.
-  const restoredFor = useRef<string | null>(null);
-
+  const loadedProject = useRef<string | null>(null);
+  const generation = useRef(0);
+  const directoryVersions = useRef(new Map<string, number>());
+  const beginRead = useCallback((dir: string) => {
+    const version = (directoryVersions.current.get(dir) ?? 0) + 1;
+    directoryVersions.current.set(dir, version);
+    return version;
+  }, []);
   useEffect(() => {
+    const version = ++generation.current;
+    const projectChanged = loadedProject.current !== projectHash;
+    loadedProject.current = projectHash;
     setError(null);
-    setChildren(new Map());
-    childrenRef.current = new Map();
-    treeRef.current.collapseAllNodes();
-    api.listDirectory(projectHash, "", includeHidden).then(async (entries) => {
-      setRoots(entries);
-      if (restoredFor.current === projectHash || !initialExpanded?.length) return;
-      restoredFor.current = projectHash;
-      // Each restored directory needs its children fetched, the same way
-      // expanding it by hand would.
-      const loaded = await Promise.all(
-        initialExpanded.map(async (dir) => {
-          try {
-            return [dir, await api.listDirectory(projectHash, dir, includeHidden)] as const;
-          } catch {
-            // A directory that no longer exists just doesn't come back.
-            return null;
+    if (projectChanged) {
+      setRoots([]);
+      setChildren(new Map());
+      childrenRef.current = new Map();
+      treeRef.current.collapseAllNodes();
+    }
+    const dirs = projectChanged || roots.length === 0 ? (initialExpanded ?? []) : [...childrenRef.current.keys()];
+    let cancelled = false;
+    const current = () => !cancelled && version === generation.current;
+    void (async () => {
+      try {
+        const rootVersion = beginRead("");
+        const entries = await api.listDirectory(projectHash, "", includeHidden);
+        const loaded = await Promise.all(dirs.map(async (dir) => {
+          const revision = beginRead(dir);
+          try { return { dir, revision, entries: await api.listDirectory(projectHash, dir, includeHidden) }; }
+          catch (err) { return { dir, revision, error: describeError(err) }; }
+        }));
+        if (!current() || rootVersion !== directoryVersions.current.get("")) return;
+        setRoots(entries);
+        setChildren((prev) => {
+          const next = new Map(prev);
+          for (const result of loaded) {
+            if (result.revision !== directoryVersions.current.get(result.dir)) continue;
+            if (result.entries) next.set(result.dir, result.entries);
+            else if (/no such|not found/i.test(result.error ?? "")) next.delete(result.dir);
           }
-        }),
-      );
-      setChildren((prev) => {
-        const next = new Map(prev);
-        for (const entry of loaded) if (entry) next.set(entry[0], entry[1]);
-        return next;
-      });
-      expandDirs(loaded.flatMap((entry) => (entry ? [entry[0]] : [])));
-    }, (err) => setError(describeError(err)));
+          // Prune descendants whose parent listing confirms their removal.
+          const listings = new Map(next).set("", entries);
+          for (const dir of next.keys()) {
+            for (let ancestor = dir; ancestor; ancestor = dirOf(ancestor)) {
+              const parent = listings.get(dirOf(ancestor));
+              if (parent && !parent.some((entry) => entry.path === ancestor && entry.is_dir)) {
+                next.delete(dir);
+                break;
+              }
+            }
+          }
+          childrenRef.current = next;
+          return next;
+        });
+        const errors = loaded.flatMap((result) => result.error && !/no such|not found/i.test(result.error) ? [result.error] : []);
+        if (errors.length) setError(errors.join("; "));
+        if (projectChanged || roots.length === 0) expandDirs(loaded.filter((r) => r.entries).map((r) => r.dir));
+      } catch (err) { if (current()) setError(describeError(err)); }
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectHash, refreshToken, includeHidden]);
 
@@ -203,7 +230,7 @@ export default function FileTree({
     return () => {
       cancelled = true;
     };
-  }, [activePath, projectHash, refreshToken, includeHidden, expandDirs]);
+  }, [activePath, projectHash, refreshToken, includeHidden, expandDirs, roots]);
   // The row exists only once the expanded directories have rendered, which
   // is some render after the fetch — so look for it after every render while
   // a reveal is pending, and stop as soon as it has been scrolled to.
@@ -221,15 +248,18 @@ export default function FileTree({
   // re-fetch just that one instead of collapsing the whole tree.
   const refreshDir = useCallback(
     async (dirPath: string) => {
+      const version = generation.current;
+      const revision = beginRead(dirPath);
       try {
         const entries = await api.listDirectory(projectHash, dirPath, includeHidden);
+        if (version !== generation.current || revision !== directoryVersions.current.get(dirPath)) return;
         if (dirPath === "") setRoots(entries);
         else setChildren((prev) => new Map(prev).set(dirPath, entries));
       } catch (err) {
-        setError(describeError(err));
+        if (version === generation.current && revision === directoryVersions.current.get(dirPath)) setError(describeError(err));
       }
     },
-    [projectHash, includeHidden],
+    [projectHash, includeHidden, beginRead],
   );
 
   const toggle = useCallback(
@@ -240,16 +270,9 @@ export default function FileTree({
       }
       const path = entry.path;
       toggleExpanded(path);
-      if (!children.has(path)) {
-        try {
-          const entries = await api.listDirectory(projectHash, path, includeHidden);
-          setChildren((prev) => new Map(prev).set(path, entries));
-        } catch (err) {
-          setError(describeError(err));
-        }
-      }
+      if (!children.has(path)) await refreshDir(path);
     },
-    [projectHash, children, onSelectFile, includeHidden, toggleExpanded],
+    [children, onSelectFile, toggleExpanded, refreshDir],
   );
 
   const runRename = async (path: string, newName: string) => {

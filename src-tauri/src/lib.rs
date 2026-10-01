@@ -4,6 +4,7 @@ mod acp_events;
 mod acp_preflight;
 mod acp_registry;
 mod agent_usage;
+mod context_status;
 mod chain_exec;
 mod chain_runner;
 mod chains;
@@ -613,6 +614,17 @@ impl Sink for AppSink {
         );
     }
 
+    fn emit_context(&self, session_id: &str, _thread_id: &str, update: serde_json::Value) {
+        let harness = self.app.state::<Harness>();
+        let mut contexts = harness.agent.contexts.lock_or_recover();
+        let status = contexts.entry(session_id.to_string()).or_default();
+        status.apply(update);
+        if let Err(error) = store::save_context(&palisade_home(), session_id, status) {
+            let _ = self.app.emit("harness-warning", format!("Could not save context status: {error}"));
+        }
+        let _ = self.app.emit("context-updated", session_id);
+    }
+
     fn emit_usage(
         &self,
         session_id: &str,
@@ -660,7 +672,30 @@ impl Sink for AppSink {
             envelope
         };
 
-        let _ = self.app.emit("executor-event", envelope_ref);
+        let manual = self.app.state::<Harness>().agent.contexts.lock_or_recover()
+            .get(&envelope_ref.session_id).is_some_and(|s| s.manual);
+        if manual && !matches!(envelope_ref.event, ExecutorEvent::Done | ExecutorEvent::Crashed { .. }
+            | ExecutorEvent::PermissionRequest { .. }) { return; }
+        if matches!(envelope_ref.event, ExecutorEvent::Done | ExecutorEvent::Crashed { .. }) {
+            let harness = self.app.state::<Harness>();
+            let mut contexts = harness.agent.contexts.lock_or_recover();
+            if let Some(status) = contexts.get_mut(&envelope_ref.session_id) {
+                status.manual = false;
+                let lifecycle_pending = status.compactions.values().any(|record| record["status"] == "in_progress");
+                if status.pending && (!lifecycle_pending || matches!(envelope_ref.event, ExecutorEvent::Crashed { .. })) {
+                    status.pending = false;
+                    if let ExecutorEvent::Crashed { message, .. } = &envelope_ref.event {
+                        status.compaction = Some("failed".into());
+                        status.error = Some(message.clone());
+                    } else { status.compaction = Some("completed".into()); }
+                    let _ = self.app.emit("context-updated", &envelope_ref.session_id);
+                }
+                let _ = store::save_context(&palisade_home(), &envelope_ref.session_id, status);
+            }
+        }
+        if !manual || !matches!(envelope_ref.event, ExecutorEvent::Crashed { .. }) {
+            let _ = self.app.emit("executor-event", envelope_ref);
+        }
 
         // The thread these side effects belong to is the one the event came
         // from, not whichever thread the sink happened to be built for — with
@@ -679,15 +714,37 @@ impl Sink for AppSink {
             .get(&envelope_ref.session_id)
             .map(|s| s.mode.clone())
             .unwrap_or_else(|| "spec".to_string());
-        executor::persist(
+        if !manual { executor::persist(
             &palisade_home(),
             &self.project_hash,
             &thread_id,
             &envelope_ref.session_id,
             &mode,
             &envelope_ref.event,
-        );
+        ); }
 
+        if matches!(envelope_ref.event, ExecutorEvent::Done) {
+            let _ = store::clear_handoff(&palisade_home(), &self.project_hash, &thread_id, &mode);
+            let app = self.app.clone();
+            let hash = self.project_hash.clone();
+            let thread = thread_id.clone();
+            let session_id = envelope_ref.session_id.clone();
+            tokio::task::spawn_blocking(move || {
+                let harness = app.state::<Harness>();
+                if harness.chain.chain_sessions.lock_or_recover().contains(&session_id) { return; }
+                let wanted = thread_meta(&hash, &thread);
+                let changed = harness.agent.acp_sessions.lock_or_recover().get(&session_id)
+                    .is_some_and(|s| wanted.as_ref().is_some_and(|m|
+                        m.executor.as_deref().is_some_and(|id| id != s.agent_id) ||
+                        m.model.as_deref().is_some_and(|id| s.models.current.as_deref() != Some(id))));
+                if changed {
+                    if let Err(error) = ensure_session(&app, &harness, &hash, &thread, &mode, None, false) {
+                        let _ = app.emit("harness-warning", format!("Could not apply agent/model choice: {error}"));
+                    }
+                    let _ = app.emit("thread-updated", &thread);
+                }
+            });
+        }
         // D22: auto-fire propose after the marker was detected and persisted.
         // Spawned as a tokio task because propose is async and the sink is sync.
         if propose_after_persist {
@@ -1316,6 +1373,9 @@ fn start_session_as(
     let extra_env = settings::cargo_target_dir(&settings, &project, &home, project_hash)
         .map(|target| vec![("CARGO_TARGET_DIR".into(), target.to_string_lossy().into_owned())])
         .unwrap_or_default();
+    let previous = store::read_sessions(&home, project_hash, thread_id)?.into_iter().rev()
+        .find(|r| r.mode == mode)
+        .filter(|r| r.agent_id == agent_id && r.working_directory.as_deref() == root.to_str());
     let spawn = acp_client::AcpSpawn {
         agent_id: agent.id.clone(),
         agent_name: agent.name.clone(),
@@ -1329,23 +1389,31 @@ fn start_session_as(
         bypass,
         model,
         extra_env,
+        restore: previous.as_ref().and_then(|r| r.provider_handle.clone()),
     };
 
     let session = acp_client::start_acp_session(spawn, sink_for(app, project_hash))?;
     let id = session.id.clone();
 
     let git = git_bin().ok();
-    store::open_session(
+    let mut record = store::open_session(
         &home,
         project_hash,
         thread_id,
         &id,
         &agent_id,
         mode,
-        None, // ACP sessions have no provider_handle
+        session.acp_session_id.as_deref(),
         git.as_ref().and_then(|bin| git::rev_parse_head(bin, &root)).as_deref(),
         git.as_ref().map(|bin| git::porcelain_snapshot(bin, &root)),
     )?;
+    store::record_session_directory(&home, &mut record, &root)?;
+    if session.restored {
+        if let Some(mut status) = previous.as_ref().and_then(|r| store::load_context(&home, &r.id)) {
+            status.pending = false;
+            harness.agent.contexts.lock_or_recover().entry(id.clone()).or_insert(status);
+        }
+    }
     harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
     Ok(id)
 }
@@ -1379,56 +1447,54 @@ fn ensure_session(
             .get(&id)
             .is_some_and(|s| s.agent_id == agent.id);
         if matches {
+            let wanted = thread_meta(project_hash, thread_id).and_then(|m| m.model);
+            if let Some(session) = harness.agent.acp_sessions.lock_or_recover().get_mut(&id) {
+                acp_client::change_model(session, wanted.as_deref())?;
+            }
             return Ok(id);
         }
-        // Agent changed under a live session: hand off (D6). The transcript
-        // budget is a fixed default until the new agent reports its context
-        // window via usage_update (D8) — 100k tokens covers every current
-        // agent's window conservatively enough for a text prefix.
-        let turns: Vec<handoff::TranscriptTurn> = store::read_thread(
-            &palisade_home(),
-            project_hash,
-            thread_id,
-        )
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|m| m.role == "user" || m.role == "assistant")
-        .map(|m| handoff::TranscriptTurn {
-            role: m.role,
-            content: m.content,
-        })
-        .collect();
+        if harness.agent.acp_sessions.lock_or_recover().get(&id).is_some_and(|s| s.is_busy()) {
+            return Err("Agent change will apply after the current turn finishes".into());
+        }
+        // The durable thread log remains the recovery source after switching.
         end_session(harness, thread_id, &id, "switched");
-        let new_id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
-        let transcript = handoff::build_handoff_transcript(&turns, 100_000);
-        let transcript_prefix = if transcript.is_empty() {
-            None
-        } else {
-            Some(format!(
-                "This conversation was handed off from another agent. Transcript so far:\n\n{transcript}"
-            ))
-        };
-        // D12: re-inject the stored spec_type as the first turn body on
-        // handoff, so the new agent doesn't lose the framing if the original
-        // turn was truncated by the 100k budget. Only when spec_type is set
-        // and no open change exists. Prepended to the transcript prefix.
-        //
-        // Spec-mode only: the reinjection carries the grill-explore skill, and
-        // pushing that into a go-mode handoff told an agent mid-build to start
-        // interviewing the user about the concept instead.
-        let reinjection = thread_meta(project_hash, thread_id)
-            .and_then(|m| spec_type_reinjection(mode, &m));
-        let prefix = match (reinjection, transcript_prefix) {
-            (Some(reinjection), Some(tp)) => Some(format!("{reinjection}\n\n{tp}")),
-            (Some(reinjection), None) => Some(reinjection),
-            (None, tp) => tp,
-        };
-        park_prefix(harness, &new_id, prefix);
-        return Ok(new_id);
     }
     let id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
-    park_prefix(harness, &id, None);
+    let restored = harness.agent.acp_sessions.lock_or_recover().get(&id).is_some_and(|s| s.restored);
+    match thread_handoff(&palisade_home(), project_hash, thread_id, mode, restored) {
+        Ok(prefix) => park_prefix(harness, &id, prefix),
+        Err(error) => {
+            // A retry must prepare the handoff again rather than reuse a bare session.
+            end_session(harness, thread_id, &id, "failed");
+            return Err(error);
+        }
+    }
     Ok(id)
+}
+
+fn thread_handoff(home: &Path, project_hash: &str, thread_id: &str, mode: &str, restored: bool) -> Res<Option<String>> {
+    // A restored provider session may never have received this parked handoff.
+    if let Some(prefix) = store::load_handoff(home, project_hash, thread_id, mode)? {
+        return Ok(Some(prefix));
+    }
+    if restored { return Ok(None); }
+    let turns = store::read_thread(home, project_hash, thread_id)?.into_iter()
+        .map(|message| {
+            let mut content = message.content;
+            if !message.attachments.is_empty() { content.push_str(&format!("\nAttachments: {}", message.attachments.join(", "))); }
+            if !message.skills.is_empty() { content.push_str(&format!("\nSkills: {}", message.skills.join(", "))); }
+            handoff::TranscriptTurn { role: message.role, content }
+        }).collect::<Vec<_>>();
+    if turns.is_empty() { return Ok(None); }
+    let meta = thread_meta(project_hash, thread_id);
+    let framing = meta.as_ref().and_then(|m| spec_type_reinjection(mode, m)).unwrap_or_default();
+    let header = format!("{framing}\nContinue this existing thread in {mode} mode. Worktree: {:?}. Linked specification: {:?}.\nPrevious conversation and work:\n",
+        meta.as_ref().and_then(|m| m.worktree_path.as_ref()), meta.as_ref().and_then(|m| m.open_spec_change_name.as_ref()));
+    // ponytail: chars/4 is an estimate; use a tokenizer if exact provider budgeting becomes available.
+    let transcript = handoff::build_handoff_transcript(&turns, 16_000usize.saturating_sub(handoff::estimate_tokens(&header)));
+    let prefix = format!("{header}{transcript}");
+    store::save_handoff(home, project_hash, thread_id, mode, &prefix)?;
+    Ok(Some(prefix))
 }
 
 /// Park a new session's first-turn prefix — only a handoff has a transcript to
@@ -1656,6 +1722,7 @@ fn agent_title_later(app: &tauri::AppHandle, project_hash: &str, thread_id: &str
             bypass: false,
             model: None,
             extra_env: vec![],
+            restore: None,
         };
         let asked = format!(
             "Name this coding thread in 3-6 words, as a title. Reply with the title              and nothing else: no quotes, no punctuation at the end, no commentary.\n\n             Request: {prompt}"
@@ -2099,7 +2166,7 @@ fn framed_spec_body(spec_type: &str, description: Option<&str>) -> String {
     body
 }
 
-/// Per D12: on agent handoff (transcript rebuilt with 100k budget), re-inject
+/// Per D12: on agent handoff, re-inject
 /// the stored `spec_type` as the first turn body if the thread has a spec_type
 /// and no open change. Returns the grill-explore skill + spec_type prompt to
 /// prepend to the handoff prefix. None when conditions aren't met — and
@@ -2229,19 +2296,20 @@ async fn spec_mode(
 /// matches.
 #[tauri::command]
 async fn set_thread_executor(
+    app: tauri::AppHandle,
     project_hash: String,
     thread_id: String,
     executor: Option<String>,
     model: Option<String>,
 ) -> Res<ThreadMeta> {
     tokio::task::spawn_blocking(move || {
-        store::set_thread_executor(
-            &palisade_home(),
-            &project_hash,
-            &thread_id,
-            executor.as_deref(),
-            model.as_deref(),
-        )
+        let meta = store::set_thread_executor(&palisade_home(), &project_hash, &thread_id, executor.as_deref(), model.as_deref())?;
+        let harness = app.state::<Harness>();
+        for session in harness.agent.acp_sessions.lock_or_recover().values_mut()
+            .filter(|s| s.thread_id == thread_id && executor.as_deref() == Some(s.agent_id.as_str())) {
+            acp_client::change_model(session, model.as_deref())?;
+        }
+        Ok(meta)
     })
     .await
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
@@ -2677,6 +2745,7 @@ async fn draft_commit_message(
             bypass: false,
             model,
             extra_env: vec![],
+            restore: None,
         };
         acp_client::agent_oneshot(
             spawn,
@@ -2911,6 +2980,58 @@ async fn agent_commands(
 ) -> Res<Vec<crate::acp_events::AgentCommand>> {
     let harness: tauri::State<'_, Harness> = app.state();
     Ok(thread_commands(&harness, &thread_id))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionContext {
+    session_id: String,
+    model: Option<String>,
+    thread_id: String,
+    mode: String,
+    busy: bool,
+    can_compact: bool,
+    status: context_status::ContextStatus,
+}
+
+#[tauri::command]
+fn session_contexts(app: tauri::AppHandle) -> Vec<SessionContext> {
+    let harness = app.state::<Harness>();
+    let sessions = harness.agent.acp_sessions.lock_or_recover();
+    let commands = harness.agent.session_commands.lock_or_recover();
+    let contexts = harness.agent.contexts.lock_or_recover();
+    sessions.values().map(|session| SessionContext {
+        session_id: session.id.clone(), model: session.models.current.clone(), thread_id: session.thread_id.clone(), mode: session.mode.clone(),
+        busy: session.is_busy(),
+        can_compact: commands.get(&session.id).is_some_and(|list| list.iter().any(|c| c.name.trim_start_matches('/') == "compact")),
+        status: contexts.get(&session.id).cloned().unwrap_or_default(),
+    }).collect()
+}
+
+#[tauri::command]
+fn compact_session(app: tauri::AppHandle, session_id: String) -> Res<()> {
+    let harness = app.state::<Harness>();
+    let sessions = harness.agent.acp_sessions.lock_or_recover();
+    let session = sessions.get(&session_id).ok_or("Session is no longer running")?;
+    if session.is_busy() { return Err("Wait for the current turn to finish".into()); }
+    if !harness.agent.session_commands.lock_or_recover().get(&session_id)
+        .is_some_and(|list| list.iter().any(|c| c.name.trim_start_matches('/') == "compact")) {
+        return Err("This agent does not advertise manual compaction".into());
+    }
+    {
+        let mut contexts = harness.agent.contexts.lock_or_recover();
+        let status = contexts.entry(session_id.clone()).or_default();
+        if status.pending { return Err("Compaction is already running".into()); }
+        status.pending = true; status.manual = true; status.compaction = Some("in_progress".into()); status.error = None;
+    }
+    if let Err(error) = acp_client::send_acp_prompt(session, None, acp_client::Prompt::text("/compact")) {
+        if let Some(status) = harness.agent.contexts.lock_or_recover().get_mut(&session_id) {
+            status.pending = false; status.manual = false; status.compaction = Some("failed".into()); status.error = Some(error.to_string());
+        }
+        return Err(error);
+    }
+    let _ = app.emit("context-updated", &session_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -4904,6 +5025,8 @@ pub fn run() {
             stop_executor,
             answer_permission_prompt,
             executor_status,
+            session_contexts,
+            compact_session,
             list_sessions,
             thread_worktrees,
             rerun_worktree_setup,
@@ -5005,10 +5128,12 @@ pub fn run() {
             commands::git_cmds::git_is_repo,
             commands::git_cmds::git_init,
             commands::fs_ops::list_directory,
+            commands::fs_ops::import_paths,
             commands::fs_ops::list_any_directory,
             commands::fs_ops::list_all_files,
             commands::fs_ops::search_text,
             commands::fs_ops::read_file_content,
+            commands::fs_ops::read_external_file,
             commands::fs_ops::read_file_base64,
             commands::fs_ops::write_file_content,
             commands::fs_ops::rename_path,
@@ -5747,6 +5872,27 @@ mod tests {
         assert_eq!(harness.pending_prefix("s1"), None);
         // A session with nothing parked is untouched.
         assert_eq!(harness.pending_prefix("s2"), None);
+    }
+
+    #[test]
+    fn restored_session_delivers_an_undelivered_handoff_after_restart() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut session, mut rx) = acp_client::stub_session(false);
+        session.mode = "go".into();
+        session.restored = true;
+        let id = session.id.clone();
+        let thread = session.thread_id.clone();
+        store::save_handoff(home.path(), "p1", &thread, "go", "User: use notes_index.py").unwrap();
+        let harness = Harness::default();
+        harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
+        park_prefix(&harness, &id, thread_handoff(home.path(), "p1", &thread, "go", true).unwrap());
+        send_to(&harness, "p1", &id, "carry on").unwrap();
+        let acp_client::BridgeCommand::Prompt(prompt) = rx.try_recv().unwrap() else { panic!("expected a prompt") };
+        assert!(prompt.joined().contains("notes_index.py"), "restoration must not skip the undelivered conversation");
+        assert!(harness.pending_prefix(&id).is_none(), "a successful send drains the parked prefix");
+        store::clear_handoff(home.path(), "p1", &thread, "go").unwrap();
+        assert_eq!(thread_handoff(home.path(), "p1", &thread, "go", true).unwrap(), None,
+            "a restored session with no pending handoff must not replay its transcript");
     }
 
     /// A reloaded webview re-seeds its `/` menu from here: a live session's

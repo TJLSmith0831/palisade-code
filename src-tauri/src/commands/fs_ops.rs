@@ -64,6 +64,70 @@ pub async fn list_directory(
     .map_err(crate::PalisadeError::from)?
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    source: String,
+    path: Option<String>,
+    error: Option<String>,
+}
+
+// Never follow source symlinks or overwrite destination entries.
+fn copy_import(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(source)?;
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::other("Symbolic links cannot be imported"));
+    }
+    if meta.is_dir() {
+        std::fs::create_dir(destination)?;
+        let result = (|| {
+            for entry in std::fs::read_dir(source)? {
+                let entry = entry?;
+                copy_import(&entry.path(), &destination.join(entry.file_name()))?;
+            }
+            Ok(())
+        })();
+        if result.is_err() { let _ = std::fs::remove_dir_all(destination); }
+        result
+    } else if meta.is_file() {
+        let mut input = std::fs::File::open(source)?;
+        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(destination)?;
+        let result = std::io::copy(&mut input, &mut output).map(|_| ());
+        if result.is_err() { let _ = std::fs::remove_file(destination); }
+        result
+    } else { Err(std::io::Error::other("Only files and directories can be imported")) }
+}
+
+pub(crate) fn import_into(root: &Path, sources: &[String], relative_path: &str) -> Res<Vec<ImportResult>> {
+    // Unlike ProjectPath::existing, imports reject absolute/parent paths outright.
+    ProjectPath::creatable(root, relative_path)?;
+    let target = ProjectPath::existing(root, relative_path)?.into_path_buf();
+    if !target.is_dir() { return Err("Import destination must be a directory".into()); }
+    Ok(sources.iter().map(|source| {
+        let result: Res<String> = (|| {
+            let path = Path::new(source);
+            if !path.is_absolute() { return Err("Import source must be absolute".into()); }
+            if std::fs::symlink_metadata(path).map_err(|e| e.to_string())?.file_type().is_symlink() { return Err("Symbolic links cannot be imported".into()); }
+            let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+            let name = path.file_name().ok_or("Cannot import a filesystem root")?;
+            let destination = target.join(name);
+            if destination.starts_with(&canonical) { return Err("Cannot import a directory into itself".into()); }
+            copy_import(path, &destination).map_err(|e| e.to_string())?;
+            Ok(destination.strip_prefix(root.canonicalize().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?.to_string_lossy().into_owned())
+        })();
+        match result {
+            Ok(path) => ImportResult { source: source.clone(), path: Some(path), error: None },
+            Err(error) => ImportResult { source: source.clone(), path: None, error: Some(error.to_string()) },
+        }
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn import_paths(project_hash: String, sources: Vec<String>, relative_path: String) -> Res<Vec<ImportResult>> {
+    tokio::task::spawn_blocking(move || import_into(&project_root(&project_hash)?, &sources, &relative_path))
+        .await.map_err(crate::PalisadeError::from)?
+}
+
 /// `~` or `~/…` against the home directory; anything else as given.
 pub(crate) fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix('~'), dirs::home_dir()) {
@@ -380,6 +444,22 @@ pub async fn read_file_content(
     .map_err(crate::PalisadeError::from)?
 }
 
+#[tauri::command]
+pub async fn read_external_file(path: String, binary: Option<bool>) -> Res<String> {
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&path);
+        if !path.is_absolute() { return Err("External file path must be absolute".into()); }
+        let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+        if size > MAX_EDITABLE_BYTES { return Err(format!("{TOO_LARGE_PREFIX} {size}").into()); }
+        if binary.unwrap_or(false) {
+            use base64::prelude::*;
+            return std::fs::read(path).map(|bytes| BASE64_STANDARD.encode(bytes)).map_err(|e| e.to_string().into());
+        }
+        if looks_binary(path) { return Err(BINARY_PREFIX.into()); }
+        std::fs::read_to_string(path).map_err(|e| e.to_string().into())
+    }).await.map_err(crate::PalisadeError::from)?
+}
+
 /// Reads a file as base64 for binary previews (images/video/gif) the editor
 /// can't render as text.
 #[tauri::command]
@@ -567,6 +647,47 @@ pub async fn create_directory(project_hash: String, relative_path: String) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn external_previews_read_absolute_text_and_media_without_writing() {
+        let source = tempfile::tempdir().unwrap();
+        let file = source.path().join("external.txt");
+        std::fs::write(&file, "preview").unwrap();
+        assert_eq!(read_external_file(file.display().to_string(), None).await.unwrap(), "preview");
+        assert_eq!(read_external_file(file.display().to_string(), Some(true)).await.unwrap(), "cHJldmlldw==");
+        assert!(read_external_file("relative.txt".into(), None).await.is_err());
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "preview", "preview never changes the source");
+    }
+
+    #[test]
+    fn imports_preserve_sources_skip_collisions_and_report_partial_success() {
+        let root = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("a.txt"), "a").unwrap();
+        std::fs::write(source.path().join("b.txt"), "b").unwrap();
+        std::fs::write(root.path().join("a.txt"), "existing").unwrap();
+        let sources = vec![source.path().join("a.txt").display().to_string(), source.path().join("b.txt").display().to_string()];
+        let result = import_into(root.path(), &sources, "").unwrap();
+        assert!(result[0].error.is_some());
+        assert_eq!(result[1].path.as_deref(), Some("b.txt"));
+        assert_eq!(std::fs::read_to_string(root.path().join("a.txt")).unwrap(), "existing");
+        assert!(source.path().join("b.txt").exists());
+        assert!(import_into(root.path(), &sources, "../").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn imports_reject_symlinks_and_roll_back_partial_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir(source.path().join("folder")).unwrap();
+        std::os::unix::fs::symlink(root.path(), source.path().join("folder/link")).unwrap();
+        let result = import_into(root.path(), &[source.path().join("folder").display().to_string()], "").unwrap();
+        assert!(result[0].error.is_some());
+        assert!(!root.path().join("folder").exists());
+        std::os::unix::fs::symlink(source.path(), root.path().join("escape")).unwrap();
+        assert!(import_into(root.path(), &[], "escape").is_err());
+    }
 
     #[test]
     fn expand_home_only_touches_a_leading_tilde() {

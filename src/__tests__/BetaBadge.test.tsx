@@ -59,6 +59,18 @@ describe("BetaBadge", () => {
     expect(screen.queryByTestId("restart-to-update")).toBeNull();
   });
 
+  it("dismisses on interactions outside the dialog and preserves the draft", async () => {
+    render(<><BetaBadge /><button>Outside control</button></>);
+    fireEvent.click(await screen.findByTestId("open-feedback"));
+    fireEvent.change(await screen.findByTestId("feedback-title"), { target: { value: "Draft report" } });
+    fireEvent.pointerDown(screen.getByTestId("feedback-title"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Outside control"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByTestId("open-feedback"));
+    expect(await screen.findByTestId("feedback-title")).toHaveValue("Draft report");
+  });
+
   it("offers a restart once an update is found", async () => {
     checkMock.mockResolvedValue({ version: "0.2.1", downloadAndInstall });
     downloadAndInstall.mockResolvedValue(undefined);

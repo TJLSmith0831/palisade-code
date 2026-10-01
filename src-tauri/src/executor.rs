@@ -285,6 +285,7 @@ pub struct Envelope {
 
 /// Anything that can receive parsed events.
 pub trait Sink: Send + Sync + 'static {
+    fn emit_context(&self, _session_id: &str, _thread_id: &str, _update: serde_json::Value) {}
     fn emit(&self, envelope: &Envelope);
 
     /// The slash commands the agent advertises for a session. Session
@@ -537,6 +538,8 @@ pub struct PendingAuthTurn {
 /// when that agent's process does. Nothing here outlives the agent.
 #[derive(Default)]
 pub struct AgentState {
+    /// Latest ACP context occupancy and compaction state, keyed by session.
+    pub contexts: Mutex<HashMap<String, crate::context_status::ContextStatus>>,
     /// Every live ACP session, keyed by its own id.
     pub acp_sessions: Mutex<HashMap<String, AcpSession>>,
     pub preflight: Mutex<Option<crate::acp_preflight::Preflight>>,
@@ -712,7 +715,7 @@ mod harness_shape_tests {
             .iter()
             .map(|n| counts[*n])
             .sum();
-        assert_eq!(grouped, 21, "a field was dropped or added without a home");
+        assert_eq!(grouped, 22, "a field was dropped or added without a home");
     }
 
     /// The field comments are why this codebase is auditable; a refactor that
