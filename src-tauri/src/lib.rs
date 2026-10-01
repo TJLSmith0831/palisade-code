@@ -1456,28 +1456,29 @@ fn ensure_session(
         if harness.agent.acp_sessions.lock_or_recover().get(&id).is_some_and(|s| s.is_busy()) {
             return Err("Agent change will apply after the current turn finishes".into());
         }
-        // Keep the durable thread log as the recovery source before replacing a session.
-        let prefix = thread_handoff(project_hash, thread_id, mode)?;
+        // The durable thread log remains the recovery source after switching.
         end_session(harness, thread_id, &id, "switched");
-        let new_id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
-        if !harness.agent.acp_sessions.lock_or_recover().get(&new_id).is_some_and(|s| s.restored) {
-            park_prefix(harness, &new_id, prefix);
-        }
-        return Ok(new_id);
     }
-    let prefix = thread_handoff(project_hash, thread_id, mode)?;
     let id = start_session(app, harness, project_hash, thread_id, mode, true, model, bypass)?;
-    if !harness.agent.acp_sessions.lock_or_recover().get(&id).is_some_and(|s| s.restored) {
-        park_prefix(harness, &id, prefix);
+    let restored = harness.agent.acp_sessions.lock_or_recover().get(&id).is_some_and(|s| s.restored);
+    match thread_handoff(&palisade_home(), project_hash, thread_id, mode, restored) {
+        Ok(prefix) => park_prefix(harness, &id, prefix),
+        Err(error) => {
+            // A retry must prepare the handoff again rather than reuse a bare session.
+            end_session(harness, thread_id, &id, "failed");
+            return Err(error);
+        }
     }
     Ok(id)
 }
 
-fn thread_handoff(project_hash: &str, thread_id: &str, mode: &str) -> Res<Option<String>> {
-    if let Some(prefix) = store::load_handoff(&palisade_home(), project_hash, thread_id, mode)? {
+fn thread_handoff(home: &Path, project_hash: &str, thread_id: &str, mode: &str, restored: bool) -> Res<Option<String>> {
+    // A restored provider session may never have received this parked handoff.
+    if let Some(prefix) = store::load_handoff(home, project_hash, thread_id, mode)? {
         return Ok(Some(prefix));
     }
-    let turns = store::read_thread(&palisade_home(), project_hash, thread_id)?.into_iter()
+    if restored { return Ok(None); }
+    let turns = store::read_thread(home, project_hash, thread_id)?.into_iter()
         .map(|message| {
             let mut content = message.content;
             if !message.attachments.is_empty() { content.push_str(&format!("\nAttachments: {}", message.attachments.join(", "))); }
@@ -1492,7 +1493,7 @@ fn thread_handoff(project_hash: &str, thread_id: &str, mode: &str) -> Res<Option
     // ponytail: chars/4 is an estimate; use a tokenizer if exact provider budgeting becomes available.
     let transcript = handoff::build_handoff_transcript(&turns, 16_000usize.saturating_sub(handoff::estimate_tokens(&header)));
     let prefix = format!("{header}{transcript}");
-    store::save_handoff(&palisade_home(), project_hash, thread_id, mode, &prefix)?;
+    store::save_handoff(home, project_hash, thread_id, mode, &prefix)?;
     Ok(Some(prefix))
 }
 
@@ -5871,6 +5872,27 @@ mod tests {
         assert_eq!(harness.pending_prefix("s1"), None);
         // A session with nothing parked is untouched.
         assert_eq!(harness.pending_prefix("s2"), None);
+    }
+
+    #[test]
+    fn restored_session_delivers_an_undelivered_handoff_after_restart() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut session, mut rx) = acp_client::stub_session(false);
+        session.mode = "go".into();
+        session.restored = true;
+        let id = session.id.clone();
+        let thread = session.thread_id.clone();
+        store::save_handoff(home.path(), "p1", &thread, "go", "User: use notes_index.py").unwrap();
+        let harness = Harness::default();
+        harness.agent.acp_sessions.lock_or_recover().insert(id.clone(), session);
+        park_prefix(&harness, &id, thread_handoff(home.path(), "p1", &thread, "go", true).unwrap());
+        send_to(&harness, "p1", &id, "carry on").unwrap();
+        let acp_client::BridgeCommand::Prompt(prompt) = rx.try_recv().unwrap() else { panic!("expected a prompt") };
+        assert!(prompt.joined().contains("notes_index.py"), "restoration must not skip the undelivered conversation");
+        assert!(harness.pending_prefix(&id).is_none(), "a successful send drains the parked prefix");
+        store::clear_handoff(home.path(), "p1", &thread, "go").unwrap();
+        assert_eq!(thread_handoff(home.path(), "p1", &thread, "go", true).unwrap(), None,
+            "a restored session with no pending handoff must not replay its transcript");
     }
 
     /// A reloaded webview re-seeds its `/` menu from here: a live session's

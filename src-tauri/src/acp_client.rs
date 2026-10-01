@@ -2032,6 +2032,10 @@ pub fn send_acp_prompt(session: &AcpSession, prefix: Option<&str>, mut prompt: P
 }
 
 pub fn change_model(session: &mut AcpSession, wanted: Option<&str>) -> Res<()> {
+    // Agents without a default alias retain their own startup selection.
+    if wanted.is_none() && !session.models.models.iter().any(|model| model.id == AGENT_DEFAULT_MODEL_ID) {
+        return Ok(());
+    }
     let wanted = wanted.unwrap_or(AGENT_DEFAULT_MODEL_ID);
     if session.models.current.as_deref() == Some(wanted) { return Ok(()); }
     if session.is_busy() { return Ok(()); } // Stored preference applies before the next turn.
@@ -3424,6 +3428,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unset_model_preserves_agent_selection_without_a_default_alias() {
+        let (mut session, mut rx) = stub_session(false);
+        session.models = ModelState {
+            config_id: Some("model".into()),
+            current: Some("provider/model-a".into()),
+            models: vec![ModelInfo { id: "provider/model-a".into(), name: "Model A".into() }],
+        };
+        change_model(&mut session, None).expect("an unset preference must keep the agent-selected model");
+        assert_eq!(session.models.current.as_deref(), Some("provider/model-a"));
+        assert!(rx.try_recv().is_err(), "no model change should be sent");
+        assert!(change_model(&mut session, Some("missing-model")).is_err(), "explicit unavailable models must still fail");
     }
 
     #[tokio::test(flavor = "multi_thread")]
