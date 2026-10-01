@@ -57,7 +57,8 @@ const openWorkspacePanel = () => {
 
 // Mock Tauri APIs before importing App. Handlers are recorded so a test can
 // deliver a backend event (`emit` below) rather than only assert on IPC calls.
-const { listeners, listenTargets } = vi.hoisted(() => ({
+const { listeners, listenTargets, nativeDrop } = vi.hoisted(() => ({
+  nativeDrop: vi.fn(),
   listeners: new Map<string, ((event: { payload: unknown }) => void)[]>(),
   // Which window a listener asked to hear from. A listener registered with no
   // target hears *every* emit, including one addressed to another window.
@@ -87,7 +88,7 @@ const emit = (name: string, payload: unknown) => {
 
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: vi.fn(() => ({
-    onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
+    onDragDropEvent: nativeDrop,
   })),
 }));
 
@@ -219,6 +220,8 @@ const defaultInvoke = (cmd: string, args?: Record<string, unknown>) => {
 };
 
 beforeEach(() => {
+  nativeDrop.mockReset();
+  nativeDrop.mockResolvedValue(() => {});
   listeners.clear();
   listenTargets.clear();
   invokeMock.mockReset();
@@ -231,6 +234,34 @@ afterEach(() => {
   clearDiagnostics();
   localStorage.clear();
   delete document.documentElement.dataset.theme;
+});
+
+it.each(["MacIntel", "Win32"])("routes Retina native drops to Explorer on %s", async (platform) => {
+  const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  const ratioSpy = vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(2);
+  const hit = vi.fn((x: number, y: number) =>
+    x === 943 && y === 250 ? document.querySelector(".ds-tree-body") : null
+  );
+  const oldHit = document.elementFromPoint;
+  document.elementFromPoint = hit;
+  try {
+    render(<App />);
+    await openProject();
+    await screen.findByTestId("file-tree");
+    const handler = nativeDrop.mock.calls.at(-1)![0];
+    await act(async () => handler({ payload: {
+      type: "drop",
+      paths: ["/tmp/external-context.txt"],
+      position: platform === "MacIntel" ? { x: 943, y: 250 } : { x: 1886, y: 500 },
+    } }));
+    expect(invokeMock).toHaveBeenCalledWith("import_paths", {
+      projectHash: "proj-1", sources: ["/tmp/external-context.txt"], relativePath: "",
+    });
+  } finally {
+    document.elementFromPoint = oldHit;
+    platformSpy.mockRestore();
+    ratioSpy.mockRestore();
+  }
 });
 
 describe("Window shell (merged-design v2)", () => {

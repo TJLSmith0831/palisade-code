@@ -20,7 +20,9 @@ LLAMA_CPP_REVISION=308f61c31f083251ce8150f10b9ef97679b500b5
 src=vendor/llama.cpp
 
 git init "$src"
-git -C "$src" remote add origin https://github.com/ggml-org/llama.cpp.git
+if ! git -C "$src" remote get-url origin >/dev/null 2>&1; then
+  git -C "$src" remote add origin https://github.com/ggml-org/llama.cpp.git
+fi
 git -C "$src" fetch --depth=1 origin "$LLAMA_CPP_REVISION"
 git -C "$src" checkout --detach FETCH_HEAD
 
@@ -28,12 +30,12 @@ common=(-DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=O
 
 cmake -S "$src" -B "$src/build-arm64" "${common[@]}" \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL=ON
-cmake --build "$src/build-arm64" --target llama-server --parallel 3
+cmake --build "$src/build-arm64" --target llama-server --parallel "${PALISADE_BUILD_JOBS:-2}"
 
 cmake -S "$src" -B "$src/build-x86_64" "${common[@]}" \
   -DCMAKE_OSX_ARCHITECTURES=x86_64 -DGGML_METAL=OFF -DGGML_NATIVE=OFF \
   -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON
-cmake --build "$src/build-x86_64" --target llama-server --parallel 3
+cmake --build "$src/build-x86_64" --target llama-server --parallel "${PALISADE_BUILD_JOBS:-2}"
 
 install -m 755 "$src/build-arm64/bin/llama-server" src-tauri/llama-server-aarch64-apple-darwin
 install -m 755 "$src/build-x86_64/bin/llama-server" src-tauri/llama-server-x86_64-apple-darwin
@@ -42,7 +44,7 @@ lipo -create \
   src-tauri/llama-server-x86_64-apple-darwin \
   -output src-tauri/llama-server-universal-apple-darwin
 
-# The host can only run its own slice; prove the fat file with lipo.
+# Prove both slices exist; readiness testing runs Intel through Rosetta.
 src-tauri/llama-server-aarch64-apple-darwin --version
 info="$(lipo -info src-tauri/llama-server-universal-apple-darwin)"
 echo "$info"
