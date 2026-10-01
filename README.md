@@ -12,7 +12,7 @@
   <a href="https://github.com/TJLSmith0831/palisade-code/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TJLSmith0831/palisade-code?include_prereleases&label=download"></a>
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <a href="https://github.com/TJLSmith0831/palisade-code/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/TJLSmith0831/palisade-code/actions/workflows/test.yml/badge.svg"></a>
-  <img alt="macOS universal" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-black">
+  <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-black">
 </p>
 
 <p align="center">
@@ -45,8 +45,10 @@ Palisade is in **public beta**. It is the tool we build Palisade with, every day
 
 | Platform | Download |
 |---|---|
-| macOS 11+, Apple Silicon **and** Intel (one universal build) | [Latest `.dmg`](https://github.com/TJLSmith0831/palisade-code/releases/latest) |
+| macOS 11+, Apple Silicon | [Latest `.dmg`](https://github.com/TJLSmith0831/palisade-code/releases/latest) |
 | Windows, Linux | Not yet. Follow [the issue tracker](https://github.com/TJLSmith0831/palisade-code/issues) for progress. |
+
+Current support is Apple Silicon. The universal artifact also contains an Intel slice, but Intel runtime behavior has not been verified.
 
 The app is signed and notarized. It updates itself; each update is checked against the project's signing key before it is installed.
 

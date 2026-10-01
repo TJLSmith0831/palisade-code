@@ -32,7 +32,9 @@ Silicon (Metal) and Intel (CPU-only), lipo's it, and verifies the model
 checksum before packaging a universal app. It then publishes three assets:
 the signed updater archive and signature for existing testers, plus a
 notarized, model-included universal DMG for a tester's first install. One
-download runs on every Mac from macOS 11 up.
+download contains both architectures and targets macOS 11 up. Current support
+is Apple Silicon; the Intel slice is not runtime-verified and must not be
+advertised as supported until a real Intel tester validates it.
 
 After publication, the existing update Worker reads that prerelease and serves
 it to installed tester apps. A failed or unapproved workflow cannot change what
