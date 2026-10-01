@@ -5,6 +5,26 @@ All notable changes to Palisade Code are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-01
+
+### Added
+
+- Live context usage and session status in the conversation popover.
+- External file imports in Explorer and read-only file previews from native drops.
+- Repeatable isolated release checks for Apple Silicon and Intel through Rosetta.
+
+### Changed
+
+- The agent registry list is collapsed behind an Add an agent menu row.
+
+### Fixed
+
+- Native file drops route to the correct surface on Retina Macs.
+- Agent-selected models survive an unset default, and pending handoffs reach restored sessions.
+- Workspace changes refresh the explorer while preserving expanded directories.
+- Composer and feedback overlays stay visible without blanking live previews.
+- Local Markdown images no longer receive an invalid source while loading.
+
 ## [0.4.0] - 2026-09-25
 
 ### Added
@@ -25,7 +45,8 @@ All notable changes to Palisade Code are documented here. The format follows
 - Text selection in the feedback modal no longer gets hijacked by the titlebar drag handler.
 - Plain Spec turns now carry the grill skill; runs started from Fleet open their chat.
 
-[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/TJLSmith0831/palisade-code/compare/v0.3.0...v0.4.0
 
 ## [0.3.0] - 2026-09-22
