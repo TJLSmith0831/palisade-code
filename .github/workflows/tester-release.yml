@@ -1,4 +1,4 @@
-name: Tester release
+name: Release
 
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
         run: node worker/test.mjs
 
   release:
-    name: Build and publish tester release
+    name: Build and publish release
     needs: verify
     runs-on: macos-15
     environment: testers
@@ -204,7 +204,7 @@ jobs:
           spctl -a -vvv -t install "$mountpoint/Palisade.app"
           lipo -info "$mountpoint/Palisade.app/Contents/MacOS/palisade-code" | grep -q 'x86_64 arm64\|arm64 x86_64'
 
-      - name: Publish the tester prerelease
+      - name: Publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
