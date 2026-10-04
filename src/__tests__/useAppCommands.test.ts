@@ -38,7 +38,7 @@ const deps = (over: Partial<AppCommandDeps> = {}): AppCommandDeps =>
     newFileAtRoot: noop,
     onNewThread: noop,
     onCloneRepository: noop,
-    onOpenProjectWindow: noop,
+    onNewWindow: noop,
     clearRecentProjects: noop,
     closeWindow: noop,
     quitApplication: noop,

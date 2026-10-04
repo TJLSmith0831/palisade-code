@@ -3847,6 +3847,11 @@ export default function App() {
     []
   );
 
+  // File → New Window: an empty window on the project picker, always opened.
+  const onNewWindow = useCallback(() => {
+    api.openNewWindow().catch(fail);
+  }, []);
+
   // #28: forget a saved project. Nothing on disk is deleted — not the repo,
   // not its worktrees, not its thread history — so the confirmation says so
   // rather than implying a destructive delete the backend never performs.
@@ -5862,7 +5867,7 @@ export default function App() {
     newFileAtRoot,
     onNewThread,
     onCloneRepository,
-    onOpenProjectWindow,
+    onNewWindow,
     clearRecentProjects,
     closeWindow,
     quitApplication,

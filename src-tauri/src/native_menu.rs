@@ -147,7 +147,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<NativeMenu<R>> {
     native.recent_menu.append(&recent_separator)?;
     native.recent_menu.append(&clear_recent)?;
     let clone = native.normal(app, "project.clone", "Clone Repository…", None)?;
-    let new_window = native.normal(app, "project.newWindow", "Open Current Project in New Window", None)?;
+    let new_window = native.normal(app, "window.new", "New Window", Some("CmdOrCtrl+Alt+N"))?;
     let project_settings = native.normal(app, "app.projectSettings", "Open Project Settings", None)?;
     let save = native.normal(app, "file.save", "Save", Some("CmdOrCtrl+S"))?;
     let close_tab = native.normal(app, "tab.close", "Close Tab", Some("CmdOrCtrl+W"))?;

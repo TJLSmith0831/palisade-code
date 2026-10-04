@@ -266,6 +266,18 @@ async fn open_project_window(app: tauri::AppHandle, hash: String) -> Res<String>
     Ok(label)
 }
 
+/// File → New Window: an empty window on the project picker. Always opens one.
+#[tauri::command]
+async fn open_new_window(app: tauri::AppHandle) -> Res<String> {
+    let config = project_windows::blank_window_config();
+    let label = config.label.clone();
+    tauri::WebviewWindowBuilder::from_config(&app, &config)
+        .map_err(|e| crate::PalisadeError::from(format!("configure new window: {e}")))?
+        .build()
+        .map_err(|e| crate::PalisadeError::from(format!("open new window: {e}")))?;
+    Ok(label)
+}
+
 #[tauri::command]
 async fn remove_project(app: tauri::AppHandle, hash: String) -> Res<()> {
     tokio::task::spawn_blocking(move || {
@@ -4991,6 +5003,7 @@ pub fn run() {
             search_mcp_registry,
             list_projects,
             open_project_window,
+            open_new_window,
             remove_project,
             add_project,
             clone_repository,

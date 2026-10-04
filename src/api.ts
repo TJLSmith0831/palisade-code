@@ -72,6 +72,7 @@ export type Message = {
 };
 
 /** Open an independent native window, initialized to this project. */
+export const openNewWindow = () => invoke<string>("open_new_window");
 export const openProjectWindow = (hash: string) => invoke<string>("open_project_window", { hash });
 /** Remove only the saved entry; source files and session history are retained. */
 export const removeProject = (hash: string) => invoke<void>("remove_project", { hash });
