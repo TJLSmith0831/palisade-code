@@ -92,6 +92,29 @@ describe("BetaBadge", () => {
     expect(await screen.findByTestId("beta-badge")).toBeInTheDocument();
   });
 
+  it("menu check says when Palisade is up to date", async () => {
+    render(<BetaBadge />);
+    await screen.findByTestId("beta-badge");
+    await act(async () => {
+      window.dispatchEvent(new Event("palisade-update-action"));
+    });
+    expect(await screen.findByTestId("update-check-status")).toHaveTextContent(
+      "Palisade is up to date (v0.2.0)"
+    );
+  });
+
+  it("menu check reports a failed check", async () => {
+    checkMock.mockRejectedValue(new Error("offline"));
+    render(<BetaBadge />);
+    await screen.findByTestId("beta-badge");
+    await act(async () => {
+      window.dispatchEvent(new Event("palisade-update-action"));
+    });
+    expect(await screen.findByTestId("update-check-status")).toHaveTextContent(
+      "check for updates"
+    );
+  });
+
   it("reports model install progress and clears it when ready", async () => {
     render(<BetaBadge />);
     await screen.findByTestId("beta-badge");

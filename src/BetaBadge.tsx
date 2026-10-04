@@ -46,6 +46,8 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Feedback for the explicit menu check; the background poll never sets it.
+  const [checkStatus, setCheckStatus] = useState<string | null>(null);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
@@ -101,7 +103,21 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
   useEffect(() => {
     const onMenuAction = () => {
       if (update) void install();
-      else check().then(setUpdate).catch(() => {});
+      else {
+        setCheckStatus("Checking for updates…");
+        check()
+          .then((found) => {
+            setUpdate(found);
+            setCheckStatus(
+              found
+                ? `Update ${found.version} ready — restart to install.`
+                : `Palisade is up to date${version ? ` (v${version})` : ""}.`
+            );
+          })
+          .catch((err) =>
+            setCheckStatus(describeError(err, { action: "check for updates" }))
+          );
+      }
     };
     const onFeedback = () => setOpen(true);
     window.addEventListener("palisade-update-action", onMenuAction);
@@ -110,7 +126,7 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
       window.removeEventListener("palisade-update-action", onMenuAction);
       window.removeEventListener("palisade-feedback-action", onFeedback);
     };
-  }, [install, update]);
+  }, [install, update, version]);
 
   const submit = useCallback(async () => {
     setSending(true);
@@ -205,6 +221,17 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
           data-testid="model-progress"
         />
       )}
+
+      <Modal
+        opened={checkStatus !== null}
+        onClose={() => setCheckStatus(null)}
+        title="Check for Updates"
+        size="sm"
+      >
+        <Text size="sm" data-testid="update-check-status">
+          {checkStatus}
+        </Text>
+      </Modal>
 
       <Modal
         opened={open}
