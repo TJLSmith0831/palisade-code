@@ -34,6 +34,26 @@ const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 type ModelProgress = { stage: string; done: number; total: number };
 
+type ManualCheck =
+  | { kind: "checking" }
+  | { kind: "current" }
+  | { kind: "found"; version: string }
+  | { kind: "failed"; message: string };
+
+// Worded at render time so the running version is never a stale capture.
+function describeManualCheck(result: ManualCheck, version: string): string {
+  switch (result.kind) {
+    case "checking":
+      return "Checking for updates…";
+    case "current":
+      return `Palisade is up to date${version ? ` (v${version})` : ""}.`;
+    case "found":
+      return `Version ${result.version} is available. Choose Restart & update in the title bar to install it.`;
+    case "failed":
+      return result.message;
+  }
+}
+
 export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: boolean) => void }) {
   const [version, setVersion] = useState("");
   const [update, setUpdate] = useState<Update | null>(null);
@@ -47,7 +67,7 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
   const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Feedback for the explicit menu check; the background poll never sets it.
-  const [checkStatus, setCheckStatus] = useState<string | null>(null);
+  const [manualCheck, setManualCheck] = useState<ManualCheck | null>(null);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
@@ -104,18 +124,14 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
     const onMenuAction = () => {
       if (update) void install();
       else {
-        setCheckStatus("Checking for updates…");
+        setManualCheck({ kind: "checking" });
         check()
           .then((found) => {
             setUpdate(found);
-            setCheckStatus(
-              found
-                ? `Update ${found.version} ready — restart to install.`
-                : `Palisade is up to date${version ? ` (v${version})` : ""}.`
-            );
+            setManualCheck(found ? { kind: "found", version: found.version } : { kind: "current" });
           })
           .catch((err) =>
-            setCheckStatus(describeError(err, { action: "check for updates" }))
+            setManualCheck({ kind: "failed", message: describeError(err, { action: "check for updates" }) })
           );
       }
     };
@@ -126,7 +142,7 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
       window.removeEventListener("palisade-update-action", onMenuAction);
       window.removeEventListener("palisade-feedback-action", onFeedback);
     };
-  }, [install, update, version]);
+  }, [install, update]);
 
   const submit = useCallback(async () => {
     setSending(true);
@@ -223,13 +239,13 @@ export default function BetaBadge({ onUpdateReady }: { onUpdateReady?: (ready: b
       )}
 
       <Modal
-        opened={checkStatus !== null}
-        onClose={() => setCheckStatus(null)}
+        opened={manualCheck !== null}
+        onClose={() => setManualCheck(null)}
         title="Check for Updates"
         size="sm"
       >
         <Text size="sm" data-testid="update-check-status">
-          {checkStatus}
+          {manualCheck && describeManualCheck(manualCheck, version)}
         </Text>
       </Modal>
 

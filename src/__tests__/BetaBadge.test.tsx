@@ -103,6 +103,19 @@ describe("BetaBadge", () => {
     );
   });
 
+  it("menu check names a found update and offers the install button", async () => {
+    render(<BetaBadge />);
+    await screen.findByTestId("beta-badge");
+    checkMock.mockResolvedValue({ version: "0.3.0", downloadAndInstall });
+    await act(async () => {
+      window.dispatchEvent(new Event("palisade-update-action"));
+    });
+    expect(await screen.findByTestId("update-check-status")).toHaveTextContent(
+      "Version 0.3.0 is available"
+    );
+    expect(screen.getByTestId("restart-to-update")).toBeInTheDocument();
+  });
+
   it("menu check reports a failed check", async () => {
     checkMock.mockRejectedValue(new Error("offline"));
     render(<BetaBadge />);
