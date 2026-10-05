@@ -89,15 +89,9 @@ pub fn window_config(home: &Path, hash: &str) -> Res<tauri::utils::config::Windo
     let project = store::list_projects(home)?.into_iter()
         .find(|p| p.hash == hash).ok_or_else(|| format!("unknown project: {hash}"))?;
     Ok(tauri::utils::config::WindowConfig {
-        label: next_label(),
         title: format!("{} — Palisade Code", project.display_name),
         url: tauri::WebviewUrl::App(format!("index.html?project={hash}").into()),
-        width: 1280.0,
-        height: 800.0,
-        min_width: Some(800.0),
-        min_height: Some(500.0),
-        decorations: false,
-        ..Default::default()
+        ..blank_window_config()
     })
 }
 
@@ -115,6 +109,13 @@ pub fn remove_saved_project(home: &Path, harness: &Harness, hash: &str) -> Res<(
 mod tests {
     use crate::locks::MutexExt;
     use super::*;
+
+    #[test]
+    fn blank_windows_open_the_picker_under_distinct_labels() {
+        let (a, b) = (blank_window_config(), blank_window_config());
+        assert_ne!(a.label, b.label);
+        assert_eq!(a.url, tauri::WebviewUrl::App("index.html".into()));
+    }
 
     #[test]
     fn removal_rejects_a_busy_project_but_not_other_projects() {
