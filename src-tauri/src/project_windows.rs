@@ -63,21 +63,35 @@ pub fn retire_unwatched(harness: &Harness) {
         .retain(|hash, _| open.contains(hash));
 }
 
-pub fn window_config(home: &Path, hash: &str) -> Res<tauri::utils::config::WindowConfig> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT_WINDOW: AtomicU64 = AtomicU64::new(1);
-    let project = store::list_projects(home)?.into_iter()
-        .find(|p| p.hash == hash).ok_or_else(|| format!("unknown project: {hash}"))?;
-    Ok(tauri::utils::config::WindowConfig {
-        label: format!("project-{}", NEXT_WINDOW.fetch_add(1, Ordering::Relaxed)),
-        title: format!("{} — Palisade Code", project.display_name),
-        url: tauri::WebviewUrl::App(format!("index.html?project={hash}").into()),
+static NEXT_WINDOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_label() -> String {
+    format!("project-{}", NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
+/// A window with no project: it lands on the onboarding/picker screen, so any
+/// project can be chosen in it. Unlike `window_config` it is never deduplicated.
+pub fn blank_window_config() -> tauri::utils::config::WindowConfig {
+    tauri::utils::config::WindowConfig {
+        label: next_label(),
+        title: "Palisade Code".into(),
+        url: tauri::WebviewUrl::App("index.html".into()),
         width: 1280.0,
         height: 800.0,
         min_width: Some(800.0),
         min_height: Some(500.0),
         decorations: false,
         ..Default::default()
+    }
+}
+
+pub fn window_config(home: &Path, hash: &str) -> Res<tauri::utils::config::WindowConfig> {
+    let project = store::list_projects(home)?.into_iter()
+        .find(|p| p.hash == hash).ok_or_else(|| format!("unknown project: {hash}"))?;
+    Ok(tauri::utils::config::WindowConfig {
+        title: format!("{} — Palisade Code", project.display_name),
+        url: tauri::WebviewUrl::App(format!("index.html?project={hash}").into()),
+        ..blank_window_config()
     })
 }
 
@@ -95,6 +109,13 @@ pub fn remove_saved_project(home: &Path, harness: &Harness, hash: &str) -> Res<(
 mod tests {
     use crate::locks::MutexExt;
     use super::*;
+
+    #[test]
+    fn blank_windows_open_the_picker_under_distinct_labels() {
+        let (a, b) = (blank_window_config(), blank_window_config());
+        assert_ne!(a.label, b.label);
+        assert_eq!(a.url, tauri::WebviewUrl::App("index.html".into()));
+    }
 
     #[test]
     fn removal_rejects_a_busy_project_but_not_other_projects() {

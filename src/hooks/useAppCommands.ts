@@ -35,7 +35,7 @@ export type AppCommandDeps = {
   newFileAtRoot: () => void;
   onNewThread: () => void;
   onCloneRepository: () => void;
-  onOpenProjectWindow: (target: Project) => void;
+  onNewWindow: () => void;
   clearRecentProjects: () => void;
   closeWindow: () => void;
   quitApplication: () => void;
@@ -74,7 +74,7 @@ export function useAppCommands({
   newFileAtRoot,
   onNewThread,
   onCloneRepository,
-  onOpenProjectWindow,
+  onNewWindow,
   clearRecentProjects,
   closeWindow,
   quitApplication,
@@ -146,11 +146,11 @@ export function useAppCommands({
         run: onCloneRepository,
       },
       {
-        id: "project.newWindow",
+        id: "window.new",
         group: "File",
-        label: "Open current project in new window",
-        enabled: !!project,
-        run: () => { if (project) void onOpenProjectWindow(project); },
+        label: "New window",
+        chord: "Mod+Alt+N",
+        run: onNewWindow,
       },
       ...projects.slice(0, 10).map((recent, slot) => ({
         id: `project.recent.${slot}`,
@@ -504,7 +504,7 @@ export function useAppCommands({
       newFileAtRoot,
       onNewThread,
       onCloneRepository,
-      onOpenProjectWindow,
+      onNewWindow,
       projects,
       clearRecentProjects,
       closeWindow,
