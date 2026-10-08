@@ -1124,7 +1124,7 @@ fn sidecar_binary_name_with_target() -> String {
 /// each with their own absolute model path, never clobber each other's
 /// record and reap a sibling's still-live sidecar.
 pub(crate) fn sidecar_pid_path(token: &str) -> PathBuf {
-    crate::store::palisade_home().join(format!(".completion-sidecar-{}.pid", crate::pidguard::instance_key(token)))
+    crate::store::machine_home().join(format!(".completion-sidecar-{}.pid", crate::pidguard::instance_key(token)))
 }
 
 /// What has to appear in a process's command line before it is recognised as

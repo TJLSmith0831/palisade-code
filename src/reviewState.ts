@@ -1,3 +1,4 @@
+import { profileStorage as localStorage } from "./profileStorage";
 // Which files a reviewer has already looked at, per thread. This is a
 // per-reviewer convenience, not evidence: it says "I read this", never that
 // the change is correct. Storage is best-effort — a private window or blocked

@@ -33,7 +33,7 @@ vi.mock("@uiw/react-md-editor", () => {
   return { default: { Markdown } };
 });
 
-import FileEditorPane, { evictProjectSessions } from "../FileEditorPane";
+import FileEditorPane, { evictProjectSessions, saveEditorSessions } from "../FileEditorPane";
 
 const render = (ui: ReactElement) =>
   rtlRender(ui, { wrapper: MantineProvider });
@@ -84,6 +84,22 @@ describe("FileEditorPane", () => {
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       }
     );
+  });
+
+  it("whole-window save preserves inactive buffers and the current buffer's next save baseline", async () => {
+    const { rerender } = render(<FileEditorPane projectHash="abc" path="first.ts" />);
+    await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
+    act(() => viewFromDom().dispatch({ changes: { from: 0, insert: "first edit\n" } }));
+    rerender(<FileEditorPane projectHash="abc" path="second.ts" />);
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("line one"));
+    act(() => viewFromDom().dispatch({ changes: { from: 0, insert: "second edit\n" } }));
+    await act(() => saveEditorSessions("abc", ["first.ts", "second.ts"]));
+    const saves = invokeMock.mock.calls.filter(([command]) => command === "write_file_content");
+    expect(saves[0][1]).toMatchObject({ relativePath: "first.ts", content: "first edit\nline one\nline two\n", expectedPrevious: "line one\nline two\n" });
+    expect(saves[1][1]).toMatchObject({ relativePath: "second.ts", content: "second edit\nline one\nline two\n" });
+    act(() => viewFromDom().dispatch({ changes: { from: 0, insert: "another edit\n" } }));
+    await act(() => saveEditorSessions("abc", ["second.ts"]));
+    expect(invokeMock.mock.calls.filter(([command]) => command === "write_file_content")[2][1].expectedPrevious).toBe("second edit\nline one\nline two\n");
   });
 
   it("routes a native Find command into the focused CodeMirror editor", async () => {

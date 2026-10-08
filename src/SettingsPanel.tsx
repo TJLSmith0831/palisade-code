@@ -1,4 +1,6 @@
-import { useEffect, useState, useRef } from "react";
+import { AccountSettingsContext } from "./AccountGate";
+import { profileStorage as localStorage } from "./profileStorage";
+import { useContext, useEffect, useState, useRef } from "react";
 import { Modal, Button, NumberInput, Select, Switch, SegmentedControl, Alert } from "@mantine/core";
 import * as api from "./api";
 import {
@@ -623,6 +625,8 @@ export default function SettingsPanel({
     );
   };
 
+  const accountSettings = useContext(AccountSettingsContext);
+
   return (
     <Modal
       opened
@@ -673,6 +677,7 @@ export default function SettingsPanel({
         },
       }}
     >
+
       <div
         style={{
           maxHeight: "calc(100vh - 110px)",
@@ -680,6 +685,10 @@ export default function SettingsPanel({
           padding: "18px 22px 16px",
         }}
       >
+        {accountSettings && <section aria-labelledby="account-settings-heading" style={{ paddingBottom: 20, marginBottom: 20, borderBottom: `1px solid ${borderSubtle}` }}>
+          <h2 id="account-settings-heading" style={{ ...sectionLabel, margin: "0 0 16px" }}>Account & local profile</h2>
+          {accountSettings}
+        </section>}
         {/* ---------------------------------------------------------------- */}
         {/* Color scheme                                                     */}
         {/* ---------------------------------------------------------------- */}

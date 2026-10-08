@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
+import { profileStorage as localStorage } from "../profileStorage";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMantineColorScheme } from "@mantine/core";
 import { useResizable } from "../useResizable";
 
@@ -125,6 +126,8 @@ export function useAppShell(projectHash: string | undefined) {
   const [theme, setThemeState] = useState<Theme>(
     () => (localStorage.getItem(THEME_KEY) as Theme) || "auto"
   );
+
+  useEffect(() => { setMantineColorScheme(theme); }, [theme, setMantineColorScheme]);
 
   const setTheme = useCallback(
     (next: Theme) => {

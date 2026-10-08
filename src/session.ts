@@ -1,3 +1,4 @@
+import { profileStorage as localStorage } from "./profileStorage";
 /**
  * What the editor was showing, per project, so relaunching lands you back
  * where you were rather than on an empty pane.

@@ -51,6 +51,7 @@ pub async fn terminal_spawn(
     terminal_id: String,
 ) -> Res<TerminalAttach> {
     tokio::task::spawn_blocking(move || {
+        let _admission = crate::account_session::admit_work()?;
         let harness: tauri::State<'_, Harness> = app.state();
         let root = project_root(&project_hash)?;
         let app_output = app.clone();

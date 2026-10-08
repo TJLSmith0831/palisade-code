@@ -24,13 +24,22 @@ fn e(ctx: &str, err: impl std::fmt::Display) -> crate::PalisadeError {
 }
 
 /// `~/.palisade-code` — the session store, deliberately outside any target repo.
-pub fn palisade_home() -> PathBuf {
+pub fn machine_home() -> PathBuf {
     #[cfg(feature = "readiness-test")]
     return crate::readiness_test::root().join("store");
     #[cfg(not(feature = "readiness-test"))]
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".palisade-code")
+}
+
+/// Personal-store selection; the account profile implementation is integrated
+/// together with the native startup/IPC gate, never independently of that gate.
+pub fn palisade_home() -> PathBuf {
+    #[cfg(test)]
+    return machine_home();
+    #[cfg(not(test))]
+    crate::account_profile::root().expect("Personal storage requires a bound account profile")
 }
 
 /// Store directories this app has used under earlier names, newest first.

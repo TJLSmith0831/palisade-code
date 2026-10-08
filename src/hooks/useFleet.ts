@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "../api";
+import { errorMessage } from "../errors";
 import type { Envelope, FleetRow } from "../api";
 import { CHAINS_CHANGED_EVENT } from "../ChainsPanel";
 
@@ -54,7 +55,7 @@ export function useFleet({
       setError(undefined);
     } catch (e) {
       if (mine !== generation.current) return;
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       if (mine === generation.current) setLoading(false);
       inFlight.current = false;

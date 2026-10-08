@@ -1,3 +1,4 @@
+import { profileStorage as localStorage } from "../profileStorage";
 import * as api from "../api";
 
 export type CompletionTelemetry = {

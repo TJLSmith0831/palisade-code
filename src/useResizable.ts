@@ -1,3 +1,4 @@
+import { profileStorage as localStorage } from "./profileStorage";
 import { useCallback, useRef, useState } from "react";
 
 interface Persisted {

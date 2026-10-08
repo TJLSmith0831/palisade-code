@@ -425,6 +425,36 @@ fn degraded(name: &str, why: &str) -> String {
     )
 }
 
+fn credential_hash(home: &Path, hash: &str) -> String {
+    if home.parent().and_then(Path::file_name).is_some_and(|name| name == "profiles") {
+        format!("{}:{hash}", home.file_name().unwrap().to_string_lossy())
+    } else { hash.into() }
+}
+pub fn copy_legacy_credentials(home: &Path, target: &Path) -> Result<(), String> {
+    let projects = home.join("projects");
+    if !projects.exists() { return Ok(()); }
+    for entry in std::fs::read_dir(projects).map_err(|_| "Could not inspect database credentials")? {
+        let entry = entry.map_err(|_| "Could not inspect database credentials")?;
+        if !entry.file_type().map_err(|_| "Could not inspect database credentials")?.is_dir() { continue; }
+        let hash = entry.file_name().to_string_lossy().into_owned();
+        for record in read_stored(home, &hash).map_err(|_| "Could not read saved database connections")? {
+            if record.password.is_some() || record.url.is_some() { continue; }
+            if record.details().is_some_and(|details| !details.has_secret()) { continue; }
+            let secret = vault::get(&hash, &record.id).map_err(|_| "Unlock the OS credential store before importing database credentials")?;
+            if let Some(secret) = secret {
+                let scoped = credential_hash(target, &hash);
+                vault::set(&scoped, &record.id, &secret).map_err(|_| "Could not copy database credentials securely")?;
+                if vault::get(&scoped, &record.id).map_err(|_| "Could not verify database credentials")? != Some(secret) {
+                    return Err("Database credential copy verification failed".into());
+                }
+            } else if record.details().is_none() {
+                return Err("A legacy database connection has missing credentials. Repair it before importing.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn connections_path(home: &Path, hash: &str) -> PathBuf {
     crate::store::project_dir(home, hash).join("db-connections.json")
 }
@@ -523,7 +553,7 @@ pub fn with_secret(home: &Path, hash: &str, conn: &DbConnection) -> Res<(DbConne
     // string in the credential store wrote this. Recover the URL from there and
     // split it into fields, so the connection repairs itself on first use.
     if conn.details.is_placeholder() && stored[i].url.is_none() {
-        let recovered = vault::get(hash, &conn.id).map_err(|why| {
+        let recovered = vault::get(&credential_hash(home, hash), &conn.id).map_err(|why| {
             format!("connection \"{}\": its details are in the credential store and it is unavailable ({why})", conn.name)
         })?;
         let url = recovered.ok_or_else(|| {
@@ -540,7 +570,7 @@ pub fn with_secret(home: &Path, hash: &str, conn: &DbConnection) -> Res<(DbConne
     if let Some(url) = stored[i].url.clone() {
         let (details, password) = parse_url(&url)?;
         let kept = match password.as_deref() {
-            Some(pw) => match vault::set(hash, &conn.id, pw) {
+            Some(pw) => match vault::set(&credential_hash(home, hash), &conn.id, pw) {
                 Ok(()) => None,
                 Err(why) => {
                     warning = Some(degraded(&stored[i].name, &why.message));
@@ -567,7 +597,7 @@ pub fn with_secret(home: &Path, hash: &str, conn: &DbConnection) -> Res<(DbConne
         return Ok((resolved, None));
     }
 
-    match vault::get(hash, &conn.id) {
+    match vault::get(&credential_hash(home, hash), &conn.id) {
         Ok(password) => resolved.password = password,
         Err(why) => {
             warning = Some(format!(
@@ -611,7 +641,7 @@ pub fn add_connection(
         return Err("connection needs a name".into());
     }
     let id = ulid::Ulid::new().to_string();
-    let (record, warning) = stow(hash, &id, name, &details, password);
+    let (record, warning) = stow(&credential_hash(home, hash), &id, name, &details, password);
     let mut list = read_stored(home, hash)?;
     list.push(record);
     save_stored(home, hash, &list)?;
@@ -632,7 +662,7 @@ pub fn remove_connection(home: &Path, hash: &str, id: &str) -> Res<()> {
     let mut list = read_stored(home, hash)?;
     list.retain(|c| c.id != id);
     save_stored(home, hash, &list)?;
-    let _ = vault::delete(hash, id);
+    let _ = vault::delete(&credential_hash(home, hash), id);
     Ok(())
 }
 
@@ -2316,5 +2346,26 @@ mod tests {
         let err = with_secret(home, h, &all[0]).unwrap_err();
         assert!(err.contains("re-enter"), "must tell the user what to do: {err}");
         assert!(err.contains("orphan"), "and which connection: {err}");
+    }
+}
+
+#[cfg(test)]
+mod account_credential_tests {
+    use super::*;
+    #[test]
+    fn credentials_for_the_same_repo_are_scoped_and_import_does_not_delete_legacy_secrets() {
+        let home = tempfile::tempdir().unwrap();
+        let a = home.path().join("profiles").join("a".repeat(64));
+        let b = home.path().join("profiles").join("b".repeat(64));
+        let hash = "account-credential-check";
+        let details = Details::Postgres { host: "localhost".into(), port: 5432, user: "test".into(), database: "test".into() };
+        let (legacy, _) = add_connection(home.path(), hash, "legacy", details.clone(), Some("legacy-test-secret")).unwrap();
+        copy_legacy_credentials(home.path(), &a).unwrap();
+        assert_eq!(vault::get(&credential_hash(&a, hash), &legacy.id).unwrap().as_deref(), Some("legacy-test-secret"));
+        assert_eq!(vault::get(hash, &legacy.id).unwrap().as_deref(), Some("legacy-test-secret"));
+        assert_eq!(vault::get(&credential_hash(&b, hash), &legacy.id).unwrap(), None);
+        let (other, _) = add_connection(&b, hash, "different", details, Some("account-b-test-secret")).unwrap();
+        assert_eq!(with_secret(&b, hash, &other).unwrap().0.password.as_deref(), Some("account-b-test-secret"));
+        assert_eq!(vault::get(&credential_hash(&a, hash), &other.id).unwrap(), None);
     }
 }

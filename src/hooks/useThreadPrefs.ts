@@ -1,3 +1,4 @@
+import { profileStorage as localStorage } from "../profileStorage";
 import { useCallback, useState } from "react";
 import * as api from "../api";
 import type { ThreadMeta } from "../api";

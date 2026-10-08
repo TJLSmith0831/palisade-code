@@ -137,6 +137,26 @@ function OutputBlock({ output }: { output: CellOutput }) {
   return null;
 }
 
+const accountBuffers = new Map<string, { doc: NotebookDoc; baseline: string }>();
+export function evictNotebookSession(projectHash: string, path: string) { accountBuffers.delete(`${projectHash}:${path}`); }
+export function evictProjectNotebookSessions(projectHash: string) {
+  for (const key of accountBuffers.keys()) if (key.startsWith(`${projectHash}:`)) accountBuffers.delete(key);
+}
+export async function saveNotebookSessions(projectHash: string, paths: string[]): Promise<string[]> {
+  const saved: string[] = [];
+  for (const path of paths) {
+    const key = `${projectHash}:${path}`;
+    const buffer = accountBuffers.get(key);
+    if (!buffer) continue;
+    const content = serializeNotebook(buffer.doc);
+    await api.writeFileContent(projectHash, path, content, buffer.baseline);
+    buffer.baseline = content;
+    window.dispatchEvent(new CustomEvent("palisade-buffer-saved", { detail: { projectHash, path, content } }));
+    saved.push(path);
+  }
+  return saved;
+}
+
 export default function NotebookTab({
   projectHash,
   path,
@@ -172,6 +192,14 @@ export default function NotebookTab({
     let cancelled = false;
     setDoc(null);
     setLoadError(null);
+    const cached = accountBuffers.get(`${projectHash}:${path}`);
+    if (cached && serializeNotebook(cached.doc) !== cached.baseline) {
+      savedContent.current = cached.baseline;
+      setDoc(cached.doc);
+      const dirty = serializeNotebook(cached.doc) !== cached.baseline;
+      setDirty(dirty); onDirtyChange(path, dirty);
+      return;
+    }
     api
       .readFileContent(projectHash, path)
       .then((content) => {
@@ -195,6 +223,18 @@ export default function NotebookTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectHash, path]);
 
+  useEffect(() => {
+    if (doc && savedContent.current !== null) accountBuffers.set(`${projectHash}:${path}`, { doc, baseline: savedContent.current });
+  }, [doc, projectHash, path]);
+  useEffect(() => {
+    const saved = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectHash: string; path: string; content: string }>).detail;
+      if (detail.projectHash === projectHash && detail.path === path) { savedContent.current = detail.content; setDirty(false); }
+    };
+    window.addEventListener("palisade-buffer-saved", saved);
+    return () => window.removeEventListener("palisade-buffer-saved", saved);
+  }, [projectHash, path]);
+
   const markDirty = useCallback(
     (next: NotebookDoc) => {
       setDoc(next);
@@ -209,6 +249,7 @@ export default function NotebookTab({
       const content = serializeNotebook(toSave);
       await api.writeFileContent(projectHash, path, content, savedContent.current);
       savedContent.current = content;
+      accountBuffers.set(`${projectHash}:${path}`, { doc: toSave, baseline: content });
       setDirty(false);
       onDirtyChange(path, false);
     },

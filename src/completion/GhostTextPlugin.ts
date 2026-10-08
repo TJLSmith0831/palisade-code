@@ -1,3 +1,4 @@
+import { profileStorage as localStorage } from "../profileStorage";
 import { StateEffect, StateField, Transaction } from "@codemirror/state";
 import {
   Decoration,

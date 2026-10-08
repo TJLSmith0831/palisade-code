@@ -167,6 +167,17 @@ export function sessionIsDirty(projectHash: string, path: string): boolean {
   return session ? docOf(session) !== session.baseline : false;
 }
 
+export async function saveEditorSessions(projectHash: string, paths: string[]) {
+  for (const path of paths) {
+    const session = sessions.get(sessionKey(projectHash, path));
+    if (!session || path.startsWith("/")) throw new Error(`Cannot safely save ${path}; return to its editor first.`);
+    const content = docOf(session);
+    await api.writeFileContent(projectHash, path, content, session.baseline);
+    session.baseline = content;
+    window.dispatchEvent(new CustomEvent("palisade-buffer-saved", { detail: { projectHash, path, content } }));
+  }
+}
+
 /** The document text out of a serialized session. */
 function docOf(session: Session): string {
   const doc = (session.json as { doc?: unknown })?.doc;
@@ -488,6 +499,15 @@ export default function FileEditorPane({
     setReloadToken((token) => token + 1);
   }, [projectHash, path]);
 
+  useEffect(() => {
+    const saved = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectHash: string; path: string; content: string }>).detail;
+      if (detail.projectHash === projectHash && detail.path === path) { baselineRef.current = detail.content; markDirty(false); }
+    };
+    window.addEventListener("palisade-buffer-saved", saved);
+    return () => window.removeEventListener("palisade-buffer-saved", saved);
+  }, [projectHash, path, markDirty]);
+
   const save = useCallback(
     (options?: { overwrite?: boolean }) => {
       const view = viewRef.current;
@@ -624,6 +644,12 @@ export default function FileEditorPane({
             line: line.number,
             col: head - line.from + 1,
           });
+        }
+        if (update.docChanged || update.selectionSet) {
+          const session = sessions.get(sessionKey(projectHash, forPath));
+          // ponytail: serialize the current buffer for whole-window saves;
+          // capture live views on demand if very large undo histories become slow.
+          if (session) session.json = update.state.toJSON(SERIALIZED_FIELDS);
         }
         if (!update.docChanged) return;
         markDirty(update.state.doc.toString() !== baselineRef.current);
