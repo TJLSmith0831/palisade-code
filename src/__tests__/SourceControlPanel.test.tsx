@@ -532,6 +532,96 @@ describe("SourceControlPanel discard and stash", () => {
     );
   });
 
+  it("focuses Cancel and leaves work intact when discard is cancelled", async () => {
+    render(<SourceControlPanel {...props} />);
+    fireEvent.click(await screen.findByTestId("sc-discard-new.ts"));
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    fireEvent.click(cancel);
+    expect(screen.queryByTestId("confirm-discard")).toBeNull();
+    expect(mocked.gitDiscardFile).not.toHaveBeenCalled();
+  });
+
+  it("confirms stash deletion and refreshes after it completes", async () => {
+    mocked.gitStashList.mockResolvedValue([{ name: "stash@{0}", oid: "abc123", message: "Saved work" }]);
+    render(<SourceControlPanel {...props} />);
+    fireEvent.click(await screen.findByTestId("sc-stash-drop-stash@{0}"));
+    expect(mocked.gitStashAction).not.toHaveBeenCalled();
+    expect(screen.getByText(/without restoring/)).toBeDefined();
+    mocked.gitStashList.mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId("confirm-drop"));
+    await waitFor(() => expect(screen.queryByText("Saved work")).toBeNull());
+    expect(mocked.gitStashAction).toHaveBeenCalledWith("p1", "drop", "stash@{0}", "abc123", undefined);
+  });
+
+  it("reports conflicts and refreshes the changed working tree while keeping the stash", async () => {
+    mocked.gitStashList.mockResolvedValue([{ name: "stash@{0}", oid: "abc123", message: "Saved work" }]);
+    mocked.gitStashAction.mockRejectedValue("merge conflict");
+    const onError = vi.fn();
+    render(<SourceControlPanel {...props} onError={onError} />);
+    const pop = await screen.findByTestId("sc-stash-pop-stash@{0}");
+    mocked.gitStatus.mockResolvedValue([{ path: "conflicted.ts", code: "UU" }]);
+    fireEvent.click(pop);
+    expect(await screen.findByText("conflicted.ts")).toBeDefined();
+    expect(screen.getByText("Saved work")).toBeDefined();
+    expect(onError).toHaveBeenCalledWith("merge conflict");
+  });
+
+  it("prevents repeated stash actions while an operation is pending", async () => {
+    let finish!: () => void;
+    mocked.gitStashAction.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    mocked.gitStashList.mockResolvedValue([{ name: "stash@{0}", oid: "abc123", message: "Saved work" }]);
+    render(<SourceControlPanel {...props} />);
+    const pop = await screen.findByTestId("sc-stash-pop-stash@{0}");
+    fireEvent.click(pop);
+    expect(pop).toBeDisabled();
+    fireEvent.click(pop);
+    expect(mocked.gitStashAction).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(pop).not.toBeDisabled());
+  });
+
+  it.each(["tree", "branch"])("closes destructive dialogs when the selected %s changes", async (target) => {
+    const { rerender } = render(<SourceControlPanel {...props} selectedTreeId="tree-a" />);
+    fireEvent.click(await screen.findByTestId("sc-discard-new.ts"));
+    rerender(<SourceControlPanel {...props} selectedTreeId={target === "tree" ? "tree-b" : "tree-a"} branch={target === "branch" ? "feature" : "main"} />);
+    expect(screen.queryByTestId("confirm-discard")).toBeNull();
+    expect(mocked.gitDiscardFile).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocked.gitStatus).toHaveBeenCalledWith("p1", target === "tree" ? "tree-b" : "tree-a"));
+  });
+
+  it("surfaces stash-list failures without removing the last known saved work", async () => {
+    mocked.gitStashList.mockResolvedValue([{ name: "stash@{0}", oid: "abc123", message: "Saved work" }]);
+    const onError = vi.fn();
+    const { rerender } = render(<SourceControlPanel {...props} onError={onError} refreshToken={0} />);
+    await screen.findByText("Saved work");
+    mocked.gitStashList.mockRejectedValue("list failed");
+    rerender(<SourceControlPanel {...props} onError={onError} refreshToken={1} />);
+    await waitFor(() => expect(onError).toHaveBeenCalledWith("list failed"));
+    expect(screen.getByText("Saved work")).toBeDefined();
+  });
+
+  it("refreshes partial bulk discard results and reports the failed file", async () => {
+    mocked.gitDiscardFile.mockResolvedValueOnce(undefined).mockRejectedValueOnce("delete failed");
+    const onError = vi.fn();
+    render(<SourceControlPanel {...props} onError={onError} />);
+    fireEvent.click(await screen.findByTestId("sc-discard-all"));
+    mocked.gitStatus.mockResolvedValue([{ path: "new.ts", code: "??" }]);
+    fireEvent.click(screen.getByTestId("confirm-discard"));
+    await waitFor(() => expect(screen.queryByTestId("sc-discard-src/b.ts")).toBeNull());
+    expect(screen.getByTestId("sc-discard-new.ts")).toBeDefined();
+    expect(onError).toHaveBeenCalledWith("delete failed");
+  });
+
+  it("only offers include-untracked stash when all changes are untracked", async () => {
+    mocked.gitStatus.mockResolvedValue([{ path: "new.ts", code: "??" }]);
+    render(<SourceControlPanel {...props} />);
+    await screen.findByTestId("sc-discard-new.ts");
+    fireEvent.click(screen.getByTestId("sc-stash-menu"));
+    expect(await screen.findByTestId("sc-stash")).toHaveAttribute("data-disabled", "true");
+    expect(screen.getByTestId("sc-stash-untracked")).not.toHaveAttribute("data-disabled");
+  });
+
   it("offers no discard on a staged file", async () => {
     render(<SourceControlPanel {...props} />);
     await screen.findByTestId("sc-unstage-src/a.ts");
@@ -563,14 +653,14 @@ describe("SourceControlPanel discard and stash", () => {
   });
 
   it("lists stashes and applies one", async () => {
-    mocked.gitStashList.mockResolvedValue([{ name: "stash@{0}", message: "On main: wip" }]);
+    mocked.gitStashList.mockResolvedValue([{ name: "stash@{0}", oid: "abc123", message: "On main: wip" }]);
     render(<SourceControlPanel {...props} />);
 
     expect(await screen.findByText("On main: wip")).toBeDefined();
     fireEvent.click(screen.getByTestId("sc-stash-apply-stash@{0}"));
 
     await waitFor(() =>
-      expect(mocked.gitStashAction).toHaveBeenCalledWith("p1", "apply", "stash@{0}", undefined),
+      expect(mocked.gitStashAction).toHaveBeenCalledWith("p1", "apply", "stash@{0}", "abc123", undefined),
     );
   });
 });

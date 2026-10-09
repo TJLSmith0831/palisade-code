@@ -7842,3 +7842,22 @@ button.ds-onboarding-status {
   .ds-composer-actions .ds-mode-selector, .ds-composer-actions > :last-child { grid-column: 3; }
   .ds-context-donut { grid-column: 2; grid-row: 2; }
 }
+
+.ds-sc-dialog { border-radius: calc(var(--mantine-radius-sm) + var(--mantine-spacing-md)); }
+.ds-sc-stash { cursor: default; }
+.ds-sc-stash .ds-sc-file-text { flex: 1; }
+
+.ds-sc .mantine-active:not([data-static]),
+.ds-sc-dialog .mantine-active:not([data-static]) {
+  transition: transform 100ms ease-out;
+}
+.ds-sc .mantine-active:not([data-static]):active:not(:disabled),
+.ds-sc-dialog .mantine-active:not([data-static]):active:not(:disabled) {
+  transform: scale(0.96);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-sc .mantine-active:not([data-static]),
+  .ds-sc-dialog .mantine-active:not([data-static]) { transition: none; }
+  .ds-sc .mantine-active:not([data-static]):active:not(:disabled),
+  .ds-sc-dialog .mantine-active:not([data-static]):active:not(:disabled) { transform: none; }
+}

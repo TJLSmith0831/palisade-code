@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionIcon, Button, Group, HoverCard, Loader, Menu, Modal as MantineModal, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
 import {
   IconArchive,
@@ -317,6 +317,7 @@ function FileRow({
   onOpen,
   onAction,
   onDiscard,
+  disabled = false,
 }: {
   file: FileStatus;
   action: "stage" | "unstage";
@@ -324,6 +325,7 @@ function FileRow({
   onAction: () => void;
   /** Only unstaged rows offer it — a staged change has to be unstaged first. */
   onDiscard?: () => void;
+  disabled?: boolean;
 }) {
   const { name, dir } = splitPath(file.path);
   const chip = statusChip(file.code);
@@ -357,6 +359,7 @@ function FileRow({
           <ActionIcon
             variant="subtle"
             size="sm"
+            disabled={disabled}
             aria-label={`Discard ${file.path}`}
             onClick={(event) => {
               event.stopPropagation();
@@ -375,6 +378,7 @@ function FileRow({
         <ActionIcon
           variant="subtle"
           size="sm"
+          disabled={disabled}
           aria-label={`${action === "stage" ? "Stage" : "Unstage"} ${file.path}`}
           onClick={(event) => {
             // Staging is not opening — the row handler must not also fire.
@@ -396,7 +400,7 @@ function FileRow({
   );
 }
 
-export default function SourceControlPanel({
+function SourceControlPanelTree({
   projectHash,
   threadId,
   workingTrees,
@@ -486,6 +490,10 @@ export default function SourceControlPanel({
   const [generating, setGenerating] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState<FileStatus[] | null>(null);
+  const [confirmDrop, setConfirmDrop] = useState<api.StashEntry | null>(null);
+  const mutationPending = useRef(false);
+  const [mutating, setMutating] = useState(false);
+  const busy = mutating || committing;
   const [stashes, setStashes] = useState<api.StashEntry[]>([]);
   /** Set while the "Stash changes" dialog is open. */
   const [stashDialog, setStashDialog] = useState<{ includeUntracked: boolean } | null>(null);
@@ -539,7 +547,9 @@ export default function SourceControlPanel({
     api
       .gitStashList(projectHash, tree)
       .then((value) => setStashes(value ?? []))
-      .catch(() => setStashes([]));
+      .catch((err) => {
+        if (errorKind(err) !== "notAGitRepo") onError(err);
+      });
     // No upstream is a normal state, not an error — no counts, no banner.
     api.gitAheadBehind(projectHash, tree).then(
       (value) => {
@@ -587,12 +597,10 @@ export default function SourceControlPanel({
   const showUncommittedNode = files.length > 0 && graphFilter.trim() === "";
 
   const act = (run: Promise<unknown>) =>
-    run
-      .then(() => {
-        reload();
-        onChanged?.();
-      })
-      .catch(onError);
+    run.catch(onError).finally(() => {
+      reload();
+      onChanged?.();
+    });
 
   /** Git takes an exclusive lock on the index, so staging N files is N
    *  sequential calls. `Promise.all` raced them and half failed with
@@ -604,24 +612,37 @@ export default function SourceControlPanel({
     for (const entry of entries) await run(entry.path);
   };
 
+  const mutate = (run: () => Promise<unknown>) => {
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    setMutating(true);
+    return act(run()).finally(() => {
+      mutationPending.current = false;
+      setMutating(false);
+    });
+  };
+
   const discard = () => {
     if (!confirmDiscard) return;
-    const files = confirmDiscard;
+    const entries = confirmDiscard;
     setConfirmDiscard(null);
-    act(
-      forEachSequentially(files, (path) =>
-        api.gitDiscardFile(projectHash, path, files.find((f) => f.path === path)?.code === "??", tree)
-      )
-    );
+    mutate(async () => {
+      for (const file of entries) {
+        await api.gitDiscardFile(projectHash, file.path, file.code === "??", tree);
+      }
+    });
   };
 
   const stash = () => {
     if (!stashDialog) return;
     const { includeUntracked } = stashDialog;
     setStashDialog(null);
-    act(api.gitStashPush(projectHash, stashMessage, includeUntracked, tree));
+    mutate(() => api.gitStashPush(projectHash, stashMessage, includeUntracked, tree));
     setStashMessage("");
   };
+
+  const stashAction = (action: "apply" | "pop" | "drop", entry: api.StashEntry) =>
+    mutate(() => api.gitStashAction(projectHash, action, entry.name, entry.oid, tree));
 
   const generate = () => {
     setGenerating(true);
@@ -633,7 +654,8 @@ export default function SourceControlPanel({
   };
 
   const commit = () => {
-    if (!message.trim() || staged.length === 0) return;
+    if (!message.trim() || staged.length === 0 || mutationPending.current) return;
+    mutationPending.current = true;
     setCommitting(true);
     api
       .gitCommit(projectHash, message.trim(), tree)
@@ -643,7 +665,10 @@ export default function SourceControlPanel({
         onChanged?.();
       })
       .catch(onError)
-      .finally(() => setCommitting(false));
+      .finally(() => {
+        mutationPending.current = false;
+        setCommitting(false);
+      });
   };
 
   return (
@@ -689,13 +714,13 @@ export default function SourceControlPanel({
         </div>
         <Menu position="bottom-end" withinPortal>
           <Menu.Target>
-            <ActionIcon variant="subtle" size="sm" aria-label="Stash actions" data-testid="sc-stash-menu">
+            <ActionIcon variant="subtle" size="sm" disabled={busy} aria-label="Stash actions" data-testid="sc-stash-menu">
               <IconArchive size={15} />
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>
             <Menu.Item
-              disabled={files.length === 0}
+              disabled={!files.some((file) => file.code !== "??")}
               onClick={() => setStashDialog({ includeUntracked: false })}
               data-testid="sc-stash"
             >
@@ -720,7 +745,7 @@ export default function SourceControlPanel({
             {/* fetch/pull/push live here rather than as primary buttons —
                 Amendment 7 supersedes the old git-btn cluster. */}
             <Menu.Item
-              onClick={() => act(api.gitFetch(projectHash, tree))}
+              onClick={() => mutate(() => api.gitFetch(projectHash, tree))}
             >
               Fetch
             </Menu.Item>
@@ -730,13 +755,13 @@ export default function SourceControlPanel({
               </Menu.Item>
             )}
             <Menu.Item
-              onClick={() => act(api.gitPull(projectHash, tree))}
+              onClick={() => mutate(() => api.gitPull(projectHash, tree))}
               data-testid="sc-pull"
             >
               Pull{behind > 0 ? ` ${behind}` : ""}
             </Menu.Item>
             <Menu.Item
-              onClick={() => act(api.gitPush(projectHash, tree))}
+              onClick={() => mutate(() => api.gitPush(projectHash, tree))}
               data-testid="sc-push"
             >
               Push{ahead > 0 ? ` ${ahead}` : ""}
@@ -855,7 +880,7 @@ export default function SourceControlPanel({
         <Button
           fullWidth
           leftSection={<IconCheck size={14} />}
-          disabled={!message.trim() || staged.length === 0 || committing}
+          disabled={!message.trim() || staged.length === 0 || committing || mutating}
           onClick={commit}
           data-testid="sc-commit"
         >
@@ -886,9 +911,10 @@ export default function SourceControlPanel({
                 <ActionIcon
                   variant="subtle"
                   size="sm"
+                  disabled={busy}
                   aria-label="Unstage all"
                   onClick={() =>
-                    act(
+                    mutate(() =>
                       forEachSequentially(staged, (path) =>
                         api.gitUnstageFile(projectHash, path, tree)
                       )
@@ -908,8 +934,9 @@ export default function SourceControlPanel({
               key={file.path}
               file={file}
               action="unstage"
+              disabled={busy}
               onOpen={() => onOpenFile(file.path, tree)}
-              onAction={() => act(api.gitUnstageFile(projectHash, file.path, tree))}
+              onAction={() => mutate(() => api.gitUnstageFile(projectHash, file.path, tree))}
             />
           ))}
         </Section>
@@ -927,9 +954,10 @@ export default function SourceControlPanel({
                   <ActionIcon
                     variant="subtle"
                     size="sm"
+                    disabled={busy}
                     aria-label="Stage all"
                     onClick={() =>
-                      act(
+                      mutate(() =>
                         forEachSequentially(unstaged, (path) =>
                           api.gitStageFile(projectHash, path, tree)
                         )
@@ -947,6 +975,7 @@ export default function SourceControlPanel({
                     variant="subtle"
                     size="sm"
                     aria-label="Discard all changes"
+                    disabled={busy}
                     onClick={() => setConfirmDiscard(unstaged)}
                     data-testid="sc-discard-all"
                   >
@@ -975,7 +1004,8 @@ export default function SourceControlPanel({
               file={file}
               action="stage"
               onOpen={() => onOpenFile(file.path, tree)}
-              onAction={() => act(api.gitStageFile(projectHash, file.path, tree))}
+              onAction={() => mutate(() => api.gitStageFile(projectHash, file.path, tree))}
+              disabled={busy}
               onDiscard={() => setConfirmDiscard([file])}
             />
           ))}
@@ -990,7 +1020,7 @@ export default function SourceControlPanel({
             onToggle={() => toggle("stashes")}
           >
             {stashes.map((entry) => (
-              <div className="ds-sc-file" data-testid="sc-stash-row" key={entry.name}>
+              <div className="ds-sc-file ds-sc-stash" data-testid="sc-stash-row" key={`${entry.name}-${entry.oid}`}>
                 <span className="ds-sc-file-text" title={entry.message}>
                   <span className="ds-sc-fname">{entry.message}</span>
                   <span className="ds-sc-fpath">{entry.name}</span>
@@ -1000,12 +1030,14 @@ export default function SourceControlPanel({
                   ["pop", "Pop", <IconArrowBackUp size={14} />],
                   ["drop", "Drop", <IconMinus size={14} />],
                 ] as const).map(([action, label, icon]) => (
-                  <Tooltip key={action} label={`${label} stash`} withinPortal>
+                  <Tooltip key={action} label={action === "pop" ? "Restore and remove stash" : action === "apply" ? "Restore stash and keep it" : "Delete stash"} withinPortal>
                     <ActionIcon
                       variant="subtle"
                       size="sm"
+                      disabled={busy}
+                      color={action === "drop" ? "danger" : undefined}
                       aria-label={`${label} ${entry.name}`}
-                      onClick={() => act(api.gitStashAction(projectHash, action, entry.name, tree))}
+                      onClick={() => action === "drop" ? setConfirmDrop(entry) : stashAction(action, entry)}
                       data-testid={`sc-stash-${action}-${entry.name}`}
                     >
                       {icon}
@@ -1125,6 +1157,7 @@ export default function SourceControlPanel({
 
       {confirmDiscard && (
         <MantineModal
+          classNames={{ content: "ds-sc-dialog" }}
           opened
           onClose={() => setConfirmDiscard(null)}
           title={
@@ -1140,18 +1173,34 @@ export default function SourceControlPanel({
               " Untracked files are deleted."}
           </Text>
           <Group justify="flex-end" gap="sm" mt="lg">
-            <Button size="xs" variant="default" onClick={() => setConfirmDiscard(null)}>
+            <Button size="xs" variant="default" onClick={() => setConfirmDiscard(null)} data-autofocus>
               Cancel
             </Button>
-            <Button size="xs" color="danger" onClick={discard} data-testid="confirm-discard" autoFocus>
+            <Button size="xs" color="danger" onClick={discard} data-testid="confirm-discard">
               Discard
             </Button>
           </Group>
         </MantineModal>
       )}
 
+      {confirmDrop && (
+        <MantineModal classNames={{ content: "ds-sc-dialog" }} opened onClose={() => setConfirmDrop(null)} title={`Delete ${confirmDrop.name}?`} transitionProps={{ duration: 0 }}>
+          <Text size="sm">{confirmDrop.message}</Text>
+          <Text size="sm" mt="sm">This removes the saved changes without restoring them.</Text>
+          <Group justify="flex-end" gap="sm" mt="lg">
+            <Button size="xs" variant="default" onClick={() => setConfirmDrop(null)} data-autofocus>Cancel</Button>
+            <Button size="xs" color="danger" data-testid="confirm-drop" onClick={() => {
+              const entry = confirmDrop;
+              setConfirmDrop(null);
+              stashAction("drop", entry);
+            }}>Delete stash</Button>
+          </Group>
+        </MantineModal>
+      )}
+
       {stashDialog && (
         <MantineModal
+          classNames={{ content: "ds-sc-dialog" }}
           opened
           onClose={() => setStashDialog(null)}
           title={stashDialog.includeUntracked ? "Stash changes (include untracked)" : "Stash changes"}
@@ -1181,4 +1230,9 @@ export default function SourceControlPanel({
       )}
     </div>
   );
+}
+
+export default function SourceControlPanel(props: Parameters<typeof SourceControlPanelTree>[0]) {
+  const tree = props.selectedTreeId === undefined ? props.threadId : props.selectedTreeId;
+  return <SourceControlPanelTree key={JSON.stringify([props.projectHash, tree ?? null, props.branch])} {...props} />;
 }

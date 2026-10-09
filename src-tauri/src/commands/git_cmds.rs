@@ -276,10 +276,11 @@ pub async fn git_stash_action(
     project_hash: String,
     action: String,
     name: String,
+    oid: String,
     thread_id: Option<String>,
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
-        git::stash_action(&git_bin()?, &tree_root(&project_hash, thread_id.as_deref())?, &action, &name)
+        git::stash_action(&git_bin()?, &tree_root(&project_hash, thread_id.as_deref())?, &action, &name, &oid)
     })
     .await
     .map_err(crate::PalisadeError::from)?
