@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "./profileStorage";
+import { profileStorage } from "./profileStorage";
 import {
   isPermissionGranted,
   requestPermission,
@@ -15,7 +15,7 @@ export const NOTIFY_TURN_DONE_KEY = "palisade:notifyTurnDone";
 /** On unless the user turned it off in Settings. */
 export function loadNotifyTurnDone(): boolean {
   try {
-    return localStorage.getItem(NOTIFY_TURN_DONE_KEY) !== "0";
+    return profileStorage.getItem(NOTIFY_TURN_DONE_KEY) !== "0";
   } catch {
     return true;
   }
@@ -23,7 +23,7 @@ export function loadNotifyTurnDone(): boolean {
 
 export function saveNotifyTurnDone(on: boolean): void {
   try {
-    localStorage.setItem(NOTIFY_TURN_DONE_KEY, on ? "1" : "0");
+    profileStorage.setItem(NOTIFY_TURN_DONE_KEY, on ? "1" : "0");
   } catch {
     // A blocked storage just means the default (on) next launch.
   }

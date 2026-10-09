@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "../profileStorage";
+import { profileStorage } from "../profileStorage";
 import { useCallback, useState } from "react";
 import * as api from "../api";
 import type { ThreadMeta } from "../api";
@@ -21,7 +21,7 @@ const threadPrefsKey = (hash: string, threadId: string) =>
   `palisade:thread-prefs:${hash}:${threadId}`;
 
 const getThreadPrefs = (hash: string, threadId: string): ThreadPrefs | null => {
-  const raw = localStorage.getItem(threadPrefsKey(hash, threadId));
+  const raw = profileStorage.getItem(threadPrefsKey(hash, threadId));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<ThreadPrefs>;
@@ -39,7 +39,7 @@ export const setThreadPrefs = (
   threadId: string,
   prefs: ThreadPrefs
 ) => {
-  localStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
+  profileStorage.setItem(threadPrefsKey(hash, threadId), JSON.stringify(prefs));
 };
 
 // Every never-configured thread starts in Accept mode (D6) — no global

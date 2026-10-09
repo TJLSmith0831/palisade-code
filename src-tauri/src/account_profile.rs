@@ -5,6 +5,11 @@ static PROFILE: OnceLock<(String, PathBuf, File)> = OnceLock::new();
 pub fn identity_key(issuer: &str, subject: &str) -> String {
     crate::store::project_hash(&format!("{}:{issuer}{subject}", issuer.len()))
 }
+/// The account key a profile store belongs to, or `None` for the shared machine store.
+pub fn key_of(home: &Path) -> Option<String> {
+    home.parent().and_then(Path::file_name).filter(|name| *name == "profiles")
+        .and(home.file_name()).map(|key| key.to_string_lossy().into_owned())
+}
 pub fn root() -> Option<PathBuf> { PROFILE.get().map(|(_, root, _)| root.clone()) }
 pub fn is_bound(key: &str) -> bool { PROFILE.get().is_some_and(|(active, _, _)| active == key) }
 fn owner_path(home: &Path) -> PathBuf { home.join("legacy-profile-owner.json") }

@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "../profileStorage";
+import { profileStorage } from "../profileStorage";
 import * as api from "../api";
 
 export type CompletionTelemetry = {
@@ -36,7 +36,7 @@ function emptyTelemetry(): StoredTelemetry {
 
 export function loadTelemetry(): StoredTelemetry {
   try {
-    const raw = localStorage.getItem(TELEMETRY_KEY);
+    const raw = profileStorage.getItem(TELEMETRY_KEY);
     if (!raw) return emptyTelemetry();
     const parsed = JSON.parse(raw) as Partial<StoredTelemetry>;
     return {
@@ -50,7 +50,7 @@ export function loadTelemetry(): StoredTelemetry {
 }
 
 function save(telemetry: StoredTelemetry) {
-  localStorage.setItem(TELEMETRY_KEY, JSON.stringify(telemetry));
+  profileStorage.setItem(TELEMETRY_KEY, JSON.stringify(telemetry));
   void flush(telemetry);
 }
 

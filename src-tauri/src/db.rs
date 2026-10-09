@@ -426,9 +426,10 @@ fn degraded(name: &str, why: &str) -> String {
 }
 
 fn credential_hash(home: &Path, hash: &str) -> String {
-    if home.parent().and_then(Path::file_name).is_some_and(|name| name == "profiles") {
-        format!("{}:{hash}", home.file_name().unwrap().to_string_lossy())
-    } else { hash.into() }
+    match crate::account_profile::key_of(home) {
+        Some(key) => format!("{key}:{hash}"),
+        None => hash.into(),
+    }
 }
 pub fn copy_legacy_credentials(home: &Path, target: &Path) -> Result<(), String> {
     let projects = home.join("projects");

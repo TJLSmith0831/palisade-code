@@ -26,7 +26,7 @@ import { bindProfileStorage, hasImportedPreferences } from "./profileStorage";
 import { errorMessage } from "./errors";
 import wordmark from "../assets/palisade-wordmark-darkmode-no-bg.png";
 import lightWordmark from "../assets/palisade-wordmark-lightmode-no-bg.png";
-import "./AccountPreview.css";
+import "./AccountGate.css";
 
 export const AccountSettingsContext = createContext<ReactNode>(null);
 

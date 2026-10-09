@@ -9,10 +9,16 @@ import {
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import App from "./App";
-import AccountPreview from "./AccountPreview";
 import AccountGate from "./AccountGate";
 import { profileStorage } from "./profileStorage";
 import { THEME_KEY } from "./hooks/useAppShell";
+
+// Dev-only design preview; a dynamic import keeps it out of production bundles.
+const AccountPreview =
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).has("account-preview")
+    ? React.lazy(() => import("./AccountPreview"))
+    : null;
 
 // DESIGN.md's three semantic status hues, registered as real Mantine colour
 // keys so a component writes `color="danger"` and gets Mantine's own variant
@@ -214,7 +220,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       colorSchemeManager={colorSchemeManager}
       defaultColorScheme="auto"
     >
-      {import.meta.env.DEV && new URLSearchParams(window.location.search).has("account-preview") ? <AccountPreview /> : <AccountGate><App /></AccountGate>}
+      {AccountPreview ? <React.Suspense fallback={null}><AccountPreview /></React.Suspense> : <AccountGate><App /></AccountGate>}
     </MantineProvider>
   </React.StrictMode>
 );

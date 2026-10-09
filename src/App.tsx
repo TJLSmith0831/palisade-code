@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "./profileStorage";
+import { profileStorage } from "./profileStorage";
 import {
   lazy,
   memo,
@@ -3625,7 +3625,7 @@ export default function App() {
         return;
       }
       setHistoryLoading(true);
-      localStorage.setItem(lastThreadKey(projectHash), next.id);
+      profileStorage.setItem(lastThreadKey(projectHash), next.id);
       clearLiveFor(next.id);
       try {
         const page = await readPage(projectHash, next.id);
@@ -3763,7 +3763,7 @@ export default function App() {
         const found = await api.listThreads(refreshed.hash);
         setThreads(found);
         await refreshBranches(refreshed.hash);
-        const remembered = localStorage.getItem(lastThreadKey(refreshed.hash));
+        const remembered = profileStorage.getItem(lastThreadKey(refreshed.hash));
         await selectThread(
           refreshed.hash,
           found.find((t) => t.id === remembered) ?? found[0] ?? null

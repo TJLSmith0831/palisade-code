@@ -13,6 +13,8 @@ use tauri::Manager;
 
 pub use crate::account_session::{Identity, ISSUER, CLIENT_ID};
 const TIMEOUT: Duration = Duration::from_secs(300);
+/// The one callback rejection that ends the wait instead of waiting for a retry.
+const DECLINED: &str = "Authorization declined";
 
 #[derive(Default)]
 pub struct PendingAuth(Mutex<Option<(String, Arc<AtomicBool>)>>);
@@ -82,7 +84,7 @@ fn callback_code(request: &str, redirect: &str, state: &str) -> Result<String, &
         return Err("Invalid callback state or issuer");
     }
     if query.contains_key("error") {
-        return Err("Authorization declined");
+        return Err(DECLINED);
     }
     query.get("code").filter(|s| !s.is_empty() && s.len() <= 4096)
         .cloned().ok_or("Missing authorization code")
@@ -127,7 +129,7 @@ fn wait_for_code(listener: TcpListener, redirect: &str, state: &str, cancel: &At
                 respond(&mut stream, result.is_ok());
                 match result {
                     Ok(code) => return Ok(code),
-                    Err(error) if error == "Authorization declined" => return Err(error),
+                    Err(error) if error == DECLINED => return Err(error),
                     Err(_) => continue,
                 }
             }
@@ -335,16 +337,14 @@ pub async fn account_prepare_workspace(app: tauri::AppHandle, import_legacy: boo
     tauri::async_runtime::spawn_blocking(move || {
         let _operation = crate::account_session::operations().lock().map_err(|_| "Account unavailable")?;
         let status = crate::account_session::status()?;
-        if !matches!(status.state.as_str(), "online" | "offline") { return Err("Sign in before opening a profile".into()); }
+        if !matches!(status.state, crate::account_session::AccountState::Online | crate::account_session::AccountState::Offline) { return Err("Sign in before opening a profile".into()); }
         let key = status.profile_key.ok_or("Account identity unavailable")?;
         if crate::account_profile::is_bound(&key) { return crate::account_session::status(); }
         let root = crate::account_profile::prepare(&crate::store::machine_home(), &key, import_legacy)?;
         crate::reconcile_stale_chain_runs_on_startup(&root).map_err(|_| "Could not recover the profile's interrupted runs")?;
         crate::account_profile::bind(&key, root.clone())?;
         let status = crate::account_session::status()?;
-        std::thread::spawn(move || {
-            if let Err(error) = crate::completion::ensure_model_installed(&app) { eprintln!("completion: {error}"); }
-        });
+        crate::install_completion_in_background(&app);
         Ok(status)
     }).await.map_err(|_| "Profile setup unavailable".to_string())?
 }

@@ -28,7 +28,7 @@ import {
 } from "@tabler/icons-react";
 import wordmark from "../assets/palisade-wordmark-darkmode-no-bg.png";
 import lightWordmark from "../assets/palisade-wordmark-lightmode-no-bg.png";
-import "./AccountPreview.css";
+import "./AccountGate.css";
 import AccountSignIn from "./AccountSignIn";
 
 type Stage = "sign-in" | "waiting" | "error" | "import" | "profile" | "expired";

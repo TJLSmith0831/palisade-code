@@ -165,6 +165,13 @@ fn finish_account_restart(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(refresh) = refresh { account_auth::revoke(&refresh); }
     app.restart();
 }
+/// Commits a pending restart; on failure, reopens the windows for work.
+async fn run_account_restart(app: &tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || finish_account_restart(&handle)).await.map_err(|_| "Account restart unavailable".to_string())?;
+    if result.is_err() { ACCOUNT_RESTART.store(false, std::sync::atomic::Ordering::SeqCst); let _ = app.emit("account-restart-state", false); }
+    result
+}
 #[tauri::command]
 async fn account_request_restart(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) -> Result<(), String> {
     if account_work_running(&app) { return Err("Stop agents, chains, terminals, notebooks and debugging before switching accounts. Your account remains signed in.".into()); }
@@ -172,9 +179,7 @@ async fn account_request_restart(app: tauri::AppHandle, registry: tauri::State<'
     let _ = app.emit("account-restart-state", true);
     let dirty = registry.begin_quit(&app.windows().into_keys().collect());
     if dirty.is_empty() {
-        let handle = app.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || finish_account_restart(&handle)).await.map_err(|_| "Account restart unavailable".to_string())?;
-        if let Err(error) = result { ACCOUNT_RESTART.store(false, std::sync::atomic::Ordering::SeqCst); let _ = app.emit("account-restart-state", false); return Err(error); }
+        run_account_restart(&app).await?;
     } else {
         for label in dirty { let _ = app.emit_to(label, "account-restart-confirm", ()); }
     }
@@ -184,9 +189,7 @@ async fn account_request_restart(app: tauri::AppHandle, registry: tauri::State<'
 async fn account_confirm_restart(window: tauri::Window, app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) -> Result<(), String> {
     if !ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return Err("No account restart is pending".into()); }
     if registry.confirm(window.label()) {
-        let handle = app.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || finish_account_restart(&handle)).await.map_err(|_| "Account restart unavailable".to_string())?;
-        if let Err(error) = result { ACCOUNT_RESTART.store(false, std::sync::atomic::Ordering::SeqCst); let _ = app.emit("account-restart-state", false); return Err(error); }
+        run_account_restart(&app).await?;
     }
     Ok(())
 }
@@ -4706,6 +4709,31 @@ async fn session_attribution(
 // --------------------------------------------------------------- completion
 
 /// Starts the completion sidecar if it isn't already running.
+/// Installing the model is a background job: copying it out of the installer
+/// bundle takes seconds and downloading it takes minutes, and neither should
+/// hold the window closed.
+pub(crate) fn install_completion_in_background(app: &tauri::AppHandle) {
+    if !*app.state::<Harness>().completion.completion_enabled.lock_or_recover() { return; }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        if let Err(err) = completion::ensure_model_installed(&handle) {
+            eprintln!("completion: {err}");
+            let _ = handle.emit("harness-warning", err);
+            return;
+        }
+        // A completion requested while the model was still landing latches the
+        // permanent-disable sentinel (see `ensure_completion_server`). Clear it
+        // now that the model is actually there, or AI completion stays off
+        // until the next launch.
+        let harness = handle.state::<Harness>();
+        *harness.completion.completion_crashes.lock_or_recover() = 0;
+        if let Err(err) = start_completion_server(&handle) {
+            eprintln!("completion: {err}");
+            let _ = handle.emit("harness-warning", err);
+        }
+    });
+}
+
 fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
     let harness = app.state::<Harness>();
     let mut server_slot = harness.completion.completion_server.lock_or_recover();

@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "./profileStorage";
+import { profileStorage } from "./profileStorage";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActionIcon,
@@ -299,11 +299,11 @@ export default function DiffPane({
       return next;
     });
   const [view, setView] = useState<DiffView>(
-    () => (localStorage.getItem(VIEW_KEY) as DiffView | null) ?? "inline"
+    () => (profileStorage.getItem(VIEW_KEY) as DiffView | null) ?? "inline"
   );
   const pickView = (next: DiffView) => {
     setView(next);
-    localStorage.setItem(VIEW_KEY, next);
+    profileStorage.setItem(VIEW_KEY, next);
   };
 
   const refresh = useCallback(async () => {

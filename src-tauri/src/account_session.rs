@@ -44,12 +44,16 @@ pub fn now() -> i64 { chrono::Utc::now().timestamp() }
 pub fn deadline(record: &Record) -> i64 {
     record.authorization_expires_at.unwrap_or(i64::MAX).min(record.verified_at.saturating_add(OFFLINE_SECONDS))
 }
-pub fn permission(record: &Record, wall: i64, monotonic_wall: i64) -> &'static str {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountState { SignedOut, Online, Offline, Expired, ClockChanged }
+/// `None` means local permission holds; otherwise the state that blocks it.
+pub fn permission(record: &Record, wall: i64, monotonic_wall: i64) -> Option<AccountState> {
     if wall < record.observed_at.saturating_sub(300) || wall < monotonic_wall.saturating_sub(300) {
-        "clockChanged"
+        Some(AccountState::ClockChanged)
     } else if wall >= deadline(record) || monotonic_wall >= deadline(record) {
-        "expired"
-    } else { "allowed" }
+        Some(AccountState::Expired)
+    } else { None }
 }
 fn namespace() -> String {
     crate::store::project_hash(&format!("{ISSUER}\n{CLIENT_ID}\n{}", crate::store::machine_home().display()))
@@ -150,7 +154,7 @@ pub fn clear() -> Result<(), String> {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
-    pub state: String,
+    pub state: AccountState,
     pub identity: Option<Identity>,
     pub profile_key: Option<String>,
     pub offline_until: Option<i64>,
@@ -159,14 +163,16 @@ pub struct Status {
     pub legacy_available: bool,
 }
 pub fn status() -> Result<Status, String> {
+    let loaded = session().lock().map_err(|_| "Account state unavailable")?.loaded;
+    let restored = if loaded { None } else { Some(load()?) };
     let mut state = session().lock().map_err(|_| "Account state unavailable")?;
-    if !state.loaded {
-        state.record = load()?;
+    if let Some(record) = restored.filter(|_| !state.loaded) {
+        state.record = record;
         state.loaded = true;
         state.anchor = Some((Instant::now(), now()));
     }
     let Some(record) = state.record.clone() else {
-        return Ok(Status { state: "signedOut".into(), identity: None, profile_key: None, offline_until: None, message: state.message.clone(), workspace_ready: false, legacy_available: false });
+        return Ok(Status { state: AccountState::SignedOut, identity: None, profile_key: None, offline_until: None, message: state.message.clone(), workspace_ready: false, legacy_available: false });
     };
     let wall = now();
     let monotonic = state.anchor.as_ref().map_or(wall, |(instant, at)| at.saturating_add(instant.elapsed().as_secs() as i64));
@@ -174,12 +180,16 @@ pub fn status() -> Result<Status, String> {
     if wall > record.observed_at.saturating_add(60) {
         let mut observed = record.clone();
         observed.observed_at = wall;
+        // Keychain I/O runs outside the session lock so IPC admission never
+        // waits on it. Every caller holds `operations()`, so no writer races.
+        drop(state);
         persist(&observed)?;
+        state = session().lock().map_err(|_| "Account state unavailable")?;
         state.record = Some(observed);
     }
     let key = crate::account_profile::identity_key(ISSUER, &record.identity.sub);
     Ok(Status {
-        state: if allowed == "allowed" { if state.online { "online" } else { "offline" } } else { allowed }.into(),
+        state: allowed.unwrap_or(if state.online { AccountState::Online } else { AccountState::Offline }),
         identity: Some(record.identity.clone()), offline_until: Some(deadline(&record)),
         workspace_ready: crate::account_profile::is_bound(&key),
         legacy_available: crate::account_profile::legacy_available(&key) && !crate::store::machine_home().join("profiles").join(&key).exists(),
@@ -187,12 +197,12 @@ pub fn status() -> Result<Status, String> {
     })
 }
 pub fn access_allowed() -> bool {
-    let Ok(state) = session().try_lock() else { return false; };
+    let Ok(state) = session().lock() else { return false; };
     let Some(record) = state.record.as_ref() else { return false; };
     if tombstone().exists() { return false; }
     let wall = now();
     let monotonic = state.anchor.as_ref().map_or(wall, |(instant, at)| at.saturating_add(instant.elapsed().as_secs() as i64));
-    permission(record, wall, monotonic) == "allowed" && crate::account_profile::is_bound(&crate::account_profile::identity_key(ISSUER, &record.identity.sub))
+    permission(record, wall, monotonic).is_none() && crate::account_profile::is_bound(&crate::account_profile::identity_key(ISSUER, &record.identity.sub))
 }
 pub static WORK_ADMISSION: std::sync::RwLock<()> = std::sync::RwLock::new(());
 pub fn admit_work() -> crate::Res<std::sync::RwLockReadGuard<'static, ()>> {
@@ -204,16 +214,71 @@ pub fn admit_work() -> crate::Res<std::sync::RwLockReadGuard<'static, ()>> {
     Ok(guard)
 }
 
+/// IPC commands the sign-in screen needs before any profile is bound. Every
+/// other command is denied until then, so a new pre-auth command goes here.
+const PRE_AUTH_COMMANDS: &[&str] = &[
+    "account_begin_sign_in",
+    "account_cancel_sign_in",
+    "account_reopen_sign_in",
+    "account_open_browser_account",
+    "account_status",
+    "account_refresh",
+    "account_prepare_workspace",
+    "account_request_restart",
+    "account_stop_work",
+    "account_confirm_restart",
+    "account_cancel_restart",
+    "sync_window_dirty",
+    "request_quit",
+    "confirm_quit_window",
+    "cancel_quit",
+    "sync_native_menu",
+    "enable_rounded_corners",
+    "enable_modern_window_style",
+    "reposition_traffic_lights",
+];
+/// Commands that save or stop existing work once access expires. A new
+/// command not listed here is unavailable while access is restricted.
+const RESTRICTED_COMMANDS: &[&str] = &[
+    "write_file_content",
+    "stop_executor",
+    "cancel_chain_run",
+    "terminal_kill",
+    "terminal_kill_project",
+    "terminal_resize",
+    "close_notebook_kernel",
+    "interrupt_notebook_kernel",
+    "debug_stop",
+    "lsp_shutdown",
+    "preview_close",
+    "preview_hide",
+    "read_file_content",
+    "read_thread",
+    "executor_status",
+    "session_contexts",
+    "list_sessions",
+    "terminal_list",
+    "debug_status",
+];
 pub fn command_allowed(command: &str) -> bool {
-    if matches!(command, "account_begin_sign_in" | "account_cancel_sign_in" | "account_reopen_sign_in" | "account_open_browser_account" | "account_status" | "account_refresh" | "account_prepare_workspace" | "account_request_restart" | "account_stop_work" | "account_confirm_restart" | "account_cancel_restart" | "sync_window_dirty" | "request_quit" | "confirm_quit_window" | "cancel_quit" | "sync_native_menu" | "enable_rounded_corners" | "enable_modern_window_style" | "reposition_traffic_lights") { return true; }
+    if PRE_AUTH_COMMANDS.contains(&command) { return true; }
     if crate::account_profile::root().is_none() { return false; }
     if access_allowed() && !crate::ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return true; }
-    matches!(command, "write_file_content" | "stop_executor" | "cancel_chain_run" | "terminal_kill" | "terminal_kill_project" | "terminal_resize" | "close_notebook_kernel" | "interrupt_notebook_kernel" | "debug_stop" | "lsp_shutdown" | "preview_close" | "preview_hide" | "read_file_content" | "read_thread" | "executor_status" | "session_contexts" | "list_sessions" | "terminal_list" | "debug_status")
+    RESTRICTED_COMMANDS.contains(&command)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_allowlisted_command_is_registered() {
+        let lib = include_str!("lib.rs");
+        let handler = &lib[lib.find("tauri::generate_handler![").unwrap()..];
+        for command in PRE_AUTH_COMMANDS.iter().chain(RESTRICTED_COMMANDS) {
+            let registered = handler.lines().map(str::trim).any(|line| line == format!("{command},") || line.ends_with(&format!("::{command},")));
+            assert!(registered, "{command} is allowlisted but not registered");
+        }
+    }
     #[test]
     fn workspace_ipc_is_denied_before_profile_binding() {
         for command in ["list_projects", "read_thread", "send_message", "write_file_content", "terminal_spawn", "db_run_query", "run_chain"] {
@@ -229,14 +294,14 @@ mod tests {
         assert!(!valid_record(&record));
         record.issuer = ISSUER.into(); record.client_id = CLIENT_ID.into();
         assert!(valid_record(&record));
-        assert_eq!(permission(&record, 1000 + OFFLINE_SECONDS - 1, 1000), "allowed");
-        assert_eq!(permission(&record, 1000 + OFFLINE_SECONDS, 1000), "expired");
-        assert_eq!(permission(&record, 699, 1000), "clockChanged");
+        assert_eq!(permission(&record, 1000 + OFFLINE_SECONDS - 1, 1000), None);
+        assert_eq!(permission(&record, 1000 + OFFLINE_SECONDS, 1000), Some(AccountState::Expired));
+        assert_eq!(permission(&record, 699, 1000), Some(AccountState::ClockChanged));
         record.observed_at = 2000;
         assert_eq!(deadline(&record), 1000 + OFFLINE_SECONDS);
-        assert_eq!(permission(&record, 1000, 1000), "clockChanged");
+        assert_eq!(permission(&record, 1000, 1000), Some(AccountState::ClockChanged));
         record.authorization_expires_at = Some(3000);
-        assert_eq!(permission(&record, 3000, 1000), "expired");
-        assert_eq!(permission(&record, 2000, 3000), "clockChanged");
+        assert_eq!(permission(&record, 3000, 1000), Some(AccountState::Expired));
+        assert_eq!(permission(&record, 2000, 3000), Some(AccountState::ClockChanged));
     }
 }

@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "../profileStorage";
+import { profileStorage } from "../profileStorage";
 import { StateEffect, StateField, Transaction } from "@codemirror/state";
 import {
   Decoration,
@@ -63,14 +63,14 @@ function announceAbstention(filePath: string, pos: number): void {
 }
 
 export function loadCompletionSettings(): FimSettings {
-  const enabled = localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false";
+  const enabled = profileStorage.getItem(COMPLETION_ENABLED_KEY) !== "false";
   // Tab by default: it is what Cursor, Copilot and every other ghost-text
   // implementation uses, and reaching for Alt-Tab on a suggestion you are
   // already looking at is the thing that makes completion feel foreign.
   // Safe because `acceptGhostText` declines when nothing is suggested, so
   // Tab falls through to `indentWithTab`.
   const acceptKeybinding =
-    localStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Tab";
+    profileStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Tab";
   return { enabled, acceptKeybinding };
 }
 
@@ -82,7 +82,7 @@ export async function persistCompletionEnabled(
   enabled: boolean,
   sync: (enabled: boolean) => Promise<unknown>
 ): Promise<void> {
-  localStorage.setItem(COMPLETION_ENABLED_KEY, String(enabled));
+  profileStorage.setItem(COMPLETION_ENABLED_KEY, String(enabled));
   window.dispatchEvent(new Event(COMPLETION_SETTINGS_CHANGED_EVENT));
   await sync(enabled).catch(() => {
     // Best-effort backend sync: the local setting is what the editor reads,

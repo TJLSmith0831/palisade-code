@@ -1,4 +1,4 @@
-import { profileStorage as localStorage } from "./profileStorage";
+import { profileStorage } from "./profileStorage";
 /**
  * What the editor was showing, per project, so relaunching lands you back
  * where you were rather than on an empty pane.
@@ -82,7 +82,7 @@ function coerce(raw: unknown): EditorSession {
 
 export function loadSession(projectHash: string): EditorSession {
   try {
-    const raw = localStorage.getItem(sessionKey(projectHash));
+    const raw = profileStorage.getItem(sessionKey(projectHash));
     return raw ? coerce(JSON.parse(raw)) : { ...EMPTY };
   } catch {
     // Corrupt JSON is not worth failing a project switch over.
@@ -92,12 +92,12 @@ export function loadSession(projectHash: string): EditorSession {
 
 export function saveSession(projectHash: string, session: EditorSession) {
   try {
-    localStorage.setItem(sessionKey(projectHash), JSON.stringify(session));
+    profileStorage.setItem(sessionKey(projectHash), JSON.stringify(session));
   } catch {
     // Storage full or disabled — the app works fine without a restore.
   }
 }
 
 export function clearSession(projectHash: string) {
-  localStorage.removeItem(sessionKey(projectHash));
+  profileStorage.removeItem(sessionKey(projectHash));
 }
