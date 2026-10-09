@@ -1445,7 +1445,22 @@ export const gitDiscardFile = (
   untracked: boolean,
   threadId?: string
 ) => invoke<void>("git_discard_file", { projectHash, path, untracked, threadId });
-export const gitIsRepo = (projectHash: string) =>
+export type StashEntry = { name: string; message: string };
+export const gitStashPush = (
+  projectHash: string,
+  message: string,
+  includeUntracked: boolean,
+  threadId?: string
+) => invoke<void>("git_stash_push", { projectHash, message, includeUntracked, threadId });
+export const gitStashList = (projectHash: string, threadId?: string) =>
+  invoke<StashEntry[]>("git_stash_list", { projectHash, threadId });
+export const gitStashAction = (
+  projectHash: string,
+  action: "apply" | "pop" | "drop",
+  name: string,
+  threadId?: string
+) => invoke<void>("git_stash_action", { projectHash, action, name, threadId });
+export const gitIsRepo =(projectHash: string) =>
   invoke<boolean>("git_is_repo", { projectHash });
 export const gitInit = (projectHash: string) =>
   invoke<void>("git_init", { projectHash });

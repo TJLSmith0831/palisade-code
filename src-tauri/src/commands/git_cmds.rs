@@ -248,6 +248,44 @@ pub async fn git_discard_file(
 }
 
 #[tauri::command]
+pub async fn git_stash_push(
+    project_hash: String,
+    message: String,
+    include_untracked: bool,
+    thread_id: Option<String>,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::stash_push(&git_bin()?, &tree_root(&project_hash, thread_id.as_deref())?, &message, include_untracked)
+    })
+    .await
+    .map_err(crate::PalisadeError::from)?
+}
+
+#[tauri::command]
+pub async fn git_stash_list(project_hash: String, thread_id: Option<String>) -> Res<Vec<git::StashEntry>> {
+    tokio::task::spawn_blocking(move || {
+        git::stash_list(&git_bin()?, &tree_root(&project_hash, thread_id.as_deref())?)
+    })
+    .await
+    .map_err(crate::PalisadeError::from)?
+}
+
+/// `action` is apply, pop or drop.
+#[tauri::command]
+pub async fn git_stash_action(
+    project_hash: String,
+    action: String,
+    name: String,
+    thread_id: Option<String>,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        git::stash_action(&git_bin()?, &tree_root(&project_hash, thread_id.as_deref())?, &action, &name)
+    })
+    .await
+    .map_err(crate::PalisadeError::from)?
+}
+
+#[tauri::command]
 pub async fn git_is_repo(project_hash: String) -> Res<bool> {
     tokio::task::spawn_blocking(move || {
         Ok(git::is_git_repo(&git_bin()?, &project_root(&project_hash)?))

@@ -523,6 +523,48 @@ pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res
     }
 }
 
+// ---------------------------------------------------------------- stash
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StashEntry {
+    /// `stash@{0}` — what apply/pop/drop take.
+    pub name: String,
+    pub message: String,
+}
+
+/// Stash tracked changes (and untracked files when asked). A blank message
+/// lets git write its own "WIP on <branch>" one.
+pub fn stash_push(bin: &Path, root: &Path, message: &str, include_untracked: bool) -> Res<()> {
+    let mut args = vec!["stash", "push"];
+    if include_untracked {
+        args.push("--include-untracked");
+    }
+    let message = message.trim();
+    if !message.is_empty() {
+        args.extend(["-m", message]);
+    }
+    run(bin, root, &args).map(|_| ())
+}
+
+/// Newest first, as git lists them.
+pub fn stash_list(bin: &Path, root: &Path) -> Res<Vec<StashEntry>> {
+    let out = run(bin, root, &["stash", "list", "--format=%gd%x1f%gs"])?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_once('\u{1f}'))
+        .map(|(name, message)| StashEntry { name: name.to_string(), message: message.to_string() })
+        .collect())
+}
+
+/// `action` is one of apply/pop/drop. A conflict surfaces git's own error and
+/// leaves the stash in place — nothing is forced.
+pub fn stash_action(bin: &Path, root: &Path, action: &str, name: &str) -> Res<()> {
+    if !matches!(action, "apply" | "pop" | "drop") {
+        return Err(format!("unknown stash action {action}").into());
+    }
+    run(bin, root, &["stash", action, name]).map(|_| ())
+}
+
 /// The folder name `git clone <url>` would produce, without asking git.
 fn clone_dir_name(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
@@ -1092,6 +1134,55 @@ world
 
         assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "line one\nline two\nline three\n");
         assert_eq!(working_tree_diff(git(), root).unwrap(), "");
+    }
+
+    // --------------------------------------------------------------- stash
+
+    #[test]
+    fn stash_push_list_and_pop_round_trip() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "line one\nCHANGED\nline three\n").unwrap();
+
+        stash_push(git(), root, "my work", false).unwrap();
+
+        assert_eq!(working_tree_diff(git(), root).unwrap(), "");
+        let stashes = stash_list(git(), root).unwrap();
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].name, "stash@{0}");
+        assert!(stashes[0].message.contains("my work"));
+
+        stash_action(git(), root, "pop", "stash@{0}").unwrap();
+        assert!(fs::read_to_string(root.join(&tracked)).unwrap().contains("CHANGED"));
+        assert!(stash_list(git(), root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stash_push_only_takes_untracked_files_when_asked() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join("scratch.txt"), "temp\n").unwrap();
+
+        assert!(stash_push(git(), root, "", false).is_err());
+        assert!(root.join("scratch.txt").exists());
+
+        stash_push(git(), root, "", true).unwrap();
+        assert!(!root.join("scratch.txt").exists());
+    }
+
+    #[test]
+    fn stash_apply_keeps_the_entry_and_drop_removes_it() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "line one\nCHANGED\nline three\n").unwrap();
+        stash_push(git(), root, "", false).unwrap();
+
+        stash_action(git(), root, "apply", "stash@{0}").unwrap();
+        assert_eq!(stash_list(git(), root).unwrap().len(), 1);
+
+        stash_action(git(), root, "drop", "stash@{0}").unwrap();
+        assert!(stash_list(git(), root).unwrap().is_empty());
+        assert!(stash_action(git(), root, "reset", "stash@{0}").is_err());
     }
 
     // --------------------------------------------------------------- clone

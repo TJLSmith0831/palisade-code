@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActionIcon, Button, Group, HoverCard, Loader, Menu, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
+import { ActionIcon, Button, Group, HoverCard, Loader, Menu, Modal as MantineModal, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
 import {
+  IconArchive,
+  IconArrowBackUp,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
@@ -314,11 +316,14 @@ function FileRow({
   action,
   onOpen,
   onAction,
+  onDiscard,
 }: {
   file: FileStatus;
   action: "stage" | "unstage";
   onOpen: () => void;
   onAction: () => void;
+  /** Only unstaged rows offer it — a staged change has to be unstaged first. */
+  onDiscard?: () => void;
 }) {
   const { name, dir } = splitPath(file.path);
   const chip = statusChip(file.code);
@@ -347,6 +352,22 @@ function FileRow({
           <span className="ds-sc-fpath">{dir}</span>
         </span>
       </button>
+      {onDiscard && (
+        <Tooltip label="Discard changes" withinPortal>
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            aria-label={`Discard ${file.path}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDiscard();
+            }}
+            data-testid={`sc-discard-${file.path}`}
+          >
+            <IconArrowBackUp size={14} />
+          </ActionIcon>
+        </Tooltip>
+      )}
       <Tooltip
         label={action === "stage" ? "Stage this file" : "Unstage this file"}
         withinPortal
@@ -464,6 +485,11 @@ export default function SourceControlPanel({
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState<FileStatus[] | null>(null);
+  const [stashes, setStashes] = useState<api.StashEntry[]>([]);
+  /** Set while the "Stash changes" dialog is open. */
+  const [stashDialog, setStashDialog] = useState<{ includeUntracked: boolean } | null>(null);
+  const [stashMessage, setStashMessage] = useState("");
   // Independent, not exclusive: each of Staged Changes/Changes/Graph gets
   // its own capped, independently-scrolling body (.ds-sc-section-body), so
   // all three can stay open together without one growing into the others —
@@ -471,6 +497,7 @@ export default function SourceControlPanel({
   const [openSections, setOpenSections] = useState({
     staged: true,
     changes: true,
+    stashes: true,
     graph: true,
   });
 
@@ -509,6 +536,10 @@ export default function SourceControlPanel({
         if (errorKind(err) === "notAGitRepo") return;
         onError(err);
       });
+    api
+      .gitStashList(projectHash, tree)
+      .then((value) => setStashes(value ?? []))
+      .catch(() => setStashes([]));
     // No upstream is a normal state, not an error — no counts, no banner.
     api.gitAheadBehind(projectHash, tree).then(
       (value) => {
@@ -571,6 +602,25 @@ export default function SourceControlPanel({
     run: (path: string) => Promise<unknown>
   ) => {
     for (const entry of entries) await run(entry.path);
+  };
+
+  const discard = () => {
+    if (!confirmDiscard) return;
+    const files = confirmDiscard;
+    setConfirmDiscard(null);
+    act(
+      forEachSequentially(files, (path) =>
+        api.gitDiscardFile(projectHash, path, files.find((f) => f.path === path)?.code === "??", tree)
+      )
+    );
+  };
+
+  const stash = () => {
+    if (!stashDialog) return;
+    const { includeUntracked } = stashDialog;
+    setStashDialog(null);
+    act(api.gitStashPush(projectHash, stashMessage, includeUntracked, tree));
+    setStashMessage("");
   };
 
   const generate = () => {
@@ -637,6 +687,29 @@ export default function SourceControlPanel({
             </HoverCard.Dropdown>
           </HoverCard>
         </div>
+        <Menu position="bottom-end" withinPortal>
+          <Menu.Target>
+            <ActionIcon variant="subtle" size="sm" aria-label="Stash actions" data-testid="sc-stash-menu">
+              <IconArchive size={15} />
+            </ActionIcon>
+          </Menu.Target>
+          <Menu.Dropdown>
+            <Menu.Item
+              disabled={files.length === 0}
+              onClick={() => setStashDialog({ includeUntracked: false })}
+              data-testid="sc-stash"
+            >
+              Stash…
+            </Menu.Item>
+            <Menu.Item
+              disabled={files.length === 0}
+              onClick={() => setStashDialog({ includeUntracked: true })}
+              data-testid="sc-stash-untracked"
+            >
+              Stash (include untracked)…
+            </Menu.Item>
+          </Menu.Dropdown>
+        </Menu>
         <Menu position="bottom-end" withinPortal>
           <Menu.Target>
             <ActionIcon variant="subtle" size="sm" aria-label="Remote actions">
@@ -868,6 +941,19 @@ export default function SourceControlPanel({
                   </ActionIcon>
                 </Tooltip>
               )}
+              {unstaged.length > 0 && (
+                <Tooltip label="Discard all changes" withinPortal>
+                  <ActionIcon
+                    variant="subtle"
+                    size="sm"
+                    aria-label="Discard all changes"
+                    onClick={() => setConfirmDiscard(unstaged)}
+                    data-testid="sc-discard-all"
+                  >
+                    <IconArrowBackUp size={15} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
               <Tooltip label="Refresh" withinPortal>
                 <ActionIcon
                   variant="subtle"
@@ -890,9 +976,46 @@ export default function SourceControlPanel({
               action="stage"
               onOpen={() => onOpenFile(file.path, tree)}
               onAction={() => act(api.gitStageFile(projectHash, file.path, tree))}
+              onDiscard={() => setConfirmDiscard([file])}
             />
           ))}
         </Section>
+
+        {stashes.length > 0 && (
+          <Section
+            id="stashes"
+            title="Stashes"
+            count={stashes.length}
+            open={openSections.stashes}
+            onToggle={() => toggle("stashes")}
+          >
+            {stashes.map((entry) => (
+              <div className="ds-sc-file" data-testid="sc-stash-row" key={entry.name}>
+                <span className="ds-sc-file-text" title={entry.message}>
+                  <span className="ds-sc-fname">{entry.message}</span>
+                  <span className="ds-sc-fpath">{entry.name}</span>
+                </span>
+                {([
+                  ["apply", "Apply", <IconPlus size={14} />],
+                  ["pop", "Pop", <IconArrowBackUp size={14} />],
+                  ["drop", "Drop", <IconMinus size={14} />],
+                ] as const).map(([action, label, icon]) => (
+                  <Tooltip key={action} label={`${label} stash`} withinPortal>
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      aria-label={`${label} ${entry.name}`}
+                      onClick={() => act(api.gitStashAction(projectHash, action, entry.name, tree))}
+                      data-testid={`sc-stash-${action}-${entry.name}`}
+                    >
+                      {icon}
+                    </ActionIcon>
+                  </Tooltip>
+                ))}
+              </div>
+            ))}
+          </Section>
+        )}
 
         <Section
           id="graph"
@@ -998,6 +1121,63 @@ export default function SourceControlPanel({
         </Section>
       </div>
       </>
+      )}
+
+      {confirmDiscard && (
+        <MantineModal
+          opened
+          onClose={() => setConfirmDiscard(null)}
+          title={
+            confirmDiscard.length === 1
+              ? `Discard changes to "${confirmDiscard[0].path}"?`
+              : `Discard changes to ${confirmDiscard.length} files?`
+          }
+          transitionProps={{ duration: 0 }}
+        >
+          <Text size="sm">
+            This can't be undone.
+            {confirmDiscard.some((f) => f.code === "??") &&
+              " Untracked files are deleted."}
+          </Text>
+          <Group justify="flex-end" gap="sm" mt="lg">
+            <Button size="xs" variant="default" onClick={() => setConfirmDiscard(null)}>
+              Cancel
+            </Button>
+            <Button size="xs" color="danger" onClick={discard} data-testid="confirm-discard" autoFocus>
+              Discard
+            </Button>
+          </Group>
+        </MantineModal>
+      )}
+
+      {stashDialog && (
+        <MantineModal
+          opened
+          onClose={() => setStashDialog(null)}
+          title={stashDialog.includeUntracked ? "Stash changes (include untracked)" : "Stash changes"}
+          transitionProps={{ duration: 0 }}
+        >
+          <TextInput
+            size="xs"
+            value={stashMessage}
+            onChange={(event) => setStashMessage(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") stash();
+            }}
+            placeholder="Message (optional)"
+            aria-label="Stash message"
+            data-autofocus
+            data-testid="sc-stash-message"
+          />
+          <Group justify="flex-end" gap="sm" mt="lg">
+            <Button size="xs" variant="default" onClick={() => setStashDialog(null)}>
+              Cancel
+            </Button>
+            <Button size="xs" onClick={stash} data-testid="confirm-stash">
+              Stash
+            </Button>
+          </Group>
+        </MantineModal>
       )}
     </div>
   );
