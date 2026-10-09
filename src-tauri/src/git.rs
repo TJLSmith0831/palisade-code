@@ -1163,11 +1163,14 @@ world
         let root = dir.path();
         fs::write(root.join("scratch.txt"), "temp\n").unwrap();
 
-        assert!(stash_push(git(), root, "", false).is_err());
+        // Without the flag git saves nothing (and may or may not exit non-zero).
+        let _ = stash_push(git(), root, "", false);
         assert!(root.join("scratch.txt").exists());
+        assert!(stash_list(git(), root).unwrap().is_empty());
 
         stash_push(git(), root, "", true).unwrap();
         assert!(!root.join("scratch.txt").exists());
+        assert_eq!(stash_list(git(), root).unwrap().len(), 1);
     }
 
     #[test]
