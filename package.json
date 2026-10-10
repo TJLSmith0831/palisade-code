@@ -1,7 +1,7 @@
 {
   "name": "palisade-code",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "An Agentic Development Environment: run ACP coding agents in parallel, review their diffs, gate merge on verification.",
   "license": "Apache-2.0",
   "repository": {

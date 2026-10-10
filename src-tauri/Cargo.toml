@@ -1,6 +1,6 @@
 [package]
 name = "palisade-code"
-version = "0.4.1"
+version = "0.5.0"
 description = "Palisade Code — an Agentic Development Environment that runs ACP coding agents in parallel and gates merge on verification"
 authors = ["TJLSmith0831 and the Palisade Code contributors"]
 license = "Apache-2.0"
