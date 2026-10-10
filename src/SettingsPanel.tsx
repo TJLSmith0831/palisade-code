@@ -1,4 +1,6 @@
-import { useEffect, useState, useRef } from "react";
+import { AccountSettingsContext } from "./AccountGate";
+import { profileStorage } from "./profileStorage";
+import { useContext, useEffect, useState, useRef } from "react";
 import { Modal, Button, NumberInput, Select, Switch, SegmentedControl, Alert } from "@mantine/core";
 import * as api from "./api";
 import {
@@ -271,7 +273,7 @@ export function applyAppearance(appearance: Appearance) {
 export const GLOBAL_APPEARANCE_KEY = "palisade:appearance";
 
 export function loadGlobalAppearance(): Appearance {
-  try { return JSON.parse(localStorage.getItem(GLOBAL_APPEARANCE_KEY) || "{}"); }
+  try { return JSON.parse(profileStorage.getItem(GLOBAL_APPEARANCE_KEY) || "{}"); }
   catch { return {}; }
 }
 
@@ -351,7 +353,7 @@ const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
 
 export function loadAccentHue(): number {
-  const stored = Number(localStorage.getItem(ACCENT_HUE_KEY));
+  const stored = Number(profileStorage.getItem(ACCENT_HUE_KEY));
 
   return Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_ACCENT_HUE;
 }
@@ -359,19 +361,19 @@ export function loadAccentHue(): number {
 export function applyAccentHue(hue: number) {
   document.documentElement.style.setProperty("--accent-hue", String(hue));
 
-  localStorage.setItem(ACCENT_HUE_KEY, String(hue));
+  profileStorage.setItem(ACCENT_HUE_KEY, String(hue));
 }
 
 export function loadEditorFont(): string {
-  return localStorage.getItem(EDITOR_FONT_KEY) || DEFAULT_EDITOR_FONT;
+  return profileStorage.getItem(EDITOR_FONT_KEY) || DEFAULT_EDITOR_FONT;
 }
 
 export function loadEditorWrap(): boolean {
-  return localStorage.getItem(EDITOR_WRAP_KEY) === "1";
+  return profileStorage.getItem(EDITOR_WRAP_KEY) === "1";
 }
 
 export function loadEditorFontSize(): number {
-  const stored = Number(localStorage.getItem(EDITOR_FONT_SIZE_KEY));
+  const stored = Number(profileStorage.getItem(EDITOR_FONT_SIZE_KEY));
 
   return Number.isFinite(stored) &&
     stored >= MIN_FONT_SIZE &&
@@ -401,10 +403,10 @@ export default function SettingsPanel({
   const [editorWrap, setEditorWrapState] = useState(loadEditorWrap);
   const [notifyTurnDone, setNotifyTurnDone] = useState(loadNotifyTurnDone);
   const [completionEnabled, setCompletionEnabledState] = useState(
-    () => localStorage.getItem(COMPLETION_ENABLED_KEY) !== "false"
+    () => profileStorage.getItem(COMPLETION_ENABLED_KEY) !== "false"
   );
   const [completionKeybinding, setCompletionKeybindingState] = useState(
-    () => localStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Alt-Tab"
+    () => profileStorage.getItem(COMPLETION_KEYBINDING_KEY) || "Alt-Tab"
   );
   const [appearance, setAppearance] = useState<Appearance>({});
   const [globalAppearance, setGlobalAppearance] = useState(loadGlobalAppearance);
@@ -441,13 +443,13 @@ export default function SettingsPanel({
 
   const setEditorFont = (value: string) => {
     setEditorFontState(value);
-    localStorage.setItem(EDITOR_FONT_KEY, value);
+    profileStorage.setItem(EDITOR_FONT_KEY, value);
     window.dispatchEvent(new Event(EDITOR_FONT_CHANGED_EVENT));
   };
 
   const setEditorWrap = (wrap: boolean) => {
     setEditorWrapState(wrap);
-    localStorage.setItem(EDITOR_WRAP_KEY, wrap ? "1" : "0");
+    profileStorage.setItem(EDITOR_WRAP_KEY, wrap ? "1" : "0");
     window.dispatchEvent(new Event(EDITOR_WRAP_CHANGED_EVENT));
   };
 
@@ -459,7 +461,7 @@ export default function SettingsPanel({
   const handleCompletionKeybinding = (keybinding: string | null) => {
     if (!keybinding) return;
     setCompletionKeybindingState(keybinding);
-    localStorage.setItem(COMPLETION_KEYBINDING_KEY, keybinding);
+    profileStorage.setItem(COMPLETION_KEYBINDING_KEY, keybinding);
     void api.setCompletionKeybinding(keybinding).catch(() => {
       // best-effort backend sync
     });
@@ -476,7 +478,7 @@ export default function SettingsPanel({
     }
 
     setEditorFontSizeState(size);
-    localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
+    profileStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
 
     window.dispatchEvent(new Event(EDITOR_FONT_CHANGED_EVENT));
   };
@@ -488,7 +490,7 @@ export default function SettingsPanel({
     setSaveError(null);
     try {
       if (scope === "global") {
-        localStorage.setItem(GLOBAL_APPEARANCE_KEY, JSON.stringify(next));
+        profileStorage.setItem(GLOBAL_APPEARANCE_KEY, JSON.stringify(next));
         setGlobalAppearance(next);
         applyAppearance(mergeAppearance(next, appearance));
       } else {
@@ -623,6 +625,8 @@ export default function SettingsPanel({
     );
   };
 
+  const accountSettings = useContext(AccountSettingsContext);
+
   return (
     <Modal
       opened
@@ -673,6 +677,7 @@ export default function SettingsPanel({
         },
       }}
     >
+
       <div
         style={{
           maxHeight: "calc(100vh - 110px)",
@@ -680,6 +685,10 @@ export default function SettingsPanel({
           padding: "18px 22px 16px",
         }}
       >
+        {accountSettings && <section aria-labelledby="account-settings-heading" style={{ paddingBottom: 20, marginBottom: 20, borderBottom: `1px solid ${borderSubtle}` }}>
+          <h2 id="account-settings-heading" style={{ ...sectionLabel, margin: "0 0 16px" }}>Account & local profile</h2>
+          {accountSettings}
+        </section>}
         {/* ---------------------------------------------------------------- */}
         {/* Color scheme                                                     */}
         {/* ---------------------------------------------------------------- */}

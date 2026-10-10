@@ -1,3 +1,4 @@
+import { profileStorage } from "./profileStorage";
 import { useCallback, useRef, useState } from "react";
 
 interface Persisted {
@@ -35,7 +36,7 @@ const load = (
   min: number,
   max: number,
 ): Persisted => {
-  const raw = localStorage.getItem(storageKey);
+  const raw = profileStorage.getItem(storageKey);
   if (!raw) return { size: defaultSize, collapsed: defaultCollapsed };
   try {
     const parsed = JSON.parse(raw);
@@ -69,7 +70,7 @@ export function useResizable(options: UseResizableOptions): UseResizableResult {
 
   const persist = useCallback(
     (next: Persisted) => {
-      localStorage.setItem(storageKey, JSON.stringify(next));
+      profileStorage.setItem(storageKey, JSON.stringify(next));
     },
     [storageKey],
   );

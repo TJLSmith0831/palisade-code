@@ -1,3 +1,6 @@
+mod account_auth;
+mod account_session;
+mod account_profile;
 mod acp_client;
 mod attachments;
 mod acp_events;
@@ -38,6 +41,9 @@ mod terminal;
 mod test_parse;
 mod plugins;
 mod commands;
+
+
+use account_auth::{account_begin_sign_in, account_cancel_sign_in, account_reopen_sign_in, account_open_browser_account, account_status, account_refresh, account_prepare_workspace};
 
 use plugins::mac_rounded_corners;
 use std::path::{Path, PathBuf};
@@ -100,6 +106,7 @@ fn sync_window_dirty(window: tauri::Window, dirty: bool, registry: tauri::State<
 
 #[tauri::command]
 fn request_quit(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
+    if ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return; }
     let live = app.windows().into_keys().collect();
     let dirty = registry.begin_quit(&live);
     if dirty.is_empty() {
@@ -111,12 +118,88 @@ fn request_quit(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>)
 
 #[tauri::command]
 fn confirm_quit_window(window: tauri::Window, app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) {
+    if ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return; }
     if registry.confirm(window.label()) { app.exit(0); }
 }
 
 #[tauri::command]
 fn cancel_quit(registry: tauri::State<'_, QuitRegistry>) {
+    if ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return; }
     registry.cancel();
+}
+
+#[tauri::command]
+async fn account_stop_work(app: tauri::AppHandle) -> Result<(), String> {
+    if account_profile::root().is_none() { return Ok(()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let harness = app.state::<Harness>();
+        for cancel in harness.chain.chain_cancels.lock_or_recover().values() { cancel.store(true, std::sync::atomic::Ordering::SeqCst); }
+        let sessions = harness.agent.acp_sessions.lock_or_recover().values().map(|session| (session.thread_id.clone(), session.id.clone())).collect::<Vec<_>>();
+        for (thread, id) in sessions { end_session(&harness, &thread, &id, "stopped"); }
+        harness.tooling.terminals.kill_all();
+        for (_, kernel) in harness.tooling.notebook_kernels.lock_or_recover().drain() { kernel.terminate(); }
+        if let Some(debug) = harness.tooling.debug_session.lock_or_recover().take() { debug.stop(); }
+        store::flush_session_log_writer().map_err(|_| "Could not finish saving output".to_string())
+    }).await.map_err(|_| "Could not stop running work".to_string())?
+}
+
+static ACCOUNT_TRANSITION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static ACCOUNT_RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn account_work_running(app: &tauri::AppHandle) -> bool {
+    let harness = app.state::<Harness>();
+    harness.agent.acp_sessions.lock_or_recover().values().any(|session| session.is_busy())
+        || !harness.chain.chain_cancels.lock_or_recover().is_empty()
+        || harness.tooling.terminals.has_live()
+        || harness.tooling.notebook_kernels.lock_or_recover().values().any(|kernel| kernel.is_alive())
+        || harness.tooling.debug_session.lock_or_recover().is_some()
+}
+fn finish_account_restart(app: &tauri::AppHandle) -> Result<(), String> {
+    let _transition = ACCOUNT_TRANSITION.lock().map_err(|_| "Account restart unavailable")?;
+    if !ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return Err("Account restart was cancelled".into()); }
+    let _admission = account_session::WORK_ADMISSION.try_write().map_err(|_| "Work is still starting or finishing. Wait for it to settle, then retry.")?;
+    if account_work_running(app) { return Err("Stop running work before switching accounts.".into()); }
+    let _operation = account_session::operations().lock().map_err(|_| "Account unavailable")?;
+    store::flush_session_log_writer().map_err(|_| "Could not finish saving session history")?;
+    let refresh = account_session::session().lock().map_err(|_| "Account unavailable")?.record.as_ref().map(|record| record.refresh_token.clone());
+    account_session::clear()?;
+    if let Some(refresh) = refresh { account_auth::revoke(&refresh); }
+    app.restart();
+}
+/// Commits a pending restart; on failure, reopens the windows for work.
+async fn run_account_restart(app: &tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || finish_account_restart(&handle)).await.map_err(|_| "Account restart unavailable".to_string())?;
+    if result.is_err() { ACCOUNT_RESTART.store(false, std::sync::atomic::Ordering::SeqCst); let _ = app.emit("account-restart-state", false); }
+    result
+}
+#[tauri::command]
+async fn account_request_restart(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) -> Result<(), String> {
+    if account_work_running(&app) { return Err("Stop agents, chains, terminals, notebooks and debugging before switching accounts. Your account remains signed in.".into()); }
+    ACCOUNT_RESTART.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).map_err(|_| "An account restart is already pending")?;
+    let _ = app.emit("account-restart-state", true);
+    let dirty = registry.begin_quit(&app.windows().into_keys().collect());
+    if dirty.is_empty() {
+        run_account_restart(&app).await?;
+    } else {
+        for label in dirty { let _ = app.emit_to(label, "account-restart-confirm", ()); }
+    }
+    Ok(())
+}
+#[tauri::command]
+async fn account_confirm_restart(window: tauri::Window, app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) -> Result<(), String> {
+    if !ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst) { return Err("No account restart is pending".into()); }
+    if registry.confirm(window.label()) {
+        run_account_restart(&app).await?;
+    }
+    Ok(())
+}
+#[tauri::command]
+fn account_cancel_restart(app: tauri::AppHandle, registry: tauri::State<'_, QuitRegistry>) -> Result<(), String> {
+    let _transition = ACCOUNT_TRANSITION.try_lock().map_err(|_| "Restart is already committing")?;
+    ACCOUNT_RESTART.store(false, std::sync::atomic::Ordering::SeqCst);
+    let _ = app.emit("account-restart-state", false);
+    registry.cancel();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -928,7 +1011,7 @@ async fn preflight(app: tauri::AppHandle, refresh: bool) -> Res<Preflight> {
 #[tauri::command]
 async fn enable_agent(app: tauri::AppHandle, agent_id: String) -> Res<Preflight> {
     tokio::task::spawn_blocking(move || {
-        acp_registry::enable_agent(&palisade_home(), &agent_id)?;
+        acp_registry::enable_agent(&store::machine_home(), &agent_id)?;
         let harness: tauri::State<'_, Harness> = app.state();
         Ok(preflight_for_harness(&harness, true))
     })
@@ -1011,7 +1094,7 @@ fn selected_executor(
         let mut cached = harness.agent.preflight.lock_or_recover();
         if cached.is_none() {
             *cached = Some(acp_preflight::preflight(
-                &store::palisade_home(),
+                &store::machine_home(),
                 &|bin| executor::find_on_path(bin),
             ));
         }
@@ -1029,7 +1112,7 @@ fn selected_executor(
     // running reads as missing. Re-detect once before warning about an override.
     if let Some(id) = &override_id {
         if flight.agent(id).is_none_or(|a| a.path.is_none()) {
-            flight = acp_preflight::preflight(&store::palisade_home(), &|bin| executor::find_on_path(bin));
+            flight = acp_preflight::preflight(&store::machine_home(), &|bin| executor::find_on_path(bin));
             *harness.agent.preflight.lock_or_recover() = Some(flight.clone());
         }
     }
@@ -1298,6 +1381,10 @@ fn bootstrap_worktree(app: &tauri::AppHandle, project_hash: &str, thread_id: &st
     let tree = worktree.to_path_buf();
     let target = settings::cargo_target_dir(&settings, project, &palisade_home(), project_hash);
     std::thread::spawn(move || {
+        let Ok(_admission) = account_session::admit_work() else {
+            let _ = store::set_thread_worktree_setup(&palisade_home(), &hash, &thread, "failed", Some("Account access ended before setup started".into()));
+            return;
+        };
         let mut child = std::process::Command::new("sh");
         child.arg("-c").arg(&command).current_dir(tree).stdin(std::process::Stdio::null()).env("PATH", executor::child_path_env());
         if let Some(target) = target { child.env("CARGO_TARGET_DIR", target); }
@@ -1350,6 +1437,7 @@ fn start_session_as(
     agent_override: Option<&str>,
     model_override: Option<String>,
 ) -> Res<String> {
+    let _admission = account_session::admit_work()?;
     let (agent, bin) = match agent_override {
         Some(id) => resolve_agent(harness, id)?,
         None => selected_executor(app, harness, project_hash, Some(thread_id))?,
@@ -1963,6 +2051,7 @@ fn send_to<'a>(
     session_id: &str,
     turn: impl Into<UserTurn<'a>>,
 ) -> Res<()> {
+    let _admission = account_session::admit_work()?;
     let turn = turn.into();
     let home = palisade_home();
     let images = turn
@@ -3871,6 +3960,7 @@ pub(crate) fn record_verification(
     thread_id: Option<String>,
     session_id: Option<String>,
 ) -> Res<i32> {
+    let _admission = account_session::admit_work()?;
     let root = project_root(project_hash)?;
     let tree = commands::git_cmds::tree_root(project_hash, thread_id.as_deref())?;
     let (settings, _) = settings::load(&root);
@@ -3957,6 +4047,7 @@ fn start_language_server(
     project_hash: &str,
     language: &str,
 ) -> Res<lsp::LspStatus> {
+    let _admission = account_session::admit_work()?;
     let servers = app.state::<lsp::SharedLsp>().inner().clone();
     let root = project_root(project_hash)?;
 
@@ -4337,6 +4428,7 @@ fn launch_chain_run(
     thread_id: String,
     replay_start: Option<(String, Vec<(String, String)>)>,
 ) -> Res<String> {
+    let _admission = account_session::admit_work()?;
     let run_id = ulid::Ulid::new().to_string();
 
     let id = run_id.clone();
@@ -4617,6 +4709,31 @@ async fn session_attribution(
 // --------------------------------------------------------------- completion
 
 /// Starts the completion sidecar if it isn't already running.
+/// Installing the model is a background job: copying it out of the installer
+/// bundle takes seconds and downloading it takes minutes, and neither should
+/// hold the window closed.
+pub(crate) fn install_completion_in_background(app: &tauri::AppHandle) {
+    if !*app.state::<Harness>().completion.completion_enabled.lock_or_recover() { return; }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        if let Err(err) = completion::ensure_model_installed(&handle) {
+            eprintln!("completion: {err}");
+            let _ = handle.emit("harness-warning", err);
+            return;
+        }
+        // A completion requested while the model was still landing latches the
+        // permanent-disable sentinel (see `ensure_completion_server`). Clear it
+        // now that the model is actually there, or AI completion stays off
+        // until the next launch.
+        let harness = handle.state::<Harness>();
+        *harness.completion.completion_crashes.lock_or_recover() = 0;
+        if let Err(err) = start_completion_server(&handle) {
+            eprintln!("completion: {err}");
+            let _ = handle.emit("harness-warning", err);
+        }
+    });
+}
+
 fn start_completion_server(app: &tauri::AppHandle) -> Res<()> {
     let harness = app.state::<Harness>();
     let mut server_slot = harness.completion.completion_server.lock_or_recover();
@@ -4944,44 +5061,28 @@ pub fn run() {
                 });
             }
             app.manage(QuitRegistry::default());
-            if let Err(err) = store::migrate_legacy_home(&palisade_home()) {
+            if let Err(err) = store::migrate_legacy_home(&store::machine_home()) {
                 eprintln!("store: {err}");
                 let _ = app.emit("harness-warning", err);
             }
-            if let Err(err) = reconcile_stale_chain_runs_on_startup(&palisade_home()) {
-                eprintln!("chain history startup reconciliation: {err}");
-                let _ = app.emit("harness-warning", err);
-            }
-            let harness: tauri::State<'_, Harness> = app.state();
-            if *harness.completion.completion_enabled.lock_or_recover() {
-                // Installing the model is a background job: copying it out of
-                // the installer bundle takes seconds and downloading it takes
-                // minutes, and neither should hold the window closed.
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    if let Err(err) = completion::ensure_model_installed(&handle) {
-                        eprintln!("completion: {err}");
-                        let _ = handle.emit("harness-warning", err);
-                        return;
-                    }
-                    // A completion requested while the model was still landing
-                    // latches the permanent-disable sentinel (see
-                    // `ensure_completion_server`). Clear it now that the model
-                    // is actually there, or AI completion stays off until the
-                    // next launch.
-                    let harness = handle.state::<Harness>();
-                    *harness.completion.completion_crashes.lock_or_recover() = 0;
-                    if let Err(err) = start_completion_server(&handle) {
-                        eprintln!("completion: {err}");
-                        let _ = handle.emit("harness-warning", err);
-                    }
-                });
-            }
             Ok(())
         })
+        .manage(account_auth::PendingAuth::default())
         .manage(Harness::default())
         .manage(lsp::SharedLsp::new(lsp::LspServers::new()))
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+            let handler: Box<tauri::ipc::InvokeHandler<tauri::Wry>> = Box::new(tauri::generate_handler![
+            account_begin_sign_in,
+            account_cancel_sign_in,
+            account_reopen_sign_in,
+            account_open_browser_account,
+            account_status,
+            account_request_restart,
+            account_stop_work,
+            account_confirm_restart,
+            account_cancel_restart,
+            account_refresh,
+            account_prepare_workspace,
             agent_commands,
             complete_code,
             agent_usage,
@@ -5170,7 +5271,12 @@ pub fn run() {
             mac_rounded_corners::enable_rounded_corners,
             mac_rounded_corners::enable_modern_window_style,
             mac_rounded_corners::reposition_traffic_lights,
-        ])
+        ]);
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                if account_session::command_allowed(invoke.message.command()) { handler(invoke) }
+                else { invoke.resolver.reject("Sign in before starting new work."); true }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {

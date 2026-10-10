@@ -42,6 +42,7 @@ pub async fn run_notebook_cell(
     source: String,
 ) -> Res<()> {
     tokio::task::spawn_blocking(move || {
+        let _admission = crate::account_session::admit_work()?;
         let harness: tauri::State<'_, Harness> = app.state();
         let id = notebook::notebook_id(&project_hash, &relative_path);
         let kernel = kernel_for(&harness, &id);

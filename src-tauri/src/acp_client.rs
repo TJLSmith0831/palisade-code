@@ -1927,6 +1927,7 @@ impl Sink for CollectingSink {
 /// The session is terminated either way — this is not a thread the user can
 /// see or resume, so leaving it live would leak a child process per click.
 pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<String> {
+    let _admission = crate::account_session::admit_work()?;
     let collected = Arc::new(Mutex::new(Collected::default()));
     let sink = Arc::new(CollectingSink(collected.clone()));
     let agent = agent_config(&spawn);

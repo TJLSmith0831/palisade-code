@@ -24,7 +24,7 @@ Cross-machine IDE shell that drives coding agents (Claude Code or Codex) through
 
 ## Gotchas
 
-- **New IPC command = three edits:** the `#[tauri::command]` fn, its name in `generate_handler!` in `lib.rs`, and a wrapper in `src/api.ts`. Miss the third and the frontend silently can't call it.
+- **New IPC command = three edits, sometimes four:** the `#[tauri::command]` fn, its name in `generate_handler!` in `lib.rs`, and a wrapper in `src/api.ts`. Miss the third and the frontend silently can't call it. The account gate denies every command until sign-in: one the sign-in screen needs goes in `PRE_AUTH_COMMANDS`, one that saves or stops work after access expires goes in `RESTRICTED_COMMANDS` (`account_session.rs`).
 - **No headless mode.** Playwright can't drive this (WKWebView, not Chromium). Use the Tauri MCP against the debug-only bridge on `127.0.0.1:9223`.
 - **Agents are discovered at runtime, not compiled in.** `acp_registry.rs` fetches agent manifests from the ACP Registry (24h-cached), and every agent is spoken to over ACP (JSON-RPC 2.0 on stdio) via `acp_client.rs`/`acp_events.rs`. There is no `KNOWN_AGENTS` table and no per-agent parser — adding an agent means the registry lists it and its CLI is on PATH, not a code change. Never hardcode an agent name outside brand artwork.
 - **Executor resolution** (`selected_executor` in `lib.rs`, D9/D18): the thread's own picker choice wins, then `.project-settings.json`'s `executorOverride`, then auto-detection (first installed agent from the cached registry preflight). An unknown id warns via `harness-warning` and falls back — it never drops the rest of the settings file. None installed → chat-only, `/go` disabled.

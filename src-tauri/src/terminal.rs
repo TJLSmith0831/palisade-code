@@ -210,6 +210,9 @@ pub struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
+    pub fn kill_all(&self) { let tabs = self.tabs.lock_or_recover().drain().map(|(_, tab)| tab).collect::<Vec<_>>(); drop(tabs); }
+    pub fn has_live(&self) -> bool { self.tabs.lock_or_recover().values().any(|tab| !tab.terminal.has_exited()) }
+
     /// Makes sure tab `id` is running against `project_root` and hands back
     /// what the caller needs to attach. A live tab is re-attached, not
     /// respawned; a tab whose shell has exited is replaced, which is how a

@@ -4,13 +4,21 @@ import {
   MantineProvider,
   createTheme,
   defaultVariantColorsResolver,
-  localStorageColorSchemeManager,
   type CSSVariablesResolver,
   type VariantColorsResolver,
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import App from "./App";
+import AccountGate from "./AccountGate";
+import { profileStorage } from "./profileStorage";
 import { THEME_KEY } from "./hooks/useAppShell";
+
+// Dev-only design preview; a dynamic import keeps it out of production bundles.
+const AccountPreview =
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).has("account-preview")
+    ? React.lazy(() => import("./AccountPreview"))
+    : null;
 
 // DESIGN.md's three semantic status hues, registered as real Mantine colour
 // keys so a component writes `color="danger"` and gets Mantine's own variant
@@ -195,7 +203,14 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
 
 // Reuses the app's own theme key/values ("auto" | "light" | "dark") so Mantine's color
 // scheme and the app's data-theme attribute (set in App.tsx) read one shared value.
-const colorSchemeManager = localStorageColorSchemeManager({ key: THEME_KEY });
+const colorSchemeManager = {
+  get: (fallback: "auto" | "light" | "dark") => {
+    const value = profileStorage.getItem(THEME_KEY);
+    return value === "light" || value === "dark" || value === "auto" ? value : fallback;
+  },
+  set: (value: "auto" | "light" | "dark") => profileStorage.setItem(THEME_KEY, value),
+  subscribe: () => {}, unsubscribe: () => {}, clear: () => profileStorage.removeItem(THEME_KEY),
+};
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -205,7 +220,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       colorSchemeManager={colorSchemeManager}
       defaultColorScheme="auto"
     >
-      <App />
+      {AccountPreview ? <React.Suspense fallback={null}><AccountPreview /></React.Suspense> : <AccountGate><App /></AccountGate>}
     </MantineProvider>
   </React.StrictMode>
 );

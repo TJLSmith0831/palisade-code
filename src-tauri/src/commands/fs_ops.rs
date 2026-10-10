@@ -534,12 +534,17 @@ pub async fn write_file_content(
         let root = file_root(&project_hash, thread_id.as_deref(), &relative_path)?;
         let resolved = resolve_creatable_path(&root, &relative_path)?;
 
+        let restricted = !crate::account_session::access_allowed() || crate::ACCOUNT_RESTART.load(std::sync::atomic::Ordering::SeqCst);
+        if restricted && (expected_previous.is_none() || std::fs::read_to_string(&resolved).ok().as_deref() != expected_previous.as_deref()) {
+            return Err("Only an existing, unchanged editor buffer can be saved while account access is restricted".into());
+        }
         check_not_stale(&resolved, expected_previous.as_deref(), &relative_path)?;
 
         // Recorded before the write so the event can't beat us to the watcher.
         note_self_write(&harness, &resolved);
         std::fs::write(&resolved, content).map_err(|err| crate::PalisadeError::from(format!("cannot write file: {err}")))?;
 
+        if restricted { return Ok(None); }
         let (settings, _) = settings::load(&root);
         Ok(settings::run_format_on_save(&settings, &root, &relative_path))
     })

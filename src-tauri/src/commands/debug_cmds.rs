@@ -207,6 +207,7 @@ pub async fn debug_start(
     configuration: Value,
 ) -> Res<DebugStatus> {
     tokio::task::spawn_blocking(move || {
+        let _admission = crate::account_session::admit_work()?;
         let harness: tauri::State<'_, Harness> = app.state();
         // One session at a time. Replacing silently would leave an orphaned
         // adapter holding the debuggee, so the old one is stopped first.

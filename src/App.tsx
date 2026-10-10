@@ -1,3 +1,4 @@
+import { profileStorage } from "./profileStorage";
 import {
   lazy,
   memo,
@@ -143,8 +144,9 @@ import {
   scrollToSession,
 } from "./EventView";
 import FileEditorPane, {
-  evictEditorSession,
-  evictProjectSessions,
+  saveEditorSessions,
+  evictEditorSession as evictTextEditorSession,
+  evictProjectSessions as evictTextProjectSessions,
 } from "./FileEditorPane";
 import TabBar from "./TabBar";
 import PreviewPane from "./PreviewPane";
@@ -237,6 +239,8 @@ import "./App.css";
 /** Native menu events are addressed to one window's label. A listener that
  * registers no target hears *every* emit, whichever window it was meant for,
  * so scoping here is what keeps a menu command in the window that ran it. */
+function evictEditorSession(hash: string, path: string) { evictTextEditorSession(hash, path); void import("./NotebookTab").then(({ evictNotebookSession }) => evictNotebookSession(hash, path)); }
+function evictProjectSessions(hash: string) { evictTextProjectSessions(hash); void import("./NotebookTab").then(({ evictProjectNotebookSessions }) => evictProjectNotebookSessions(hash)); }
 const nativeEventTarget = () => ({ target: getCurrentWindow().label });
 
 // Shared chat surface: mounted as the Vibe shell's main column and as the
@@ -3621,7 +3625,7 @@ export default function App() {
         return;
       }
       setHistoryLoading(true);
-      localStorage.setItem(lastThreadKey(projectHash), next.id);
+      profileStorage.setItem(lastThreadKey(projectHash), next.id);
       clearLiveFor(next.id);
       try {
         const page = await readPage(projectHash, next.id);
@@ -3759,7 +3763,7 @@ export default function App() {
         const found = await api.listThreads(refreshed.hash);
         setThreads(found);
         await refreshBranches(refreshed.hash);
-        const remembered = localStorage.getItem(lastThreadKey(refreshed.hash));
+        const remembered = profileStorage.getItem(lastThreadKey(refreshed.hash));
         await selectThread(
           refreshed.hash,
           found.find((t) => t.id === remembered) ?? found[0] ?? null
@@ -4062,6 +4066,44 @@ export default function App() {
   const closeWindow = useCallback(() => {
     void getCurrentWindow().close();
   }, []);
+  const [accountConfirmation, setAccountConfirmation] = useState(false);
+  const [accountSaveError, setAccountSaveError] = useState("");
+  const [accountSaving, setAccountSaving] = useState(false);
+  const accountSave = useRef(async () => {});
+  accountSave.current = async () => {
+    if (!project) return;
+    const dirty = tabsRef.current.tabs.filter((tab) => tab.type === "file" && tab.dirty);
+    const paths = dirty.map((tab) => tabKey(tab));
+    const { saveNotebookSessions } = await import("./NotebookTab");
+    const notebooks = await saveNotebookSessions(project.hash, paths);
+    await saveEditorSessions(project.hash, paths.filter((path) => !notebooks.includes(path)));
+    for (const tab of dirty) tabs.setDirty(tabKey(tab), false);
+  };
+  useEffect(() => {
+    const confirmation = listen("account-restart-confirm", () => {
+      setAccountSaveError(""); setAccountConfirmation(true);
+    }, nativeEventTarget());
+    const reset = listen<boolean>("account-restart-state", (event) => { if (!event.payload) setAccountConfirmation(false); else setSettingsOpen(false); }, nativeEventTarget());
+    const save = (event: Event) => {
+      const detail = (event as CustomEvent<{ promises: Promise<void>[] }>).detail;
+      detail.promises.push(accountSave.current());
+    };
+    const access = (event: Event) => { if (!(event as CustomEvent<boolean>).detail) setSettingsOpen(false); };
+    window.addEventListener("palisade-account-access", access);
+    window.addEventListener("palisade-account-save-all", save);
+    return () => { void confirmation.then((off) => off()); void reset.then((off) => off()); window.removeEventListener("palisade-account-save-all", save); window.removeEventListener("palisade-account-access", access); };
+  }, []);
+  const cancelAccountRestart = () => {
+    void api.accountCancelRestart().then(() => setAccountConfirmation(false)).catch((failure) => setAccountSaveError(describeError(failure)));
+  };
+  const accountDialog = <MantineModal opened={accountConfirmation} onClose={cancelAccountRestart} title="Save changes before restarting?" zIndex={1200} centered>
+    <Stack gap="lg"><p>Every Palisade window must settle its unsaved files before your account is signed out.</p>{accountSaveError && <Alert color="danger">{accountSaveError}</Alert>}<Group>
+      <Button loading={accountSaving} onClick={async () => { setAccountSaving(true); try { await accountSave.current(); await api.accountConfirmRestart(); setAccountConfirmation(false); } catch (failure) { setAccountSaveError(describeError(failure)); } finally { setAccountSaving(false); } }}>Save all and restart</Button>
+      <Button disabled={accountSaving} variant="default" onClick={() => void api.accountConfirmRestart().then(() => setAccountConfirmation(false)).catch((failure) => setAccountSaveError(describeError(failure)))}>Discard and restart</Button>
+      <Button disabled={accountSaving} variant="subtle" onClick={cancelAccountRestart}>Cancel</Button>
+    </Group></Stack>
+  </MantineModal>;
+
   const quitApplication = useCallback(() => {
     // The native registry fans this request out to *every* dirty Palisade
     // window. A single renderer cannot truthfully decide process exit.
@@ -6999,6 +7041,7 @@ export default function App() {
 
   return (
     <ArchivingContext.Provider value={archivingIds}>
+    {accountDialog}
     <div className="ds-window" data-testid="window-shell">
       <div className="app" data-color-mode="dark">
         <header

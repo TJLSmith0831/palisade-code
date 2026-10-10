@@ -9,6 +9,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 
+import { AccountSettingsContext } from "../AccountGate";
+
 import SettingsPanel, {
   ACCENT_HUE_KEY,
   loadAppearance,
@@ -571,4 +573,11 @@ it("previews the accent the active theme will actually use", async () => {
       /^oklch\(var\(--accent-l\) var\(--accent-c\) \d+\)$/
     );
   }
+});
+
+it("account controls render inside Settings without leaving the pane", () => {
+  render(<AccountSettingsContext.Provider value={<button>Sign out and restart</button>}><SettingsPanel projectHash="" onOpenProjectSettings={vi.fn()} onClose={vi.fn()} /></AccountSettingsContext.Provider>);
+  const heading = screen.getByRole("heading", { name: "Account & local profile" });
+  expect(heading.closest("[role=dialog]"), "account details belong to the existing Settings dialog").not.toBeNull();
+  expect(screen.getByRole("button", { name: "Sign out and restart" }).closest("section"), "account controls stay in their labelled section").toBe(heading.closest("section"));
 });

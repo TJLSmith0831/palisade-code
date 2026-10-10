@@ -1864,3 +1864,29 @@ export type SessionContext = {
 export const sessionContexts = () => invoke<SessionContext[]>("session_contexts");
 export const compactSession = (sessionId: string) => invoke<void>("compact_session", { sessionId });
 export const readExternalFile = (path: string, binary = false) => invoke<string>("read_external_file", { path, binary });
+
+/** Native account authentication. Credentials never cross IPC. */
+export type AccountIdentity = { sub: string; email: string | null; name: string | null; picture: string | null };
+export type AccountConnection = { identity: AccountIdentity; accessTokenExpiresIn: number | null; refreshTokenIssued: boolean };
+export const accountBeginSignIn = () => invoke<AccountConnection>("account_begin_sign_in");
+export const accountCancelSignIn = () => invoke<void>("account_cancel_sign_in");
+export const accountReopenSignIn = () => invoke<void>("account_reopen_sign_in");
+
+export type AccountStatus = {
+  state: "signedOut" | "online" | "offline" | "expired" | "clockChanged";
+  identity: AccountIdentity | null;
+  profileKey: string | null;
+  offlineUntil: number | null;
+  message: string | null;
+  workspaceReady: boolean;
+  legacyAvailable: boolean;
+};
+export const accountStatus = () => invoke<AccountStatus>("account_status");
+export const accountRefresh = () => invoke<AccountStatus>("account_refresh");
+export const accountPrepareWorkspace = (importLegacy: boolean) => invoke<AccountStatus>("account_prepare_workspace", { importLegacy });
+export const accountRequestRestart = () => invoke<void>("account_request_restart");
+export const accountOpenBrowserAccount = () => invoke<void>("account_open_browser_account");
+export const accountConfirmRestart = () => invoke<void>("account_confirm_restart");
+export const accountCancelRestart = () => invoke<void>("account_cancel_restart");
+
+export const accountStopWork = () => invoke<void>("account_stop_work");

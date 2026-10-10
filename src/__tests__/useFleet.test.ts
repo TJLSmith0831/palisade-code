@@ -120,3 +120,10 @@ describe("useFleet", () => {
     await waitFor(() => expect(result.current.error).toContain("no backend"));
   });
 });
+
+it("shows the message from a structured backend failure instead of object Object", async () => {
+  mocked.fleetOverview.mockRejectedValue({ kind: "notAGitRepo", message: "This project is not a Git repository" });
+  const { result } = renderHook(() => useFleet({ active: true }));
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.error).toBe("This project is not a Git repository");
+});
