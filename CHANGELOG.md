@@ -5,6 +5,19 @@ All notable changes to Palisade Code are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-10
+
+### Added
+
+- Desktop sign-in with Google, GitHub, or an email code through the system browser, with account-scoped local profiles and account details in Settings.
+- Discard and stash changes from the Source Control panel.
+- File > New Window opens an empty window.
+
+### Fixed
+
+- Check for Updates from the menu now shows its progress and result: up to date, update found, or failure.
+- Fleet errors no longer display as `[object Object]`.
+
 ## [0.4.1] - 2026-10-01
 
 ### Added
@@ -45,7 +58,8 @@ All notable changes to Palisade Code are documented here. The format follows
 - Text selection in the feedback modal no longer gets hijacked by the titlebar drag handler.
 - Plain Spec turns now carry the grill skill; runs started from Fleet open their chat.
 
-[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/TJLSmith0831/palisade-code/compare/v0.3.0...v0.4.0
 
