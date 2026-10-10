@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::git_repo;
+use crate::locks::MutexExt;
 use crate::store::Res;
 
 pub use crate::git_repo::{BranchInfo, FileStatus};
@@ -506,21 +507,84 @@ pub fn ahead_behind(_bin: &Path, root: &Path) -> Res<Option<(u32, u32)>> {
 
 // ------------------------------------------------------- discard + init
 
-/// The everyday "undo this" next to a changed file (distinct from unstage).
-/// `untracked` comes from the caller's already-fetched `status()` — an
-/// untracked file has nothing in HEAD to revert to, so discarding it means
-/// deleting it instead of `git checkout --`.
+/// Discard a working-tree path without touching staged or ignored content.
 pub fn discard_file(bin: &Path, root: &Path, path: &str, untracked: bool) -> Res<()> {
-    if untracked {
-        let full = root.join(path);
-        // An untracked directory (git status reports it as one entry, e.g.
-        // "build-out/") needs remove_dir_all — remove_file only deletes
-        // a single file and errors ("Operation not permitted") on a dir.
-        let result = if full.is_dir() { std::fs::remove_dir_all(&full) } else { std::fs::remove_file(&full) };
-        result.map_err(|err| crate::PalisadeError::from(format!("could not delete {path}: {err}")))
-    } else {
-        run(bin, root, &["checkout", "--", path]).map(|_| ())
+    if path.is_empty() || !Path::new(path).components().all(|part| matches!(part, std::path::Component::Normal(_))) {
+        return Err("Discard requires a path inside the working tree.".into());
     }
+    let literal = format!(":(literal){path}");
+    if untracked {
+        // Git rechecks tracking and preserves ignored files, even if the UI status is stale.
+        run(bin, root, &["clean", "-f", "-d", "--", &literal]).map(|_| ())
+    } else {
+        run(bin, root, &["checkout", "--", &literal]).map(|_| ())
+    }
+}
+
+// ---------------------------------------------------------------- stash
+
+// Worktrees share refs/stash; serialize mutations across panels and windows.
+static STASH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StashEntry {
+    /// `stash@{0}` — what apply/pop/drop take.
+    pub name: String,
+    pub oid: String,
+    pub message: String,
+}
+
+/// Stash tracked changes (and untracked files when asked). A blank message
+/// lets git write its own "WIP on <branch>" one.
+pub fn stash_push(bin: &Path, root: &Path, message: &str, include_untracked: bool) -> Res<()> {
+    let _guard = STASH_LOCK.lock_or_recover();
+    let mut args = vec!["stash", "push"];
+    if include_untracked {
+        args.push("--include-untracked");
+    }
+    let message = message.trim();
+    if !message.is_empty() {
+        args.extend(["-m", message]);
+    }
+    run(bin, root, &args).map(|_| ())
+}
+
+/// Newest first, as git lists them.
+pub fn stash_list(bin: &Path, root: &Path) -> Res<Vec<StashEntry>> {
+    let out = run(bin, root, &["stash", "list", "--format=%gd%x1f%H%x1f%gs"])?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let (name, rest) = line.split_once('\u{1f}')?;
+            let (oid, message) = rest.split_once('\u{1f}')?;
+            Some(StashEntry { name: name.to_string(), oid: oid.to_string(), message: message.to_string() })
+        })
+        .collect())
+}
+
+/// `action` is one of apply/pop/drop. A conflict surfaces git's own error and
+/// leaves the stash in place — nothing is forced.
+pub fn stash_action(bin: &Path, root: &Path, action: &str, name: &str, oid: &str) -> Res<()> {
+    let _guard = STASH_LOCK.lock_or_recover();
+    if !matches!(action, "apply" | "pop" | "drop") {
+        return Err(format!("unknown stash action {action}").into());
+    }
+    let entry = stash_list(bin, root)?.into_iter().find(|entry| entry.name == name && entry.oid == oid);
+    if entry.is_none() {
+        return Err("The stash list changed. Refresh and try again.".into());
+    }
+    // Apply the immutable commit; a shifted reflog must never restore different work.
+    if action != "drop" {
+        run(bin, root, &["stash", "apply", oid])?;
+    }
+    if action != "apply" {
+        let current = stash_list(bin, root)?;
+        if !current.iter().any(|entry| entry.name == name && entry.oid == oid) {
+            return Err("The stash list changed. The stash was kept; refresh before dropping it.".into());
+        }
+        run(bin, root, &["stash", "drop", name])?;
+    }
+    Ok(())
 }
 
 /// The folder name `git clone <url>` would produce, without asking git.
@@ -1092,6 +1156,108 @@ world
 
         assert_eq!(fs::read_to_string(root.join(&tracked)).unwrap(), "line one\nline two\nline three\n");
         assert_eq!(working_tree_diff(git(), root).unwrap(), "");
+    }
+
+    // --------------------------------------------------------------- stash
+
+    #[test]
+    fn stash_push_list_and_pop_round_trip() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "line one\nCHANGED\nline three\n").unwrap();
+
+        stash_push(git(), root, "my work", false).unwrap();
+
+        assert_eq!(working_tree_diff(git(), root).unwrap(), "");
+        let stashes = stash_list(git(), root).unwrap();
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].name, "stash@{0}");
+        assert!(stashes[0].message.contains("my work"));
+
+        stash_action(git(), root, "pop", "stash@{0}", &stashes[0].oid).unwrap();
+        assert!(fs::read_to_string(root.join(&tracked)).unwrap().contains("CHANGED"));
+        assert!(stash_list(git(), root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stash_push_only_takes_untracked_files_when_asked() {
+        let (dir, _tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join("scratch.txt"), "temp\n").unwrap();
+
+        // Without the flag git saves nothing (and may or may not exit non-zero).
+        let _ = stash_push(git(), root, "", false);
+        assert!(root.join("scratch.txt").exists());
+        assert!(stash_list(git(), root).unwrap().is_empty());
+
+        stash_push(git(), root, "", true).unwrap();
+        assert!(!root.join("scratch.txt").exists());
+        assert_eq!(stash_list(git(), root).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stash_apply_keeps_the_entry_and_drop_removes_it() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "line one\nCHANGED\nline three\n").unwrap();
+        stash_push(git(), root, "", false).unwrap();
+
+        let oid = stash_list(git(), root).unwrap()[0].oid.clone();
+        stash_action(git(), root, "apply", "stash@{0}", &oid).unwrap();
+        assert_eq!(stash_list(git(), root).unwrap().len(), 1);
+
+        stash_action(git(), root, "drop", "stash@{0}", &oid).unwrap();
+        assert!(stash_list(git(), root).unwrap().is_empty());
+        assert!(stash_action(git(), root, "reset", "stash@{0}", &oid).is_err());
+    }
+
+    #[test]
+    fn stale_stash_identity_never_applies_or_drops_a_newer_entry() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "first work\n").unwrap();
+        stash_push(git(), root, "first", false).unwrap();
+        let first = stash_list(git(), root).unwrap().remove(0);
+        fs::write(root.join(&tracked), "second work\n").unwrap();
+        stash_push(git(), root, "second", false).unwrap();
+        for action in ["apply", "pop", "drop"] {
+            assert!(stash_action(git(), root, action, &first.name, &first.oid).is_err(), "{action} must reject a shifted entry");
+        }
+        assert_eq!(stash_list(git(), root).unwrap().len(), 2, "both stashes survive");
+        assert_eq!(working_tree_diff(git(), root).unwrap(), "", "neither stash is restored");
+    }
+
+    #[test]
+    fn conflicting_pop_preserves_the_stash_and_reports_conflicts() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        fs::write(root.join(&tracked), "stashed version\n").unwrap();
+        stash_push(git(), root, "work", false).unwrap();
+        let entry = stash_list(git(), root).unwrap().remove(0);
+        fs::write(root.join(&tracked), "committed version\n").unwrap();
+        stage_file(git(), root, &tracked).unwrap();
+        run(git(), root, &["commit", "-m", "conflicting change"]).unwrap();
+        assert!(stash_action(git(), root, "pop", &entry.name, &entry.oid).is_err(), "conflicts surface as errors");
+        assert_eq!(stash_list(git(), root).unwrap()[0].oid, entry.oid, "the saved work survives");
+        assert!(fs::read_to_string(root.join(&tracked)).unwrap().contains("<<<<<<<"), "the working tree contains conflict markers");
+    }
+
+    #[test]
+    fn discard_rechecks_tracking_and_preserves_ignored_files() {
+        let (dir, tracked) = init_test_repo();
+        let root = dir.path();
+        discard_file(git(), root, &tracked, true).unwrap();
+        assert!(root.join(&tracked).exists(), "stale untracked status must not delete tracked work");
+        fs::write(root.join(".gitignore"), "scratch/keep.txt\n").unwrap();
+        fs::create_dir(root.join("scratch")).unwrap();
+        fs::write(root.join("scratch/keep.txt"), "ignored work").unwrap();
+        fs::write(root.join("scratch/remove.txt"), "untracked work").unwrap();
+        discard_file(git(), root, "scratch/", true).unwrap();
+        assert!(root.join("scratch/keep.txt").exists(), "ignored work survives bulk directory discard");
+        assert!(!root.join("scratch/remove.txt").exists(), "untracked work is discarded");
+        for path in ["", "/tmp", "../outside", "scratch/../../outside", "."] {
+            assert!(discard_file(git(), root, path, true).is_err(), "reject unsafe path {path:?}");
+        }
     }
 
     // --------------------------------------------------------------- clone
