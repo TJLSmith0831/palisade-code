@@ -61,6 +61,8 @@ pnpm install
 pnpm start        # tauri dev: compiles the Rust backend and opens the window
 ```
 
+On macOS, dev rebuilds and local packaging prefer an available valid Apple-issued Developer ID or Apple Development signing identity and a fixed identifier. After a one-time Keychain grant, its team identity stays stable across rebuilds. `CODESIGN_ID` overrides the certificate. Without an Apple-issued identity, the runner falls back to `Palisade Code Dev` (see `package.sh` for setup), or ad-hoc signing with a warning: these fallbacks can still prompt for Keychain access after each rebuild because [macOS partitions other signing identities by binary hash](https://github.com/apple-oss-distributions/Security/blob/main/securityd/src/clientid.cpp). `CODESIGN_ID=-` explicitly selects ad-hoc signing. This does not change release signing or require notarization for dev builds.
+
 | Command | Purpose |
 |---|---|
 | `pnpm test` | All frontend tests (vitest) |

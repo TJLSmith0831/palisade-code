@@ -92,7 +92,7 @@ const PHASE_TITLES: Record<PhaseState, string> = {
   reported: "Task checkboxes ticked by the agent — a self-report, not verification",
   passed: "The last verify command exited 0",
   failed: "The last verify command failed",
-  "not-run": "No verify command has been run for this project",
+  "not-run": "No verification for this task at its current clean commit",
 };
 function parseTasks(markdown: string): TaskItem[] {
   return markdown
@@ -131,6 +131,7 @@ export default function SpecChangeTab({
   // --- Verify data (same sources as VerifyPane) ---
   const [commands, setCommands] = useState<[string, string][]>([]);
   const [runs, setRuns] = useState<VerificationRun[]>([]);
+  const [verifiedTree, setVerifiedTree] = useState<{ projectHash: string; threadId: string; head: string | null } | null>(null);
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
@@ -210,26 +211,42 @@ export default function SpecChangeTab({
       });
   }, [projectHash, specName, threadId, reload]);
 
-  // Load verify commands + history (same as VerifyPane).
+  // Worktree evidence follows the same clean-commit rule as Fleet's merge gate.
   useEffect(() => {
-    Promise.all([
-      api.verifyCommands(projectHash),
-      api.listVerifications(projectHash),
-    ])
-      .then(([configured, history]) => {
-        setCommands(configured);
-        setRuns(history);
-        setVerifyError(null);
-      })
-      .catch((err) => setVerifyError(describeError(err)));
-  }, [projectHash]);
+    if (!threadId) return;
+    let cancelled = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const trees = await api.threadWorktrees(projectHash);
+        if (cancelled) return;
+        const tree = trees.find((entry) => entry.threadId === threadId);
+        setVerifiedTree({ projectHash, threadId, head: tree?.clean ? tree.head : null });
+      } catch (err) {
+        if (cancelled) return;
+        setVerifiedTree(null);
+        setVerifyError(describeError(err));
+      } finally {
+        inFlight = false;
+      }
+    };
+    refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [projectHash, threadId, reload]);
 
-  // A verify command runs detached — the result arrives as an event.
+  // Subscribe before reading history so completion cannot fall between them.
   useEffect(() => {
+    let cancelled = false;
+    setRuns([]);
+    setRunning(new Set());
     const finished = listen<VerificationRun>(
       "verification-finished",
       ({ payload }) => {
-        if (payload.projectHash !== projectHash) return;
+        if (cancelled || payload.projectHash !== projectHash || !threadId || payload.threadId !== threadId) return;
+        setReload((n) => n + 1);
         setRuns((previous) => [...previous, payload]);
         setRunning((previous) => {
           const next = new Set(previous);
@@ -238,15 +255,27 @@ export default function SpecChangeTab({
         });
       }
     );
+    finished.then(() => {
+      if (cancelled) return;
+      return Promise.all([api.verifyCommands(projectHash), api.listVerifications(projectHash)])
+        .then(([configured, history]) => {
+          if (cancelled) return;
+          setCommands(configured);
+          setRuns((previous) => [...history, ...previous.filter((entry) => !history.some((saved) => saved.id === entry.id))]);
+          setVerifyError(null);
+        });
+    }).catch((err) => !cancelled && setVerifyError(describeError(err)));
     return () => {
-      finished.then((un) => un());
+      cancelled = true;
+      finished.then((un) => un()).catch(() => {});
     };
-  }, [projectHash]);
+  }, [projectHash, threadId]);
 
   const run = useCallback(
     (name: string) => {
+      if (!threadId) return;
       setRunning((previous) => new Set(previous).add(name));
-      api.runVerify(projectHash, name).catch((err) => {
+      api.runVerify(projectHash, name, threadId).catch((err) => {
         setVerifyError(describeError(err));
         setRunning((previous) => {
           const next = new Set(previous);
@@ -255,7 +284,7 @@ export default function SpecChangeTab({
         });
       });
     },
-    [projectHash]
+    [projectHash, threadId]
   );
 
   const taskItems = useMemo(
@@ -266,14 +295,19 @@ export default function SpecChangeTab({
   const pinnedCommand = verifyPins?.[0];
   const pinnedCommandPair = commands.find(([name]) => name === pinnedCommand);
 
-  const latestRuns = useMemo(() => [...runs].reverse(), [runs]);
+  const latestRuns = useMemo(
+    () => threadId ? runs.filter((entry) => entry.projectHash === projectHash && entry.threadId === threadId).sort((a, b) => b.at.localeCompare(a.at)) : [],
+    [runs, projectHash, threadId]
+  );
 
   // One row that is both the navigation and the status of the change: which
   // artifacts exist, how many boxes the agent ticked, and whether a verify
   // command has actually passed. States are worded as what they are — a
   // ticked task is "reported", never "done"; only verify can say "passed".
   const tickedCount = taskItems.filter((t) => t.checked).length;
-  const lastRun = latestRuns[0];
+  const currentHead = verifiedTree?.projectHash === projectHash && verifiedTree.threadId === threadId
+    ? verifiedTree.head : null;
+  const lastRun = currentHead ? latestRuns.find((entry) => entry.gitHead === currentHead) : undefined;
   const artifactState = (a: ArtifactState): PhaseState =>
     a.loading ? "loading" : a.content ? "written" : "missing";
   const phases: Phase[] = [
@@ -302,7 +336,7 @@ export default function SpecChangeTab({
       state: !lastRun ? "not-run" : lastRun.exitCode === 0 ? "passed" : "failed",
       detail: lastRun
         ? `${lastRun.exitCode === 0 ? "passed" : "failed"} · ${shortCommit(lastRun.gitHead)}`
-        : "not run",
+        : "not verified",
     },
   ];
 
@@ -368,6 +402,7 @@ export default function SpecChangeTab({
                     leftSection={<IconPlayerPlay size={14} />}
                     loading={running.has(pinnedCommandPair[0])}
                     onClick={() => run(pinnedCommandPair[0])}
+                    disabled={!threadId}
                     data-testid="spec-tasks-run-verify"
                     style={{ alignSelf: "flex-start" }}
                   >
@@ -445,6 +480,7 @@ export default function SpecChangeTab({
                   Verification
                 </Text>
               </Group>
+              {!threadId && <Text size="xs" c="dimmed">Open this change from its owning task to run verification.</Text>}
               {verifyError && (
                 <Alert color="danger" variant="light">
                   {verifyError}
@@ -468,6 +504,7 @@ export default function SpecChangeTab({
                           leftSection={<IconPlayerPlay size={12} />}
                           loading={running.has(name)}
                           onClick={() => run(name)}
+                          disabled={!threadId}
                           data-testid={`spec-verify-run-${name}`}
                         >
                           {name}

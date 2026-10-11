@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build Palisade Code.app and install it to /Applications.
 #
-#   ./package.sh                                 # signs with the dev identity
+#   ./package.sh                                 # prefers an available Apple-issued identity
 #   ./package.sh --no-install                    # build only
 #   ./package.sh --installer                     # bundle the model
 #   CODESIGN_ID=- ./package.sh                   # force ad-hoc (resets TCC grants)
@@ -90,9 +90,10 @@ find "$APP" -name '.DS_Store' -delete 2>/dev/null || true
 # — bundle id plus certificate, neither of which changes when the code does.
 #
 # `Palisade Code Dev` is a self-signed cert in the login keychain. It does not
-# need to be *trusted*: codesign signs happily with an untrusted self-signed
-# identity, and nothing here is distributed, so no Gatekeeper check ever
-# evaluates it. Each machine generates its own — the certs do not need to match
+# need to be *trusted* for local TCC identity, but Keychain still assigns it a
+# per-build cdhash partition, so it cannot prevent recurring credential prompts.
+# Apple-issued identities are preferred for that reason. Each machine generates
+# its own fallback certificate — the certs do not need to match
 # across machines, since only per-machine rebuild consistency matters.
 #
 # To create one (per machine, once):
@@ -141,31 +142,8 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   [[ "$INSTALL" == "0" ]] && exit 0
 else
 
-# Default to this machine's dev identity rather than to ad-hoc. The old default
-# was `-`, which meant a bare ./package.sh quietly re-signed with a cdhash
-# requirement and reset every TCC grant — even on a machine with a perfectly
-# good identity sitting in its keychain. Ad-hoc is still reachable explicitly
-# (CODESIGN_ID=-) and is still the automatic fallback on a machine that has not
-# created an identity yet, so a fresh clone builds rather than failing on a
-# certificate it has never heard of.
-DEFAULT_CODESIGN_ID="Palisade Code Dev"
-if [[ -z "${CODESIGN_ID:-}" ]]; then
-  if security find-certificate -c "$DEFAULT_CODESIGN_ID" >/dev/null 2>&1; then
-    CODESIGN_ID="$DEFAULT_CODESIGN_ID"
-  else
-    CODESIGN_ID="-"
-  fi
-fi
-
-if [[ "$CODESIGN_ID" == "-" ]]; then
-  echo "==> WARNING: ad-hoc signing."
-  echo "    The designated requirement will be a cdhash, so macOS will treat every"
-  echo "    rebuild as a different app and every permission you grant will be"
-  echo "    re-requested. This machine has no '$DEFAULT_CODESIGN_ID' certificate —"
-  echo "    see this script's comments for the one-time commands to create one."
-else
-  echo "==> signing as '$CODESIGN_ID'"
-fi
+source scripts/codesign-identity.sh
+echo "==> signing as '$CODESIGN_ID'"
 # -i pins the signing identifier to the bundle id. Without it codesign derives
 # one from the binary name (palisade_code-<hash>), which is not what the rest of
 # the system knows this app as.

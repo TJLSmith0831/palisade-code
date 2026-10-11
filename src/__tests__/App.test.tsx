@@ -1392,9 +1392,12 @@ describe("Where a chain run lives (D3/D7/D7a)", () => {
           title: "ship",
           createdAt: "2026-08-06T00:00:00Z",
           updatedAt: "2026-08-06T00:00:00Z",
-          currentMode: "go",
+          currentMode: "spec",
           openSpecChangeName: null,
         });
+      if (cmd === "set_thread_executor" || cmd === "set_thread_mode")
+        return Promise.resolve({ id: "t-new", projectHash: "proj-1", title: "ship",
+          currentMode: "go", executor: "chain:ship", model: null, openSpecChangeName: null });
       if (cmd === "run_chain") return Promise.resolve("run-1");
       return defaultInvoke(cmd, args);
     });
@@ -1414,6 +1417,13 @@ describe("Where a chain run lives (D3/D7/D7a)", () => {
         expect.objectContaining({ threadId: "t-new", chainName: "ship" })
       )
     );
+    expect(invokeMock).toHaveBeenCalledWith("set_thread_executor", {
+      projectHash: "proj-1", threadId: "t-new", executor: "chain:ship", model: null,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("set_thread_mode", {
+      projectHash: "proj-1", threadId: "t-new", mode: "go",
+    });
+    expect(screen.queryByTestId("spec-progress")).not.toBeInTheDocument();
     // The run gets its own thread, named after the chain — the previously
     // focused thread's transcript is never touched by the run.
     expect(invokeMock).not.toHaveBeenCalledWith(
@@ -1421,6 +1431,44 @@ describe("Where a chain run lives (D3/D7/D7a)", () => {
       expect.objectContaining({ threadId: "t1" })
     );
   });
+});
+
+it("refreshes a mounted Review file list after its owning verification finishes", async () => {
+  const kept = { path: "src/kept.js", added: 1, removed: 0, status: "added" };
+  const removed = { path: "tests/intentionally-failing.test.mjs", added: 1, removed: 0, status: "added" };
+  let rows = [kept, removed];
+  invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "list_threads") return Promise.resolve([{ id: "t1", projectHash: "proj-1", title: "Verify removal", createdAt: "", updatedAt: "", currentMode: "go", openSpecChangeName: null }]);
+    if (cmd === "fleet_overview") return Promise.resolve([{
+      kind: "thread", threadId: "t1", title: "Verify removal", projectId: "proj-1", projectName: "palisade-code",
+      mode: "go", status: "idle", diff: { added: rows.length, removed: 0, files: rows.length }, filesTouched: rows.map((row) => row.path), overlap: [],
+      verify: { state: "not_run" }, merge: "clean", updatedAt: "2026-08-06T00:00:00Z",
+    }]);
+    if (cmd === "thread_review_files") return Promise.resolve(rows);
+    if (cmd === "thread_review_diff") return Promise.resolve("diff --git a/src/kept.js b/src/kept.js\n");
+    if (cmd === "verify_commands") return Promise.resolve([["test", "npm test"]]);
+    return defaultInvoke(cmd, args);
+  });
+  render(<App />);
+  await openProject();
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const row = await screen.findByTestId("fleet-row");
+  fireEvent.keyDown(row, { key: "r" });
+  const review = await screen.findByTestId("review-pane");
+  await within(review).findByLabelText("Viewed tests/intentionally-failing.test.mjs");
+  rows = [kept];
+  const reads = () => invokeMock.mock.calls.filter(([cmd]) => cmd === "thread_review_files").length;
+  const before = reads();
+  await act(async () => {
+    emit("verification-finished", { projectHash: "other", threadId: "t1" });
+    emit("verification-finished", { projectHash: "proj-1", threadId: "t2" });
+  });
+  expect(reads()).toBe(before);
+  expect(within(review).getByLabelText("Viewed tests/intentionally-failing.test.mjs")).toBeInTheDocument();
+  await act(async () => fireEvent.click(within(review).getByRole("button", { name: "Run verify" })));
+  await act(async () => emit("verification-finished", { projectHash: "proj-1", threadId: "t1", name: "test", gitHead: "411d27d" }));
+  await waitFor(() => expect(within(review).queryByLabelText("Viewed tests/intentionally-failing.test.mjs")).toBeNull());
+  expect(within(review).getByLabelText("Viewed src/kept.js")).toBeInTheDocument();
 });
 
 describe("Panes (Cmd+J editor, Cmd+K back to Fleet)", () => {
@@ -3406,7 +3454,7 @@ describe("Error banner provenance", () => {
     // Both instances survive rather than the second overwriting the first.
     expect(screen.getAllByTestId("error")).toHaveLength(2);
 
-    fireEvent.click(screen.getAllByTestId("error")[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss error" })[0]);
     await waitFor(() => expect(screen.getAllByTestId("error")).toHaveLength(1));
   });
 });
@@ -4239,6 +4287,17 @@ describe("Vibe preset layout (shell-redesign Amendment 3)", () => {
 });
 
 describe("Harness warnings", () => {
+  it("keeps multiline diagnostics behind details without dismissing the banner", async () => {
+    render(<App />);
+    await openProject();
+    act(() => emit("harness-warning", "Agent connection failed.\ncommand: connect\nline two"));
+    const banner = await screen.findByTestId("error");
+    expect(banner.querySelector("details")?.open).toBe(false);
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByTestId("error")).toBe(banner);
+    expect(banner.querySelector("pre")?.textContent).toContain("command: connect\nline two");
+  });
+
   it("shows a warning as a warning, not as a failed action", async () => {
     render(<App />);
     await openProject();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Button,
@@ -14,6 +14,8 @@ import {
 } from "@mantine/core";
 import { IconArrowLeft, IconGitPullRequest } from "@tabler/icons-react";
 
+import { listen } from "@tauri-apps/api/event";
+import { describeError } from "./errors";
 import type { FleetMerge, FleetVerify } from "./api";
 import { statusChip } from "./SourceControlPanel";
 import { relativeTime } from "./SessionList";
@@ -51,7 +53,7 @@ export type ReviewPaneProps = {
   merge: FleetMerge;
   /** App supplies the existing DiffPane for that file. */
   renderDiff(path: string): React.ReactNode;
-  onRunVerify(): void;
+  onRunVerify(): Promise<void>;
   onMerge(opts: { override: boolean }): void;
   onOpenPr(): void;
   onOpenInEditor(path: string): void;
@@ -127,10 +129,40 @@ export default function ReviewPane({
   const [configuring, setConfiguring] = useState(false);
   const [configureError, setConfigureError] = useState<string | null>(null);
 
+  const [verifyRunning, setVerifyRunning] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const verifyRequest = useRef(0);
+
   useEffect(() => {
     setViewedSet(loadViewed(threadId));
     setSelected(0);
-  }, [threadId]);
+    setVerifyRunning(false);
+    setVerifyError(null);
+    verifyRequest.current += 1;
+    const finished = listen<api.VerificationRun>("verification-finished", ({ payload }) => {
+      if (payload.projectHash !== projectHash || payload.threadId !== threadId) return;
+      verifyRequest.current += 1;
+      setVerifyRunning(false);
+    });
+    return () => {
+      verifyRequest.current += 1;
+      finished.then((unlisten) => unlisten());
+    };
+  }, [projectHash, threadId]);
+
+  const runVerification = async () => {
+    const request = ++verifyRequest.current;
+    setVerifyRunning(true);
+    setVerifyError(null);
+    try {
+      // The launch resolves before the detached checks finish; wait for their event.
+      await onRunVerify();
+    } catch (err) {
+      if (request !== verifyRequest.current) return;
+      setVerifyRunning(false);
+      setVerifyError(describeError(err, { action: "run verification" }));
+    }
+  };
 
   const selectedFile = files[Math.min(selected, Math.max(files.length - 1, 0))];
 
@@ -229,19 +261,20 @@ export default function ReviewPane({
       </div>
 
       <Group className="review-verify" justify="space-between" wrap="nowrap">
-        <Text size="sm" data-testid="review-verify-line" data-state={verify.state}>
-          {verifyLine(verify)}
+        <Text size="sm" role="status" data-testid="review-verify-line" data-state={verifyRunning ? "running" : verify.state}>
+          {verifyRunning ? "Running verification…" : verifyLine(verify)}
         </Text>
         {verify.state === "unconfigured" ? (
           <Button size="xs" variant="default" onClick={openConfigure}>
             Configure Verification
           </Button>
         ) : verify.state === "pass" ? null : (
-          <Button size="xs" variant="default" onClick={onRunVerify}>
-            Run verify
+          <Button size="xs" variant="default" loading={verifyRunning} disabled={verifyRunning} onClick={() => void runVerification()}>
+            {verifyRunning ? "Running verification" : "Run verify"}
           </Button>
         )}
       </Group>
+      {verifyError && <Text size="xs" c="danger" role="alert">{verifyError}</Text>}
       {setup?.state === "running" && <Text size="xs" c="dimmed">Setting up worktree…</Text>}
       {setup?.state === "failed" && (
         <Group gap="xs" wrap="nowrap">
@@ -322,9 +355,7 @@ export default function ReviewPane({
             <Text size="xs" c="dimmed" data-testid="review-merge-blocker">
               {verify.state === "unconfigured"
                 ? "Configure verification before merging"
-                : merge === "clean"
-                ? "Merge will verify this branch first"
-                : "Merge needs a clean base"}
+                : mergeBlocker}
             </Text>
             <Button size="xs" disabled>
               Merge

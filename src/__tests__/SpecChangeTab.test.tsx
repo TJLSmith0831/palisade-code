@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 const { listenMock } = vi.hoisted(() => ({
@@ -64,7 +64,7 @@ const twoDeltasPayload = {
 const verifyRun = {
   id: "v1",
   projectHash: "proj-1",
-  threadId: null,
+  threadId: "t-1",
   sessionId: null,
   name: "test",
   command: "pnpm test",
@@ -105,6 +105,7 @@ function setupMocks(overrides: { showSpecChange?: unknown } = {}) {
       if (cmd === "list_verifications") {
         return Promise.resolve([verifyRun]);
       }
+      if (cmd === "thread_worktrees") return Promise.resolve([{ threadId: "t-1", head: "abc1234", clean: true }]);
       if (cmd === "run_verify") return Promise.resolve();
       return Promise.resolve([]);
     }
@@ -119,6 +120,7 @@ const renderTab = (
       <SpecChangeTab
         projectHash="proj-1"
         specName="vibe-spec-tabs"
+        threadId="t-1"
         {...props}
       />
     </MantineProvider>
@@ -211,6 +213,107 @@ describe("SpecChangeTab", () => {
     expect(state("Tasks").textContent).not.toMatch(/done|complete/i);
   });
 
+  it("does not claim verification or expose unrelated runs for a different owner", async () => {
+    renderTab({ threadId: "fresh-spec" });
+    fireEvent.click(screen.getByText("Verify"));
+    await waitFor(() => expect(screen.getByTestId("spec-verify-run-test")).toBeInTheDocument());
+    const phase = screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+    expect(phase.dataset.state).toBe("not-run");
+    expect(screen.queryByTestId("spec-verification-run")).not.toBeInTheDocument();
+  });
+
+  it("does not verify a task without an isolated worktree even with its own prior pass", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd, args) => cmd === "thread_worktrees" ? Promise.resolve([]) : original(cmd, args));
+    renderTab();
+    fireEvent.click(screen.getByText("Verify"));
+    await waitFor(() => expect(screen.getByTestId("spec-verification-run")).toBeInTheDocument());
+    const phase = screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+    expect(phase.dataset.state).toBe("not-run");
+  });
+
+  it("keeps ownerless changes unverified and disables verification actions", async () => {
+    renderTab({ threadId: undefined });
+    fireEvent.click(screen.getByText("Verify"));
+    await waitFor(() => expect(screen.getByTestId("spec-verify-run-test")).toBeInTheDocument());
+    const phase = screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+    expect(phase.dataset.state).toBe("not-run");
+    expect(screen.getByTestId("spec-verify-run-test")).toBeDisabled();
+  });
+
+  it("invalidates verification when the owning checkout changes commit", async () => {
+    renderTab();
+    const phase = () => screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+    await waitFor(() => expect(phase().dataset.state).toBe("passed"));
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd, args) => cmd === "thread_worktrees" ? Promise.resolve([{ threadId: "t-1", head: "new-head", clean: true }]) : original(cmd, args));
+    const handler = (listenMock.mock.calls as unknown as [string, (e: unknown) => void][]).find(([name]) => name === "fs-changed")![1];
+    act(() => handler({ payload: { projectHash: "proj-1", paths: ["openspec/changes/vibe-spec-tabs/tasks.md"] } }));
+    await waitFor(() => expect(phase().dataset.state).toBe("not-run"));
+  });
+
+  it("accepts slow worktree evidence without overlapping polls", async () => {
+    vi.useFakeTimers();
+    try {
+      const original = invokeMock.getMockImplementation()!;
+      let resolveTrees!: (value: unknown) => void;
+      invokeMock.mockImplementation((cmd, args) => cmd === "thread_worktrees"
+        ? new Promise((resolve) => { resolveTrees = resolve; }) : original(cmd, args));
+      renderTab();
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(6500); });
+      expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "thread_worktrees")).toHaveLength(1);
+      await act(async () => resolveTrees([{ threadId: "t-1", head: "abc1234", clean: true }]));
+      const phase = screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+      expect(phase.dataset.state).toBe("passed");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+      expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "thread_worktrees")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not mark a dirty owning checkout verified", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd, args) => cmd === "thread_worktrees" ? Promise.resolve([{ threadId: "t-1", head: "abc1234", clean: false }]) : original(cmd, args));
+    renderTab();
+    await waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === "thread_worktrees")).toBe(true));
+    const phase = screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+    expect(phase.dataset.state).toBe("not-run");
+  });
+
+  it("ignores late verification history after switching owning tasks", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    let resolveOld!: (value: unknown) => void;
+    invokeMock.mockImplementation((cmd, args) => cmd === "list_verifications"
+      ? new Promise((resolve) => { resolveOld = resolve; }) : original(cmd, args));
+    const view = renderTab();
+    await waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === "list_verifications")).toBe(true));
+    invokeMock.mockImplementation((cmd, args) => cmd === "list_verifications" ? Promise.resolve([]) : original(cmd, args));
+    view.rerender(<MantineProvider><SpecChangeTab projectHash="proj-1" specName="vibe-spec-tabs" threadId="new-owner" /></MantineProvider>);
+    await act(async () => resolveOld([verifyRun]));
+    fireEvent.click(screen.getByText("Verify"));
+    await waitFor(() => expect(screen.getByTestId("spec-verify-run-test")).toBeInTheDocument());
+    expect(screen.queryByTestId("spec-verification-run")).not.toBeInTheDocument();
+  });
+
+  it("keeps a just-finished owning verification when earlier history returns late", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    let resolveHistory!: (value: unknown) => void;
+    invokeMock.mockImplementation((cmd, args) => cmd === "list_verifications"
+      ? new Promise((resolve) => { resolveHistory = resolve; }) : original(cmd, args));
+    renderTab();
+    const phase = () => screen.getAllByTestId("spec-inner-tab").find((tab) => tab.querySelector(".ds-spec-phase-label")?.textContent === "Verify")!;
+    await waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === "thread_worktrees")).toBe(true));
+    const handler = (listenMock.mock.calls as unknown as [string, (e: unknown) => void][]).find(([name]) => name === "verification-finished")![1];
+    await act(async () => handler({ payload: verifyRun }));
+    await waitFor(() => expect(phase().dataset.state).toBe("passed"));
+    await act(async () => resolveHistory([]));
+    expect(phase().dataset.state).toBe("passed");
+    await act(async () => handler({ payload: { ...verifyRun, id: "unrelated", threadId: "other", exitCode: 1 } }));
+    expect(phase().dataset.state).toBe("passed");
+  });
+
   it("renders the proposal as a document, not framed source", async () => {
     renderTab();
     await waitFor(() => {
@@ -276,7 +379,8 @@ describe("SpecChangeTab", () => {
         invokeMock.mock.calls.find(
           (c) =>
             c[0] === "run_verify" &&
-            (c[1] as Record<string, unknown>).name === "test"
+            (c[1] as Record<string, unknown>).name === "test" &&
+            (c[1] as Record<string, unknown>).threadId === "t-1"
         )
       ).toBeTruthy();
     });

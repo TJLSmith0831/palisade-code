@@ -158,6 +158,8 @@ pub enum ExecutorEvent {
         /// prompt rather than a separate dialog.
         warning: Option<String>,
     },
+    QuestionRequest { id: String, session_id: String, message: String, fields: Vec<crate::acp_client::QuestionField> },
+    QuestionResolved { id: String },
     Done,
     /// A turn ended badly. `retryable` separates the two cases that used to
     /// share this variant: a turn the *live* agent refused or failed (auth

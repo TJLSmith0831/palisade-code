@@ -96,6 +96,7 @@ export function useFleet({
     };
     void refresh();
     const un = listen<Envelope>("executor-event", () => trigger.current());
+    const verified = listen<api.VerificationRun>("verification-finished", () => trigger.current());
     const chainsChanged = () => trigger.current();
     window.addEventListener(CHAINS_CHANGED_EVENT, chainsChanged);
     const timer = setInterval(() => trigger.current(), pollMs);
@@ -107,6 +108,7 @@ export function useFleet({
       clearInterval(timer);
       window.removeEventListener(CHAINS_CHANGED_EVENT, chainsChanged);
       void un.then((off) => off());
+      void verified.then((off) => off());
     };
   }, [active, pollMs, minGapMs, refresh]);
 

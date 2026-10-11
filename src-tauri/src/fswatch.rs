@@ -137,14 +137,19 @@ impl Drop for FsWatcher {
 }
 
 /// `Some(relative_path)` when the change is one the UI should react to, or
-/// `None` for anything under a skipped directory. Uses the same skip rule as
-/// the file tree so the two can't disagree about what exists.
+/// `None` for anything under a skipped directory, except Playbook definitions
+/// whose external edits must refresh their graph and sidebar metadata.
 fn relative_if_interesting(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
     if relative.as_os_str().is_empty() {
         return None;
     }
-    for component in relative.components() {
+    // Playbook definitions need reconciliation even though the file tree hides dotdirs.
+    let playbook = relative.starts_with(".palisade/chains");
+    for (index, component) in relative.components().enumerate() {
+        if playbook && index == 0 {
+            continue;
+        }
         let name = component.as_os_str().to_string_lossy();
         if should_skip_entry(&name, false) {
             return None;
@@ -363,6 +368,17 @@ mod tests {
 
         let changed = recv_changes(&rx).expect("the real file should report");
         assert_eq!(changed, vec!["real.txt".to_string()], "skip list leaked: {changed:?}");
+    }
+
+    #[test]
+    fn playbook_changes_reach_the_ui_without_exposing_other_hidden_paths() {
+        let root = Path::new("/project");
+        for relative in [".palisade/chains", ".palisade/chains/review.json"] {
+            assert_eq!(relative_if_interesting(root, &root.join(relative)).as_deref(), Some(relative));
+        }
+        for relative in [".palisade/project-settings.json", ".palisade/chains/.secret", ".env", ".palisade/chains-backup/review.json"] {
+            assert_eq!(relative_if_interesting(root, &root.join(relative)), None);
+        }
     }
 
     #[test]

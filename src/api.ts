@@ -1,6 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "./errors";
 
+export interface QuestionField {
+  id: string;
+  title: string;
+  description: string | null;
+  options: { value: string; label: string; description: string | null }[];
+  required: boolean;
+  secret: boolean;
+}
+export interface QuestionRequest {
+  id: string;
+  sessionId: string;
+  message: string;
+  fields: QuestionField[];
+}
+
 export type Mode = "spec" | "go";
 
 export type Project = {
@@ -238,6 +253,9 @@ export type ExecutorEvent =
        *  session in the same project (same port or DATABASE_URL). */
       warning: string | null;
     }
+  | { kind: "questionRequest"; id: string; sessionId: string; message: string;
+      fields: QuestionField[] }
+  | { kind: "questionResolved"; id: string }
   | { kind: "done" }
   | {
       kind: "crashed";

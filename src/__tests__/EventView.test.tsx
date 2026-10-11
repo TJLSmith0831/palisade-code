@@ -893,3 +893,15 @@ describe("Explore stage marker", () => {
     expect(markers[0].compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+ it("shows agent clarification outside collapsed work and closes it from persisted resolution", async () => {
+  const question: Item = { kind: "questionRequest", id: "q1", sessionId: "s1", message: "Choose the behavior",
+    fields: [{ id: "behavior", title: "Scroll to results?", description: null, options: ["Scroll", "Stay"].map(value => ({ value, label: value, description: null })), required: true, secret: false }] };
+  const items: Item[] = [{ kind: "toolCall", id: "tool", name: "inspect", command: "ls" }, question];
+  const view = renderWithMantine(<EventList items={items} />);
+  expect(screen.getByRole("radio", { name: "Scroll" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Send answers" })).toBeTruthy();
+  view.rerender(<MantineProvider><EventList items={[...items, { kind: "questionResolved", id: "q1" }]} /></MantineProvider>);
+  expect(screen.queryByRole("button", { name: "Send answers" })).toBeNull();
+  expect(screen.getByText("Question closed")).toBeTruthy();
+ });

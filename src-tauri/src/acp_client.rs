@@ -181,6 +181,7 @@ pub(crate) fn client_capabilities() -> v1::ClientCapabilities {
     let mut meta = serde_json::Map::new();
     meta.insert("terminal-auth".into(), serde_json::Value::Bool(true));
     v1::ClientCapabilities::new()
+        .elicitation(v1::ElicitationCapabilities::new().form(v1::ElicitationFormCapabilities::new()))
         .auth(v1::AuthCapabilities::new().terminal(true).meta(meta))
         .session(v1::ClientSessionCapabilities::new().compaction(v1::CompactionCapabilities::new()))
 }
@@ -497,11 +498,9 @@ impl AcpSession {
         self.busy.load(Ordering::SeqCst)
     }
 
-    /// True while this session is blocked on an unanswered Allow/Deny
-    /// prompt — reuses `pending_permissions` rather than tracking a
-    /// separate flag (attention-routing D1).
+    /// True while this session has an unanswered permission or clarification request.
     pub fn needs_attention(&self) -> bool {
-        !self.pending_permissions.lock_or_recover().is_empty()
+        !self.pending_permissions.lock_or_recover().is_empty() || questions().lock_or_recover().values().any(|request| request.session_id == self.id)
     }
 
     /// Resolve a pending permission request from outside the bridge thread
@@ -529,6 +528,19 @@ impl AcpSession {
         self.busy.store(false, Ordering::SeqCst);
         for (_, tx) in self.pending_permissions.lock_or_recover().drain() {
             let _ = tx.send(PermissionAnswer::Deny);
+        }
+        let removed = {
+            let mut pending = questions().lock_or_recover();
+            let ids: Vec<_> = pending.iter().filter(|(_, request)| request.session_id == self.id).map(|(id, _)| id.clone()).collect();
+            ids.into_iter().filter_map(|id| pending.remove(&id).map(|request| (id, request))).collect::<Vec<_>>()
+        };
+        if !removed.is_empty() {
+            // Teardown often holds the sessions lock, which the event sink also reads.
+            std::thread::spawn(move || {
+                for (id, request) in removed {
+                    emit(&request.sink, &request.session_id, &request.thread_id, ExecutorEvent::QuestionResolved {id});
+                }
+            });
         }
         active_commands_registry().lock_or_recover().remove(&self.id);
     }
@@ -725,10 +737,114 @@ impl PermissionAnswer {
     }
 }
 
-/// Requests awaiting the user's decision, keyed by a fresh id distinct from
-/// `tool_call_id` (D-design-2). Lives on the session handle, shared with the
-/// bridge task the same way `busy` already is, so `answer_permission_prompt`
-/// (lib.rs) can resolve one from outside the bridge thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionField {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub options: Vec<QuestionOption>,
+    pub required: bool,
+    pub secret: bool,
+}
+
+struct PendingQuestion {
+    session_id: String,
+    fields: Vec<QuestionField>,
+    deadline: Option<std::time::Instant>,
+    sender: Option<oneshot::Sender<v1::CreateElicitationResponse>>,
+    sink: Arc<dyn Sink>,
+    thread_id: String,
+}
+// Pending forms stay session-owned even after an async provider turn completes.
+static QUESTIONS: std::sync::OnceLock<Mutex<HashMap<String, PendingQuestion>>> = std::sync::OnceLock::new();
+fn questions() -> &'static Mutex<HashMap<String, PendingQuestion>> {
+    QUESTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn question_fields(schema: &serde_json::Value) -> Result<Vec<QuestionField>, String> {
+    let properties = schema.get("properties").and_then(|p| p.as_object()).ok_or("Question form has no properties")?;
+    if schema["type"] != "object" || properties.is_empty() { return Err("Unsupported question form".into()); }
+    let required = schema["required"].as_array();
+    if schema.get("required").is_some() && required.is_none() { return Err("Invalid required question fields".into()); }
+    if required.is_some_and(|values| values.iter().any(|value| value.as_str().is_none_or(|id| !properties.contains_key(id)))) { return Err("Unknown required question field".into()); }
+    properties.iter().map(|(id, prop)| {
+        if ["pattern", "minLength", "maxLength", "format"].iter().any(|key| prop.get(key).is_some()) { return Err(format!("Unsupported question validation: {id}")); }
+        if prop["type"] != "string" { return Err(format!("Unsupported question field: {id}")); }
+        if prop.get("oneOf").is_some() && prop.get("enum").is_some() { return Err("Conflicting question options".into()); }
+        let options = if let Some(choices) = prop.get("oneOf") {
+            choices.as_array().ok_or("Invalid question options")?.iter().map(|choice| {
+                let value = choice["const"].as_str().ok_or_else(|| "Unsupported question option".to_owned())?;
+                Ok::<_, String>(QuestionOption {value: value.into(), label: choice["title"].as_str().unwrap_or(value).into(), description: choice["description"].as_str().map(str::to_owned)})
+            }).collect::<Result<Vec<_>, _>>()?
+        } else if let Some(choices) = prop.get("enum") {
+            choices.as_array().ok_or("Invalid question options")?.iter().map(|choice| {
+                let value = choice.as_str().ok_or_else(|| "Unsupported question option".to_owned())?;
+                Ok::<_, String>(QuestionOption {value: value.into(), label: value.into(), description: None})
+            }).collect::<Result<Vec<_>, _>>()?
+        } else { Vec::new() };
+        if options.is_empty() && (prop.get("enum").is_some() || prop.get("oneOf").is_some()) { return Err("Question options cannot be empty".into()); }
+        Ok(QuestionField {
+            id: id.clone(), title: prop["title"].as_str().unwrap_or(id).into(),
+            description: prop["description"].as_str().map(str::to_owned), options,
+            required: required.is_some_and(|values| values.contains(&serde_json::Value::String(id.clone()))),
+            secret: prop["_meta"]["codex"]["isSecret"].as_bool().unwrap_or(false),
+        })
+    }).collect()
+}
+
+pub fn answer_question(session: &AcpSession, request_id: &str, answers: HashMap<String, String>) -> Res<()> {
+    let mut pending = questions().lock_or_recover();
+    let request = pending.get(request_id).ok_or("This question is no longer available")?;
+    if request.sender.is_none() { return Err("This question has already been answered".into()); }
+    if request.session_id != session.id { return Err("Question belongs to another session".into()); }
+    for field in &request.fields {
+        let value = answers.get(&field.id).map(String::as_str).unwrap_or("");
+        if (field.required && value.trim().is_empty()) || (!value.is_empty() && !field.options.is_empty() && !field.options.iter().any(|option| option.value == value)) {
+            return Err(format!("Choose or enter an answer for {}", field.title).into());
+        }
+    }
+    if answers.keys().any(|id| !request.fields.iter().any(|field| &field.id == id)) { return Err("Unknown question field".into()); }
+    let expired = request.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline);
+    if expired {
+        // Async Codex requests stop listening at their deadline; continue the same session with the submitted answers.
+        let text = request.fields.iter().filter_map(|field| answers.get(&field.id).map(|answer| format!("{}: {}", field.title, answer))).collect::<Vec<_>>().join("\n");
+        send_acp_prompt(session, None, Prompt::text(format!("My answers to your clarification questions:\n{text}\nContinue using these answers.")))?;
+    }
+    let request = pending.get_mut(request_id).unwrap();
+    let sender = request.sender.take().ok_or("This question has already been answered")?;
+    let content: std::collections::BTreeMap<_, _> = answers.into_iter().map(|(id, value)| (id, v1::ElicitationContentValue::from(value))).collect();
+    let _ = sender.send(v1::CreateElicitationResponse::new(v1::ElicitationAcceptAction::new().content(content)));
+    Ok(())
+}
+
+async fn ask_question(request: v1::CreateElicitationRequest, sink: Arc<dyn Sink>, session_id: String, thread_id: String) -> Result<v1::CreateElicitationResponse, acp::Error> {
+    let wire = serde_json::to_value(&request).map_err(|e| acp::Error::invalid_params().data(e.to_string()))?;
+    if wire["mode"] != "form" || !wire["sessionId"].is_string() {
+        return Err(acp::Error::invalid_params().data("Palisade supports session-owned question forms only"));
+    }
+    let fields = question_fields(&wire["requestedSchema"]).map_err(|e| acp::Error::invalid_params().data(e))?;
+    let id = ulid::Ulid::new().to_string();
+    let deadline = wire["_meta"]["codex"]["autoResolutionMs"].as_u64().map(|ms| std::time::Instant::now() + Duration::from_millis(ms));
+    let (sender, receiver) = oneshot::channel();
+    questions().lock_or_recover().insert(id.clone(), PendingQuestion { session_id: session_id.clone(), fields: fields.clone(), deadline, sender: Some(sender), sink: sink.clone(), thread_id: thread_id.clone() });
+    emit(&sink, &session_id, &thread_id, ExecutorEvent::QuestionRequest { id: id.clone(), session_id: session_id.clone(), message: request.message, fields });
+    let response = receiver.await.unwrap_or_else(|_| v1::CreateElicitationResponse::new(v1::ElicitationAction::Cancel));
+    if questions().lock_or_recover().remove(&id).is_some() {
+        emit(&sink, &session_id, &thread_id, ExecutorEvent::QuestionResolved { id });
+    }
+    Ok(response)
+}
+
+/// Permission requests awaiting a user decision, shared with the bridge task.
 pub(crate) type PendingPermissions = Arc<Mutex<HashMap<String, oneshot::Sender<PermissionAnswer>>>>;
 
 /// The last Execute-kind command each live session ran, keyed by session id
@@ -1300,6 +1416,9 @@ async fn run_bridge(
     let tail_session = palisade_session_id.clone();
     let tail_thread = spawn.thread_id.clone();
 
+    let question_sink = sink.clone();
+    let question_session = palisade_session_id.clone();
+    let question_thread = spawn.thread_id.clone();
     let result = acp::Client.builder()
         .name("palisade-code")
         .on_receive_notification(
@@ -1447,6 +1566,17 @@ async fn run_bridge(
                     )
                     .await;
                     responder.respond(response)
+                })
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v1::CreateElicitationRequest, responder, cx| {
+                let sink = question_sink.clone();
+                let session = question_session.clone();
+                let thread = question_thread.clone();
+                cx.spawn(async move {
+                    responder.respond_with_result(ask_question(request, sink, session, thread).await)
                 })
             },
             acp::on_receive_request!(),
@@ -1794,7 +1924,7 @@ fn start_with_transport(
 /// bridges notifications to the sync `Sink`. Blocks until the session is
 /// ready or startup fails.
 pub fn start_acp_session(spawn: AcpSpawn, sink: Arc<dyn Sink>) -> Res<AcpSession> {
-    let agent = agent_config(&spawn);
+    let agent = agent_config(&spawn)?;
     let identity = SessionIdentity::from(&spawn);
     let restore_id = spawn.restore.clone();
     let (id, models, cmd_tx, busy, acp_session_id, pending_permissions) =
@@ -1833,7 +1963,7 @@ pub fn probe_models(
         extra_env: vec![],
         restore: None,
     };
-    let agent = agent_config(&spawn);
+    let agent = agent_config(&spawn)?;
     let (_id, models, _cmd_tx, _busy, _acp_id, _pending) =
         start_with_transport(agent, spawn, Arc::new(NullSink), true, None)?;
     Ok(models)
@@ -1870,7 +2000,7 @@ pub fn authenticate_agent(
         extra_env: vec![],
         restore: None,
     };
-    let agent = agent_config(&spawn);
+    let agent = agent_config(&spawn)?;
     start_with_transport(agent, spawn, Arc::new(NullSink), false, Some(method_id))?;
     Ok(())
 }
@@ -1930,7 +2060,7 @@ pub fn agent_oneshot(spawn: AcpSpawn, prompt: &str, timeout: Duration) -> Res<St
     let _admission = crate::account_session::admit_work()?;
     let collected = Arc::new(Mutex::new(Collected::default()));
     let sink = Arc::new(CollectingSink(collected.clone()));
-    let agent = agent_config(&spawn);
+    let agent = agent_config(&spawn)?;
     let (_id, models, cmd_tx, busy, _acp_id, _pending) =
         start_with_transport(agent, spawn, sink, false, None)?;
     let _ = models;
@@ -2051,7 +2181,28 @@ pub fn change_model(session: &mut AcpSession, wanted: Option<&str>) -> Res<()> {
     Ok(())
 }
 
-fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
+#[cfg(unix)]
+fn codex_question_proxy() -> Res<PathBuf> {
+    static PROXY: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    PROXY.get_or_init(|| {
+        let root = std::env::temp_dir().join(format!("palisade-codex-{}", ulid::Ulid::new()));
+        std::fs::create_dir(&root).map_err(|e| e.to_string())?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+        }
+        let script = root.join("codex-question-proxy.cjs");
+        std::fs::write(&script, include_str!("../driver/codex-question-proxy.cjs")).map_err(|e| e.to_string())?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+            Ok(script)
+        }
+
+    }).clone().map_err(Into::into)
+}
+
+fn agent_config(spawn: &AcpSpawn) -> Res<acp::AcpAgent> {
     let mut config = acp::AcpAgentConfig::new(spawn.bin.clone());
     config = config.args(spawn.args.iter().cloned());
     // A GUI-launched Palisade inherits launchd's minimal PATH; the agent (and
@@ -2062,7 +2213,14 @@ fn agent_config(spawn: &AcpSpawn) -> acp::AcpAgent {
     for (key, value) in &spawn.extra_env {
         config = config.env(key.clone(), value.clone());
     }
-    acp::AcpAgent::new(config)
+    #[cfg(unix)]
+    if spawn.agent_id == "codex-acp" {
+        let target = spawn.extra_env.iter().rev().find(|(key, _)| key == "CODEX_PATH").map(|(_, value)| value.clone())
+            .or_else(|| std::env::var("CODEX_PATH").ok()).unwrap_or_else(|| "codex".into());
+        config = config.env("PALISADE_CODEX_TARGET", target)
+            .env("CODEX_PATH", codex_question_proxy()?.to_string_lossy().into_owned());
+    }
+    Ok(acp::AcpAgent::new(config))
 }
 
 /// A session handle for tests that never touch a transport.
@@ -2098,6 +2256,106 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------- one-shot
+
+    #[tokio::test]
+    async fn question_answers_are_validated_and_owned_by_one_session() {
+        let (mut session, _commands) = stub_session(false);
+        session.id = ulid::Ulid::new().to_string();
+        let (mut other, _commands) = stub_session(false);
+        other.id = "another-session".into();
+        let fields = question_fields(&serde_json::json!({"type":"object", "required":["choice"], "properties":{"choice":{"type":"string","title":"Choice", "oneOf":[{"const":"Yes"},{"const":"No"}]}}})).unwrap();
+        let (sender, receiver) = oneshot::channel();
+        let id = ulid::Ulid::new().to_string();
+        questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: None, sender: Some(sender), sink: Arc::new(NullSink), thread_id: String::new()});
+        assert!(answer_question(&other, &id, HashMap::from([("choice".into(), "Yes".into())])).is_err());
+        assert!(answer_question(&session, &id, HashMap::new()).is_err());
+        assert!(answer_question(&session, &id, HashMap::from([("choice".into(), "Invalid".into())])).is_err());
+        answer_question(&session, &id, HashMap::from([("choice".into(), "Yes".into())])).unwrap();
+        let response = serde_json::to_value(receiver.await.unwrap()).unwrap();
+        assert_eq!(response["action"], "accept");
+        assert_eq!(response["content"]["choice"], "Yes");
+        assert!(answer_question(&session, &id, HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn question_choices_reject_empty_or_conflicting_constraints() {
+        for property in [
+            serde_json::json!({"type":"string","enum":[]}),
+            serde_json::json!({"type":"string","oneOf":[]}),
+            serde_json::json!({"type":"string","enum":["No"],"oneOf":[{"const":"Yes"}]}),
+        ] {
+            assert!(question_fields(&serde_json::json!({"type":"object","properties":{"choice":property}})).is_err());
+        }
+    }
+
+    #[test]
+    fn question_option_titles_and_descriptions_keep_the_wire_value() {
+        let fields = question_fields(&serde_json::json!({"type":"object","properties":{"choice":{"type":"string","oneOf":[{"const":"scroll","title":"Filter and scroll","description":"Show the results immediately."}]}}})).unwrap();
+        assert_eq!(fields[0].options[0], QuestionOption {value:"scroll".into(),label:"Filter and scroll".into(),description:Some("Show the results immediately.".into())});
+    }
+
+    #[test]
+    fn unsupported_question_fields_fail_explicitly() {
+        assert!(question_fields(&serde_json::json!({"type":"object","properties":{"amount":{"type":"number"}}})).is_err());
+        assert!(question_fields(&serde_json::json!({"type":"object","required":["missing"],"properties":{"choice":{"type":"string"}}})).is_err());
+    }
+
+    #[tokio::test]
+    async fn expired_async_question_continues_its_own_session() {
+        let (mut session, mut commands) = stub_session(false);
+        session.id = ulid::Ulid::new().to_string();
+        let fields = question_fields(&serde_json::json!({"type":"object", "properties":{"choice":{"type":"string","title":"Scroll?"}}})).unwrap();
+        let (sender, _receiver) = oneshot::channel();
+        let id = ulid::Ulid::new().to_string();
+        questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: Some(std::time::Instant::now()), sender: Some(sender), sink: Arc::new(NullSink), thread_id: String::new()});
+        answer_question(&session, &id, HashMap::from([("choice".into(), "Yes".into())])).unwrap();
+        let BridgeCommand::Prompt(prompt) = commands.try_recv().unwrap() else {panic!("expected same-session continuation")};
+        assert!(prompt.joined().contains("Scroll?: Yes"));
+    }
+
+    #[test]
+    fn busy_async_answer_remains_pending_for_retry() {
+        let (mut session, _commands) = stub_session(true);
+        session.id = ulid::Ulid::new().to_string();
+        let fields = question_fields(&serde_json::json!({"type":"object", "properties":{"choice":{"type":"string"}}})).unwrap();
+        let (sender, _receiver) = oneshot::channel();
+        let id = ulid::Ulid::new().to_string();
+        questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: Some(std::time::Instant::now()), sender: Some(sender), sink: Arc::new(NullSink), thread_id: String::new()});
+        let answers = HashMap::from([("choice".into(), "Yes".into())]);
+        assert!(answer_question(&session, &id, answers.clone()).is_err());
+        assert!(questions().lock_or_recover()[&id].sender.is_some());
+        session.busy.store(false, Ordering::SeqCst);
+        answer_question(&session, &id, answers).unwrap();
+    }
+
+    #[tokio::test]
+    async fn question_request_renders_and_resolves_with_session_cleanup() {
+        let (mut session, _commands) = stub_session(false);
+        session.id = ulid::Ulid::new().to_string();
+        let (tx, events) = mpsc::channel();
+        let request: v1::CreateElicitationRequest = serde_json::from_value(serde_json::json!({
+            "sessionId":"provider-session", "mode":"form", "message":"Choose a route",
+            "requestedSchema":{"type":"object","properties":{"route":{"type":"string","title":"Route"}}}
+        })).unwrap();
+        let ask = tokio::spawn(ask_question(request, Arc::new(ChannelSink(tx)), session.id.clone(), "owning-thread".into()));
+        tokio::task::yield_now().await;
+        let event = events.try_recv().unwrap();
+        assert_eq!(event.thread_id, "owning-thread");
+        let ExecutorEvent::QuestionRequest {id, session_id, ..} = event.event else {panic!("missing question form")};
+        assert_eq!(session_id, session.id);
+        assert!(session.needs_attention());
+        session.terminate();
+        let response = serde_json::to_value(ask.await.unwrap().unwrap()).unwrap();
+        assert_eq!(response["action"], "cancel");
+        assert_eq!(events.recv_timeout(Duration::from_secs(1)).unwrap().event, ExecutorEvent::QuestionResolved {id});
+        assert!(!session.needs_attention());
+    }
+
+    #[test]
+    fn advertises_native_question_forms() {
+        let caps = serde_json::to_value(client_capabilities()).unwrap();
+        assert!(caps["elicitation"]["form"].is_object());
+    }
 
     #[test]
     fn collector_joins_text_events_and_finishes_on_done() {
