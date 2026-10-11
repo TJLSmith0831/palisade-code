@@ -10,6 +10,7 @@ on:
       - .github/workflows/tester-release.yml
       - .github/workflows/release-dry-run.yml
       - scripts/build-sidecar.sh
+      - scripts/test-release-smoke.mjs
       - src-tauri/tauri*.conf.json
       - src-tauri/Cargo.toml
       - src-tauri/Cargo.lock
@@ -91,5 +92,5 @@ jobs:
           lipo -info "$mountpoint/Palisade.app/Contents/MacOS/palisade-code" | grep -q 'x86_64 arm64\|arm64 x86_64'
           ls "$mountpoint/Palisade.app/Contents/Resources/resources/models/"
 
-      - name: Worker tests
-        run: node worker/test.mjs
+      - name: Worker and release smoke tests
+        run: node --test worker/test.mjs scripts/test-release-smoke.mjs
