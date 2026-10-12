@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
+  Loader,
   Menu,
   Select,
   Skeleton,
@@ -64,11 +65,11 @@ export type FleetBoardProps = {
   titlePendingIds?: Set<string>;
   onOpen(threadId: string): void;
   onReview(threadId: string): void;
-  onStop(threadId: string): void;
+  onStop(threadId: string): Promise<unknown>;
   /** Opens a playbook run — the board's Open for a `playbook` row. */
   onOpenRun(runId: string): void;
   /** Stops a playbook run — the board's Stop for a `playbook` row. */
-  onCancelRun(runId: string): void;
+  onCancelRun(runId: string): Promise<unknown>;
   onArchiveRun(projectId: string, runId: string): void;
   onMerge(projectId: string, threadId: string): void;
   onOpenPr(projectId: string, threadId: string): void;
@@ -172,14 +173,19 @@ function Row({
   const playbook = row.kind === "playbook";
   const runId = row.runId ?? row.threadId;
   // Keyed like the archive call itself: a playbook run archives by run id.
+  const [stopping, setStopping] = useState(false);
   const archiving = useIsArchiving(runId);
+  const busy = archiving || stopping;
   const open = () => (playbook ? onOpenRun(runId) : onOpen(row.threadId));
-  const stop = () => (playbook ? onCancelRun(runId) : onStop(row.threadId));
+  const stop = () => {
+    setStopping(true);
+    void (playbook ? onCancelRun(runId) : onStop(row.threadId)).finally(() => setStopping(false));
+  };
 
   return (
     <div
       className="fleet-row"
-      data-busy={archiving || undefined}
+      data-busy={busy || undefined}
       role="button"
       tabIndex={0}
       data-testid="fleet-row"
@@ -269,10 +275,10 @@ function Row({
             className="ds-icon-btn"
             aria-label={`Actions for ${row.title}`}
             data-testid="fleet-actions"
-            disabled={archiving}
+            disabled={busy}
             onClick={(e) => e.stopPropagation()}
           >
-            {archiving ? <ArchivingSpinner /> : <IconDots size={14} />}
+            {archiving ? <ArchivingSpinner /> : stopping ? <Loader size={12} aria-label="Stopping" /> : <IconDots size={14} />}
           </button>
         </Menu.Target>
         <Menu.Dropdown onClick={(e) => e.stopPropagation()}>
