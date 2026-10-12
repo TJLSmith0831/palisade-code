@@ -108,6 +108,27 @@ test("expiry retains the existing buffer and same-account verification resumes i
   expect(buffer).toHaveValue("still here");
 });
 
+test("expiry banner actions confirm success instead of doing nothing visible", async () => {
+  vi.mocked(api.accountStatus).mockResolvedValue(online);
+  vi.mocked(api.accountRefresh).mockResolvedValue({ ...online, state: "expired" });
+  vi.mocked(api.accountStopWork).mockResolvedValue(undefined);
+  mount();
+  expect(
+    await screen.findByText("Account access needs attention")
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Stop running work"));
+  expect(
+    await screen.findByText("Running work stopped."),
+    "stopping work is announced"
+  ).toHaveAttribute("role", "status");
+  fireEvent.click(screen.getByText("Save open files"));
+  expect(
+    await screen.findByText("Open files saved."),
+    "saving replaces the previous notice"
+  ).toHaveAttribute("role", "status");
+  expect(screen.queryByText("Running work stopped.")).toBeNull();
+});
+
 test("browser account management opens separately and does not start desktop sign-in", async () => {
   vi.mocked(api.accountOpenBrowserAccount).mockResolvedValue(undefined);
   mount();
