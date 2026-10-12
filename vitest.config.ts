@@ -6,6 +6,8 @@ export default defineConfig({
     setupFiles: ["./src/__tests__/setup.ts"],
     globals: true,
     css: true,
+    // App.test.tsx renders the whole shell; CI runners take ~6s on the slowest cases.
+    testTimeout: 20000,
     // Git worktrees live under `.claude/worktrees/` — each is a full checkout
     // of this repo, so without this vitest runs every test file two or three
     // times, once per stale branch, and reports their failures as ours.
