@@ -42,6 +42,8 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [working, setWorking] = useState<"" | "save" | "stop">("");
+  const [notice, setNotice] = useState("");
   const attempt = useRef(0);
   const setup = useRef(false);
   const accept = useCallback(async (next: api.AccountStatus) => {
@@ -153,6 +155,40 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       setBusy(false);
     }
   }
+  // Both actions succeed silently on the backend, so confirm them here.
+  async function act(
+    action: "save" | "stop",
+    run: () => Promise<unknown>,
+    done: string
+  ) {
+    setWorking(action);
+    setNotice("");
+    setError("");
+    try {
+      await run();
+      setNotice(done);
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setWorking("");
+    }
+  }
+  const stopWork = () =>
+    void act("stop", api.accountStopWork, "Running work stopped.");
+  const saveAll = () =>
+    void act(
+      "save",
+      () => {
+        const promises: Promise<void>[] = [];
+        window.dispatchEvent(
+          new CustomEvent("palisade-account-save-all", {
+            detail: { promises },
+          })
+        );
+        return Promise.all(promises);
+      },
+      "Open files saved."
+    );
   const signIn = (
     <AccountSignIn
       stage={stage}
@@ -175,6 +211,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   const ready =
     !restricted && permitted(status) && status?.workspaceReady === true;
   useEffect(() => {
+    setNotice("");
     window.dispatchEvent(
       new CustomEvent("palisade-account-access", { detail: ready })
     );
@@ -210,6 +247,11 @@ export default function AccountGate({ children }: { children: ReactNode }) {
         there before choosing another. Stop running work first; every window
         will ask about unsaved changes.
       </Text>
+      {notice && (
+        <Text size="sm" role="status">
+          {notice}
+        </Text>
+      )}
       {error && (
         <Alert color="danger" title="Account action failed">
           {error}
@@ -218,11 +260,8 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       <Group>
         <Button
           variant="default"
-          onClick={() =>
-            void api
-              .accountStopWork()
-              .catch((failure) => setError(errorMessage(failure)))
-          }
+          loading={working === "stop"}
+          onClick={stopWork}
         >
           Stop running work
         </Button>
@@ -309,27 +348,15 @@ export default function AccountGate({ children }: { children: ReactNode }) {
                     <Group mt="md">
                       <Button
                         variant="default"
-                        onClick={() => {
-                          const promises: Promise<void>[] = [];
-                          window.dispatchEvent(
-                            new CustomEvent("palisade-account-save-all", {
-                              detail: { promises },
-                            })
-                          );
-                          void Promise.all(promises).catch((failure) =>
-                            setError(errorMessage(failure))
-                          );
-                        }}
+                        loading={working === "save"}
+                        onClick={saveAll}
                       >
                         Save open files
                       </Button>
                       <Button
                         variant="default"
-                        onClick={() =>
-                          void api
-                            .accountStopWork()
-                            .catch((failure) => setError(errorMessage(failure)))
-                        }
+                        loading={working === "stop"}
+                        onClick={stopWork}
                       >
                         Stop running work
                       </Button>
@@ -344,6 +371,11 @@ export default function AccountGate({ children }: { children: ReactNode }) {
                         Sign out and restart
                       </Button>
                     </Group>
+                    {notice && (
+                      <Text size="sm" mt="sm" role="status">
+                        {notice}
+                      </Text>
+                    )}
                   </Alert>
                 )}
                 {error && stage !== "error" && (
