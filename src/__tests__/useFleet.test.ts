@@ -127,3 +127,13 @@ it("shows the message from a structured backend failure instead of object Object
   await waitFor(() => expect(result.current.loading).toBe(false));
   expect(result.current.error).toBe("This project is not a Git repository");
 });
+
+ it("updates visible verification evidence on completion without waiting for a poll", async () => {
+  const before = { id: "t1", verify: { state: "none" } } as never;
+  const after = { id: "t1", verify: { state: "fail", commit: "abc123", command: "npm test" } } as never;
+  mocked.fleetOverview.mockResolvedValueOnce([before]).mockResolvedValue([after]);
+  const { result } = renderHook(() => useFleet({ active: true, minGapMs: 0, pollMs: 60_000 }));
+  await waitFor(() => expect(result.current.rows).toEqual([before]));
+  await act(async () => handlers.get("verification-finished")?.({ payload: { threadId: "t1" } }));
+  await waitFor(() => expect(result.current.rows).toEqual([after]));
+ });

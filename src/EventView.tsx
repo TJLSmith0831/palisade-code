@@ -15,6 +15,7 @@ import type { AgentLogin, ExecutorEvent, Message, Preflight } from "./api";
 import { answerPermissionPrompt } from "./api";
 import { rowsFromChange } from "./diffLines";
 import DiffRows from "./DiffRows";
+import { QuestionCard } from "./QuestionCard";
 import { ExploreHandoff } from "./BuildLaunch";
 import { agentNameFromAuthMessage, isAuthError } from "./errors";
 
@@ -943,6 +944,10 @@ export const EventList = memo(function EventList({
             return (
               <AssistantResponse key={index} text={item.text} />
             );
+          case "questionRequest":
+            return <QuestionCard key={item.id} event={item} resolved={items.some((event) => event.kind === "questionResolved" && event.id === item.id)} />;
+          case "questionResolved":
+            return null;
           case "reasoning":
           case "fileEdit":
           case "toolCall":

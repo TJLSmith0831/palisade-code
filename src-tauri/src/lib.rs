@@ -680,6 +680,9 @@ struct AppSink {
 }
 
 impl Sink for AppSink {
+    fn emit_turn_started(&self, session_id: &str, thread_id: &str) {
+        let _ = self.app.emit("executor-turn-started", serde_json::json!({"sessionId": session_id, "threadId": thread_id}));
+    }
     /// The agent re-sends the whole list whenever it changes, so the payload
     /// replaces the session's commands rather than appending to them.
     fn emit_commands(
@@ -772,7 +775,7 @@ impl Sink for AppSink {
         let manual = self.app.state::<Harness>().agent.contexts.lock_or_recover()
             .get(&envelope_ref.session_id).is_some_and(|s| s.manual);
         if manual && !matches!(envelope_ref.event, ExecutorEvent::Done | ExecutorEvent::Crashed { .. }
-            | ExecutorEvent::PermissionRequest { .. }) { return; }
+            | ExecutorEvent::PermissionRequest { .. } | ExecutorEvent::QuestionRequest { .. } | ExecutorEvent::QuestionResolved { .. }) { return; }
         if matches!(envelope_ref.event, ExecutorEvent::Done | ExecutorEvent::Crashed { .. }) {
             let harness = self.app.state::<Harness>();
             let mut contexts = harness.agent.contexts.lock_or_recover();
@@ -3045,6 +3048,21 @@ async fn answer_permission_prompt(
     .map_err(|e| crate::PalisadeError::from(e.to_string()))?
 }
 
+#[tauri::command]
+async fn answer_question_prompt(
+    app: tauri::AppHandle,
+    session_id: String,
+    request_id: String,
+    answers: std::collections::HashMap<String, String>,
+) -> Res<()> {
+    tokio::task::spawn_blocking(move || {
+        let harness: tauri::State<'_, Harness> = app.state();
+        let sessions = harness.agent.acp_sessions.lock_or_recover();
+        let session = sessions.get(&session_id).ok_or("The question's session has ended")?;
+        acp_client::answer_question(session, &request_id, answers)
+    }).await.map_err(|e| crate::PalisadeError::from(e.to_string()))?
+}
+
 /// What each live session is doing.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -5140,6 +5158,7 @@ pub fn run() {
             change_status,
             stop_executor,
             answer_permission_prompt,
+            answer_question_prompt,
             executor_status,
             session_contexts,
             compact_session,

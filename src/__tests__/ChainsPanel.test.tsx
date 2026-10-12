@@ -1,10 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import ChainsPanel from "../ChainsPanel";
 
-const { apiMock } = vi.hoisted(() => ({
+const { apiMock, listenMock } = vi.hoisted(() => ({
+  listenMock: vi.fn(() => Promise.resolve(() => {})),
   apiMock: {
     listChains: vi.fn(),
     deleteChain: vi.fn().mockResolvedValue(undefined),
@@ -13,6 +14,7 @@ const { apiMock } = vi.hoisted(() => ({
   },
 }));
 vi.mock("../api", () => apiMock);
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
 // Isolate ChainsPanel from ChainRunHistory's own behaviour (covered in its
 // own test file) so this file only proves the wiring between them.
@@ -37,6 +39,7 @@ const chain = {
 };
 
 beforeEach(() => {
+  listenMock.mockClear();
   apiMock.listChains.mockReset();
   apiMock.deleteChain.mockClear();
   apiMock.saveChain.mockClear();
@@ -45,6 +48,40 @@ beforeEach(() => {
 });
 
 describe("ChainsPanel", () => {
+  it("refreshes counts for external Playbook edits, including directory replacement", async () => {
+    apiMock.listChains.mockResolvedValue([chain]);
+    render(<MantineProvider><ChainsPanel projectHash="proj-1" onOpen={vi.fn()} /></MantineProvider>);
+    await screen.findByText("2 nodes");
+    const handler = (listenMock.mock.calls as unknown as [string, (event: unknown) => void][])
+      .find(([event]) => event === "fs-changed")?.[1];
+    expect(handler).toBeDefined();
+    handler!({ payload: { projectHash: "other", paths: [".palisade/chains/review.json"] } });
+    handler!({ payload: { projectHash: "proj-1", paths: [".palisade/project-settings.json"] } });
+    expect(apiMock.listChains).toHaveBeenCalledTimes(1);
+    apiMock.listChains.mockResolvedValue([{ ...chain, nodes: { ...chain.nodes, build: chain.nodes.scout } }]);
+    handler!({ payload: { projectHash: "proj-1", paths: [".palisade/chains"] } });
+    await screen.findByText("3 nodes");
+  });
+
+  it("keeps the newest count when external refreshes finish in reverse order", async () => {
+    apiMock.listChains.mockResolvedValue([chain]);
+    render(<MantineProvider><ChainsPanel projectHash="proj-1" onOpen={vi.fn()} /></MantineProvider>);
+    await screen.findByText("2 nodes");
+    const handler = (listenMock.mock.calls as unknown as [string, (event: unknown) => void][])
+      .find(([event]) => event === "fs-changed")![1];
+    let old!: (chains: typeof chain[]) => void;
+    let latest!: (chains: typeof chain[]) => void;
+    apiMock.listChains.mockReturnValueOnce(new Promise<typeof chain[]>((done) => { old = done; }))
+      .mockReturnValueOnce(new Promise<typeof chain[]>((done) => { latest = done; }));
+    await act(async () => {
+      handler({ payload: { projectHash: "proj-1", paths: [".palisade/chains/review.json"] } });
+      handler({ payload: { projectHash: "proj-1", paths: [".palisade/chains/review.json"] } });
+    });
+    await act(async () => latest([{ ...chain, nodes: { ...chain.nodes, build: chain.nodes.scout } }]));
+    await act(async () => old([chain]));
+    expect(screen.getByText("3 nodes")).toBeInTheDocument();
+  });
+
   it("lists chains and opens one on click", async () => {
     apiMock.listChains.mockResolvedValue([chain]);
     const onOpen = vi.fn();

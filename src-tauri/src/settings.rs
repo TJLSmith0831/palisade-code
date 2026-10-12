@@ -349,7 +349,7 @@ pub fn run_verify_with_env(
         .ok_or_else(|| format!("no verify command named `{name}` in {FILE_NAME}"))?
         .clone();
     let mut process = Command::new("sh");
-    process.arg("-c").arg(&command).current_dir(project_root).stdin(Stdio::null());
+    process.arg("-c").arg(&command).current_dir(project_root).stdin(Stdio::null()).env("PATH", crate::executor::child_path_env());
     if let Some(target) = cargo_target { process.env("CARGO_TARGET_DIR", target); }
     let output = process.output()
         .map_err(|err| crate::PalisadeError::from(format!("{command} failed to start: {err}")))?;
@@ -585,6 +585,16 @@ mod tests {
 
         // An unconfigured name is an error, not a silent pass.
         assert!(run_verify(&settings, root.path(), "nope").is_err());
+    }
+
+    #[test]
+    fn verification_uses_the_executor_tool_path() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = with_verify(&[("path", "printf %s \"$PATH\"")]);
+        let outcome = run_verify(&settings, root.path(), "path").unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.output_tail, crate::executor::child_path_env().to_string_lossy(),
+            "GUI verification must discover the same tools as agent and worktree setup");
     }
 
     /// Task 5.8: the verify command is the user's own shell line, run whole.

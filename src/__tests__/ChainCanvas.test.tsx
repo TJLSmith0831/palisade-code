@@ -52,7 +52,8 @@ function planeTransform(): { x: number; y: number; zoom: number } {
 
 vi.mock("../ChainsPanel", () => ({ announceChainsChanged: vi.fn() }));
 
-const { apiMock } = vi.hoisted(() => ({
+const { apiMock, listenMock } = vi.hoisted(() => ({
+  listenMock: vi.fn(() => Promise.resolve(() => {})),
   apiMock: {
     listChains: vi.fn().mockResolvedValue([]),
     listModels: vi.fn().mockResolvedValue({ models: [] }),
@@ -63,6 +64,7 @@ const { apiMock } = vi.hoisted(() => ({
   },
 }));
 vi.mock("../api", () => apiMock);
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
 // CHA-02: the audit's live-app click reported zero DOM/IPC effect from the
 // toolbar's "+ Node" button. The toolbar's Zoom-in control also uses a
@@ -205,6 +207,71 @@ const chain = {
   edges: [{ from: "scout", to: "judge" }],
   layout: {},
 };
+
+describe("ChainCanvas — external Playbook edits", () => {
+  it("reloads a clean canvas and preserves an unsaved draft", async () => {
+    listenMock.mockClear();
+    apiMock.listChains.mockResolvedValue([chain]);
+    render(<MantineProvider><ChainCanvas projectHash="proj-1" chainName="review" agents={[]} verifyCommands={[]} /></MantineProvider>);
+    await screen.findByTestId("chain-node-scout");
+    const handler = (listenMock.mock.calls as unknown as [string, (event: unknown) => void][])
+      .find(([event]) => event === "fs-changed")?.[1];
+    expect(handler).toBeDefined();
+    const next = { ...chain, nodes: { ...chain.nodes, build: { ...chain.nodes.scout, role: "build" } } };
+    apiMock.listChains.mockResolvedValue([next]);
+    const reads = apiMock.listChains.mock.calls.length;
+    await act(async () => handler!({ payload: { projectHash: "other", paths: [".palisade/chains/review.json"] } }));
+    await act(async () => handler!({ payload: { projectHash: "proj-1", paths: [".palisade/chains/another.json"] } }));
+    expect(apiMock.listChains).toHaveBeenCalledTimes(reads);
+    await act(async () => handler!({ payload: { projectHash: "proj-1", paths: [".palisade/chains/review.json"] } }));
+    await screen.findByTestId("chain-node-build");
+    fireEvent.click(screen.getByRole("button", { name: "Node" }));
+    const count = screen.queryAllByTestId(/^chain-node-/).length;
+    apiMock.listChains.mockResolvedValue([chain]);
+    await act(async () => handler!({ payload: { projectHash: "proj-1", paths: [".palisade/chains"] } }));
+    expect(screen.queryAllByTestId(/^chain-node-/)).toHaveLength(count);
+    expect(screen.getByText(/changed on disk/)).toBeInTheDocument();
+  });
+
+  it.each([false, true])("keeps the latest graph after reversed reads (initial pending: %s)", async (initialPending) => {
+    listenMock.mockClear();
+    let old!: (chains: typeof chain[]) => void;
+    let latest!: (chains: typeof chain[]) => void;
+    apiMock.listChains.mockResolvedValue([chain]);
+    if (initialPending) apiMock.listChains.mockReturnValueOnce(new Promise<typeof chain[]>((done) => { old = done; }));
+    render(<MantineProvider><ChainCanvas projectHash="proj-1" chainName="review" agents={[]} verifyCommands={[]} /></MantineProvider>);
+    if (!initialPending) {
+      await screen.findByTestId("chain-node-scout");
+      apiMock.listChains.mockReturnValueOnce(new Promise<typeof chain[]>((done) => { old = done; }));
+    }
+    apiMock.listChains.mockReturnValueOnce(new Promise<typeof chain[]>((done) => { latest = done; }));
+    const handler = (listenMock.mock.calls as unknown as [string, (event: unknown) => void][])
+      .find(([event]) => event === "fs-changed")![1];
+    await act(async () => {
+      if (!initialPending) handler({ payload: { projectHash: "proj-1", paths: [".palisade/chains"] } });
+      handler({ payload: { projectHash: "proj-1", paths: [".palisade/chains"] } });
+    });
+    await act(async () => latest([{ ...chain, nodes: { ...chain.nodes, build: { ...chain.nodes.scout, role: "build" } } }]));
+    await act(async () => old([chain]));
+    expect(screen.getByTestId("chain-node-build")).toBeInTheDocument();
+  });
+
+  it("does not replace an edit made while the reload is in flight", async () => {
+    listenMock.mockClear();
+    apiMock.listChains.mockResolvedValue([chain]);
+    render(<MantineProvider><ChainCanvas projectHash="proj-1" chainName="review" agents={[]} verifyCommands={[]} /></MantineProvider>);
+    await screen.findByTestId("chain-node-scout");
+    const handler = (listenMock.mock.calls as unknown as [string, (event: unknown) => void][])
+      .find(([event]) => event === "fs-changed")![1];
+    let resolve!: (chains: typeof chain[]) => void;
+    apiMock.listChains.mockReturnValueOnce(new Promise<typeof chain[]>((done) => { resolve = done; }));
+    await act(async () => handler({ payload: { projectHash: "proj-1", paths: [".palisade/chains/review.json"] } }));
+    fireEvent.change(screen.getByTestId("chain-name"), { target: { value: "My draft" } });
+    await act(async () => resolve([{ ...chain, name: "review" }]));
+    expect(screen.getByTestId("chain-name")).toHaveValue("My draft");
+    expect(screen.getByTestId("chain-dirty")).toBeInTheDocument();
+  });
+});
 
 describe("ChainCanvas — test run mode", () => {
   it("opens a seed composer from Test run and starts only after a seed is confirmed", async () => {

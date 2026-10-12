@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import ReviewPane from "../ReviewPane";
@@ -22,14 +22,16 @@ const pass: FleetVerify = {
   at: new Date(Date.now() - 5 * 60_000).toISOString(),
 };
 
+const { listenMock } = vi.hoisted(() => ({ listenMock: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+
 const onMerge = vi.fn();
-const onRunVerify = vi.fn();
+const onRunVerify = vi.fn().mockResolvedValue(undefined);
 const onOpenPr = vi.fn();
 const onOpenInEditor = vi.fn();
 const onBackToFleet = vi.fn();
 
-const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) =>
-  render(
+const pane = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) => (
     <ReviewPane
       threadId="t1"
       title="Fix the merge gate"
@@ -52,6 +54,7 @@ const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) =>
       {...over}
     />,
   );
+const mount = (over: Partial<Parameters<typeof ReviewPane>[0]> = {}) => render(pane(over));
 
 const mergeButton = () => screen.getByRole("button", { name: "Merge" });
 
@@ -59,6 +62,43 @@ describe("ReviewPane", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+  });
+
+  it("shows running feedback until this thread's verification finishes", async () => {
+    const view = mount({ verify: { state: "not_run" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run verify" }));
+    expect(screen.getByTestId("review-verify-line")).toHaveTextContent("Running verification");
+    expect(screen.getByRole("button", { name: "Running verification" })).toBeDisabled();
+    const handler = (listenMock.mock.calls as unknown as [string, (event: unknown) => void][])
+      .find(([event]) => event === "verification-finished")![1];
+    await act(async () => handler({ payload: { projectHash: "other", threadId: "t1" } }));
+    await act(async () => handler({ payload: { projectHash: "p1", threadId: "t2" } }));
+    expect(screen.getByTestId("review-verify-line")).toHaveTextContent("Running verification");
+    await act(async () => handler({ payload: { projectHash: "p1", threadId: "t1" } }));
+    expect(screen.getByRole("button", { name: "Run verify" })).toBeEnabled();
+    view.rerender(pane({ verify: pass }));
+    expect(screen.getByTestId("review-verify-line")).toHaveTextContent("Verified: pnpm test exited 0 at cafe123");
+    expect(screen.queryByRole("button", { name: "Run verify" })).toBeNull();
+  });
+
+  it("reports launch failure and permits retry", async () => {
+    onRunVerify.mockRejectedValueOnce(new Error("npm was not found"));
+    mount({ verify: { state: "not_run" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run verify" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't run verification — npm was not found");
+    expect(screen.getByRole("button", { name: "Run verify" })).toBeEnabled();
+  });
+
+  it("resets feedback on thread switch and ignores the old launch rejection", async () => {
+    let reject!: (reason: Error) => void;
+    onRunVerify.mockReturnValueOnce(new Promise<void>((_, fail) => { reject = fail; }));
+    const view = mount({ verify: { state: "not_run" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run verify" }));
+    expect(screen.getByTestId("review-verify-line")).toHaveTextContent("Running verification");
+    view.rerender(pane({ threadId: "t2", verify: { state: "not_run" } }));
+    await act(async () => reject(new Error("old launch failed")));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Run verify" })).toBeEnabled();
   });
 
   it("shows k of n viewed and persists a toggle", () => {
@@ -116,12 +156,9 @@ describe("ReviewPane", () => {
   it("names what is missing in the override modal and merges with override", async () => {
     mount({ merge: "conflicts", verify: { state: "not_run" } });
     fireEvent.click(screen.getByRole("button", { name: "Merge anyway…" }));
-    expect(
-      await screen.findByText("This branch conflicts with its base branch."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("No verification has been run on this branch."),
-    ).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("This branch conflicts with its base branch.")).toBeInTheDocument();
+    expect(within(dialog).getByText("No verification has been run on this branch.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Merge anyway" }));
     expect(onMerge).toHaveBeenCalledWith({ override: true });
   });
@@ -182,8 +219,13 @@ describe("ReviewPane", () => {
     unverified.unmount();
     mount({ merge: "conflicts" });
     expect(screen.getByTestId("review-merge-blocker")).toHaveTextContent(
-      "Merge needs a clean base",
+      "This branch conflicts with its base branch.",
     );
+  });
+
+  it("names a behind branch without suggesting conflicts", () => {
+    mount({ merge: "behind" });
+    expect(screen.getByTestId("review-merge-blocker")).toHaveTextContent("This branch is behind its base branch.");
   });
 
   it("offers guided configuration when verification is unconfigured", () => {

@@ -5,6 +5,22 @@ All notable changes to Palisade Code are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-12
+
+### Fixed
+
+- Account Save and Stop actions show progress and confirm completion.
+- Composer and Fleet Stop, notebook Restart and Interrupt, and Playbook history Re-run actions show progress and report failures.
+- GUI verification and fresh worktree setup find npm through the existing executable environment.
+- Review refreshes verification status and file changes when its task's checks finish, and names the actual merge blocker.
+- Externally saved Playbooks refresh their graph and sidebar count while preserving unsaved edits.
+- Playbook chats display their actual execution context.
+- Spec verification requires evidence from the owning task at its current clean commit.
+- Supported agent clarification questions display answer controls and resume the owning session; unsupported requests fail explicitly.
+- Async clarification answers wait for the owning agent's current turn automatically. Question cards use selectable option rows, keyboard focus, and a compact resolved state.
+- Verification errors show a concise explanation with readable, expandable diagnostic details.
+- Local macOS development and packaging prefer Apple-issued signing identities to preserve Keychain access across rebuilds.
+
 ## [0.5.0] - 2026-10-10
 
 ### Added
@@ -58,7 +74,8 @@ All notable changes to Palisade Code are documented here. The format follows
 - Text selection in the feedback modal no longer gets hijacked by the titlebar drag handler.
 - Plain Spec turns now carry the grill skill; runs started from Fleet open their chat.
 
-[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/TJLSmith0831/palisade-code/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/TJLSmith0831/palisade-code/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/TJLSmith0831/palisade-code/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/TJLSmith0831/palisade-code/compare/v0.3.0...v0.4.0
