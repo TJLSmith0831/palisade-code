@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import ChainRunHistory from "../ChainRunHistory";
@@ -182,7 +182,7 @@ describe("ChainRunHistory — cost labeling (D-d)", () => {
 describe("ChainRunHistory — re-run", () => {
   it("Re-run calls onRerun with the record's id and no fromRole", async () => {
     apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x" })]);
-    const onRerun = vi.fn();
+    const onRerun = vi.fn().mockResolvedValue(undefined);
 
     renderHistory({ onRerun });
 
@@ -195,7 +195,7 @@ describe("ChainRunHistory — re-run", () => {
 
   it("Re-run from here on node judge calls onRerun with the record id and role 'judge'", async () => {
     apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x" })]);
-    const onRerun = vi.fn();
+    const onRerun = vi.fn().mockResolvedValue(undefined);
 
     renderHistory({ onRerun });
 
@@ -204,6 +204,25 @@ describe("ChainRunHistory — re-run", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: /re-run from judge/i }));
 
     expect(onRerun).toHaveBeenCalledWith("run-x", "judge");
+  });
+
+  it("Re-run spins on the row's actions button until the re-run starts", async () => {
+    apiMock.listChainRuns.mockResolvedValue([record({ id: "run-x" })]);
+    let settle: () => void = () => {};
+    const onRerun = vi.fn(() => new Promise<void>((resolve) => (settle = resolve)));
+
+    renderHistory({ onRerun });
+
+    const row = await screen.findByTestId("chain-run-row-run-x");
+    const actions = within(row).getByRole("button", { name: /actions/i });
+    fireEvent.click(actions);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^re-run$/i }));
+
+    await waitFor(() =>
+      expect(actions, "the row shows the re-run is starting").toHaveAttribute("data-loading", "true")
+    );
+    await act(async () => settle());
+    expect(actions).not.toHaveAttribute("data-loading");
   });
 
   it("composes re-run-from-node options from the record's chainSnapshot, never a currently-listed chain", async () => {
@@ -235,7 +254,7 @@ describe("ChainRunHistory — re-run", () => {
         },
       }),
     ]);
-    const onRerun = vi.fn();
+    const onRerun = vi.fn().mockResolvedValue(undefined);
 
     renderHistory({ onRerun });
 

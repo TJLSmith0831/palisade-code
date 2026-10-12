@@ -9,6 +9,8 @@ All notable changes to Palisade Code are documented here. The format follows
 
 ### Fixed
 
+- Account Save and Stop actions show progress and confirm completion.
+- Composer and Fleet Stop, notebook Restart and Interrupt, and Playbook history Re-run actions show progress and report failures.
 - GUI verification and fresh worktree setup find npm through the existing executable environment.
 - Review refreshes verification status and file changes when its task's checks finish, and names the actual merge blocker.
 - Externally saved Playbooks refresh their graph and sidebar count while preserving unsaved edits.

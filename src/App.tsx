@@ -332,8 +332,8 @@ type ChatSurfaceProps = {
   onRemoveQueued?: (id: string) => void;
   /** Send a queued message again after it failed. */
   onRetryQueued?: (id: string) => void;
-  /** Stop the live session for this thread. */
-  onStop: () => void;
+  /** Stop the live session for this thread; settles once it has stopped. */
+  onStop: () => Promise<unknown>;
   onRenameThread: (target: ThreadMeta) => void;
   onSpec: () => void;
   onGo: () => void;
@@ -721,6 +721,7 @@ export const ChatSurface = memo(
     onLoadEarlier,
     titlePendingIds,
   }: ChatSurfaceProps) {
+    const [stopping, setStopping] = useState(false);
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
     // Confirmation popover for the Accept→Bypass direction only (D2e) — the
@@ -2398,7 +2399,11 @@ export const ChatSurface = memo(
                   )}
                 <ActionIcon
                   data-testid="composer-stop"
-                  onClick={onStop}
+                  loading={stopping}
+                  onClick={() => {
+                    setStopping(true);
+                    void onStop().finally(() => setStopping(false));
+                  }}
                   aria-label="Stop"
                   title="Stop"
                   size={36}
@@ -4549,7 +4554,7 @@ export default function App() {
     // The backend ends this thread's busy session, not whichever live one
     // comes first: a thread can run a spec and a go session at once. Never
     // without a thread — that would stop every session in the app.
-    if (thread?.id) void api.stopExecutor(undefined, thread.id);
+    return thread?.id ? api.stopExecutor(undefined, thread.id).catch(fail) : Promise.resolve();
   }, [thread?.id]);
 
   // A thread's live buffer is pruned to its live-only events once history is
@@ -6144,9 +6149,7 @@ export default function App() {
     },
     [selectFleetThread, shell.openPanel]
   );
-  const onFleetStop = useCallback((threadId: string) => {
-    void api.stopExecutor(undefined, threadId);
-  }, []);
+  const onFleetStop = useCallback((threadId: string) => api.stopExecutor(undefined, threadId).catch(fail), []);
   /** A playbook row opens where its run already lives: the Playbooks panel,
    *  with the run selected on the canvas — the same path the panel's own run
    *  history takes. */
@@ -6157,9 +6160,7 @@ export default function App() {
     },
     [onChainOpenRun, shell.openPanel]
   );
-  const onFleetCancelRun = useCallback((runId: string) => {
-    void api.cancelChainRun(runId);
-  }, []);
+  const onFleetCancelRun = useCallback((runId: string) => api.cancelChainRun(runId).catch(fail), []);
   const onFleetArchiveRun = useCallback((projectId: string, runId: string) => {
     void withArchiving(runId, () => api.setChainRunArchived(projectId, runId, true))
       .then(() => fleet.refresh())
@@ -6994,7 +6995,7 @@ export default function App() {
               });
             }}
             onRerun={(runId, fromRole) =>
-              thread && void api.rerunChainRun(project.hash, runId, fromRole, thread.id)
+              thread ? api.rerunChainRun(project.hash, runId, fromRole, thread.id).catch(fail) : Promise.resolve()
             }
           />
         );

@@ -176,6 +176,8 @@ export default function NotebookTab({
   const [kernelStarting, setKernelStarting] = useState(false);
   const [outputsByCellRun, setOutputsByCellRun] = useState<Map<string, CellOutput[]>>(new Map());
   const [warning, setWarning] = useState<string | null>(null);
+  const [kernelAction, setKernelAction] = useState<"" | "interrupt" | "restart">("");
+  const [kernelNotice, setKernelNotice] = useState("");
   const [dirty, setDirty] = useState(false);
   const [colorMode] = useState<"light" | "dark">(() =>
     document.documentElement.classList.contains("dark") ? "dark" : "light"
@@ -371,6 +373,7 @@ export default function NotebookTab({
       // first spinner and race its automatic save.
       if (!doc || runningCellId !== null) return;
       setWarning(null);
+      setKernelNotice("");
       const cleared = new Map(outputsRef.current);
       cleared.set(cell.id, []);
       outputsRef.current = cleared;
@@ -388,13 +391,19 @@ export default function NotebookTab({
     [doc, path, projectHash, runningCellId]
   );
 
-  const interrupt = useCallback(() => {
-    void api.interruptNotebookKernel(projectHash, path);
-  }, [projectHash, path]);
-
-  const restart = useCallback(() => {
-    void api.restartNotebookKernel(projectHash, path);
-  }, [projectHash, path]);
+  const kernelCall = (
+    action: "interrupt" | "restart",
+    call: (projectHash: string, path: string) => Promise<void>,
+    done: string
+  ) => {
+    setKernelAction(action);
+    setKernelNotice("");
+    call(projectHash, path)
+      .then(() => setKernelNotice(done), (err) => setWarning(describeError(err)))
+      .finally(() => setKernelAction(""));
+  };
+  const interrupt = () => kernelCall("interrupt", api.interruptNotebookKernel, "Interrupt sent");
+  const restart = () => kernelCall("restart", api.restartNotebookKernel, "Kernel restarted");
 
   if (loadError) {
     return (
@@ -427,12 +436,13 @@ export default function NotebookTab({
               Starting kernel…
             </Badge>
           )}
+          {kernelNotice && <Badge color="neutral" role="status">{kernelNotice}</Badge>}
         </Group>
         <Group gap="xs">
-          <Button size="xs" variant="default" leftSection={<IconPlayerStop size={14} />} onClick={interrupt}>
+          <Button size="xs" variant="default" leftSection={<IconPlayerStop size={14} />} loading={kernelAction === "interrupt"} onClick={interrupt}>
             Interrupt
           </Button>
-          <Button size="xs" variant="default" leftSection={<IconRefresh size={14} />} onClick={restart}>
+          <Button size="xs" variant="default" leftSection={<IconRefresh size={14} />} loading={kernelAction === "restart"} onClick={restart}>
             Restart kernel
           </Button>
           <Button size="xs" disabled={!dirty} onClick={() => void save(doc)}>

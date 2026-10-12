@@ -60,13 +60,13 @@ const props = (over: Partial<FleetBoardProps> = {}): FleetBoardProps => ({
   agents: [{ id: "a1", name: "Agent One", installed: true }],
   onOpen: vi.fn(),
   onReview: vi.fn(),
-  onStop: vi.fn(),
+  onStop: vi.fn().mockResolvedValue(undefined),
   onMerge: vi.fn(),
   onOpenPr: vi.fn(),
   onArchive: vi.fn(),
   onArchiveRun: vi.fn(),
   onOpenRun: vi.fn(),
-  onCancelRun: vi.fn(),
+  onCancelRun: vi.fn().mockResolvedValue(undefined),
   onNewRun: vi.fn(),
   ...over,
 });
@@ -293,9 +293,9 @@ describe("FleetBoard", () => {
 
   it("opens and stops a playbook row by run id, never by thread", async () => {
     const onOpen = vi.fn();
-    const onStop = vi.fn();
+    const onStop = vi.fn().mockResolvedValue(undefined);
     const onOpenRun = vi.fn();
-    const onCancelRun = vi.fn();
+    const onCancelRun = vi.fn().mockResolvedValue(undefined);
     render(
       <FleetBoard
         {...props({
@@ -317,7 +317,7 @@ describe("FleetBoard", () => {
   });
 
   it("offers Stop on a just-started thread before its row confirms running", async () => {
-    const onStop = vi.fn();
+    const onStop = vi.fn().mockResolvedValue(undefined);
     render(
       <FleetBoard
         {...props({
@@ -330,6 +330,21 @@ describe("FleetBoard", () => {
     fireEvent.click(screen.getByTestId("fleet-actions"));
     fireEvent.click(await screen.findByText("Stop"));
     expect(onStop).toHaveBeenCalledWith("t");
+  });
+
+  it("shows a stopping spinner on the row until Stop settles", async () => {
+    let settle: () => void = () => {};
+    const onStop = vi.fn(() => new Promise<void>((resolve) => (settle = resolve)));
+    render(<FleetBoard {...props({ rows: [row({ status: "running" })], onStop })} />);
+    fireEvent.click(screen.getByTestId("fleet-actions"));
+    fireEvent.click(await screen.findByText("Stop"));
+    expect(
+      await screen.findByLabelText("Stopping"),
+      "the row shows that stop is in progress"
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-actions")).toBeDisabled();
+    await act(async () => settle());
+    expect(screen.queryByLabelText("Stopping")).toBeNull();
   });
 
   it("offers Archive for a finished playbook run", async () => {
