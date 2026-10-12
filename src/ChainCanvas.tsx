@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   ActionIcon,
   Alert,
@@ -320,6 +321,7 @@ export default function ChainCanvas({
   // an in-progress edit from a freshly opened or just-saved chain without a
   // second copy of the whole draft in state.
   const savedSnapshot = useRef<string>(JSON.stringify(emptyDraft()));
+  const loadRequest = useRef(0);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [models, setModels] = useState<api.ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -355,6 +357,8 @@ export default function ChainCanvas({
     // Switching chains is not an edit. Undoing across it would drop the user
     // into a chain they were never editing, so the history starts over.
     undoStack.current = [];
+    persisted.current = chainName;
+    const request = ++loadRequest.current;
     if (!chainName) {
       setDraftNow(emptyDraft());
       return;
@@ -364,7 +368,7 @@ export default function ChainCanvas({
       .listChains(projectHash)
       .then((chains) => {
         const found = chains.find((c) => c.name === chainName);
-        if (live && found) {
+        if (live && request === loadRequest.current && found) {
           setDraftNow(found);
           persisted.current = found.name;
           savedSnapshot.current = JSON.stringify(found);
@@ -378,7 +382,7 @@ export default function ChainCanvas({
           }).catch(() => undefined);
         }
       })
-      .catch((err) => live && setError(describeError(err, { loading: "this playbook" })));
+      .catch((err) => live && request === loadRequest.current && setError(describeError(err, { loading: "this playbook" })));
     return () => {
       live = false;
     };
@@ -425,6 +429,34 @@ export default function ChainCanvas({
   // rename, drag, gate change — trips it, and a Save (or a fresh load) clears
   // it the same way.
   const dirty = JSON.stringify(draft) !== savedSnapshot.current;
+  const editState = useRef({ dirty, watching });
+  editState.current = { dirty, watching };
+  useEffect(() => {
+    if (!chainName) return;
+    let live = true;
+    const changed = listen<api.FsChanged>("fs-changed", ({ payload }) => {
+      if (payload.projectHash !== projectHash || !payload.paths.some((p) =>
+        p === ".palisade/chains" || p === `.palisade/chains/${persisted.current}.json`) || editState.current.watching) return;
+      const request = ++loadRequest.current;
+      if (editState.current.dirty) {
+        setError("This playbook changed on disk. Your unsaved changes were kept. Reopen it to load the saved version.");
+        return;
+      }
+      void api.listChains(projectHash).then((chains) => {
+        const found = chains.find((c) => c.name === persisted.current);
+        // An edit made while the read was in flight still belongs to the user.
+        if (!live || request !== loadRequest.current || !found || editState.current.dirty || editState.current.watching) return;
+        savedSnapshot.current = JSON.stringify(found);
+        undoStack.current = [];
+        setDraftNow(found);
+        setError(null);
+      }).catch((err) => live && request === loadRequest.current && setError(describeError(err, { loading: "this playbook" })));
+    });
+    return () => {
+      live = false;
+      changed.then((unlisten) => unlisten());
+    };
+  }, [projectHash, chainName]);
   const nodeCount = roles.length;
   const reportedCosts = Object.entries(run?.nodes ?? {}).flatMap(([role, value]) =>
     value.cost ? [{ role, ...value.cost }] : []

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   ActionIcon,
   Alert,
@@ -116,16 +117,24 @@ export default function ChainsPanel({ projectHash, onOpen, onRun, onOpenRun, onR
       return;
     }
     let live = true;
-    const load = () =>
-      api
+    let latestRequest = 0;
+    const load = () => {
+      const request = ++latestRequest;
+      return api
         .listChains(projectHash)
-        .then((next) => live && setChains(next))
-        .catch((err) => live && setError(describeError(err, { loading: "your playbooks" })));
+        .then((next) => live && request === latestRequest && setChains(next))
+        .catch((err) => live && request === latestRequest && setError(describeError(err, { loading: "your playbooks" })));
+    };
     void load();
     window.addEventListener(CHAINS_CHANGED_EVENT, load);
+    const changed = listen<api.FsChanged>("fs-changed", ({ payload }) => {
+      if (payload.projectHash === projectHash && payload.paths.some((p) =>
+        p === ".palisade/chains" || p.startsWith(".palisade/chains/"))) void load();
+    });
     return () => {
       live = false;
       window.removeEventListener(CHAINS_CHANGED_EVENT, load);
+      changed.then((unlisten) => unlisten());
     };
   }, [projectHash]);
 
