@@ -11,7 +11,7 @@ const step = workflow.split("      - name: Smoke-test the published update manif
   .split("        run: |\n")[1].split("\n      - name:")[0]
   .replace(/^          /gm, "");
 const manifest = {
-  version: "0.5.0",
+  version: "0.5.1",
   platforms: Object.fromEntries(["darwin-universal", "darwin-aarch64", "darwin-x86_64"]
     .map((key) => [key, { signature: "SIG", url: "https://w.dev/download/111" }])),
 };
@@ -35,7 +35,7 @@ function run(responses) {
       }
       sleep() { :; }
       ${step}
-    `], { encoding: "utf8", env: { ...process.env, RUNNER_TEMP: dir, EXPECTED_VERSION: "v0.5.0" } });
+    `], { encoding: "utf8", env: { ...process.env, RUNNER_TEMP: dir, EXPECTED_VERSION: "v0.5.1" } });
     return {
       ...result,
       calls: Number(readFileSync(join(dir, "calls"), "utf8")),
