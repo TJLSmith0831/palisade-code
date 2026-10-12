@@ -70,8 +70,8 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-      - name: Run Worker tests
-        run: node worker/test.mjs
+      - name: Run Worker and release smoke tests
+        run: node --test worker/test.mjs scripts/test-release-smoke.mjs
 
   release:
     name: Build and publish release
@@ -215,26 +215,37 @@ jobs:
           EXPECTED_VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          curl --fail --show-error --retry 3 \
-            "https://palisade-updates.tjlsmith0831.workers.dev/latest.json?release=$EXPECTED_VERSION" \
-            --output "$RUNNER_TEMP/latest.json"
-          node -e '
-            const fs = require("fs");
-            const manifest = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/latest.json", "utf8"));
-            const expected = process.env.EXPECTED_VERSION.slice(1);
-            if (manifest.version !== expected) {
-              throw new Error("Published update manifest is not for " + expected);
-            }
-            // The universal build asks for darwin-universal; installs from
-            // the aarch64-only era still ask for darwin-aarch64 and must be
-            // offered the same archive, or they never see another update.
-            for (const key of ["darwin-universal", "darwin-aarch64", "darwin-x86_64"]) {
-              const platform = manifest.platforms?.[key];
-              if (!platform?.signature || !platform?.url) {
-                throw new Error("Published update manifest does not describe " + key);
+          # Retry validation too: GitHub can briefly return the previous release with HTTP 200.
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              "https://palisade-updates.tjlsmith0831.workers.dev/latest.json?release=$EXPECTED_VERSION&attempt=$attempt" \
+              --output "$RUNNER_TEMP/latest.json" &&
+            node -e '
+              const fs = require("fs");
+              const manifest = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/latest.json", "utf8"));
+              const expected = process.env.EXPECTED_VERSION.slice(1);
+              if (manifest.version !== expected) {
+                throw new Error("Published update manifest is not for " + expected + "; got " + manifest.version);
               }
-            }
-          '
+              // The universal build asks for darwin-universal; installs from
+              // the aarch64-only era still ask for darwin-aarch64 and must be
+              // offered the same archive, or they never see another update.
+              for (const key of ["darwin-universal", "darwin-aarch64", "darwin-x86_64"]) {
+                const platform = manifest.platforms?.[key];
+                if (!platform?.signature || !platform?.url) {
+                  throw new Error("Published update manifest does not describe " + key);
+                }
+              }
+            '; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 12 ]]; then
+              echo "Waiting for release manifest ($attempt/12)..."
+              sleep 10
+            fi
+          done
+          echo "Published update manifest did not become valid for $EXPECTED_VERSION" >&2
+          exit 1
 
       - name: Remove signing material
         if: always()

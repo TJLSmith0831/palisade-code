@@ -572,27 +572,21 @@ input[type="checkbox"] {
   gap: 4px;
 }
 
-.error {
-  padding: 10px 16px;
-  background: color-mix(in oklab, var(--danger), transparent 88%);
-  border-bottom: 1px solid color-mix(in oklab, var(--danger), transparent 70%);
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--danger);
-}
+.ds-error-banner { flex-shrink: 0; border-bottom: 1px solid var(--border); }
 
-/* Advisory, not a failure — the danger palette on something that didn't
-   fail is how users learn to dismiss banners without reading them. */
-.error.warn {
-  background: color-mix(in oklab, var(--warn), transparent 88%);
-  border-bottom-color: color-mix(in oklab, var(--warn), transparent 70%);
-  color: var(--warn);
-}
-
-.dismiss {
-  color: var(--muted);
-  text-decoration: underline;
-}
+.question-card { background: var(--bg); border-color: var(--border); }
+.question-context { color: var(--muted); }
+.question-context > svg { flex-shrink: 0; }
+.question-label { color: var(--fg); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.question-option { min-height: 44px; padding: 10px 12px; background: var(--surface); border-color: var(--border); }
+.question-option:not(:disabled):hover { background: var(--surface-warm); }
+.question-option[data-checked] { border-color: var(--accent); background: color-mix(in oklab, var(--accent), var(--bg) 94%); }
+.question-option:disabled { cursor: wait; }
+.question-option-copy { min-width: 0; overflow-wrap: anywhere; text-align: start; }
+.ds-error-summary { color: var(--fg); line-height: 1.5; max-width: 75ch; overflow-wrap: anywhere; }
+.ds-error-details { margin-top: 6px; }
+.ds-error-details summary { width: fit-content; cursor: pointer; color: var(--fg); font-size: 12px; }
+.ds-error-log { margin-top: 8px; max-height: 200px; overflow: auto; color: var(--fg); background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 
 .body {
   display: flex;

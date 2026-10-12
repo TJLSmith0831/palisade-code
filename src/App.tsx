@@ -221,6 +221,7 @@ import NavRail from "./NavRail";
 import FleetBoard, { type NewRunInput } from "./FleetBoard";
 import WorktreeModeBadge from "./WorktreeModeBadge";
 import ReviewPane, { type ReviewFile } from "./ReviewPane";
+import ErrorBanner from "./ErrorBanner";
 import ReviewRunList from "./ReviewRunList";
 import { useFleet } from "./hooks/useFleet";
 import SessionList from "./SessionList";
@@ -5007,9 +5008,11 @@ export default function App() {
       if (!project) return;
       try {
         const created = await createThreadWithPrefs(project.hash, name);
+        await api.setThreadExecutor(project.hash, created.id, `${CHAIN_EXECUTOR_PREFIX}${name}`, null);
+        const configured = await api.setThreadMode(project.hash, created.id, "go");
         setThreads(await api.listThreads(project.hash));
-        await selectThread(project.hash, created);
-        await startChainRun(name, seed, created);
+        await selectThread(project.hash, configured);
+        await startChainRun(name, seed, configured);
       } catch (err) {
         fail(err);
       }
@@ -5089,6 +5092,14 @@ export default function App() {
         flushTimer ??= setTimeout(flushLive, LIVE_BATCH_MS);
       }
     );
+    const started = listen<{ sessionId: string; threadId: string }>(
+      "executor-turn-started",
+      ({ payload }) => {
+        if (threadsRef.current.some((thread) => thread.id === payload.threadId)) {
+          setBusyFor(payload.threadId, true);
+        }
+      }
+    );
     const updated = listen<string>("thread-updated", () => {
       refresh().catch(fail);
     });
@@ -5117,6 +5128,7 @@ export default function App() {
     return () => {
       clearTimeout(flushTimer);
       streaming.then((un) => un());
+      started.then((un) => un());
       updated.then((un) => un());
       ambiguous.then((un) => un());
       warned.then((un) => un());
@@ -6330,8 +6342,8 @@ export default function App() {
           const name =
             verifyPairs.find(([, cmd]) => cmd === row?.verify.command)?.[0] ??
             verifyPairs[0]?.[0];
-          if (!name) return;
-          api.runVerify(project.hash, name, thread.id).catch(fail);
+          if (!name) return Promise.reject(new Error("Configure verification before running checks."));
+          return api.runVerify(project.hash, name, thread.id);
         }}
         onMerge={({ override }) =>
           void onMergeThread(project.hash, thread.id, override)
@@ -6444,6 +6456,7 @@ export default function App() {
       "verification-finished",
       ({ payload }) => {
         if (payload.projectHash !== project?.hash) return;
+        if (payload.threadId === current.current.thread?.id) setDiffRefreshToken((t) => t + 1);
         if (payload.tests?.parsed) setTestReport(payload.tests);
       }
     );
@@ -7312,15 +7325,7 @@ export default function App() {
         )}
 
         {errors.map((e) => (
-          <div
-            key={e.id}
-            className={e.tone === "warn" ? "error warn" : "error"}
-            data-tone={e.tone}
-            onClick={() => dismissError(e.id)}
-            data-testid="error"
-          >
-            {e.message} <span className="dismiss">dismiss</span>
-          </div>
+          <ErrorBanner key={e.id} message={e.message} tone={e.tone} onDismiss={() => dismissError(e.id)} />
         ))}
 
         <div className="body">
