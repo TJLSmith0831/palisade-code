@@ -5234,7 +5234,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     expect(await screen.findByTestId("models-none")).toBeDefined();
   });
 
-  it("removes the model picker for a chain executor instead of probing the chain as an agent", async () => {
+  it.each(["chain:ship", "claude"])("removes the model picker for a chain executor instead of probing the chain as an agent, starting from %s", async (initialExecutor) => {
     // A saved chain runs several agents in sequence, each with its own
     // model — `chain:<name>` used to get passed straight to `list_models`
     // as if it were an agent id, and the backend rejected it with
@@ -5246,7 +5246,7 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       current: "m1",
       models: [{ id: "m1", name: "Model One" }],
     });
-    let currentExecutor = "chain:ship";
+    let currentExecutor = initialExecutor;
     invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "list_threads")
         return Promise.resolve([
@@ -5285,25 +5285,19 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
       expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
     );
     await waitFor(() =>
-      expect(screen.getByTestId("executor-btn")).toHaveTextContent("ship")
+      expect(screen.getByTestId("executor-btn")).toHaveTextContent(
+        initialExecutor === "claude" ? /claude/i : "ship"
+      )
     );
 
-    expect(screen.queryByTestId("model-btn")).not.toBeInTheDocument();
-
-    // Switch away, then back onto the chain — picking it is exactly the
-    // path that used to call `list_models` with "chain:ship" as the agent
-    // id and get "unknown or unavailable agent `chain:ship`" back.
-    fireEvent.click(screen.getByTestId("executor-btn"));
-    fireEvent.click(await screen.findByTestId("executor-opt-claude"));
-    await waitFor(() =>
-      expect(screen.getByTestId("executor-btn")).toHaveTextContent(/claude/i)
-    );
-
-    fireEvent.click(screen.getByTestId("executor-btn"));
-    fireEvent.click(await screen.findByTestId("executor-opt-chain:ship"));
-    await waitFor(() =>
-      expect(screen.getByTestId("executor-btn")).toHaveTextContent("ship")
-    );
+    if (initialExecutor === "claude") {
+      expect(screen.getByTestId("model-btn")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("executor-btn"));
+      fireEvent.click(await screen.findByTestId("executor-opt-chain:ship"));
+      await waitFor(() =>
+        expect(screen.getByTestId("executor-btn")).toHaveTextContent("ship")
+      );
+    }
     expect(screen.queryByTestId("model-btn")).not.toBeInTheDocument();
     expect(listModels).not.toHaveBeenCalledWith({
       projectHash: "proj-1",
