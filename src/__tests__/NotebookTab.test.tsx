@@ -41,3 +41,16 @@ test("Restart kernel spins while restarting, then confirms", async () => {
   await act(async () => settle());
   expect(await screen.findByRole("status"), "a finished restart is confirmed").toHaveTextContent("Kernel restarted");
 });
+test("Interrupt spins while sending and reports a failure", async () => {
+  let fail: (err: Error) => void = () => {};
+  vi.mocked(api.interruptNotebookKernel).mockReturnValue(new Promise<void>((_, reject) => (fail = reject)));
+  mount();
+  fireEvent.click(await screen.findByText("Interrupt"));
+  expect(
+    screen.getByText("Interrupt").closest("button"),
+    "the button shows the interrupt is in progress"
+  ).toHaveAttribute("data-loading", "true");
+  await act(async () => fail(new Error("no kernel")));
+  expect(await screen.findByText(/no kernel/), "a failed interrupt is reported, not swallowed").toBeInTheDocument();
+  expect(screen.getByText("Interrupt").closest("button")).not.toHaveAttribute("data-loading");
+});

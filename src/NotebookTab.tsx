@@ -176,7 +176,7 @@ export default function NotebookTab({
   const [kernelStarting, setKernelStarting] = useState(false);
   const [outputsByCellRun, setOutputsByCellRun] = useState<Map<string, CellOutput[]>>(new Map());
   const [warning, setWarning] = useState<string | null>(null);
-  const [kernelAction, setKernelAction] = useState<"" | "restart">("");
+  const [kernelAction, setKernelAction] = useState<"" | "interrupt" | "restart">("");
   const [kernelNotice, setKernelNotice] = useState("");
   const [dirty, setDirty] = useState(false);
   const [colorMode] = useState<"light" | "dark">(() =>
@@ -392,7 +392,7 @@ export default function NotebookTab({
   );
 
   const kernelCall = (
-    action: "restart",
+    action: "interrupt" | "restart",
     call: (projectHash: string, path: string) => Promise<void>,
     done: string
   ) => {
@@ -402,9 +402,7 @@ export default function NotebookTab({
       .then(() => setKernelNotice(done), (err) => setWarning(describeError(err)))
       .finally(() => setKernelAction(""));
   };
-  const interrupt = useCallback(() => {
-    void api.interruptNotebookKernel(projectHash, path);
-  }, [projectHash, path]);
+  const interrupt = () => kernelCall("interrupt", api.interruptNotebookKernel, "Interrupt sent");
   const restart = () => kernelCall("restart", api.restartNotebookKernel, "Kernel restarted");
 
   if (loadError) {
@@ -441,7 +439,7 @@ export default function NotebookTab({
           {kernelNotice && <Badge color="neutral" role="status">{kernelNotice}</Badge>}
         </Group>
         <Group gap="xs">
-          <Button size="xs" variant="default" leftSection={<IconPlayerStop size={14} />} onClick={interrupt}>
+          <Button size="xs" variant="default" leftSection={<IconPlayerStop size={14} />} loading={kernelAction === "interrupt"} onClick={interrupt}>
             Interrupt
           </Button>
           <Button size="xs" variant="default" leftSection={<IconRefresh size={14} />} loading={kernelAction === "restart"} onClick={restart}>
