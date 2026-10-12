@@ -16,7 +16,7 @@ type Props = {
   /** Opens a past run on the canvas in Review mode. */
   onOpenRun?: (runId: string) => void;
   /** Re-runs a past record; fromRole starts from that node's recorded inputs. */
-  onRerun?: (runId: string, fromRole?: string) => void;
+  onRerun?: (runId: string, fromRole?: string) => Promise<unknown>;
 };
 
 export default function ChainRunHistory({ projectHash, chainName, onOpenRun, onRerun }: Props) {
@@ -159,11 +159,17 @@ function RunRow({
 }: {
   run: api.ChainRunRecord;
   onOpenRun?: (runId: string) => void;
-  onRerun?: (runId: string, fromRole?: string) => void;
+  onRerun?: (runId: string, fromRole?: string) => Promise<unknown>;
   onArchiveToggle: (runId: string, archived: boolean) => void;
 }) {
+  const [rerunning, setRerunning] = useState(false);
   const outcome = outcomeLabel(run);
   const roles = Object.keys(run.chainSnapshot.nodes);
+  const rerun = (fromRole?: string) => {
+    if (!onRerun) return;
+    setRerunning(true);
+    void onRerun(run.id, fromRole).finally(() => setRerunning(false));
+  };
   // Cost is per node, from the record's own history — never summed as a
   // run total, since an agent that doesn't report cost must not be coerced
   // into a silent 0.00 (D-d).
@@ -198,16 +204,17 @@ function RunRow({
                 variant="subtle"
                 color="neutral"
                 aria-label={`Actions for run from ${run.startedAt}`}
+                loading={rerunning}
               >
                 <IconDots size={14} />
               </ActionIcon>
             </Menu.Target>
             <Menu.Dropdown>
-              <Menu.Item leftSection={<IconRefresh size={14} />} onClick={() => onRerun?.(run.id, undefined)}>
+              <Menu.Item leftSection={<IconRefresh size={14} />} onClick={() => rerun()}>
                 Re-run
               </Menu.Item>
               {roles.map((role) => (
-                <Menu.Item key={role} onClick={() => onRerun?.(run.id, role)}>
+                <Menu.Item key={role} onClick={() => rerun(role)}>
                   Re-run from {role}
                 </Menu.Item>
               ))}

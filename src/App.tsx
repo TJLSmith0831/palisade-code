@@ -6982,7 +6982,7 @@ export default function App() {
               });
             }}
             onRerun={(runId, fromRole) =>
-              thread && void api.rerunChainRun(project.hash, runId, fromRole, thread.id)
+              thread ? api.rerunChainRun(project.hash, runId, fromRole, thread.id).catch(fail) : Promise.resolve()
             }
           />
         );

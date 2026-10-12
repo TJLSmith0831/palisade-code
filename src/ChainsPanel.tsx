@@ -43,7 +43,7 @@ type Props = {
   /** Opens a past run on the canvas in Review mode. */
   onOpenRun?: (runId: string) => void;
   /** Re-runs a past record; `fromRole` starts from that node's recorded inputs. */
-  onRerun?: (runId: string, fromRole?: string) => void;
+  onRerun?: (runId: string, fromRole?: string) => Promise<unknown>;
   /** Installed agents (D16), used to bind the worked example's agent node —
    *  the same list `ChainCanvas`'s own picker offers. */
   agents?: { id: string; name: string }[];
