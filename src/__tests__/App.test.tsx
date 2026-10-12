@@ -5451,6 +5451,25 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     );
   });
 
+  it("restores Stop for an answer continuation on its owning thread after the previous turn ends", async () => {
+    setupWithThread("claude");
+    render(<App />);
+    await openProject();
+    await waitFor(() => expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A"));
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    await act(async () => {
+      emit("executor-turn-started", { sessionId: "other-session", threadId: "other-thread" });
+    });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    await act(async () => {
+      emit("executor-event", { sessionId: "s1", threadId: "t1", event: { kind: "done" } });
+      emit("executor-turn-started", { sessionId: "s1", threadId: "t1" });
+    });
+    const stop = await screen.findByTestId("composer-stop");
+    fireEvent.click(stop);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("stop_executor", { sessionId: null, threadId: "t1" }));
+  });
+
   it("passes bypass to sendMessage", async () => {
     setupWithThread("claude");
     render(<App />);

@@ -817,7 +817,36 @@ pub fn answer_question(session: &AcpSession, request_id: &str, answers: HashMap<
     if expired {
         // Async Codex requests stop listening at their deadline; continue the same session with the submitted answers.
         let text = request.fields.iter().filter_map(|field| answers.get(&field.id).map(|answer| format!("{}: {}", field.title, answer))).collect::<Vec<_>>().join("\n");
-        send_acp_prompt(session, None, Prompt::text(format!("My answers to your clarification questions:\n{text}\nContinue using these answers.")))?;
+        let prompt = Prompt::text(format!("My answers to your clarification questions:\n{text}\nContinue using these answers."));
+        let tx = session.cmd_tx.clone().ok_or("session is shut down")?;
+        let busy = session.busy.clone();
+        let stopping = session.stopping.clone();
+        let sink = request.sink.clone();
+        let session_id = session.id.clone();
+        let thread_id = request.thread_id.clone();
+        // Resolve the form now: some adapters await its response before completing the current turn.
+        std::thread::spawn(move || {
+            loop {
+                if stopping.load(Ordering::SeqCst) { return; }
+                if tx.is_closed() { break; }
+                if busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    if stopping.load(Ordering::SeqCst) {
+                        busy.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                    let mut prompt = prompt;
+                    prompt.context.insert(0, include_str!("../skills/palisade-preview.md").to_string());
+                    sink.emit_turn_started(&session_id, &thread_id);
+                    if tx.send(BridgeCommand::Prompt(prompt)).is_ok() { return; }
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            busy.store(false, Ordering::SeqCst);
+            if !stopping.load(Ordering::SeqCst) {
+                emit(&sink, &session_id, &thread_id, ExecutorEvent::agent_died(None, "Agent connection closed before the answers could be delivered".into()));
+            }
+        });
     }
     let request = pending.get_mut(request_id).unwrap();
     let sender = request.sender.take().ok_or("This question has already been answered")?;
@@ -1408,7 +1437,6 @@ async fn run_bridge(
     // when the tool call completes — nothing more to de-dup against.
     let notif_tool_output =
         Arc::new(std::sync::Mutex::new(HashMap::<String, ToolOutputStream>::new()));
-    let notif_busy = busy.clone();
     // Clones for the error tail after connect_with — the closure moves the
     // originals.
     let tail_ready_tx = ready_tx.clone();
@@ -1444,7 +1472,6 @@ async fn run_bridge(
                             spec_mode_violation(kind, perm_mode, command.as_deref(), &path_refs)
                         {
                             notif_cancelled.store(true, Ordering::SeqCst);
-                            notif_busy.store(false, Ordering::SeqCst);
                             // Ask the agent to stop the current turn.
                             let _ = cx.send_notification(v1::CancelNotification::new(
                                 notification.session_id.clone(),
@@ -1747,12 +1774,12 @@ async fn run_bridge(
                                     prompt.blocks(images_supported),
                                 ));
                                 if let Err(e) = send.on_receiving_result(async move |result| {
-                                    done_busy.store(false, Ordering::SeqCst);
                                     // If the notification handler already cancelled
                                     // the turn for a Spec-mode violation, it emitted
                                     // Crashed and cleared the buffers — don't emit a
                                     // duplicate Done/Crashed here.
                                     if done_cancelled.load(Ordering::SeqCst) {
+                                        done_busy.store(false, Ordering::SeqCst);
                                         return Ok(());
                                     }
                                     // Flush the turn's accumulated chunks as the
@@ -1791,6 +1818,7 @@ async fn run_bridge(
                                                 ExecutorEvent::turn_failed_classified(message, Some(failure_class)))
                                         }
                                     }
+                                    done_busy.store(false, Ordering::SeqCst);
                                     Ok(())
                                 }) {
                                     busy.store(false, Ordering::SeqCst);
@@ -2145,11 +2173,10 @@ impl SessionIdentity {
 /// `prompt` carries the user's own turn; Palisade's instructions and any
 /// parked handoff `prefix` are put ahead of it here.
 pub fn send_acp_prompt(session: &AcpSession, prefix: Option<&str>, mut prompt: Prompt) -> Res<()> {
-    if session.is_busy() {
+    let tx = session.cmd_tx.as_ref().ok_or("session is shut down")?;
+    if session.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Err("executor is mid-turn".into());
     }
-    let tx = session.cmd_tx.as_ref().ok_or("session is shut down")?;
-    session.busy.store(true, Ordering::SeqCst);
     // Shared by all registry agents, including resumed and handoff sessions.
     // Bundled prompt instructions need no agent-specific installation or writes
     // into the user's project. One-shot metadata requests bypass this path.
@@ -2309,23 +2336,77 @@ mod tests {
         let id = ulid::Ulid::new().to_string();
         questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: Some(std::time::Instant::now()), sender: Some(sender), sink: Arc::new(NullSink), thread_id: String::new()});
         answer_question(&session, &id, HashMap::from([("choice".into(), "Yes".into())])).unwrap();
-        let BridgeCommand::Prompt(prompt) = commands.try_recv().unwrap() else {panic!("expected same-session continuation")};
+        let command = tokio::time::timeout(Duration::from_secs(2), commands.recv()).await.unwrap().unwrap();
+        let BridgeCommand::Prompt(prompt) = command else {panic!("expected same-session continuation")};
         assert!(prompt.joined().contains("Scroll?: Yes"));
     }
 
-    #[test]
-    fn busy_async_answer_remains_pending_for_retry() {
-        let (mut session, _commands) = stub_session(true);
+    #[tokio::test]
+    async fn busy_async_answer_resolves_then_continues_once_its_turn_finishes() {
+        struct StartedSink(std::sync::mpsc::Sender<(String, String)>);
+        impl Sink for StartedSink {
+            fn emit(&self, _: &Envelope) {}
+            fn emit_turn_started(&self, session_id: &str, thread_id: &str) {
+                self.0.send((session_id.into(), thread_id.into())).unwrap();
+            }
+        }
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (mut session, mut commands) = stub_session(true);
+        session.id = ulid::Ulid::new().to_string();
+        let fields = question_fields(&serde_json::json!({"type":"object", "properties":{"choice":{"type":"string","title":"Activation"}}})).unwrap();
+        let (sender, receiver) = oneshot::channel();
+        let id = ulid::Ulid::new().to_string();
+        questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: Some(std::time::Instant::now()), sender: Some(sender), sink: Arc::new(StartedSink(started_tx)), thread_id: "owning-thread".into()});
+        let answers = HashMap::from([("choice".into(), "Enter".into())]);
+        answer_question(&session, &id, answers.clone()).unwrap();
+        assert_eq!(serde_json::to_value(receiver.await.unwrap()).unwrap()["action"], "accept");
+        assert!(commands.try_recv().is_err());
+        assert!(started_rx.try_recv().is_err());
+        assert!(answer_question(&session, &id, answers).is_err());
+        session.busy.store(false, Ordering::SeqCst);
+        let command = tokio::time::timeout(Duration::from_secs(2), commands.recv()).await.unwrap().unwrap();
+        let BridgeCommand::Prompt(prompt) = command else {panic!("expected same-session continuation")};
+        assert!(prompt.joined().contains("Activation: Enter"));
+        assert!(session.is_busy());
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(2)).unwrap(), (session.id.clone(), "owning-thread".into()));
+        assert!(started_rx.try_recv().is_err());
+        assert!(commands.try_recv().is_err());
+        questions().lock_or_recover().remove(&id);
+    }
+
+    #[tokio::test]
+    async fn stopping_a_session_cancels_its_queued_question_continuation() {
+        let (mut session, mut commands) = stub_session(true);
         session.id = ulid::Ulid::new().to_string();
         let fields = question_fields(&serde_json::json!({"type":"object", "properties":{"choice":{"type":"string"}}})).unwrap();
-        let (sender, _receiver) = oneshot::channel();
+        let (sender, receiver) = oneshot::channel();
         let id = ulid::Ulid::new().to_string();
         questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: Some(std::time::Instant::now()), sender: Some(sender), sink: Arc::new(NullSink), thread_id: String::new()});
-        let answers = HashMap::from([("choice".into(), "Yes".into())]);
-        assert!(answer_question(&session, &id, answers.clone()).is_err());
-        assert!(questions().lock_or_recover()[&id].sender.is_some());
-        session.busy.store(false, Ordering::SeqCst);
-        answer_question(&session, &id, answers).unwrap();
+        answer_question(&session, &id, HashMap::from([("choice".into(), "Enter".into())])).unwrap();
+        receiver.await.unwrap();
+        session.terminate();
+        assert!(matches!(commands.recv().await, Some(BridgeCommand::Shutdown)));
+        assert!(tokio::time::timeout(Duration::from_millis(150), commands.recv()).await.map_or(true, |command| command.is_none()));
+    }
+
+    #[tokio::test]
+    async fn queued_question_reports_a_connection_that_closes_mid_turn() {
+        let (mut session, commands) = stub_session(true);
+        session.id = ulid::Ulid::new().to_string();
+        let fields = question_fields(&serde_json::json!({"type":"object", "properties":{"choice":{"type":"string"}}})).unwrap();
+        let (sender, receiver) = oneshot::channel();
+        let (events_tx, events) = mpsc::channel();
+        let id = ulid::Ulid::new().to_string();
+        questions().lock_or_recover().insert(id.clone(), PendingQuestion {session_id: session.id.clone(), fields, deadline: Some(std::time::Instant::now()), sender: Some(sender), sink: Arc::new(ChannelSink(events_tx)), thread_id: "owning-thread".into()});
+        answer_question(&session, &id, HashMap::from([("choice".into(), "Enter".into())])).unwrap();
+        receiver.await.unwrap();
+        drop(commands);
+        let failure = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(failure.session_id, session.id);
+        assert_eq!(failure.thread_id, "owning-thread");
+        assert_eq!(failure.event, ExecutorEvent::agent_died(None, "Agent connection closed before the answers could be delivered".into()));
+        assert!(!session.is_busy());
+        questions().lock_or_recover().remove(&id);
     }
 
     #[tokio::test]

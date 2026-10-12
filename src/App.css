@@ -573,6 +573,16 @@ input[type="checkbox"] {
 }
 
 .ds-error-banner { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+
+.question-card { background: var(--bg); border-color: var(--border); }
+.question-context { color: var(--muted); }
+.question-context > svg { flex-shrink: 0; }
+.question-label { color: var(--fg); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.question-option { min-height: 44px; padding: 10px 12px; background: var(--surface); border-color: var(--border); }
+.question-option:not(:disabled):hover { background: var(--surface-warm); }
+.question-option[data-checked] { border-color: var(--accent); background: color-mix(in oklab, var(--accent), var(--bg) 94%); }
+.question-option:disabled { cursor: wait; }
+.question-option-copy { min-width: 0; overflow-wrap: anywhere; text-align: start; }
 .ds-error-summary { color: var(--fg); line-height: 1.5; max-width: 75ch; overflow-wrap: anywhere; }
 .ds-error-details { margin-top: 6px; }
 .ds-error-details summary { width: fit-content; cursor: pointer; color: var(--fg); font-size: 12px; }

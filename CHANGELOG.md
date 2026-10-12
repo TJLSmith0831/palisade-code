@@ -15,6 +15,7 @@ All notable changes to Palisade Code are documented here. The format follows
 - Playbook chats display their actual execution context.
 - Spec verification requires evidence from the owning task at its current clean commit.
 - Supported agent clarification questions display answer controls and resume the owning session; unsupported requests fail explicitly.
+- Async clarification answers wait for the owning agent's current turn automatically. Question cards use selectable option rows, keyboard focus, and a compact resolved state.
 - Verification errors show a concise explanation with readable, expandable diagnostic details.
 - Local macOS development and packaging prefer Apple-issued signing identities to preserve Keychain access across rebuilds.
 

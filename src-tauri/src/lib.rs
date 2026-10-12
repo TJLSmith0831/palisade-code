@@ -680,6 +680,9 @@ struct AppSink {
 }
 
 impl Sink for AppSink {
+    fn emit_turn_started(&self, session_id: &str, thread_id: &str) {
+        let _ = self.app.emit("executor-turn-started", serde_json::json!({"sessionId": session_id, "threadId": thread_id}));
+    }
     /// The agent re-sends the whole list whenever it changes, so the payload
     /// replaces the session's commands rather than appending to them.
     fn emit_commands(

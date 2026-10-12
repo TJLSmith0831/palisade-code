@@ -5092,6 +5092,14 @@ export default function App() {
         flushTimer ??= setTimeout(flushLive, LIVE_BATCH_MS);
       }
     );
+    const started = listen<{ sessionId: string; threadId: string }>(
+      "executor-turn-started",
+      ({ payload }) => {
+        if (threadsRef.current.some((thread) => thread.id === payload.threadId)) {
+          setBusyFor(payload.threadId, true);
+        }
+      }
+    );
     const updated = listen<string>("thread-updated", () => {
       refresh().catch(fail);
     });
@@ -5120,6 +5128,7 @@ export default function App() {
     return () => {
       clearTimeout(flushTimer);
       streaming.then((un) => un());
+      started.then((un) => un());
       updated.then((un) => un());
       ambiguous.then((un) => un());
       warned.then((un) => un());

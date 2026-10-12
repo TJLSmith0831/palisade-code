@@ -290,6 +290,7 @@ pub struct Envelope {
 
 /// Anything that can receive parsed events.
 pub trait Sink: Send + Sync + 'static {
+    fn emit_turn_started(&self, _session_id: &str, _thread_id: &str) {}
     fn emit_context(&self, _session_id: &str, _thread_id: &str, _update: serde_json::Value) {}
     fn emit(&self, envelope: &Envelope);
 
