@@ -5392,6 +5392,48 @@ describe("Executor/model/bypass menu (thread-executor-preferences)", () => {
     );
   });
 
+  it("shows the stop button loading until stop settles, then reports a failure", async () => {
+    setupWithThread("claude");
+    const baseImpl = invokeMock.getMockImplementation();
+    let rejectStop: (err: Error) => void = () => {};
+    invokeMock.mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "send_message")
+          return Promise.resolve({
+            seq: 1,
+            role: "user",
+            content: "hello",
+            createdAt: "2026-08-12T00:00:00Z",
+          });
+        if (cmd === "stop_executor")
+          return new Promise((_, reject) => (rejectStop = reject));
+        return baseImpl?.(cmd, args) ?? Promise.resolve([]);
+      }
+    );
+    render(<App />);
+    await openProject();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-title")).toHaveTextContent("Thread A")
+    );
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "hello" },
+    });
+    fireEvent.submit(screen.getByTestId("composer-input").closest("form")!);
+    fireEvent.click(await screen.findByTestId("composer-stop"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("composer-stop"),
+        "stop shows progress while the session ends"
+      ).toHaveAttribute("data-loading", "true")
+    );
+    await act(async () => rejectStop(new Error("stop failed")));
+    expect(
+      await screen.findByText(/stop failed/),
+      "a failed stop is reported, not swallowed"
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("composer-stop")).not.toHaveAttribute("data-loading");
+  });
+
   it("passes bypass to sendMessage", async () => {
     setupWithThread("claude");
     render(<App />);

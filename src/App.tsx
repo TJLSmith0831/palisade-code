@@ -331,8 +331,8 @@ type ChatSurfaceProps = {
   onRemoveQueued?: (id: string) => void;
   /** Send a queued message again after it failed. */
   onRetryQueued?: (id: string) => void;
-  /** Stop the live session for this thread. */
-  onStop: () => void;
+  /** Stop the live session for this thread; settles once it has stopped. */
+  onStop: () => Promise<unknown>;
   onRenameThread: (target: ThreadMeta) => void;
   onSpec: () => void;
   onGo: () => void;
@@ -720,6 +720,7 @@ export const ChatSurface = memo(
     onLoadEarlier,
     titlePendingIds,
   }: ChatSurfaceProps) {
+    const [stopping, setStopping] = useState(false);
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelQuery, setModelQuery] = useState("");
     // Confirmation popover for the Accept→Bypass direction only (D2e) — the
@@ -2397,7 +2398,11 @@ export const ChatSurface = memo(
                   )}
                 <ActionIcon
                   data-testid="composer-stop"
-                  onClick={onStop}
+                  loading={stopping}
+                  onClick={() => {
+                    setStopping(true);
+                    void onStop().finally(() => setStopping(false));
+                  }}
                   aria-label="Stop"
                   title="Stop"
                   size={36}
@@ -4548,7 +4553,7 @@ export default function App() {
     // The backend ends this thread's busy session, not whichever live one
     // comes first: a thread can run a spec and a go session at once. Never
     // without a thread — that would stop every session in the app.
-    if (thread?.id) void api.stopExecutor(undefined, thread.id);
+    return thread?.id ? api.stopExecutor(undefined, thread.id).catch(fail) : Promise.resolve();
   }, [thread?.id]);
 
   // A thread's live buffer is pruned to its live-only events once history is
